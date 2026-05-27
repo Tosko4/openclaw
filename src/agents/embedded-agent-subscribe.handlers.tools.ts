@@ -26,6 +26,7 @@ import {
 import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
+import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
@@ -53,7 +54,6 @@ import {
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
-import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -76,6 +76,15 @@ const beforeToolCallModuleLoader = createLazyImportLoader<BeforeToolCallModule>(
 );
 const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
+const DRY_RUN_DELIVERY_STATUS = "dry_run";
+const RESULT_ENVELOPE_KEYS = [
+  "details",
+  "payload",
+  "result",
+  "results",
+  "sendResult",
+  "toolResult",
+];
 const TRACE_REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path" }],
   write: REQUIRED_PARAM_GROUPS.write,
@@ -289,6 +298,56 @@ function readToolResultDetailsRecord(result: unknown): Record<string, unknown> |
 function isAsyncStartedToolResult(result: unknown): boolean {
   const details = readToolResultDetailsRecord(result);
   return details?.async === true && details.status === "started";
+}
+
+function parseJsonRecord(value: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function deliveryEnvelopeIndicatesDryRun(value: unknown, depth = 0): boolean {
+  if (!value || typeof value !== "object" || depth > 4) {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => deliveryEnvelopeIndicatesDryRun(item, depth + 1));
+  }
+
+  const record = value as Record<string, unknown>;
+  if (
+    record.dryRun === true ||
+    normalizeOptionalLowercaseString(record.deliveryStatus) === DRY_RUN_DELIVERY_STATUS
+  ) {
+    return true;
+  }
+
+  const content = record.content;
+  if (Array.isArray(content)) {
+    for (const item of content) {
+      if (deliveryEnvelopeIndicatesDryRun(item, depth + 1)) {
+        return true;
+      }
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        const text = (item as Record<string, unknown>).text;
+        if (typeof text === "string") {
+          const parsed = parseJsonRecord(text);
+          if (parsed && deliveryEnvelopeIndicatesDryRun(parsed, depth + 1)) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+
+  return RESULT_ENVELOPE_KEYS.some((key) =>
+    deliveryEnvelopeIndicatesDryRun(record[key], depth + 1),
+  );
 }
 
 function readExecToolDetails(result: unknown): ExecToolDetails | null {
@@ -1225,13 +1284,17 @@ export async function handleToolExecutionEnd(
   const isMessagingSend =
     pendingMediaUrls.length > 0 ||
     (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));
+  const isMessagingDryRun =
+    isMessagingTool(toolName) &&
+    isMessagingToolSendAction(toolName, startArgs) &&
+    (startArgs.dryRun === true || deliveryEnvelopeIndicatesDryRun(result));
   const committedMediaUrls =
-    !isToolError && isMessagingSend
+    !isToolError && isMessagingSend && !isMessagingDryRun
       ? [...pendingMediaUrls, ...collectMessagingMediaUrlsFromToolResult(result)]
       : [];
   if (pendingText) {
     ctx.state.pendingMessagingTexts.delete(toolCallId);
-    if (!isToolError) {
+    if (!isToolError && !isMessagingDryRun) {
       ctx.state.messagingToolSentTexts.push(pendingText);
       ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(pendingText));
       ctx.log.debug(`Committed messaging text: tool=${toolName} len=${pendingText.length}`);
@@ -1240,7 +1303,7 @@ export async function handleToolExecutionEnd(
   }
   if (pendingTarget) {
     ctx.state.pendingMessagingTargets.delete(toolCallId);
-    if (!isToolError) {
+    if (!isToolError && !isMessagingDryRun) {
       ctx.state.messagingToolSentTargets.push({
         ...pendingTarget,
         ...(pendingText ? { text: pendingText } : {}),
@@ -1250,7 +1313,7 @@ export async function handleToolExecutionEnd(
     }
   }
   ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
-  if (!isToolError && isMessagingSend) {
+  if (!isToolError && isMessagingSend && !isMessagingDryRun) {
     if (committedMediaUrls.length > 0) {
       ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
       ctx.trimMessagingToolSent();

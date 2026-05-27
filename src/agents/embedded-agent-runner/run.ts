@@ -1,8 +1,11 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  markReplyPayloadForSourceSuppressionDelivery,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
   resolveContextEngine,
@@ -161,6 +164,7 @@ import {
 import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
+  MESSAGE_TOOL_ONLY_RETRY_INSTRUCTION,
   resolveAckExecutionFastPathInstruction,
   resolveAttemptReplayMetadata,
   extractPlanningOnlyPlanDetails,
@@ -202,11 +206,110 @@ type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
+const MESSAGE_TOOL_ONLY_MISSING_REPLY_TEXT =
+  "⚠️ Agent wrote a private final answer instead of sending the source reply through the message tool. Please try again.";
+const MESSAGE_TOOL_ONLY_REPLAY_UNSAFE_MISSING_REPLY_TEXT =
+  "⚠️ Agent wrote a private final answer instead of sending the source reply through the message tool. Note: some tool actions may have already been executed — please verify before retrying.";
 const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+
+function hasVisibleReplyPayloadContent(payload: ReplyPayload): boolean {
+  return Boolean(
+    payload.text?.trim() ||
+    payload.mediaUrl?.trim() ||
+    (payload.mediaUrls?.length ?? 0) > 0 ||
+    payload.presentation ||
+    payload.interactive ||
+    payload.channelData,
+  );
+}
+
+function buildMessageToolOnlyMissingReplyPayload(text: string): ReplyPayload {
+  return markReplyPayloadForSourceSuppressionDelivery({
+    text,
+    isError: true,
+  });
+}
+
+function hasMessageToolOnlySourceReplyEvidence(attempt: EmbeddedRunAttemptForRunner): boolean {
+  if ((attempt.messagingToolSourceReplyPayloads ?? []).length > 0) {
+    return true;
+  }
+  if (!attempt.didSendViaMessagingTool) {
+    return false;
+  }
+  const targetedTextCounts = new Map<string, number>();
+  const targetedMediaUrlCounts = new Map<string, number>();
+  for (const target of attempt.messagingToolSentTargets ?? []) {
+    const text = target.text?.trim();
+    if (text) {
+      targetedTextCounts.set(text, (targetedTextCounts.get(text) ?? 0) + 1);
+    }
+    for (const mediaUrl of target.mediaUrls ?? []) {
+      const trimmed = mediaUrl.trim();
+      if (trimmed) {
+        targetedMediaUrlCounts.set(trimmed, (targetedMediaUrlCounts.get(trimmed) ?? 0) + 1);
+      }
+    }
+  }
+  for (const text of attempt.messagingToolSentTexts ?? []) {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const targetedCount = targetedTextCounts.get(trimmed) ?? 0;
+    if (targetedCount <= 0) {
+      return true;
+    }
+    targetedTextCounts.set(trimmed, targetedCount - 1);
+  }
+  for (const mediaUrl of attempt.messagingToolSentMediaUrls ?? []) {
+    const trimmed = mediaUrl.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const targetedCount = targetedMediaUrlCounts.get(trimmed) ?? 0;
+    if (targetedCount <= 0) {
+      return true;
+    }
+    targetedMediaUrlCounts.set(trimmed, targetedCount - 1);
+  }
+  return false;
+}
+
+function isVisiblePrivateFinalText(text: string | undefined): boolean {
+  return Boolean(text?.trim()) && !isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN);
+}
+
+function hasVisiblePrivateFinalText(texts: readonly string[] | undefined): boolean {
+  return (texts ?? []).some(isVisiblePrivateFinalText);
+}
+
+function hasPrivateFinalReplyText(params: {
+  attempt: EmbeddedRunAttemptForRunner;
+  finalAssistantVisibleText: string | undefined;
+  finalAssistantRawText: string | undefined;
+  payloads: ReplyPayload[] | undefined;
+}): boolean {
+  if (hasVisiblePrivateFinalText(params.attempt.assistantTexts)) {
+    return true;
+  }
+  if (
+    isVisiblePrivateFinalText(params.finalAssistantVisibleText) ||
+    isVisiblePrivateFinalText(params.finalAssistantRawText)
+  ) {
+    return true;
+  }
+  return (params.payloads ?? []).some(
+    (payload) =>
+      payload.isError !== true &&
+      payload.isReasoning !== true &&
+      hasVisibleReplyPayloadContent(payload),
+  );
+}
 
 function resolveAttemptDispatchApiKey(params: {
   apiKeyInfo: ApiKeyInfo | null;
@@ -1140,6 +1243,7 @@ export async function runEmbeddedAgent(
       let planningOnlyRetryInstruction: string | null = null;
       let reasoningOnlyRetryInstruction: string | null = null;
       let emptyResponseRetryInstruction: string | null = null;
+      let messageToolOnlyRetryInstruction: string | null = null;
       let compactionContinuationRetryInstruction: string | null = null;
       let nextAttemptPromptOverride: string | null = null;
       const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
@@ -1156,7 +1260,9 @@ export async function runEmbeddedAgent(
       // for errored turns; stopReason="stop" empty zero-token turns use the
       // visible-answer retry instruction instead.
       const MAX_EMPTY_ERROR_RETRIES = 3;
+      const MAX_MESSAGE_TOOL_ONLY_RETRIES = 1;
       let emptyErrorRetries = 0;
+      let messageToolOnlyRetries = 0;
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
       const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
@@ -1407,6 +1513,7 @@ export async function runEmbeddedAgent(
             planningOnlyRetryInstruction,
             reasoningOnlyRetryInstruction,
             emptyResponseRetryInstruction,
+            messageToolOnlyRetryInstruction,
             compactionContinuationRetryInstruction,
           ].filter(
             (value): value is string => typeof value === "string" && value.trim().length > 0,
@@ -3043,6 +3150,77 @@ export async function runEmbeddedAgent(
             );
             continue;
           }
+          const messageToolOnlyMissingSourceReply =
+            params.sourceReplyDeliveryMode === "message_tool_only" &&
+            !aborted &&
+            !timedOut &&
+            !attempt.didSendDeterministicApprovalPrompt &&
+            !hasMessageToolOnlySourceReplyEvidence(attempt) &&
+            hasPrivateFinalReplyText({
+              attempt,
+              finalAssistantVisibleText,
+              finalAssistantRawText,
+              payloads: payloadsWithToolMedia,
+            });
+          if (messageToolOnlyMissingSourceReply) {
+            const replayMetadata = resolveAttemptReplayMetadata(attempt);
+            if (
+              replayMetadata.replaySafe &&
+              messageToolOnlyRetries < MAX_MESSAGE_TOOL_ONLY_RETRIES
+            ) {
+              messageToolOnlyRetries += 1;
+              messageToolOnlyRetryInstruction = MESSAGE_TOOL_ONLY_RETRY_INSTRUCTION;
+              log.warn(
+                `message-tool-only final reply was private: runId=${params.runId} sessionId=${params.sessionId} ` +
+                  `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ` +
+                  `${messageToolOnlyRetries}/${MAX_MESSAGE_TOOL_ONLY_RETRIES} with message-tool delivery steer`,
+              );
+              continue;
+            }
+
+            const messageToolOnlyMissingReplyText = replayMetadata.hadPotentialSideEffects
+              ? MESSAGE_TOOL_ONLY_REPLAY_UNSAFE_MISSING_REPLY_TEXT
+              : MESSAGE_TOOL_ONLY_MISSING_REPLY_TEXT;
+            const replayInvalid = resolveReplayInvalidForAttempt(messageToolOnlyMissingReplyText);
+            const livenessState = resolveRunLivenessState({
+              payloadCount: 0,
+              aborted,
+              timedOut,
+              attempt,
+              incompleteTurnText: messageToolOnlyMissingReplyText,
+            });
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid,
+              livenessState,
+            });
+            return {
+              payloads: [buildMessageToolOnlyMissingReplyPayload(messageToolOnlyMissingReplyText)],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
+                finalAssistantVisibleText,
+                finalAssistantRawText,
+                replayInvalid,
+                livenessState,
+                toolSummary: attemptToolSummary,
+                ...(failureSignal ? { failureSignal } : {}),
+                agentHarnessResultClassification: attempt.agentHarnessResultClassification,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
+              successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+            };
+          }
+          messageToolOnlyRetryInstruction = null;
           if (
             !nextPlanningOnlyRetryInstruction &&
             nextReasoningOnlyRetryInstruction &&

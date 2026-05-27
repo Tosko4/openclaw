@@ -23,6 +23,7 @@ import {
   EMPTY_RESPONSE_RETRY_INSTRUCTION,
   extractPlanningOnlyPlanDetails,
   isLikelyExecutionAckPrompt,
+  MESSAGE_TOOL_ONLY_RETRY_INSTRUCTION,
   PLANNING_ONLY_RETRY_INSTRUCTION,
   REASONING_ONLY_RETRY_INSTRUCTION,
   resolveAckExecutionFastPathInstruction,
@@ -744,6 +745,274 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expectWarnMessageWith("empty response detected");
+  });
+
+  it("retries message-tool-only final answers that were only written privately", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Private final that the source channel will not receive."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            { type: "text", text: "Private final that the source channel will not receive." },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Private final should stay private after message send."],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Visible via message tool."],
+        messagingToolSourceReplyPayloads: [{ text: "Visible via message tool." }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            { type: "text", text: "Private final should stay private after message send." },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      sourceReplyDeliveryMode: "message_tool_only",
+      runId: "run-message-tool-only-private-final-retry",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const secondCall = runAttemptCall(1);
+    expect(secondCall.prompt).toContain(MESSAGE_TOOL_ONLY_RETRY_INSTRUCTION);
+    expect(result.payloads).toBeUndefined();
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTexts).toEqual(["Visible via message tool."]);
+    expectWarnMessageWith("message-tool-only final reply was private");
+  });
+
+  it("surfaces a visible runtime error if message-tool-only final answers never call message", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: ["Still private only."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "Still private only." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      sourceReplyDeliveryMode: "message_tool_only",
+      runId: "run-message-tool-only-private-final-exhausted",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("private final answer");
+  });
+
+  it("accepts committed default-route message sends as source replies", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Private final should stay private after visible delivery."],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Visible via default-route message tool."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            { type: "text", text: "Private final should stay private after visible delivery." },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      sourceReplyDeliveryMode: "message_tool_only",
+      runId: "run-message-tool-only-default-route-delivered",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toBeUndefined();
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTexts).toEqual(["Visible via default-route message tool."]);
+  });
+
+  it("accepts default-route source replies even when the turn also sends elsewhere", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Private final should stay private after visible delivery."],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Visible via default-route message tool.", "Sent somewhere else."],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "telegram",
+            to: "other-session",
+            text: "Sent somewhere else.",
+          },
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            { type: "text", text: "Private final should stay private after visible delivery." },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      sourceReplyDeliveryMode: "message_tool_only",
+      runId: "run-message-tool-only-default-route-and-explicit-route",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toBeUndefined();
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTargets).toHaveLength(1);
+  });
+
+  it("does not treat explicit-route message sends as source replies", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Private final for the current source chat."],
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "telegram",
+            to: "other-session",
+            text: "Sent somewhere else.",
+          },
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "Private final for the current source chat." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      sourceReplyDeliveryMode: "message_tool_only",
+      runId: "run-message-tool-only-explicit-route-still-missing-source",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("private final answer");
+    expect(result.payloads?.[0]?.text).toContain("verify before retrying");
+    expect(result.messagingToolSentTargets).toEqual([
+      {
+        tool: "message",
+        provider: "telegram",
+        to: "other-session",
+        text: "Sent somewhere else.",
+      },
+    ]);
+  });
+
+  it("preserves NO_REPLY as silent in message-tool-only mode", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["NO_REPLY"],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "NO_REPLY" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      sourceReplyDeliveryMode: "message_tool_only",
+      runId: "run-message-tool-only-no-reply-silent",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toBeUndefined();
+    expectNoWarnMessageWith("incomplete/no-output assistant response");
+    expectNoWarnMessageWith("message-tool-only final reply was private");
+  });
+
+  it("preserves planning-only retries before message-tool-only private-final recovery", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["I'll inspect the files now, then patch the issue."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "I'll inspect the files now, then patch the issue." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Private final should stay private after message send."],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Visible after acting."],
+        messagingToolSourceReplyPayloads: [{ text: "Visible after acting." }],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      prompt: "Please inspect the files and patch the issue.",
+      provider: "openai",
+      model: "gpt-5.4",
+      sourceReplyDeliveryMode: "message_tool_only",
+      runId: "run-message-tool-only-planning-only-first",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const secondCall = runAttemptCall(1);
+    expect(secondCall.prompt).toContain(PLANNING_ONLY_RETRY_INSTRUCTION);
+    expect(secondCall.prompt).not.toContain(MESSAGE_TOOL_ONLY_RETRY_INSTRUCTION);
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTexts).toEqual(["Visible after acting."]);
   });
 
   it("retries zero-token empty Claude stop turns with a visible-answer continuation instruction", async () => {

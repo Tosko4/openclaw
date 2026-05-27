@@ -1552,7 +1552,7 @@ describe("messaging tool media URL tracking", () => {
       type: "tool_execution_start",
       toolName: "message",
       toolCallId: "tool-dry-run-source-reply",
-      args: { action: "send", message: "preview" },
+      args: { action: "send", message: "preview", dryRun: true },
     });
     await handleToolExecutionEnd(ctx, {
       type: "tool_execution_end",
@@ -1567,6 +1567,34 @@ describe("messaging tool media URL tracking", () => {
           sourceReply: { text: "preview" },
         },
       },
+    });
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-nested-dry-run",
+      args: { action: "send", message: "nested preview" },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-nested-dry-run",
+      isError: false,
+      result: { details: { payload: { deliveryStatus: "dry_run" } } },
+    });
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-json-content-dry-run",
+      args: { action: "send", message: "json preview" },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-json-content-dry-run",
+      isError: false,
+      result: { content: [{ type: "text", text: '{"deliveryStatus":"dry_run"}' }] },
     });
 
     await handleToolExecutionStart(ctx, {
@@ -1590,6 +1618,37 @@ describe("messaging tool media URL tracking", () => {
     });
 
     expect(ctx.state.messagingToolSourceReplyPayloads).toHaveLength(0);
+    expect(ctx.state.messagingToolSentTexts).toEqual(["sent externally"]);
+    expect(ctx.state.messagingToolSentTargets).toHaveLength(1);
+  });
+
+  it("tracks sessions_send as targeted cross-session delivery evidence", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "sessions_send",
+      toolCallId: "tool-session-send",
+      args: {
+        sessionKey: "agent:main:subagent:worker",
+        message: "sent to worker",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "sessions_send",
+      toolCallId: "tool-session-send",
+      isError: false,
+      result: { ok: true },
+    });
+
+    expect(ctx.state.messagingToolSentTexts).toEqual(["sent to worker"]);
+    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
+      tool: "sessions_send",
+      provider: "session",
+      to: "agent:main:subagent:worker",
+      text: "sent to worker",
+    });
   });
 
   it("commits sendAttachment args as message delivery evidence", async () => {

@@ -681,6 +681,21 @@ export function extractMessagingToolSend(
         }
       : undefined;
   }
+  if (toolName === "sessions_send") {
+    const toRaw =
+      normalizeOptionalString(args.sessionKey) ??
+      normalizeOptionalString(args.sessionId) ??
+      normalizeOptionalString(args.label);
+    const to = normalizeTargetForProvider("session", toRaw);
+    return to
+      ? {
+          tool: toolName,
+          provider: "session",
+          accountId,
+          to,
+        }
+      : undefined;
+  }
   const providerId = normalizeChannelId(toolName);
   if (!providerId) {
     return undefined;
