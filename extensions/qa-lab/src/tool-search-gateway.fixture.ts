@@ -6,7 +6,6 @@ import { pathToFileURL } from "node:url";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
-  countSessionLogMentions,
   countSystemPromptChars,
   fetchQaFixtureJson,
   outputText,
@@ -23,6 +22,10 @@ import {
 } from "./providers/shared/debug-request-cursor.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
+import {
+  countToolSearchSessionLogMentions,
+  requestToolSearchGatewayResponse,
+} from "./tool-search-gateway-request-evidence.js";
 
 type Lane = "normal" | "code" | "tools";
 
@@ -145,18 +148,6 @@ export async function fetchJson(
     fetchImpl: options.fetchImpl,
     maxBodyBytes: options.maxBodyBytes ?? DEFAULT_FETCH_LIMITS.bodyMaxBytes,
     timeoutMs: options.timeoutMs ?? DEFAULT_FETCH_LIMITS.timeoutMs,
-  });
-}
-
-async function countToolSearchSessionLogMentions(params: { stateDir: string; targetTool: string }) {
-  return countSessionLogMentions({
-    sessionsDir: path.join(params.stateDir, "agents", "qa", "sessions"),
-    needles: {
-      tool_search_code: "tool_search_code",
-      tool_search: "tool_search",
-      tool_call: "tool_call",
-      [params.targetTool]: params.targetTool,
-    },
   });
 }
 
@@ -424,37 +415,20 @@ export async function runToolSearchGatewayLane(params: {
     await fetchJson(qaMockRequestCursorUrl(providerBaseUrl)),
   );
   const sessionKey = `tool-search-gateway-${params.lane}`;
-  const response = await fetchJson(
-    `${params.env.gateway.baseUrl}/v1/responses`,
-    {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${gatewayToken}`,
-        "content-type": "application/json",
-        "x-openclaw-scopes": "operator.write",
-        "x-openclaw-agent": "qa",
-        "x-openclaw-session-key": sessionKey,
-      },
-      body: JSON.stringify({
-        model: "openclaw/qa",
-        input: [
-          {
-            type: "message",
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: `tool search qa check target=${params.fixture.targetTool}`,
-              },
-            ],
-          },
-        ],
-        max_output_tokens: 256,
-        stream: false,
-      }),
-    },
-    { timeoutMs: liveTurnTimeoutMs(params.env, 30_000) },
-  );
+  const response = await requestToolSearchGatewayResponse({
+    fetchJson,
+    gatewayBaseUrl: params.env.gateway.baseUrl,
+    gatewayToken,
+    lane: params.lane,
+    mentionCountsBefore,
+    providerBaseUrl,
+    requestCursorBefore,
+    readGatewayLogs: () => params.env.gateway.logs?.() ?? "",
+    sessionKey,
+    stateDir,
+    targetTool: params.fixture.targetTool,
+    timeoutMs: liveTurnTimeoutMs(params.env, 30_000),
+  });
   const laneRequests = (await fetchJson(
     qaMockRequestsAfterUrl(providerBaseUrl, requestCursorBefore),
   )) as Array<{

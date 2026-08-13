@@ -252,13 +252,57 @@ describe("tool search gateway e2e session log scanner", () => {
 });
 
 describe("tool search gateway e2e lane result", () => {
-  it("preserves surrogate pairs in provider request snippets", async () => {
+  async function createLaneHarness(logs?: () => string) {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-search-lane-"));
     const configPath = path.join(tempRoot, "openclaw.json");
+    await fs.writeFile(configPath, "{}\n", "utf8");
+    const gatewayCall = vi.fn(async () => ({
+      groups: [
+        {
+          tools: [
+            {
+              id: "fake_plugin_tool_17",
+              source: "plugin",
+              pluginId: "tool-search-e2e-fixture",
+            },
+          ],
+        },
+      ],
+    }));
+    const env: QaSuiteRuntimeEnv = {
+      alternateModel: "openai/gpt-5.6-luna",
+      cfg: {},
+      gateway: {
+        baseUrl: "http://gateway.test",
+        call: gatewayCall,
+        logs,
+        restartAfterStateMutation: async (mutateState) => {
+          await mutateState({
+            configPath,
+            runtimeEnv: {},
+            stateDir: path.join(tempRoot, "state"),
+            tempRoot,
+          });
+        },
+        runtimeEnv: { OPENCLAW_GATEWAY_TOKEN: "test-token" },
+        tempRoot,
+        workspaceDir: tempRoot,
+      },
+      mock: { baseUrl: "http://mock-openai.test" },
+      outputDir: path.join(tempRoot, "output"),
+      primaryModel: "openai/gpt-5.6-luna",
+      providerMode: "mock-openai",
+      repoRoot: tempRoot,
+      transport: {} as QaSuiteRuntimeEnv["transport"],
+    };
+    return { configPath, env, gatewayCall, tempRoot };
+  }
+
+  it("preserves surrogate pairs in provider request snippets", async () => {
+    const { configPath, env, gatewayCall, tempRoot } = await createLaneHarness();
     const inputPrefix = "i".repeat(499);
     const searchOutput = '{"results":[{"query":"first"}]}';
     const toolOutput = `${"o".repeat(3_999)}😀tail`;
-    await fs.writeFile(configPath, "{}\n", "utf8");
     const jsonResponse = (body: unknown) =>
       new Response(JSON.stringify(body), {
         headers: { "content-type": "application/json" },
@@ -290,44 +334,6 @@ describe("tool search gateway e2e lane result", () => {
         ]),
       );
     vi.stubGlobal("fetch", fetchMock);
-    const gatewayCall = vi.fn(async () => ({
-      groups: [
-        {
-          tools: [
-            {
-              id: "fake_plugin_tool_17",
-              source: "plugin",
-              pluginId: "tool-search-e2e-fixture",
-            },
-          ],
-        },
-      ],
-    }));
-    const env: QaSuiteRuntimeEnv = {
-      alternateModel: "openai/gpt-5.6-luna",
-      cfg: {},
-      gateway: {
-        baseUrl: "http://gateway.test",
-        call: gatewayCall,
-        restartAfterStateMutation: async (mutateState) => {
-          await mutateState({
-            configPath,
-            runtimeEnv: {},
-            stateDir: path.join(tempRoot, "state"),
-            tempRoot,
-          });
-        },
-        runtimeEnv: { OPENCLAW_GATEWAY_TOKEN: "test-token" },
-        tempRoot,
-        workspaceDir: tempRoot,
-      },
-      mock: { baseUrl: "http://mock-openai.test" },
-      outputDir: path.join(tempRoot, "output"),
-      primaryModel: "openai/gpt-5.6-luna",
-      providerMode: "mock-openai",
-      repoRoot: tempRoot,
-      transport: {} as QaSuiteRuntimeEnv["transport"],
-    };
 
     try {
       const result = await runToolSearchGatewayLane({
@@ -356,6 +362,90 @@ describe("tool search gateway e2e lane result", () => {
       };
       expect(laneConfig.memory?.search).toMatchObject({ enabled: false });
       expect(laneConfig.memory?.search).not.toHaveProperty("sync");
+    } finally {
+      await fs.rm(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("reports bounded stage evidence for a failed gateway request without leaking diagnostics", async () => {
+    const gatewaySecret = "gateway-secret-value";
+    const responseSecret = "raw-response-secret";
+    const promptSecret = "raw-prompt-secret";
+    const toolOutputSecret = "raw-tool-output-secret";
+    let requestFailed = false;
+    const { env, tempRoot } = await createLaneHarness(() =>
+      requestFailed
+        ? `${"old-log-line\n".repeat(500)}OPENAI_API_KEY=${gatewaySecret}\ngateway-stage-tail`
+        : "before-request-log",
+    );
+    const sessionsDir = path.join(tempRoot, "state", "agents", "qa", "sessions");
+    const jsonResponse = (body: unknown, init?: ResponseInit) =>
+      new Response(JSON.stringify(body), {
+        headers: { "content-type": "application/json" },
+        ...init,
+      });
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/debug/request-cursor")) {
+        return jsonResponse({ cursor: 0 });
+      }
+      if (url.endsWith("/v1/responses")) {
+        requestFailed = true;
+        await fs.mkdir(sessionsDir, { recursive: true });
+        await fs.writeFile(
+          path.join(sessionsDir, "failed.jsonl"),
+          `${JSON.stringify({
+            message: {
+              role: "assistant",
+              content: "tool_search_code fake_plugin_tool_17",
+            },
+          })}\n`,
+          "utf8",
+        );
+        return jsonResponse({ error: { message: responseSecret } }, { status: 502 });
+      }
+      if (url.includes("/debug/requests?after=0")) {
+        return jsonResponse([
+          {
+            body: {
+              tools: [{ type: "function", name: "tool_search_code" }],
+            },
+            plannedToolName: "tool_search_code",
+            raw: responseSecret,
+            prompt: promptSecret,
+            toolOutput: `${toolOutputSecret} FAKE_PLUGIN_OK fake_plugin_tool_17`,
+          },
+        ]);
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const failure = await runToolSearchGatewayLane({
+        env,
+        fixture: { fakePluginDir: tempRoot, targetTool: "fake_plugin_tool_17" },
+        lane: "code",
+      }).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(Error);
+      const error = failure as Error;
+      expect(error.message).toContain("Tool Search code lane gateway request failed (HTTP 502)");
+      expect(error.message).toContain(
+        'providerRequests=[{"plannedToolName":"tool_search_code","declaredToolCount":1,"targetDeclared":false,"bridgeDeclared":true,"targetResultObserved":true}]',
+      );
+      expect(error.message).toContain(
+        'sessionMentions={"tool_search_code":1,"tool_search":1,"tool_call":0,"fake_plugin_tool_17":1}',
+      );
+      expect(error.message).toContain("Gateway logs:");
+      expect(error.message).toContain("gateway-stage-tail");
+      expect(error.message).not.toContain(gatewaySecret);
+      expect(error.message).not.toContain(responseSecret);
+      expect(error.message).not.toContain(promptSecret);
+      expect(error.message).not.toContain(toolOutputSecret);
+      expect(error.message.length).toBeLessThan(6_000);
+      expect(error.cause).toBeInstanceOf(Error);
+      expect((error.cause as Error).message).toContain(responseSecret);
     } finally {
       await fs.rm(tempRoot, { force: true, recursive: true });
     }
