@@ -24,7 +24,7 @@ import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import {
   countToolSearchSessionLogMentions,
-  requestToolSearchGatewayResponse,
+  throwToolSearchGatewayRequestFailure,
 } from "./tool-search-gateway-request-evidence.js";
 
 type Lane = "normal" | "code" | "tools";
@@ -401,34 +401,65 @@ export async function runToolSearchGatewayLane(params: {
   fixture: ToolSearchGatewayFixture;
   lane: Lane;
 }): Promise<LaneResult> {
-  const providerBaseUrl = params.env.mock?.baseUrl;
+  const { env, fixture, lane } = params;
+  const { targetTool } = fixture;
+  const providerBaseUrl = env.mock?.baseUrl;
   assert(providerBaseUrl, "Tool Search gateway fixture requires mock-openai provider mode");
-  const gatewayToken = params.env.gateway.runtimeEnv.OPENCLAW_GATEWAY_TOKEN;
+  const gatewayToken = env.gateway.runtimeEnv.OPENCLAW_GATEWAY_TOKEN;
   assert(gatewayToken, "Tool Search gateway fixture requires QA gateway token");
   await configureLane(params);
-  const stateDir = path.join(params.env.gateway.tempRoot, "state");
+  const stateDir = path.join(env.gateway.tempRoot, "state");
   const mentionCountsBefore = await countToolSearchSessionLogMentions({
     stateDir,
-    targetTool: params.fixture.targetTool,
+    targetTool,
   });
   const requestCursorBefore = readQaMockRequestCursor(
     await fetchJson(qaMockRequestCursorUrl(providerBaseUrl)),
   );
-  const sessionKey = `tool-search-gateway-${params.lane}`;
-  const response = await requestToolSearchGatewayResponse({
-    fetchJson,
-    gatewayBaseUrl: params.env.gateway.baseUrl,
-    gatewayToken,
-    lane: params.lane,
-    mentionCountsBefore,
-    providerBaseUrl,
-    requestCursorBefore,
-    readGatewayLogs: () => params.env.gateway.logs?.() ?? "",
-    sessionKey,
-    stateDir,
-    targetTool: params.fixture.targetTool,
-    timeoutMs: liveTurnTimeoutMs(params.env, 30_000),
-  });
+  const sessionKey = `tool-search-gateway-${lane}`;
+  const response = await fetchJson(
+    `${env.gateway.baseUrl}/v1/responses`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${gatewayToken}`,
+        "content-type": "application/json",
+        "x-openclaw-scopes": "operator.write",
+        "x-openclaw-agent": "qa",
+        "x-openclaw-session-key": sessionKey,
+      },
+      body: JSON.stringify({
+        model: "openclaw/qa",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: `tool search qa check target=${targetTool}`,
+              },
+            ],
+          },
+        ],
+        max_output_tokens: 256,
+        stream: false,
+      }),
+    },
+    { timeoutMs: liveTurnTimeoutMs(env, 30_000) },
+  ).catch((cause) =>
+    throwToolSearchGatewayRequestFailure({
+      cause,
+      fetchJson,
+      gatewayLogs: env.gateway.logs?.() ?? "",
+      lane,
+      mentionCountsBefore,
+      providerBaseUrl,
+      requestCursorBefore,
+      stateDir,
+      targetTool,
+    }),
+  );
   const laneRequests = (await fetchJson(
     qaMockRequestsAfterUrl(providerBaseUrl, requestCursorBefore),
   )) as Array<{
@@ -466,16 +497,16 @@ export async function runToolSearchGatewayLane(params: {
     .join("\n");
   const responseStatus = (response as { status?: unknown }).status;
   const targetToolIdentity = await readTargetToolIdentity({
-    env: params.env,
+    env,
     sessionKey,
-    targetTool: params.fixture.targetTool,
+    targetTool,
   });
   const mentionCountsAfter = await countToolSearchSessionLogMentions({
     stateDir,
-    targetTool: params.fixture.targetTool,
+    targetTool,
   });
   return {
-    lane: params.lane,
+    lane,
     status: typeof responseStatus === "string" ? responseStatus : "",
     providerRequestCount: laneRequests.length,
     providerRawBytes: typeof lastRequest.raw === "string" ? lastRequest.raw.length : 0,
@@ -497,7 +528,7 @@ export async function runToolSearchGatewayLane(params: {
       : [],
     providerDirectoryContainsTarget:
       providerPromptText.includes("### Deferred Tool Schemas") &&
-      providerPromptText.includes(`- ${params.fixture.targetTool}`),
+      providerPromptText.includes(`- ${targetTool}`),
     providerPlannedTools: laneRequests
       .map((request) => request.plannedToolName)
       .filter((name): name is string => typeof name === "string"),

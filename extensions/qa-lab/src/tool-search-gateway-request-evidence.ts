@@ -14,25 +14,7 @@ const SAFE_TOOL_SEARCH_STAGE_NAMES = new Set([
   "tool_call",
 ]);
 
-function readDeclaredToolName(tool: unknown) {
-  if (!isRecord(tool)) {
-    return null;
-  }
-  const wrapped = isRecord(tool.function) ? tool.function.name : undefined;
-  if (typeof wrapped === "string") {
-    return wrapped;
-  }
-  return typeof tool.name === "string" ? tool.name : null;
-}
-
-function readSafePlannedToolName(value: unknown, targetTool: string) {
-  if (typeof value !== "string") {
-    return null;
-  }
-  return value === targetTool || SAFE_TOOL_SEARCH_STAGE_NAMES.has(value) ? value : "<other>";
-}
-
-function summarizeToolSearchProviderRequests(requests: unknown, targetTool: string) {
+export function projectToolSearchProviderRequests(requests: unknown, targetTool: string) {
   if (!Array.isArray(requests)) {
     return [];
   }
@@ -42,12 +24,21 @@ function summarizeToolSearchProviderRequests(requests: unknown, targetTool: stri
     const tools = Array.isArray(body.tools) ? body.tools : [];
     const declaredNames = new Set(
       tools.flatMap((tool) => {
-        const name = readDeclaredToolName(tool);
-        return name === null ? [] : [name];
+        if (!isRecord(tool)) {
+          return [];
+        }
+        const name = isRecord(tool.function) ? tool.function.name : tool.name;
+        return typeof name === "string" ? [name] : [];
       }),
     );
+    const plannedToolName = record.plannedToolName;
     return {
-      plannedToolName: readSafePlannedToolName(record.plannedToolName, targetTool),
+      plannedToolName:
+        typeof plannedToolName !== "string"
+          ? null
+          : plannedToolName === targetTool || SAFE_TOOL_SEARCH_STAGE_NAMES.has(plannedToolName)
+            ? plannedToolName
+            : "<other>",
       declaredToolCount: tools.length,
       targetDeclared: declaredNames.has(targetTool),
       bridgeDeclared: declaredNames.has("tool_search_code"),
@@ -81,78 +72,42 @@ type FetchJson = (
   options?: { timeoutMs?: number },
 ) => Promise<unknown>;
 
-export async function requestToolSearchGatewayResponse(params: {
+export async function throwToolSearchGatewayRequestFailure(params: {
+  cause: unknown;
   fetchJson: FetchJson;
-  gatewayBaseUrl: string;
-  gatewayToken: string;
+  gatewayLogs: string;
   lane: string;
   mentionCountsBefore: Record<string, number>;
   providerBaseUrl: string;
   requestCursorBefore: number;
-  readGatewayLogs: () => string;
-  sessionKey: string;
   stateDir: string;
   targetTool: string;
-  timeoutMs: number;
-}) {
-  try {
-    return await params.fetchJson(
-      `${params.gatewayBaseUrl}/v1/responses`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${params.gatewayToken}`,
-          "content-type": "application/json",
-          "x-openclaw-scopes": "operator.write",
-          "x-openclaw-agent": "qa",
-          "x-openclaw-session-key": params.sessionKey,
-        },
-        body: JSON.stringify({
-          model: "openclaw/qa",
-          input: [
-            {
-              type: "message",
-              role: "user",
-              content: [
-                {
-                  type: "input_text",
-                  text: `tool search qa check target=${params.targetTool}`,
-                },
-              ],
-            },
-          ],
-          max_output_tokens: 256,
-          stream: false,
-        }),
-      },
-      { timeoutMs: params.timeoutMs },
-    );
-  } catch (error) {
-    const requests = await params
-      .fetchJson(qaMockRequestsAfterUrl(params.providerBaseUrl, params.requestCursorBefore))
-      .catch(() => []);
-    const mentionsAfter = await countToolSearchSessionLogMentions(params).catch(() => null);
-    const sessionMentions = mentionsAfter
-      ? subtractMentionCounts(mentionsAfter, params.mentionCountsBefore)
-      : null;
-    const providerRequests = summarizeToolSearchProviderRequests(requests, params.targetTool);
-    const redactedLogs = redactQaGatewayDebugText(params.readGatewayLogs());
-    const safeLogs = formatQaGatewayLogsForError(
-      sliceUtf16Safe(redactedLogs, -TOOL_SEARCH_FAILURE_LOG_CHARS),
-    );
-    const errorMessage = error instanceof Error ? error.message : "";
-    const httpStatus = /^HTTP (\d{3})\b/u.exec(errorMessage)?.[1];
-    const errorCode = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
-    const safeFailure = httpStatus
-      ? `HTTP ${httpStatus}`
-      : errorCode === "ETIMEDOUT" || errorCode === "ETOOBIG"
-        ? errorCode
-        : "request failed";
-    throw new Error(
-      `Tool Search ${params.lane} lane gateway request failed (${safeFailure}); ` +
-        `providerRequests=${JSON.stringify(providerRequests)}; ` +
-        `sessionMentions=${JSON.stringify(sessionMentions)}${safeLogs}`,
-      { cause: error },
-    );
-  }
+}): Promise<never> {
+  const requests = await params
+    .fetchJson(qaMockRequestsAfterUrl(params.providerBaseUrl, params.requestCursorBefore))
+    .catch(() => []);
+  const mentionsAfter = await countToolSearchSessionLogMentions(params).catch(() => null);
+  const sessionMentions = mentionsAfter
+    ? subtractMentionCounts(mentionsAfter, params.mentionCountsBefore)
+    : null;
+  const providerRequests = projectToolSearchProviderRequests(requests, params.targetTool);
+  const safeLogs = formatQaGatewayLogsForError(
+    sliceUtf16Safe(redactQaGatewayDebugText(params.gatewayLogs), -TOOL_SEARCH_FAILURE_LOG_CHARS),
+  );
+  const httpStatus = /^HTTP (\d{3})\b/u.exec(
+    params.cause instanceof Error ? params.cause.message : "",
+  )?.[1];
+  const errorCode =
+    params.cause instanceof Error ? (params.cause as NodeJS.ErrnoException).code : undefined;
+  const safeFailure = httpStatus
+    ? `HTTP ${httpStatus}`
+    : errorCode === "ETIMEDOUT" || errorCode === "ETOOBIG"
+      ? errorCode
+      : "request failed";
+  throw new Error(
+    `Tool Search ${params.lane} lane gateway request failed (${safeFailure}); ` +
+      `providerRequests=${JSON.stringify(providerRequests)}; ` +
+      `sessionMentions=${JSON.stringify(sessionMentions)}${safeLogs}`,
+    { cause: params.cause },
+  );
 }

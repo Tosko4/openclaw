@@ -252,6 +252,12 @@ describe("tool search gateway e2e session log scanner", () => {
 });
 
 describe("tool search gateway e2e lane result", () => {
+  const jsonResponse = (body: unknown, init?: ResponseInit) =>
+    new Response(JSON.stringify(body), {
+      headers: { "content-type": "application/json" },
+      ...init,
+    });
+
   async function createLaneHarness(logs?: () => string) {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-search-lane-"));
     const configPath = path.join(tempRoot, "openclaw.json");
@@ -303,10 +309,6 @@ describe("tool search gateway e2e lane result", () => {
     const inputPrefix = "i".repeat(499);
     const searchOutput = '{"results":[{"query":"first"}]}';
     const toolOutput = `${"o".repeat(3_999)}😀tail`;
-    const jsonResponse = (body: unknown) =>
-      new Response(JSON.stringify(body), {
-        headers: { "content-type": "application/json" },
-      });
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ cursor: 0 }))
@@ -379,11 +381,6 @@ describe("tool search gateway e2e lane result", () => {
         : "before-request-log",
     );
     const sessionsDir = path.join(tempRoot, "state", "agents", "qa", "sessions");
-    const jsonResponse = (body: unknown, init?: ResponseInit) =>
-      new Response(JSON.stringify(body), {
-        headers: { "content-type": "application/json" },
-        ...init,
-      });
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (url.endsWith("/debug/request-cursor")) {
@@ -395,10 +392,7 @@ describe("tool search gateway e2e lane result", () => {
         await fs.writeFile(
           path.join(sessionsDir, "failed.jsonl"),
           `${JSON.stringify({
-            message: {
-              role: "assistant",
-              content: "tool_search_code fake_plugin_tool_17",
-            },
+            message: { role: "assistant", content: "tool_search_code fake_plugin_tool_17" },
           })}\n`,
           "utf8",
         );
