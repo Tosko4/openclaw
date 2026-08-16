@@ -104,10 +104,10 @@ export async function throwToolSearchGatewayRequestFailure(params: {
     : errorCode === "ETIMEDOUT" || errorCode === "ETOOBIG"
       ? errorCode
       : "request failed";
+  // Scenario formatting traverses causes; raw HTTP errors can include complete provider bodies.
   throw new Error(
     `Tool Search ${params.lane} lane gateway request failed (${safeFailure}); ` +
       `providerRequests=${JSON.stringify(providerRequests)}; ` +
       `sessionMentions=${JSON.stringify(sessionMentions)}${safeLogs}`,
-    { cause: params.cause },
   );
 }

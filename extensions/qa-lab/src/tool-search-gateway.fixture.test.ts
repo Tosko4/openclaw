@@ -16,6 +16,7 @@ import {
   qaMockRequestsAfterUrl,
   readQaMockRequestCursor,
 } from "./providers/shared/debug-request-cursor.js";
+import { runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import {
   assertToolSearchBatchLaneResult,
@@ -369,7 +370,7 @@ describe("tool search gateway e2e lane result", () => {
     }
   });
 
-  it("reports bounded stage evidence for a failed gateway request without leaking diagnostics", async () => {
+  it("renders bounded stage evidence for a failed gateway request without leaking diagnostics", async () => {
     const gatewaySecret = "gateway-secret-value";
     const responseSecret = "raw-response-secret";
     const promptSecret = "raw-prompt-secret";
@@ -416,30 +417,35 @@ describe("tool search gateway e2e lane result", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     try {
-      const failure = await runToolSearchGatewayLane({
-        env,
-        fixture: { fakePluginDir: tempRoot, targetTool: "fake_plugin_tool_17" },
-        lane: "code",
-      }).catch((error: unknown) => error);
+      const scenario = await runQaSuiteScenarioSteps("Tool Search failure evidence", [
+        {
+          name: "runs the compact lane",
+          run: async () => {
+            await runToolSearchGatewayLane({
+              env,
+              fixture: { fakePluginDir: tempRoot, targetTool: "fake_plugin_tool_17" },
+              lane: "code",
+            });
+          },
+        },
+      ]);
 
-      expect(failure).toBeInstanceOf(Error);
-      const error = failure as Error;
-      expect(error.message).toContain("Tool Search code lane gateway request failed (HTTP 502)");
-      expect(error.message).toContain(
+      expect(scenario.status).toBe("fail");
+      const renderedError = scenario.details ?? "";
+      expect(renderedError).toContain("Tool Search code lane gateway request failed (HTTP 502)");
+      expect(renderedError).toContain(
         'providerRequests=[{"plannedToolName":"tool_search_code","declaredToolCount":1,"targetDeclared":false,"bridgeDeclared":true,"targetResultObserved":true}]',
       );
-      expect(error.message).toContain(
+      expect(renderedError).toContain(
         'sessionMentions={"tool_search_code":1,"tool_search":1,"tool_call":0,"fake_plugin_tool_17":1}',
       );
-      expect(error.message).toContain("Gateway logs:");
-      expect(error.message).toContain("gateway-stage-tail");
-      expect(error.message).not.toContain(gatewaySecret);
-      expect(error.message).not.toContain(responseSecret);
-      expect(error.message).not.toContain(promptSecret);
-      expect(error.message).not.toContain(toolOutputSecret);
-      expect(error.message.length).toBeLessThan(6_000);
-      expect(error.cause).toBeInstanceOf(Error);
-      expect((error.cause as Error).message).toContain(responseSecret);
+      expect(renderedError).toContain("Gateway logs:");
+      expect(renderedError).toContain("gateway-stage-tail");
+      expect(renderedError).not.toContain(gatewaySecret);
+      expect(renderedError).not.toContain(responseSecret);
+      expect(renderedError).not.toContain(promptSecret);
+      expect(renderedError).not.toContain(toolOutputSecret);
+      expect(renderedError.length).toBeLessThan(6_000);
     } finally {
       await fs.rm(tempRoot, { force: true, recursive: true });
     }
