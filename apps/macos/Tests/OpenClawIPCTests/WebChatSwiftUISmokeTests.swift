@@ -250,6 +250,7 @@ struct WebChatSwiftUISmokeTests {
         let unresolved = WebChatSwiftUIWindowController(
             sessionKey: "main",
             agentID: nil,
+            initialDraft: "keep this draft",
             cachedRoutingIdentity: cachedIdentity,
             store: nil)
         let explicit = WebChatSwiftUIWindowController(
@@ -259,6 +260,10 @@ struct WebChatSwiftUISmokeTests {
             store: nil)
 
         #expect(unresolved._testActiveAgentID == nil)
+        #expect(unresolved._testRequiresExplicitAgentSelection)
+        unresolved._testSelectAgent(" Work ")
+        #expect(!unresolved._testRequiresExplicitAgentSelection)
+        #expect(unresolved._testDraft == "keep this draft")
         #expect(explicit._testActiveAgentID == "work")
         unresolved.close()
         explicit.close()

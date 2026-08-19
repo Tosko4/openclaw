@@ -405,7 +405,7 @@ final class NodeAppModel {
     private var gatewaySessionScope: String?
     var gatewayAccentColorHex: String?
     private var gatewaySessionRoutingContract: String?
-    private var gatewayAgentSelectionRequired = false
+    private(set) var gatewayAgentSelectionRequired = false
     private var focusedChatSessionKey: String?
     var selectedAgentId: String?
     var gatewayDefaultAgentId: String?

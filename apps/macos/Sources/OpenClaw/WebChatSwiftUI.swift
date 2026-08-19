@@ -789,6 +789,9 @@ private struct MacChatSurface: View {
     @State private var appState = AppStateStore.shared
     @State private var talkController = TalkModeController.shared
     @State private var audioInputCatalog = MacChatAudioInputCatalog()
+    @State private var selectableAgents: [OpenClawChatAgentChoice] = []
+    @State private var agentSelectionError: String?
+    @State private var isLoadingSelectableAgents = false
     @AppStorage(OpenClawChatWindowShell.assistantReasoningDefaultsKey, store: AppDefaults.standard)
     private var showsReasoning = WebChatTracePreferences.displayOptions().contains(.reasoning)
     @AppStorage(OpenClawChatWindowShell.assistantToolActivityDefaultsKey, store: AppDefaults.standard)
@@ -797,17 +800,20 @@ private struct MacChatSurface: View {
     private let usesPrimaryAppRuntime: Bool
     private let speech: OpenClawChatSpeechController
     private let voiceNoteRecorder: OpenClawVoiceNoteRecorder
+    private let selectAgent: (String) -> Void
 
     init(
         viewModel: OpenClawChatViewModel,
         usesPrimaryAppRuntime: Bool,
         speech: OpenClawChatSpeechController,
-        voiceNoteRecorder: OpenClawVoiceNoteRecorder)
+        voiceNoteRecorder: OpenClawVoiceNoteRecorder,
+        selectAgent: @escaping (String) -> Void)
     {
         _viewModel = State(initialValue: viewModel)
         self.usesPrimaryAppRuntime = usesPrimaryAppRuntime
         self.speech = speech
         self.voiceNoteRecorder = voiceNoteRecorder
+        self.selectAgent = selectAgent
     }
 
     var body: some View {
@@ -824,8 +830,78 @@ private struct MacChatSurface: View {
                 !AppStateStore.shared.talkEnabled &&
                     !self.voiceNoteRecorder.ownsPendingChatAttachment
             })
+            .safeAreaInset(edge: .top, spacing: 0) {
+                self.agentSelectionBanner
+            }
             .onAppear { self.audioInputCatalog.start() }
             .onDisappear { self.audioInputCatalog.stop() }
+            .task(id: self.viewModel.requiresExplicitAgentSelection) {
+                await self.loadSelectableAgentsIfNeeded()
+            }
+    }
+
+    @ViewBuilder
+    private var agentSelectionBanner: some View {
+        if self.viewModel.requiresExplicitAgentSelection {
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Image(systemName: "person.crop.circle.badge.questionmark")
+                        .foregroundStyle(.secondary)
+                    Text("Choose an agent before sending this message.")
+                        .font(.callout)
+                    Spacer(minLength: 12)
+                    if self.isLoadingSelectableAgents {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else if self.selectableAgents.isEmpty {
+                        Button("Retry") {
+                            Task { await self.loadSelectableAgentsIfNeeded(force: true) }
+                        }
+                    } else {
+                        Menu("Choose Agent") {
+                            ForEach(self.selectableAgents) { agent in
+                                Button(agent.displayName) {
+                                    self.selectAgent(agent.id)
+                                    self.agentSelectionError = nil
+                                }
+                            }
+                        }
+                        .accessibilityIdentifier("chat-agent-selection-menu")
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                if let agentSelectionError {
+                    Text(agentSelectionError)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                Divider()
+            }
+            .background(.regularMaterial)
+        }
+    }
+
+    private func loadSelectableAgentsIfNeeded(force: Bool = false) async {
+        guard self.viewModel.requiresExplicitAgentSelection else {
+            self.selectableAgents = []
+            self.agentSelectionError = nil
+            return
+        }
+        guard force || self.selectableAgents.isEmpty else { return }
+        self.isLoadingSelectableAgents = true
+        defer { self.isLoadingSelectableAgents = false }
+        do {
+            self.selectableAgents = try await self.viewModel.availableAgentsForSelection()
+            self.agentSelectionError = self.selectableAgents.isEmpty
+                ? String(localized: "No agents are available on this gateway.")
+                : nil
+        } catch {
+            self.agentSelectionError = error.localizedDescription
+        }
     }
 
     private var talkControl: OpenClawChatTalkControl {
@@ -918,16 +994,34 @@ private final class WebChatSessionKeyRelay {
 }
 
 @MainActor
+private final class WebChatAgentSelectionRelay {
+    private(set) var selectedAgentID: String?
+    var onSelection: ((String) -> Void)?
+
+    init(selectedAgentID: String?) {
+        self.selectedAgentID = WebChatRoute.normalizedAgentID(selectedAgentID)
+    }
+
+    func select(_ agentID: String) {
+        guard let normalized = WebChatRoute.normalizedAgentID(agentID) else { return }
+        self.selectedAgentID = normalized
+        self.onSelection?(normalized)
+    }
+}
+
+@MainActor
 final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     private let sessionKey: String
     private let viewModel: OpenClawChatViewModel
     private let contentController: NSViewController
     private let sessionKeyRelay: WebChatSessionKeyRelay
+    private let agentSelectionRelay: WebChatAgentSelectionRelay
     private let speech: OpenClawChatSpeechController
     private let voiceNoteRecorder: OpenClawVoiceNoteRecorder
     private var routingIdentityTask: Task<Void, Never>?
     private var window: NSWindow?
     var onClosed: (() -> Void)?
+    var onAgentIDChanged: ((String) -> Void)?
     var onVisibilityChanged: ((Bool) -> Void)?
     /// Fires when the hosted chat switches sessions in place (sidebar,
     /// composer picker, /new) so the owner can track what this surface shows.
@@ -1021,6 +1115,9 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         self.speech = speech
         let sessionKeyRelay = WebChatSessionKeyRelay()
         self.sessionKeyRelay = sessionKeyRelay
+        let explicitAgentID = WebChatRoute.normalizedAgentID(explicitAgentID)
+        let agentSelectionRelay = WebChatAgentSelectionRelay(selectedAgentID: explicitAgentID)
+        self.agentSelectionRelay = agentSelectionRelay
         let vm = OpenClawChatViewModel(
             sessionKey: sessionKey,
             transport: transport,
@@ -1069,7 +1166,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
                         // An explicit navigation agent owns this window; gateway
                         // default refreshes only supply the fallback route.
                         let effectiveAgentID = Self.effectiveAgentID(
-                            explicitAgentID: explicitAgentID,
+                            explicitAgentID: agentSelectionRelay.selectedAgentID ?? explicitAgentID,
                             cachedDefaultAgentID: routingIdentity.defaultAgentID,
                             selectionRequired: routingIdentity.selectionRequired)
                         gatewayTransport.updateDefaultGlobalAgentID(effectiveAgentID)
@@ -1093,9 +1190,17 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
             viewModel: vm,
             usesPrimaryAppRuntime: usesPrimaryAppRuntime,
             speech: speech,
-            voiceNoteRecorder: voiceNoteRecorder))
+            voiceNoteRecorder: voiceNoteRecorder,
+            selectAgent: { agentSelectionRelay.select($0) }))
         self.contentController = hosting
         super.init()
+        agentSelectionRelay.onSelection = { [weak self, weak vm] agentID in
+            guard let self, let vm else { return }
+            (transport as? MacGatewayChatTransport)?.updateDefaultGlobalAgentID(agentID)
+            vm.syncActiveAgentId(agentID)
+            vm.errorText = nil
+            self.onAgentIDChanged?(agentID)
+        }
         self.window = Self.makeWindow(
             contentViewController: self.contentController,
             title: windowTitle,
@@ -1242,6 +1347,14 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
 
     var _testDraft: String {
         self.viewModel.input
+    }
+
+    var _testRequiresExplicitAgentSelection: Bool {
+        self.viewModel.requiresExplicitAgentSelection
+    }
+
+    func _testSelectAgent(_ agentID: String) {
+        self.agentSelectionRelay.select(agentID)
     }
     #endif
 }

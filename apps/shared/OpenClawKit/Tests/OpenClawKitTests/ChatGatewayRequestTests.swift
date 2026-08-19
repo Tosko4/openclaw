@@ -847,6 +847,15 @@ struct ChatGatewayPayloadCodecTests {
         #expect(identity.contract == "global|primary|work")
     }
 
+    @Test func `routing identity preserves legacy required selection without contract`() throws {
+        let identity = try OpenClawChatGatewayPayloadCodec.decodeSessionRoutingIdentity(
+            Data(#"{"defaultId":"Work","mainKey":"Primary","scope":"per-sender","selectionRequired":true,"agents":[]}"#.utf8))
+
+        #expect(identity.defaultAgentID == "work")
+        #expect(identity.selectionRequired)
+        #expect(identity.contract == "per-sender|primary|unowned")
+    }
+
     @Test func `model choices preserve metadata and replace blank names`() throws {
         let payload = Data(
             #"{"models":[{"id":"gpt-5","name":"  ","provider":"openai","available":false,"unavailableReason":"missing-auth","unavailableUntil":1234,"contextWindow":200000,"reasoning":true}]}"#
