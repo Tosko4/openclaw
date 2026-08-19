@@ -2782,7 +2782,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let identity = try #require(OpenClawChatSessionRoutingIdentity(
             scope: "per-sender",
             mainSessionKey: "restored-main",
-            defaultAgentID: "main"))
+            defaultAgentID: "main",
+            selectionRequired: true,
+            sessionRoutingContract: "per-sender|restored-main|unowned"))
         let store = databases.store(gatewayID: stableID)
         await store.storeSessionRoutingIdentity(identity)
         await store.retire()
@@ -2809,6 +2811,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         #expect(talkMode.isGatewayConnected)
         #expect(appModel.chatSessionRoutingContract == identity.contract)
+        #expect(appModel.chatDeliveryAgentId == nil)
         #expect(talkMode.isUsingMainSessionKey(appModel.chatSessionKey))
     }
 

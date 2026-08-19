@@ -19,6 +19,8 @@ extension OpenClawClientDatabases {
                 scope TEXT NOT NULL,
                 main_session_key TEXT NOT NULL,
                 default_agent_id TEXT NOT NULL,
+                routing_contract TEXT,
+                selection_required INTEGER,
                 updated_at REAL NOT NULL
             );
                 CREATE TABLE outbox_commands(
