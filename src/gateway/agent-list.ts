@@ -7,6 +7,10 @@ import { listAgentEntries, tryResolveDefaultAgentId } from "../agents/agent-scop
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SessionScope } from "../config/sessions.js";
+import {
+  resolveAgentMainSessionKey,
+  resolveSessionRoutingContract,
+} from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, normalizeMainKey } from "../routing/session-key.js";
 import type { GatewayAgentKind } from "../shared/session-types.js";
@@ -67,8 +71,43 @@ export function resolveGatewayAgentSelectionState(cfg: OpenClawConfig): GatewayA
   };
 }
 
+/** Matches the released Apple projection only for an explicit canonical main target. */
+export function matchesLegacyGatewaySessionRoutingContract(params: {
+  cfg: OpenClawConfig;
+  expectedContract: string;
+  agentId?: string;
+  sessionKey: string;
+}): boolean {
+  if (params.cfg.agents?.ownership !== "explicit" || !params.agentId) {
+    return false;
+  }
+  const scope = params.cfg.session?.scope ?? "per-sender";
+  if (scope !== "per-sender") {
+    return false;
+  }
+  const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
+  if (resolveSessionRoutingContract(params.cfg) !== [scope, mainKey, "unowned"].join("|")) {
+    return false;
+  }
+  const agentId = normalizeAgentId(params.agentId);
+  if (!listAgentEntries(params.cfg).some((entry) => normalizeAgentId(entry.id) === agentId)) {
+    return false;
+  }
+  if (
+    params.sessionKey.trim().toLowerCase() !==
+    resolveAgentMainSessionKey({ cfg: params.cfg, agentId })
+  ) {
+    return false;
+  }
+  const legacyDefaultId = resolveGatewayAgentSelectionState(params.cfg).defaultId;
+  return (
+    params.expectedContract.trim().toLowerCase() === [scope, mainKey, legacyDefaultId].join("|")
+  );
+}
+
 /** Lists gateway-visible agents with canonical membership, ordering, and semantic kind. */
 export function listGatewayAgentsBasic(cfg: OpenClawConfig): GatewayAgentSelectionState & {
+  sessionRoutingContract: string;
   mainKey: string;
   scope: SessionScope;
   agents: GatewayAgentListRow[];
@@ -126,5 +165,11 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): GatewayAgentSelecti
         : "agent",
     name: configuredById.get(id),
   }));
-  return { ...selection, mainKey, scope, agents };
+  return {
+    ...selection,
+    sessionRoutingContract: resolveSessionRoutingContract(cfg),
+    mainKey,
+    scope,
+    agents,
+  };
 }
