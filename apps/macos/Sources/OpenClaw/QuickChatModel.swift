@@ -113,6 +113,7 @@ private struct ModelPatchSettlement {
 private struct AgentsResolution {
     let displays: [QuickChatAgentDisplay]
     let selectedID: String?
+    let selectionIsExplicit: Bool
     let target: QuickChatRoutingTarget?
 }
 
@@ -157,7 +158,7 @@ final class QuickChatModel {
             if !self.text.isEmpty, self.sendState == .sent {
                 self.sendState = .idle
             }
-            if self.sendTask == nil, let retryIdentity = self.retryIdentity, retryIdentity.draft != self.text {
+            if self.sendTask == nil, let retryIdentity, retryIdentity.draft != self.text {
                 self.retryIdentity = nil
             }
             if !self.isDictating, !self.isStartingDictation, self.dictationTextSession == nil {
@@ -172,6 +173,8 @@ final class QuickChatModel {
     private(set) var agents: [QuickChatAgentDisplay] = []
     private(set) var defaultAgentID: String?
     private(set) var selectedAgentID: String?
+    private(set) var agentSelectionRequired = false
+    private var selectedAgentIsExplicit = false
     private(set) var agentDisplay = QuickChatAgentDisplay.placeholder
     private(set) var missingPermissions: [Capability] = []
     private(set) var permissionsDismissedThisSession = false
@@ -267,9 +270,15 @@ final class QuickChatModel {
         },
         connectionGateProvider: @escaping ConnectionGateProvider = {
             let appState = AppStateStore.shared
-            if appState.connectionMode == .unconfigured { return .unconfigured }
-            if appState.isPaused { return .paused }
-            if ControlChannel.shared.state != .connected { return .disconnected }
+            if appState.connectionMode == .unconfigured {
+                return .unconfigured
+            }
+            if appState.isPaused {
+                return .paused
+            }
+            if ControlChannel.shared.state != .connected {
+                return .disconnected
+            }
             return .available
         },
         frontmostAppNameProvider: @escaping FrontmostAppNameProvider = {
@@ -332,11 +341,12 @@ final class QuickChatModel {
         return (!self.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || self.textContext != nil) &&
             !self.sessionKey.isEmpty &&
             self.connectionGate == .available &&
+            (!self.agentSelectionRequired || self.hasOwnedRoutingTarget) &&
             !self.isCapturingTextContext &&
             !self.isStartingDictation &&
             !self.isUpdatingModel &&
             (!hasPendingOverrideState || !self.isLoadingModelControls) &&
-            self.isSelectedThinkingLevelSupported &&
+            isSelectedThinkingLevelSupported &&
             self.sendState != .sending
     }
 
@@ -380,6 +390,9 @@ final class QuickChatModel {
         if let targetSessionOverride {
             return String(format: String(localized: "Reply in %@"), targetSessionOverride.displayName)
         }
+        if self.agentSelectionRequired, self.selectedAgentID == nil {
+            return String(localized: "Select an agent")
+        }
         return String(format: String(localized: "Message %@"), self.agentDisplay.name)
     }
 
@@ -400,8 +413,8 @@ final class QuickChatModel {
         self.textContext = nil
         self.textContextCaptureMessage = nil
         self.cancelTextContextCapture()
-        self.resetDictationState()
-        self.cancelModelControlRefresh()
+        resetDictationState()
+        cancelModelControlRefresh()
         self.appliedModelSelections.removeAll()
         self.selectedModelSelectionID = nil
         self.selectedThinkingLevel = nil
@@ -414,7 +427,9 @@ final class QuickChatModel {
         // contract: selecting from a stale scope/mainKey could target an obsolete session.
         self.agentsScope = nil
         self.agentsMainKey = nil
-        if self.sendTask == nil { self.sendState = .idle }
+        if self.sendTask == nil {
+            self.sendState = .idle
+        }
         self.startPermissionPolling(id: self.presentationID)
         return self.presentationID
     }
@@ -437,7 +452,7 @@ final class QuickChatModel {
         switch agentsResult {
         case let .success(result):
             let resolution = self.resolveAgents(result)
-            await self.awaitModelPatchSettlement(for: resolution.target)
+            await awaitModelPatchSettlement(for: resolution.target)
             guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
             self.applyAgentsList(result, resolution: resolution)
             let modelControlsTask = self.modelControlsTask
@@ -452,13 +467,14 @@ final class QuickChatModel {
         // screenshot captured for the previously selected agent.
         guard self.sendState != .sending,
               !self.isUpdatingModel,
-              let display = self.agents.first(where: { $0.id == id }),
-              let mainKey = self.agentsMainKey
+              let display = agents.first(where: { $0.id == id }),
+              let mainKey = agentsMainKey
         else { return }
         // Agent and recent-session targeting are mutually exclusive: keeping both would
         // make the avatar advertise one destination while sends go somewhere else.
         self.targetSessionOverride = nil
         self.selectedAgentID = id
+        self.selectedAgentIsExplicit = true
         self.agentDisplay = display
         let target = Self.routingTarget(scope: self.agentsScope, selectedAgentID: id, mainKey: mainKey)
         self.baseRoutingTarget = target
@@ -537,7 +553,7 @@ final class QuickChatModel {
     }
 
     func selectModel(_ selectionID: String) {
-        guard self.canUseModelControls, !self.isUpdatingModel, let target = self.routingTarget else { return }
+        guard canUseModelControls, !self.isUpdatingModel, let target = routingTarget else { return }
         let normalized = selectionID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard normalized == OpenClawChatViewModel.defaultModelSelectionID ||
             self.modelChoices.contains(where: { $0.selectionID == normalized })
@@ -553,7 +569,7 @@ final class QuickChatModel {
             self.retryIdentity = nil
         }
         if case let .patch(model) = patchDecision {
-            self.startModelPatch(model: model, selectionID: normalized, target: target)
+            startModelPatch(model: model, selectionID: normalized, target: target)
         }
     }
 
@@ -643,7 +659,7 @@ final class QuickChatModel {
         // Bind the pipeline to the route visible when the user completed the selection; an agent
         // switch or re-presentation during processing must drop the capture, not reroute it.
         guard self.capturePipelineID == pipelineID,
-              let presentationID = self.activePresentationID
+              let presentationID = activePresentationID
         else { return false }
         let sessionKey = self.sessionKey
         let agentID = self.sendAgentID
@@ -682,7 +698,7 @@ final class QuickChatModel {
             self.cancelCapturePipeline(pipelineID)
             return false
         }
-        let accepted = await self.performSend(
+        let accepted = await performSend(
             messageOverride: message,
             attachments: [attachment],
             draftOverride: draft,
@@ -755,10 +771,10 @@ final class QuickChatModel {
         self.clearTextContext()
         self.textContextCaptureMessage = nil
         self.cancelTextContextCapture()
-        self.resetDictationState()
+        resetDictationState()
         // Model patches are persistent session mutations. Let an accepted selection
         // settle even though its presentation-scoped controls are being discarded.
-        self.cancelModelControlRefresh()
+        cancelModelControlRefresh()
         self.appliedModelSelections.removeAll()
         self.selectedModelSelectionID = nil
         self.selectedThinkingLevel = nil
@@ -777,61 +793,21 @@ final class QuickChatModel {
         self.cancelPermissionTask()
         self.cancelPermissionPolling()
         self.cancelTextContextCapture()
-        self.cancelModelControlRefresh()
-        self.resetDictationState()
-        if self.sendState == .sending { self.sendState = .idle }
-    }
-
-    private func resolveAgents(_ result: AgentsListResult) -> AgentsResolution {
-        let displays = result.agents.filter(\.isSelectableAgent).map(QuickChatAgentDisplay.init(summary:))
-        let selectedID: String? = if let selectedAgentID,
-                                     displays.contains(where: { $0.id == selectedAgentID })
-        {
-            selectedAgentID
-        } else if displays.contains(where: { $0.id == result.defaultid }) {
-            result.defaultid
-        } else {
-            displays.first?.id
+        cancelModelControlRefresh()
+        resetDictationState()
+        if self.sendState == .sending {
+            self.sendState = .idle
         }
-
-        let target = selectedID.map {
-            Self.routingTarget(
-                scope: result.scope.value as? String,
-                selectedAgentID: $0,
-                mainKey: result.mainkey)
-        }
-        return AgentsResolution(displays: displays, selectedID: selectedID, target: target)
-    }
-
-    private func applyAgentsList(_ result: AgentsListResult, resolution: AgentsResolution) {
-        let displays = resolution.displays
-        let selectedID = resolution.selectedID
-
-        self.agents = displays
-        self.defaultAgentID = result.defaultid
-        self.selectedAgentID = selectedID
-        self.agentsScope = result.scope.value as? String
-        self.agentsMainKey = result.mainkey
-
-        guard let selectedID,
-              let display = displays.first(where: { $0.id == selectedID })
-        else {
-            self.agentDisplay = .placeholder
-            self.baseRoutingTarget = nil
-            self.setRoutingTarget(nil)
-            return
-        }
-        self.agentDisplay = display
-        guard let target = resolution.target else { return }
-        self.baseRoutingTarget = target
-        self.applyRoutingTarget()
     }
 
     private func refreshFallbackIdentity(id: UUID) async {
-        let resolvedSessionKey = await self.sessionKeyProvider()
+        let resolvedSessionKey = await sessionKeyProvider()
         guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
+        let fallbackAgentID = OpenClawChatSessionKey.agentID(from: resolvedSessionKey)
+        let mustPreserveSelectionGate = self.agentSelectionRequired && fallbackAgentID == nil
+        let mustResolveFallbackOwner = fallbackAgentID == nil
         let target = QuickChatRoutingTarget(sessionKey: resolvedSessionKey, agentID: nil)
-        await self.awaitModelPatchSettlement(for: target)
+        await awaitModelPatchSettlement(for: target)
         guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
         self.baseRoutingTarget = target
         self.applyRoutingTarget()
@@ -839,30 +815,42 @@ final class QuickChatModel {
         self.agents = []
         self.defaultAgentID = nil
         self.selectedAgentID = nil
+        self.selectedAgentIsExplicit = false
         self.agentsScope = nil
         self.agentsMainKey = nil
+        self.agentSelectionRequired = mustPreserveSelectionGate || mustResolveFallbackOwner
         self.agentDisplay = .placeholder
 
         do {
-            let display = try await self.agentIdentityProvider(resolvedSessionKey)
+            let display = try await agentIdentityProvider(resolvedSessionKey)
             guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
             self.agentDisplay = display
             self.agents = [display]
             self.defaultAgentID = display.id
-            self.selectedAgentID = display.id
+            if let fallbackAgentID {
+                self.selectedAgentID = fallbackAgentID
+                self.agentSelectionRequired = false
+            }
         } catch {
-            // The fallback session remains sendable even when its optional identity cannot load.
+            // Agent-scoped fallbacks remain sendable; bare fallbacks stay
+            // gated until ownership metadata recovers.
         }
         await modelControlsTask?.value
     }
 
     private func applyRoutingTarget() {
-        guard let baseRoutingTarget else {
+        let target: QuickChatRoutingTarget? = if let baseRoutingTarget {
+            Self.routingTarget(override: self.targetSessionOverride, base: baseRoutingTarget)
+        } else if let targetSessionOverride {
+            QuickChatRoutingTarget(sessionKey: targetSessionOverride.key, agentID: nil)
+        } else {
+            nil
+        }
+        guard let target else {
             self.setRoutingTarget(nil)
-            self.cancelModelControlRefresh()
+            cancelModelControlRefresh()
             return
         }
-        let target = Self.routingTarget(override: self.targetSessionOverride, base: baseRoutingTarget)
         let previousTarget = self.routingTarget
         self.setRoutingTarget(target)
         if previousTarget != target {
@@ -873,7 +861,7 @@ final class QuickChatModel {
             self.modelDefaultProvider = nil
             self.thinkingOptions = []
         }
-        self.refreshModelControls(for: target)
+        refreshModelControls(for: target)
     }
 
     private func setRoutingTarget(_ target: QuickChatRoutingTarget?) {
@@ -889,13 +877,17 @@ final class QuickChatModel {
         textContextOverride: QuickChatTextContext? = nil,
         continuesCapturePipeline: Bool = false) async -> Bool
     {
-        guard let presentationID = self.activePresentationID else { return false }
+        guard let presentationID = activePresentationID else { return false }
         // The capture pipeline captured its draft before detached processing; edits made
         // meanwhile must survive, so the clear-decision compares against that original.
         let draft = draftOverride ?? self.text
         let textContext = textContextOverride ?? self.textContext
         let message = messageOverride ?? Self.assembleMessage(draft: draft, context: textContext)
-        guard !message.isEmpty, !self.sessionKey.isEmpty, self.connectionGate == .available else {
+        guard !message.isEmpty,
+              !self.sessionKey.isEmpty,
+              self.connectionGate == .available,
+              !self.agentSelectionRequired || self.hasOwnedRoutingTarget
+        else {
             // The capture pipeline unwinds its own held state after this returns false.
             return false
         }
@@ -905,7 +897,7 @@ final class QuickChatModel {
         let agentID = self.sendAgentID
         let route = QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID)
         let selectedModelSelectionID = self.selectedModelSelectionID
-        guard await self.applySelectedModelIfNeeded(
+        guard await applySelectedModelIfNeeded(
             to: route,
             selectionID: selectedModelSelectionID)
         else { return false }
@@ -913,7 +905,7 @@ final class QuickChatModel {
               self.isCurrentPresentation(presentationID),
               self.routingTarget == route,
               self.connectionGate == .available,
-              self.isSelectedThinkingLevelSupported,
+              isSelectedThinkingLevelSupported,
               continuesCapturePipeline || self.sendState != .sending
         else { return false }
         let thinking = self.selectedThinkingLevel
@@ -922,7 +914,7 @@ final class QuickChatModel {
         // fast turn must not emit frames before the reply view model starts listening.
         self.onSendDispatched?(route)
         let idempotencyKey: String
-        if let retryIdentity = self.retryIdentity,
+        if let retryIdentity,
            retryIdentity.draft == draft,
            retryIdentity.message == message,
            retryIdentity.thinking == thinking,
@@ -933,7 +925,7 @@ final class QuickChatModel {
             idempotencyKey = retryIdentity.idempotencyKey
         } else {
             idempotencyKey = UUID().uuidString
-            self.retryIdentity = RetryIdentity(
+            retryIdentity = RetryIdentity(
                 draft: draft,
                 message: message,
                 thinking: thinking,
@@ -952,14 +944,14 @@ final class QuickChatModel {
             self.sendTask = nil
             switch ChatSendStatus.acceptance(of: status) {
             case .terminalFailure:
-                self.retryIdentity = nil
+                retryIdentity = nil
                 let normalized = ChatSendStatus.normalized(status)
                 self.sendState = self.text == draft
                     ? .failed("Message was not accepted (\(normalized)).")
                     : .idle
                 return false
             case .terminalSuccess, .inFlight:
-                self.retryIdentity = nil
+                retryIdentity = nil
                 self.lastAcceptedRoute = route
                 self.lastAcceptedIdempotencyKey = idempotencyKey
                 if self.textContext == textContext {
@@ -975,7 +967,7 @@ final class QuickChatModel {
             }
         } catch is CancellationError {
             self.sendTask = nil
-            self.retryIdentity = nil
+            retryIdentity = nil
             self.sendState = .idle
             return false
         } catch {
@@ -983,6 +975,11 @@ final class QuickChatModel {
             self.sendState = self.text == draft ? .failed(error.localizedDescription) : .idle
             return false
         }
+    }
+
+    private var hasOwnedRoutingTarget: Bool {
+        guard let routingTarget else { return false }
+        return routingTarget.agentID != nil || OpenClawChatSessionKey.agentID(from: routingTarget.sessionKey) != nil
     }
 
     private func startPermissionPolling(id: UUID) {
@@ -1017,7 +1014,7 @@ final class QuickChatModel {
     }
 
     private func recheckPermissions(id: UUID) async {
-        let status = await self.permissionStatusProvider(Self.trackedPermissions)
+        let status = await permissionStatusProvider(Self.trackedPermissions)
         guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
         self.applyPermissionStatus(status)
     }
@@ -1126,12 +1123,14 @@ extension QuickChatModel {
         }
         self.cancelModelControlRefresh()
         let request = ModelPatchRequest(
-            presentationID: self.presentationID,
+            presentationID: presentationID,
             target: target,
             selectionID: selectionID)
         // Install synchronously and serialize same-target settlements: a dispatched mutation
         // cannot be cancelled, and the latest selection must reach the provider last.
-        if self.routingTarget == target { self.isUpdatingModel = true }
+        if self.routingTarget == target {
+            self.isUpdatingModel = true
+        }
         let task = Task { [weak self, previousTask = previousSettlement?.task] in
             _ = await previousTask?.value
             guard let self else { return false }
@@ -1146,7 +1145,7 @@ extension QuickChatModel {
         to target: QuickChatRoutingTarget,
         selectionID: String?) async -> Bool
     {
-        if let settlement = self.modelPatchSettlementsByTarget[target] {
+        if let settlement = modelPatchSettlementsByTarget[target] {
             guard settlement.request.selectionID == selectionID
             else { return false }
             return await settlement.task.value
@@ -1177,7 +1176,7 @@ extension QuickChatModel {
         // authoritative refresh, guarded state commit, and cleanup as one settlement.
         defer { self.clearModelPatchState(request: request) }
         do {
-            let result = try await self.modelPatchProvider(request.target, model)
+            let result = try await modelPatchProvider(request.target, model)
             guard self.modelPatchSettlementsByTarget[request.target]?.request == request else { return false }
             var refreshedSnapshot: QuickChatModelControlSnapshot?
             var refreshFailed = false
@@ -1253,7 +1252,7 @@ extension QuickChatModel {
 
     private func awaitModelPatchSettlement(for target: QuickChatRoutingTarget?) async {
         guard let target,
-              let settlement = self.modelPatchSettlementsByTarget[target]
+              let settlement = modelPatchSettlementsByTarget[target]
         else { return }
         _ = await settlement.task.value
     }
@@ -1274,9 +1273,70 @@ extension QuickChatModel {
     }
 }
 
+extension QuickChatModel {
+    private func resolveAgents(_ result: AgentsListResult) -> AgentsResolution {
+        let displays = result.agents.filter(\.isSelectableAgent).map(QuickChatAgentDisplay.init(summary:))
+        let selectionRequired = result.selectionrequired ?? false
+        let preservesExistingSelection = if let selectedAgentID {
+            displays.contains(where: { $0.id == selectedAgentID }) &&
+                (!selectionRequired || self.selectedAgentIsExplicit)
+        } else {
+            false
+        }
+        let selectedID: String? = if preservesExistingSelection {
+            selectedAgentID
+        } else if selectionRequired {
+            nil
+        } else if displays.contains(where: { $0.id == result.defaultid }) {
+            result.defaultid
+        } else {
+            displays.first?.id
+        }
+        let selectionIsExplicit = preservesExistingSelection && self.selectedAgentIsExplicit
+
+        let target = selectedID.map {
+            Self.routingTarget(
+                scope: result.scope.value as? String,
+                selectedAgentID: $0,
+                mainKey: result.mainkey)
+        }
+        return AgentsResolution(
+            displays: displays,
+            selectedID: selectedID,
+            selectionIsExplicit: selectionIsExplicit,
+            target: target)
+    }
+
+    private func applyAgentsList(_ result: AgentsListResult, resolution: AgentsResolution) {
+        let displays = resolution.displays
+        let selectedID = resolution.selectedID
+
+        self.agents = displays
+        self.defaultAgentID = result.defaultid
+        self.selectedAgentID = selectedID
+        self.selectedAgentIsExplicit = resolution.selectionIsExplicit
+        self.agentSelectionRequired = result.selectionrequired ?? false
+        self.agentsScope = result.scope.value as? String
+        self.agentsMainKey = result.mainkey
+
+        guard let selectedID,
+              let display = displays.first(where: { $0.id == selectedID })
+        else {
+            self.agentDisplay = .placeholder
+            self.baseRoutingTarget = nil
+            self.applyRoutingTarget()
+            return
+        }
+        self.agentDisplay = display
+        guard let target = resolution.target else { return }
+        self.baseRoutingTarget = target
+        self.applyRoutingTarget()
+    }
+}
+
 extension String {
     fileprivate var nonEmptyTrimmed: String? {
-        let trimmed = self.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
 }

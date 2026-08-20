@@ -84,10 +84,17 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
                     db,
                     sql: """
                     SELECT scope, main_session_key, default_agent_id,
-                           selection_required, routing_contract
+                           selection_required, routing_contract,
+                           updated_at, routing_identity_updated_at
                     FROM gateway_routing_identity WHERE gateway_id = ?
                     """,
                     arguments: [gatewayID])
+                else { return nil }
+                guard let updatedAt: Double = row["updated_at"],
+                      let routingIdentityUpdatedAt: Double = row["routing_identity_updated_at"],
+                      updatedAt == routingIdentityUpdatedAt,
+                      (row["selection_required"] as Int?) != nil,
+                      (row["routing_contract"] as String?) != nil
                 else { return nil }
                 return OpenClawChatSessionRoutingIdentity(
                     scope: row["scope"],
@@ -457,6 +464,47 @@ extension OpenClawClientDatabases {
         if !columns.contains("selection_required") {
             try db.execute(sql: "ALTER TABLE gateway_routing_identity ADD COLUMN selection_required INTEGER")
         }
+        if !columns.contains("routing_identity_updated_at") {
+            try db.execute(sql: "ALTER TABLE gateway_routing_identity ADD COLUMN routing_identity_updated_at REAL")
+            // The previous client could persist a legacy `unowned` contract
+            // with selection_required = 0. Repair those rows before granting
+            // them a freshness marker or the upgraded reader would treat the
+            // stale boolean as authoritative.
+            let legacyRows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT gateway_id, routing_contract, selection_required
+                FROM gateway_routing_identity
+                WHERE routing_contract IS NOT NULL
+                  AND selection_required IS NOT NULL
+                """)
+            for row in legacyRows {
+                let contract: String? = row["routing_contract"]
+                guard OpenClawChatSessionRoutingContract.parse(contract)?.defaultAgentID == "unowned",
+                      (row["selection_required"] as Int?) != 1,
+                      let gatewayID: String = row["gateway_id"]
+                else { continue }
+                try db.execute(
+                    sql: """
+                    UPDATE gateway_routing_identity
+                    SET selection_required = 1
+                    WHERE gateway_id = ?
+                    """,
+                    arguments: [gatewayID])
+            }
+            // Rows written by the immediately preceding schema already carry
+            // the complete routing identity. Mark those rows once during the
+            // upgrade so they remain readable. Future downgraded writers will
+            // change `updated_at` without advancing this marker and are still
+            // rejected by the equality check in the read path.
+            try db.execute(sql: """
+            UPDATE gateway_routing_identity
+            SET routing_identity_updated_at = updated_at
+            WHERE routing_identity_updated_at IS NULL
+              AND routing_contract IS NOT NULL
+              AND selection_required IS NOT NULL
+            """)
+        }
     }
 
     private static func openRepairableCacheDatabase(at url: URL) throws -> DatabaseQueue {
@@ -768,28 +816,39 @@ extension OpenClawClientDatabases {
             for identity in snapshot.routingIdentities
                 where !forgottenGatewayHashes.contains(Self.gatewayIdentityHash(identity.gatewayID))
             {
+                let repairedSelectionRequired = identity.selectionRequired ||
+                    OpenClawChatSessionRoutingContract.parse(identity.routingContract)?.defaultAgentID == "unowned"
+                guard let canonicalIdentity = OpenClawChatSessionRoutingIdentity(
+                    scope: identity.scope,
+                    mainSessionKey: identity.mainSessionKey,
+                    defaultAgentID: identity.defaultAgentID,
+                    selectionRequired: repairedSelectionRequired,
+                    sessionRoutingContract: identity.routingContract)
+                else { continue }
                 try db.execute(
                     sql: """
                     INSERT INTO gateway_routing_identity(
                         gateway_id, scope, main_session_key, default_agent_id,
-                        routing_contract, selection_required, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        routing_contract, selection_required, routing_identity_updated_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(gateway_id) DO UPDATE SET
                         scope = excluded.scope,
                         main_session_key = excluded.main_session_key,
                         default_agent_id = excluded.default_agent_id,
                         routing_contract = excluded.routing_contract,
                         selection_required = excluded.selection_required,
+                        routing_identity_updated_at = excluded.routing_identity_updated_at,
                         updated_at = excluded.updated_at
                     WHERE excluded.updated_at > gateway_routing_identity.updated_at
                     """,
                     arguments: [
                         identity.gatewayID,
-                        identity.scope,
-                        identity.mainSessionKey,
-                        identity.defaultAgentID,
-                        identity.routingContract,
-                        identity.selectionRequired ? 1 : 0,
+                        canonicalIdentity.scope,
+                        canonicalIdentity.mainSessionKey,
+                        canonicalIdentity.defaultAgentID,
+                        canonicalIdentity.contract,
+                        canonicalIdentity.selectionRequired ? 1 : 0,
+                        identity.updatedAt,
                         identity.updatedAt,
                     ])
             }

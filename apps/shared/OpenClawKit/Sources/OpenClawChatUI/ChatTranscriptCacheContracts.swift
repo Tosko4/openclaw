@@ -445,12 +445,13 @@ public struct OpenClawChatSessionRoutingIdentity: Equatable, Sendable {
     public let selectionRequired: Bool
     public let contract: String
 
+    // periphery:ignore - Shipped public initializer retained for OpenClawKit source compatibility.
     public init?(contract: String?) {
         guard let components = OpenClawChatSessionRoutingContract.parse(contract) else { return nil }
         self.scope = components.scope
         self.mainSessionKey = components.mainKey
         self.defaultAgentID = components.defaultAgentID
-        self.selectionRequired = false
+        self.selectionRequired = components.defaultAgentID == "unowned"
         self.contract = "\(components.scope)|\(components.mainKey)|\(components.defaultAgentID)"
     }
 

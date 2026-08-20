@@ -594,6 +594,21 @@ struct RootTabsPresentationTests {
             selectionRequired: false) == "main")
     }
 
+    @Test func `chat does not present the display default as selected when ownership is explicit`() {
+        #expect(ChatProTab.presentationAgentID(
+            deliveryAgentID: nil,
+            displayAgentID: "main",
+            selectionRequired: true).isEmpty)
+        #expect(ChatProTab.presentationAgentID(
+            deliveryAgentID: " Research ",
+            displayAgentID: "main",
+            selectionRequired: true) == "research")
+        #expect(ChatProTab.presentationAgentID(
+            deliveryAgentID: nil,
+            displayAgentID: " Main ",
+            selectionRequired: false) == "main")
+    }
+
     @Test func `sidebar agent badges use canonical identity fallback`() {
         #expect(RootSidebar.agentBadge(
             name: "Research Agent",

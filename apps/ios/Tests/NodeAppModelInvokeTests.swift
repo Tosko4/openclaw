@@ -1374,6 +1374,82 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel.mainSessionKey == "agent:agent-123:main")
     }
 
+    @Test @MainActor func `explicit ownership keeps selected default agent scoped for Talk`() async throws {
+        let appModel = NodeAppModel()
+        let stableID = "talk-explicit-default-\(UUID().uuidString)"
+        let databaseDirectoryURL = try #require(NodeAppModel.chatDatabaseDirectoryURL())
+        let databases = try OpenClawClientDatabases(directoryURL: databaseDirectoryURL)
+        let identity = try #require(OpenClawChatSessionRoutingIdentity(
+            scope: "per-sender",
+            mainSessionKey: "main",
+            defaultAgentID: "main",
+            selectionRequired: true,
+            sessionRoutingContract: "opaque-routing-contract"))
+        let store = databases.store(gatewayID: stableID)
+        await store.storeSessionRoutingIdentity(identity)
+        await store.retire()
+        defer {
+            try? databases.removeGatewayData(gatewayID: stableID)
+            appModel.voiceWake.stop()
+        }
+
+        appModel.prepareForGatewayConnect(stableID: stableID)
+        await appModel.chatSessionRoutingRestoreTask?.value
+
+        appModel.openChat(sessionKey: "agent:research:incident")
+        #expect(appModel.chatDeliveryAgentId == "research")
+        #expect(appModel.mainSessionKey == "main")
+
+        appModel.setTalkEnabled(true)
+        #expect(!appModel.talkMode.isEnabled)
+        #expect(appModel.talkMode.statusText == "Select an agent before enabling Talk")
+        #expect(appModel.voiceCommandSessionKey() == nil)
+        #expect(appModel.voiceWake.statusText == "Select an agent before using Voice Wake")
+        await #expect(throws: Error.self) {
+            try await appModel.sendVoiceTranscript(text: "hello", sessionKey: "main")
+        }
+
+        appModel.setSelectedAgentId("main")
+
+        #expect(appModel.gatewayAgentSelectionRequired)
+        #expect(appModel.mainSessionKey == "agent:main:main")
+        #expect(appModel.talkMode._test_mainSessionKey() == "agent:main:main")
+        #expect(appModel.voiceCommandSessionKey() == "agent:main:main")
+    }
+
+    @Test @MainActor func `routing restore revokes persisted Talk for an unowned session`() async throws {
+        try await withUserDefaults(["talk.enabled": true]) {
+            let talkMode = TalkModeManager(allowSimulatorCapture: true)
+            let appModel = NodeAppModel(talkMode: talkMode)
+            let stableID = "talk-persisted-unowned-\(UUID().uuidString)"
+            let databaseDirectoryURL = try #require(NodeAppModel.chatDatabaseDirectoryURL())
+            let databases = try OpenClawClientDatabases(directoryURL: databaseDirectoryURL)
+            let identity = try #require(OpenClawChatSessionRoutingIdentity(
+                scope: "per-sender",
+                mainSessionKey: "main",
+                defaultAgentID: "main",
+                selectionRequired: true,
+                sessionRoutingContract: "opaque-routing-contract"))
+            let store = databases.store(gatewayID: stableID)
+            await store.storeSessionRoutingIdentity(identity)
+            await store.retire()
+            defer {
+                try? databases.removeGatewayData(gatewayID: stableID)
+                appModel.voiceWake.stop()
+            }
+
+            #expect(appModel.talkMode.isEnabled)
+            appModel.prepareForGatewayConnect(stableID: stableID)
+            await appModel.chatSessionRoutingRestoreTask?.value
+
+            #expect(appModel.gatewayAgentSelectionRequired)
+            #expect(appModel.chatDeliveryAgentId == nil)
+            #expect(!appModel.talkMode.isEnabled)
+            #expect(!UserDefaults.standard.bool(forKey: "talk.enabled"))
+            #expect(appModel.talkMode.statusText == "Select an agent before enabling Talk")
+        }
+    }
+
     @Test @MainActor func `session key extracts canonical agent ID`() {
         #expect(SessionKey.agentId(from: "agent:rust-claw:mattermost:channel:w6g") == "rust-claw")
         #expect(SessionKey.agentId(from: " agent:main:main ") == "main")

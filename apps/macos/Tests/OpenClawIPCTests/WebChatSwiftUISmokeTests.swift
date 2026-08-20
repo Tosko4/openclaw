@@ -246,7 +246,7 @@ struct WebChatSwiftUISmokeTests {
             mainSessionKey: "main",
             defaultAgentID: "main",
             selectionRequired: true,
-            sessionRoutingContract: "per-sender|main|unowned"))
+            sessionRoutingContract: "opaque-routing-contract-v2"))
         let unresolved = WebChatSwiftUIWindowController(
             sessionKey: "main",
             agentID: nil,
@@ -275,6 +275,53 @@ struct WebChatSwiftUISmokeTests {
         #expect(explicit._testActiveAgentID == "work")
         unresolved.close()
         explicit.close()
+    }
+
+    @Test func `controller gates an uncached bare session until routing metadata arrives`() {
+        let unresolved = WebChatSwiftUIWindowController(
+            sessionKey: "main",
+            agentID: nil,
+            cachedRoutingIdentity: nil,
+            store: nil)
+        let scoped = WebChatSwiftUIWindowController(
+            sessionKey: "agent:work:main",
+            agentID: nil,
+            cachedRoutingIdentity: nil,
+            store: nil)
+        let explicit = WebChatSwiftUIWindowController(
+            sessionKey: "main",
+            agentID: "work",
+            cachedRoutingIdentity: nil,
+            store: nil)
+
+        #expect(unresolved._testRequiresExplicitAgentSelection)
+        #expect(!scoped._testRequiresExplicitAgentSelection)
+        #expect(!explicit._testRequiresExplicitAgentSelection)
+        unresolved.close()
+        scoped.close()
+        explicit.close()
+    }
+
+    @Test func `routing refresh preserves an agent selected while metadata was pending`() throws {
+        let controller = WebChatSwiftUIWindowController(
+            sessionKey: "main",
+            agentID: nil,
+            cachedRoutingIdentity: nil,
+            store: nil)
+        controller._testSelectAgent("work")
+        let routingIdentity = try #require(OpenClawChatSessionRoutingIdentity(
+            scope: "per-sender",
+            mainSessionKey: "main",
+            defaultAgentID: "main",
+            selectionRequired: true,
+            sessionRoutingContract: "per-sender|main|unowned"))
+
+        controller._testApplyRoutingIdentity(routingIdentity)
+
+        #expect(controller._testSelectedAgentID == "work")
+        #expect(controller._testSessionKey == "agent:work:main")
+        #expect(!controller._testRequiresExplicitAgentSelection)
+        controller.close()
     }
 
     @Test func `max and Ultra thinking preferences survive reopen`() throws {

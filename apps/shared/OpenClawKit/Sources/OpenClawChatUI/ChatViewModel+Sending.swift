@@ -22,7 +22,7 @@ extension OpenClawChatViewModel {
 
     public var requiresExplicitAgentSelection: Bool {
         guard self.currentSessionSnapshot().deliveryAgentID == nil else { return false }
-        return OpenClawChatSessionRoutingContract.parse(self.sessionRoutingContract)?.defaultAgentID == "unowned"
+        return self.agentSelectionRequired
     }
 
     public func availableAgentsForSelection() async throws -> [OpenClawChatAgentChoice] {

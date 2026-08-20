@@ -31,6 +31,108 @@ struct QuickChatModelTests {
         #expect(model.sendState == .idle)
     }
 
+    @Test func `explicit ownership keeps quick chat unsendable until an agent is selected`() async {
+        let model = self.makeModel(agentsProvider: {
+            Self.agentsResult(
+                defaultID: "main",
+                agentIDs: ["main", "research"],
+                selectionRequired: true)
+        })
+        let presentationID = model.beginPresentation()
+        await model.refreshForPresentation(id: presentationID)
+        model.text = "route this explicitly"
+
+        #expect(model.agentSelectionRequired)
+        #expect(model.selectedAgentID == nil)
+        #expect(!model.canSend)
+        #expect(model.messagePlaceholder == "Select an agent")
+
+        model.selectAgent("research")
+
+        #expect(model.selectedAgentID == "research")
+        #expect(model.canSend)
+        #expect(model.routingTarget == QuickChatRoutingTarget(
+            sessionKey: "agent:research:main",
+            agentID: nil))
+    }
+
+    @Test func `explicit ownership clears an implicit display default from a prior refresh`() async {
+        let results = AgentsResultsBox(results: [
+            Self.agentsResult(defaultID: "main", agentIDs: ["main", "research"]),
+            Self.agentsResult(
+                defaultID: "main",
+                agentIDs: ["main", "research"],
+                selectionRequired: true),
+        ])
+        let model = self.makeModel(agentsProvider: { results.next() })
+        await self.prepare(model)
+        #expect(model.selectedAgentID == "main")
+
+        model.endPresentation()
+        await self.prepare(model)
+
+        #expect(model.agentSelectionRequired)
+        #expect(model.selectedAgentID == nil)
+        #expect(!model.canSend)
+    }
+
+    @Test func `explicit ownership survives a transient agents refresh failure`() async {
+        let failure = GrantFlag()
+        let model = self.makeModel(
+            sessionKeyProvider: { "main" },
+            agentsProvider: {
+                if failure.value {
+                    throw FakeSendError.rejected
+                }
+                return Self.agentsResult(
+                    defaultID: "main",
+                    agentIDs: ["main", "research"],
+                    selectionRequired: true)
+            })
+        await self.prepare(model)
+        failure.value = true
+
+        model.endPresentation()
+        await self.prepare(model)
+
+        #expect(model.agentSelectionRequired)
+        #expect(model.selectedAgentID == nil)
+        #expect(model.sessionKey == "main")
+        #expect(!model.canSend)
+    }
+
+    @Test func `first metadata failure keeps an ownerless fallback unsendable`() async {
+        let model = self.makeModel(
+            sessionKeyProvider: { "main" },
+            agentsProvider: { throw FakeSendError.rejected },
+            agentIdentityProvider: { _ in throw FakeSendError.rejected })
+
+        await self.prepare(model)
+        model.text = "do not infer an owner"
+
+        #expect(model.agentSelectionRequired)
+        #expect(model.selectedAgentID == nil)
+        #expect(model.messagePlaceholder == "Select an agent")
+        #expect(!model.canSend)
+    }
+
+    @Test func `fallback display identity does not claim an ownerless session`() async {
+        let model = self.makeModel(
+            sessionKeyProvider: { "main" },
+            agentsProvider: { throw FakeSendError.rejected },
+            agentIdentityProvider: { _ in
+                QuickChatAgentDisplay(id: "main", name: "Molty", emoji: "🦞")
+            })
+
+        await self.prepare(model)
+        model.text = "do not infer the display owner"
+
+        #expect(model.agentDisplay.id == "main")
+        #expect(model.agentSelectionRequired)
+        #expect(model.selectedAgentID == nil)
+        #expect(!model.canSend)
+    }
+
     @Test(arguments: ["error", "timeout"])
     func `terminal failure preserves text`(_ status: String) async {
         let model = self.makeModel(sendStatus: status)
@@ -60,7 +162,9 @@ struct QuickChatModelTests {
         var keys: [String] = []
         let model = self.makeModel(sendHandler: { _, _, _, _, idempotencyKey, _ in
             keys.append(idempotencyKey)
-            if keys.count == 1 { throw FakeSendError.rejected }
+            if keys.count == 1 {
+                throw FakeSendError.rejected
+            }
             return "started"
         })
         await self.prepare(model)
@@ -76,7 +180,9 @@ struct QuickChatModelTests {
         var keys: [String] = []
         let model = self.makeModel(sendHandler: { _, _, _, _, idempotencyKey, _ in
             keys.append(idempotencyKey)
-            if keys.count == 1 { throw FakeSendError.rejected }
+            if keys.count == 1 {
+                throw FakeSendError.rejected
+            }
             return "started"
         })
         await self.prepare(model)
@@ -93,7 +199,9 @@ struct QuickChatModelTests {
     @Test func `new dispatch clears the previous accepted reply key`() async {
         var shouldFail = false
         let model = self.makeModel(sendHandler: { _, _, _, _, _, _ in
-            if shouldFail { throw FakeSendError.rejected }
+            if shouldFail {
+                throw FakeSendError.rejected
+            }
             return "started"
         })
         await self.prepare(model)
@@ -166,6 +274,39 @@ struct QuickChatModelTests {
 
         #expect(model.sessionKey.isEmpty)
         #expect(!model.canSend)
+    }
+
+    @Test func `new presentation cannot send through a stale implicit route while metadata is pending`() async {
+        var sendCount = 0
+        let results = AgentsRefreshLatch(
+            first: Self.agentsResult(defaultID: "main", agentIDs: ["main", "work"]))
+        let model = self.makeModel(
+            agentsProvider: { await results.next() },
+            sendHandler: { _, _, _, _, _, _ in
+                sendCount += 1
+                return "started"
+            })
+        await self.prepare(model)
+        model.text = "do not use stale ownership"
+        #expect(model.canSend)
+
+        model.endPresentation()
+        let presentationID = model.beginPresentation()
+        let refresh = Task { await model.refreshForPresentation(id: presentationID) }
+        while !results.waitingForSecondResult {
+            await Task.yield()
+        }
+
+        #expect(model.sessionKey.isEmpty)
+        #expect(!model.canSend)
+        #expect(!(await model.send()))
+        #expect(sendCount == 0)
+
+        results.finish(with: Self.agentsResult(
+            defaultID: "main",
+            agentIDs: ["main", "work"],
+            selectionRequired: true))
+        await refresh.value
     }
 
     @Test func `dismissal lets dispatched send settle without retry`() async {
@@ -249,7 +390,7 @@ struct QuickChatModelTests {
             connectionGateProvider: { .available },
             modelControlsProvider: { _ in .testFixture },
             modelPatchProvider: { _, _ in nil })
-        await self.prepare(model)
+        await prepare(model)
         #expect(model.missingPermissions == [.screenRecording])
 
         model.grantMissingPermissions()
@@ -278,7 +419,7 @@ struct QuickChatModelTests {
             connectionGateProvider: { .available },
             modelControlsProvider: { _ in .testFixture },
             modelPatchProvider: { _, _ in nil })
-        await self.prepare(model)
+        await prepare(model)
 
         model.grantMissingPermissions()
 
@@ -373,6 +514,99 @@ struct QuickChatModelTests {
 
         #expect(await model.send())
         #expect(sentRoute == QuickChatRoutingTarget(sessionKey: key, agentID: nil))
+    }
+
+    @Test func `explicit recent session override satisfies the ownership gate`() async {
+        var sentRoute: QuickChatRoutingTarget?
+        let model = self.makeModel(
+            agentsProvider: {
+                Self.agentsResult(
+                    defaultID: "main",
+                    agentIDs: ["main", "work"],
+                    selectionRequired: true)
+            },
+            sendHandler: { sessionKey, agentID, _, _, _, _ in
+                sentRoute = QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID)
+                return "started"
+            })
+        await self.prepare(model)
+        let key = "agent:ops:discord:channel:release"
+        model.selectSessionOverride(QuickChatSessionTargetOverride(key: key, displayName: "Release"))
+        model.text = "hello"
+
+        #expect(model.selectedAgentID == nil)
+        #expect(model.canSend)
+        #expect(await model.send())
+        #expect(sentRoute == QuickChatRoutingTarget(sessionKey: key, agentID: nil))
+    }
+
+    @Test func `ownerless recent session override does not satisfy the ownership gate`() async {
+        var sendCount = 0
+        let model = self.makeModel(
+            agentsProvider: {
+                Self.agentsResult(
+                    defaultID: "main",
+                    agentIDs: ["main", "work"],
+                    selectionRequired: true)
+            },
+            sendHandler: { _, _, _, _, _, _ in
+                sendCount += 1
+                return "started"
+            })
+        await self.prepare(model)
+        model.selectSessionOverride(QuickChatSessionTargetOverride(key: "main", displayName: "Main"))
+        model.text = "hello"
+
+        #expect(model.selectedAgentID == nil)
+        #expect(!model.canSend)
+        #expect(!(await model.send()))
+        #expect(sendCount == 0)
+    }
+
+    @Test func `ownerless recent session override revokes a prior agent selection`() async {
+        var sendCount = 0
+        let model = self.makeModel(
+            agentsProvider: {
+                Self.agentsResult(
+                    defaultID: "main",
+                    agentIDs: ["main", "work"],
+                    selectionRequired: true)
+            },
+            sendHandler: { _, _, _, _, _, _ in
+                sendCount += 1
+                return "started"
+            })
+        await self.prepare(model)
+        model.selectAgent("work")
+        model.selectSessionOverride(QuickChatSessionTargetOverride(key: "main", displayName: "Main"))
+        model.text = "hello"
+
+        #expect(model.selectedAgentID == "work")
+        #expect(!model.canSend)
+        #expect(!(await model.send()))
+        #expect(sendCount == 0)
+    }
+
+    @Test func `owned recent session selected during refresh survives explicit ownership metadata`() async {
+        let latch = AgentsResultLatch()
+        let model = self.makeModel(agentsProvider: { await latch.wait() })
+        let presentationID = model.beginPresentation()
+        let refresh = Task { await model.refreshForPresentation(id: presentationID) }
+        while !latch.started {
+            await Task.yield()
+        }
+        let key = "agent:ops:discord:channel:release"
+        model.selectSessionOverride(QuickChatSessionTargetOverride(key: key, displayName: "Release"))
+        latch.finish(with: Self.agentsResult(
+            defaultID: "main",
+            agentIDs: ["main", "work"],
+            selectionRequired: true))
+        await refresh.value
+        model.text = "hello"
+
+        #expect(model.selectedAgentID == nil)
+        #expect(model.sessionKey == key)
+        #expect(model.canSend)
     }
 
     @Test func `global override preserves selected global agent`() async {
@@ -632,19 +866,23 @@ struct QuickChatModelTests {
         sendStatus: String = "ok",
         sendError: Error? = nil,
         permissionStatus: [Capability: Bool]? = nil,
+        sessionKeyProvider: QuickChatModel.SessionKeyProvider? = nil,
         agentsProvider: QuickChatModel.AgentsProvider? = nil,
+        agentIdentityProvider: QuickChatModel.AgentIdentityProvider? = nil,
         sendHandler: QuickChatModel.SendProvider? = nil) -> QuickChatModel
     {
         QuickChatModel(
-            sessionKeyProvider: { "agent:main:main" },
+            sessionKeyProvider: sessionKeyProvider ?? { "agent:main:main" },
             agentsProvider: agentsProvider ?? {
                 Self.agentsResult(defaultID: "main", agentIDs: ["main"], names: ["Molty"])
             },
-            agentIdentityProvider: { _ in
+            agentIdentityProvider: agentIdentityProvider ?? { _ in
                 QuickChatAgentDisplay(id: "main", name: "Molty", emoji: "🦞")
             },
             sendProvider: sendHandler ?? { _, _, _, _, _, _ in
-                if let sendError { throw sendError }
+                if let sendError {
+                    throw sendError
+                }
                 return sendStatus
             },
             permissionStatusProvider: { capabilities in
@@ -663,10 +901,12 @@ struct QuickChatModelTests {
         agentIDs: [String],
         names: [String] = [],
         kinds: [AgentKind?] = [],
-        scope: String = "per-agent") -> AgentsListResult
+        scope: String = "per-agent",
+        selectionRequired: Bool? = nil) -> AgentsListResult
     {
         AgentsListResult(
             defaultid: defaultID,
+            selectionrequired: selectionRequired,
             mainkey: "main",
             scope: AnyCodable(scope),
             agents: agentIDs.enumerated().map { index, id in
@@ -698,7 +938,9 @@ private final class PermissionGrantLatch {
     private var finished = false
 
     func wait() async {
-        if self.finished { return }
+        if self.finished {
+            return
+        }
         await withCheckedContinuation { continuation in
             self.continuation = continuation
         }
@@ -721,6 +963,52 @@ private final class AgentsResultsBox {
 
     func next() -> AgentsListResult {
         self.results.removeFirst()
+    }
+}
+
+@MainActor
+private final class AgentsResultLatch {
+    private var continuation: CheckedContinuation<AgentsListResult, Never>?
+    private(set) var started = false
+
+    func wait() async -> AgentsListResult {
+        self.started = true
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func finish(with result: AgentsListResult) {
+        self.continuation?.resume(returning: result)
+        self.continuation = nil
+    }
+}
+
+@MainActor
+private final class AgentsRefreshLatch {
+    private let first: AgentsListResult
+    private var callCount = 0
+    private var continuation: CheckedContinuation<AgentsListResult, Never>?
+    private(set) var waitingForSecondResult = false
+
+    init(first: AgentsListResult) {
+        self.first = first
+    }
+
+    func next() async -> AgentsListResult {
+        self.callCount += 1
+        if self.callCount == 1 {
+            return self.first
+        }
+        self.waitingForSecondResult = true
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func finish(with result: AgentsListResult) {
+        self.continuation?.resume(returning: result)
+        self.continuation = nil
     }
 }
 

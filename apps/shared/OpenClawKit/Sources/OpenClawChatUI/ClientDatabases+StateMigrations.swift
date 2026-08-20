@@ -21,6 +21,7 @@ extension OpenClawClientDatabases {
                 default_agent_id TEXT NOT NULL,
                 routing_contract TEXT,
                 selection_required INTEGER,
+                routing_identity_updated_at REAL,
                 updated_at REAL NOT NULL
             );
                 CREATE TABLE outbox_commands(
