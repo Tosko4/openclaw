@@ -3470,7 +3470,8 @@ extension NodeAppModel {
 
     var requiresExplicitAgentSelectionForVoice: Bool {
         let selected = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return self.gatewayAgentSelectionRequired && selected.isEmpty
+        return self.chatSessionRoutingContract == nil ||
+            (self.gatewayAgentSelectionRequired && selected.isEmpty)
     }
 
     func voiceCommandSessionKey() -> String? {
@@ -3598,6 +3599,7 @@ extension NodeAppModel {
     /// display fallback: a cold offline start must wait for persisted or
     /// gateway-provided ownership before it can queue durable work.
     var chatDeliveryAgentId: String? {
+        guard self.chatSessionRoutingContract != nil else { return nil }
         if let sessionAgentId = SessionKey.agentId(from: chatSessionKey) {
             return sessionAgentId.lowercased()
         }
@@ -4031,7 +4033,9 @@ extension NodeAppModel {
         self.gatewaySessionScope = nil
         self.gatewayAccentColorHex = nil
         self.gatewaySessionRoutingContract = nil
-        self.gatewayAgentSelectionRequired = false
+        // A fresh route has no authoritative ownership yet. Keep ownerless chat and
+        // voice delivery closed until cache restore or agents.list publishes it.
+        self.gatewayAgentSelectionRequired = true
         self.gatewayDefaultAgentId = nil
         self.gatewayAgents = []
         self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: stableID)

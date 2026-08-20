@@ -80,6 +80,11 @@ struct QuickChatRoutingTarget: Equatable, Hashable, Sendable {
     let agentID: String?
 }
 
+struct QuickChatRoutingIdentity: Equatable, Sendable {
+    let target: QuickChatRoutingTarget
+    let sessionRoutingContract: String?
+}
+
 struct QuickChatSessionTargetOverride: Equatable, Hashable, Sendable {
     let key: String
     let displayName: String
@@ -114,6 +119,7 @@ private struct AgentsResolution {
     let displays: [QuickChatAgentDisplay]
     let selectedID: String?
     let selectionIsExplicit: Bool
+    let routingIdentity: OpenClawChatSessionRoutingIdentity?
     let target: QuickChatRoutingTarget?
 }
 
@@ -121,8 +127,7 @@ private struct RetryIdentity {
     let draft: String
     let message: String
     let thinking: String?
-    let sessionKey: String
-    let agentID: String?
+    let routingIdentity: QuickChatRoutingIdentity
     let attachments: [OpenClawChatAttachmentPayload]
     let idempotencyKey: String
 }
@@ -134,8 +139,7 @@ final class QuickChatModel {
     typealias AgentsProvider = @MainActor () async throws -> AgentsListResult
     typealias AgentIdentityProvider = @MainActor (String) async throws -> QuickChatAgentDisplay
     typealias SendProvider = @MainActor (
-        String,
-        String?,
+        QuickChatRoutingIdentity,
         String,
         String?,
         String,
@@ -201,7 +205,7 @@ final class QuickChatModel {
     private(set) var modelControlStatusMessage: String?
     /// Route of the most recently accepted send; navigation reads this immutable value
     /// instead of sampling live routing state that an agent switch could move meanwhile.
-    private(set) var lastAcceptedRoute: QuickChatRoutingTarget?
+    private(set) var lastAcceptedRoutingIdentity: QuickChatRoutingIdentity?
     private(set) var lastAcceptedIdempotencyKey: String?
 
     @ObservationIgnored private let sessionKeyProvider: SessionKeyProvider
@@ -217,10 +221,9 @@ final class QuickChatModel {
     @ObservationIgnored private let modelPatchProvider: ModelPatchProvider
     /// Invoked with the snapshotted route just before a send is dispatched, for every
     /// send path (text and capture); wires the reply consumer's pre-bind.
-    @ObservationIgnored var onSendDispatched: ((QuickChatRoutingTarget) -> Void)?
+    @ObservationIgnored var onSendDispatched: ((QuickChatRoutingIdentity) -> Void)?
     @ObservationIgnored private var presentationID = UUID()
-    @ObservationIgnored private var agentsScope: String?
-    @ObservationIgnored private var agentsMainKey: String?
+    @ObservationIgnored private var agentsRoutingIdentity: OpenClawChatSessionRoutingIdentity?
     @ObservationIgnored private var baseRoutingTarget: QuickChatRoutingTarget?
     @ObservationIgnored private var sendTask: Task<String, Error>?
     @ObservationIgnored private var permissionTask: Task<Void, Never>?
@@ -252,10 +255,12 @@ final class QuickChatModel {
                 emoji: emoji,
                 avatar: QuickChatAgentDisplay.avatar(fromRendered: identity.avatar))
         },
-        sendProvider: @escaping SendProvider = { sessionKey, agentID, message, thinking, idempotencyKey, attachments in
-            let response = try await GatewayConnection.shared.chatSend(
-                sessionKey: sessionKey,
-                agentID: agentID,
+        sendProvider: @escaping SendProvider = { routingIdentity, message, thinking, idempotencyKey, attachments in
+            let transport = MacGatewayChatTransport(defaultGlobalAgentID: routingIdentity.target.agentID)
+            let response = try await transport.sendTargetedMessage(
+                sessionKey: routingIdentity.target.sessionKey,
+                agentID: routingIdentity.target.agentID,
+                expectedSessionRoutingContract: routingIdentity.sessionRoutingContract,
                 message: message,
                 thinking: thinking,
                 idempotencyKey: idempotencyKey,
@@ -397,8 +402,20 @@ final class QuickChatModel {
     }
 
     var routingTarget: QuickChatRoutingTarget? {
+        self.routingIdentity?.target
+    }
+
+    var routingIdentity: QuickChatRoutingIdentity? {
         guard !self.sessionKey.isEmpty else { return nil }
-        return QuickChatRoutingTarget(sessionKey: self.sessionKey, agentID: self.sendAgentID)
+        return QuickChatRoutingIdentity(
+            target: QuickChatRoutingTarget(
+                sessionKey: self.sessionKey,
+                agentID: self.sendAgentID),
+            sessionRoutingContract: self.agentsRoutingIdentity?.contract)
+    }
+
+    var lastAcceptedRoute: QuickChatRoutingTarget? {
+        self.lastAcceptedRoutingIdentity?.target
     }
 
     var activePresentationID: UUID? {
@@ -425,8 +442,7 @@ final class QuickChatModel {
         self.baseRoutingTarget = nil
         // The cached list stays displayable, but routing metadata must wait for the fresh
         // contract: selecting from a stale scope/mainKey could target an obsolete session.
-        self.agentsScope = nil
-        self.agentsMainKey = nil
+        self.agentsRoutingIdentity = nil
         if self.sendTask == nil {
             self.sendState = .idle
         }
@@ -468,7 +484,7 @@ final class QuickChatModel {
         guard self.sendState != .sending,
               !self.isUpdatingModel,
               let display = agents.first(where: { $0.id == id }),
-              let mainKey = agentsMainKey
+              let routingIdentity = agentsRoutingIdentity
         else { return }
         // Agent and recent-session targeting are mutually exclusive: keeping both would
         // make the avatar advertise one destination while sends go somewhere else.
@@ -476,7 +492,10 @@ final class QuickChatModel {
         self.selectedAgentID = id
         self.selectedAgentIsExplicit = true
         self.agentDisplay = display
-        let target = Self.routingTarget(scope: self.agentsScope, selectedAgentID: id, mainKey: mainKey)
+        let target = Self.routingTarget(
+            scope: routingIdentity.scope,
+            selectedAgentID: id,
+            mainKey: routingIdentity.mainSessionKey)
         self.baseRoutingTarget = target
         self.applyRoutingTarget()
     }
@@ -816,8 +835,7 @@ final class QuickChatModel {
         self.defaultAgentID = nil
         self.selectedAgentID = nil
         self.selectedAgentIsExplicit = false
-        self.agentsScope = nil
-        self.agentsMainKey = nil
+        self.agentsRoutingIdentity = nil
         self.agentSelectionRequired = mustPreserveSelectionGate || mustResolveFallbackOwner
         self.agentDisplay = .placeholder
 
@@ -895,7 +913,12 @@ final class QuickChatModel {
 
         let sessionKey = self.sessionKey
         let agentID = self.sendAgentID
-        let route = QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID)
+        let routingIdentity = QuickChatRoutingIdentity(
+            target: QuickChatRoutingTarget(
+                sessionKey: sessionKey,
+                agentID: agentID),
+            sessionRoutingContract: self.agentsRoutingIdentity?.contract)
+        let route = routingIdentity.target
         let selectedModelSelectionID = self.selectedModelSelectionID
         guard await applySelectedModelIfNeeded(
             to: route,
@@ -903,7 +926,7 @@ final class QuickChatModel {
         else { return false }
         guard !Task.isCancelled,
               self.isCurrentPresentation(presentationID),
-              self.routingTarget == route,
+              self.routingIdentity == routingIdentity,
               self.connectionGate == .available,
               isSelectedThinkingLevelSupported,
               continuesCapturePipeline || self.sendState != .sending
@@ -912,14 +935,13 @@ final class QuickChatModel {
         self.lastAcceptedIdempotencyKey = nil
         // Pre-bind the reply consumer for every send path (text and screenshots): a
         // fast turn must not emit frames before the reply view model starts listening.
-        self.onSendDispatched?(route)
+        self.onSendDispatched?(routingIdentity)
         let idempotencyKey: String
         if let retryIdentity,
            retryIdentity.draft == draft,
            retryIdentity.message == message,
            retryIdentity.thinking == thinking,
-           retryIdentity.sessionKey == sessionKey,
-           retryIdentity.agentID == agentID,
+           retryIdentity.routingIdentity == routingIdentity,
            retryIdentity.attachments == attachments
         {
             idempotencyKey = retryIdentity.idempotencyKey
@@ -929,13 +951,12 @@ final class QuickChatModel {
                 draft: draft,
                 message: message,
                 thinking: thinking,
-                sessionKey: sessionKey,
-                agentID: agentID,
+                routingIdentity: routingIdentity,
                 attachments: attachments,
                 idempotencyKey: idempotencyKey)
         }
         let task = Task {
-            try await self.sendProvider(sessionKey, agentID, message, thinking, idempotencyKey, attachments)
+            try await self.sendProvider(routingIdentity, message, thinking, idempotencyKey, attachments)
         }
         self.sendTask = task
         self.sendState = .sending
@@ -952,7 +973,7 @@ final class QuickChatModel {
                 return false
             case .terminalSuccess, .inFlight:
                 retryIdentity = nil
-                self.lastAcceptedRoute = route
+                self.lastAcceptedRoutingIdentity = routingIdentity
                 self.lastAcceptedIdempotencyKey = idempotencyKey
                 if self.textContext == textContext {
                     self.textContext = nil
@@ -1276,6 +1297,12 @@ extension QuickChatModel {
 extension QuickChatModel {
     private func resolveAgents(_ result: AgentsListResult) -> AgentsResolution {
         let displays = result.agents.filter(\.isSelectableAgent).map(QuickChatAgentDisplay.init(summary:))
+        let routingIdentity = OpenClawChatSessionRoutingIdentity(
+            scope: result.scope.value as? String,
+            mainSessionKey: result.mainkey,
+            defaultAgentID: result.defaultid,
+            selectionRequired: result.selectionrequired ?? false,
+            sessionRoutingContract: result.sessionroutingcontract)
         let selectionRequired = result.selectionrequired ?? false
         let preservesExistingSelection = if let selectedAgentID {
             displays.contains(where: { $0.id == selectedAgentID }) &&
@@ -1294,16 +1321,19 @@ extension QuickChatModel {
         }
         let selectionIsExplicit = preservesExistingSelection && self.selectedAgentIsExplicit
 
-        let target = selectedID.map {
-            Self.routingTarget(
-                scope: result.scope.value as? String,
-                selectedAgentID: $0,
-                mainKey: result.mainkey)
+        let target = selectedID.flatMap { selectedID in
+            routingIdentity.map {
+                Self.routingTarget(
+                    scope: $0.scope,
+                    selectedAgentID: selectedID,
+                    mainKey: $0.mainSessionKey)
+            }
         }
         return AgentsResolution(
             displays: displays,
             selectedID: selectedID,
             selectionIsExplicit: selectionIsExplicit,
+            routingIdentity: routingIdentity,
             target: target)
     }
 
@@ -1316,8 +1346,7 @@ extension QuickChatModel {
         self.selectedAgentID = selectedID
         self.selectedAgentIsExplicit = resolution.selectionIsExplicit
         self.agentSelectionRequired = result.selectionrequired ?? false
-        self.agentsScope = result.scope.value as? String
-        self.agentsMainKey = result.mainkey
+        self.agentsRoutingIdentity = resolution.routingIdentity
 
         guard let selectedID,
               let display = displays.first(where: { $0.id == selectedID })

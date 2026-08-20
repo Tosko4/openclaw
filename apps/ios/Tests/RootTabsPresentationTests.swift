@@ -459,6 +459,17 @@ struct RootTabsPresentationTests {
             nextTransportAgentID: "work"))
     }
 
+    @Test func `chat preserves a draft only across same-gateway agent resolution`() {
+        #expect(ChatProTab.composerDraftForReplacement(
+            "  unsent draft  ",
+            currentOwnerID: "gateway-a",
+            nextOwnerID: "gateway-a") == "  unsent draft  ")
+        #expect(ChatProTab.composerDraftForReplacement(
+            "do not leak",
+            currentOwnerID: "gateway-a",
+            nextOwnerID: "gateway-b") == nil)
+    }
+
     @Test func `localized QR status matcher accepts positional placeholders`() {
         #expect(SettingsProTab.localizedFormat(
             "qr loaded. connecting to %1$@:%2$@...",

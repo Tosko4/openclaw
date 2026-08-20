@@ -1450,6 +1450,24 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         }
     }
 
+    @Test @MainActor func `fresh ownerless gateway stays gated until routing metadata resolves`() async {
+        let appModel = NodeAppModel()
+        let stableID = "routing-metadata-pending-\(UUID().uuidString)"
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        defer {
+            GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+            appModel.voiceWake.stop()
+        }
+
+        appModel.prepareForGatewayConnect(stableID: stableID)
+        await appModel.chatSessionRoutingRestoreTask?.value
+
+        #expect(appModel.gatewayAgentSelectionRequired)
+        #expect(appModel.chatDeliveryAgentId == nil)
+        #expect(appModel.chatSessionRoutingContract == nil)
+        #expect(appModel.requiresExplicitAgentSelectionForVoice)
+    }
+
     @Test @MainActor func `session key extracts canonical agent ID`() {
         #expect(SessionKey.agentId(from: "agent:rust-claw:mattermost:channel:w6g") == "rust-claw")
         #expect(SessionKey.agentId(from: " agent:main:main ") == "main")

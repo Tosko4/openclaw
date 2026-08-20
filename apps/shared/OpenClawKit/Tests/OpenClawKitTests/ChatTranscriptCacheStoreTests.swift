@@ -1205,6 +1205,30 @@ final class ClientDatabaseLegacyImportTests: TemporaryDatabaseTestSuite, @unchec
         #expect(!FileManager.default.fileExists(atPath: legacyURL.path))
     }
 
+    @Test func `legacy routing rows without authoritative columns stay untrusted`() async throws {
+        let legacyURL = directory.appendingPathComponent("chat-cache.sqlite")
+        try withRawDatabase(at: legacyURL) { raw in
+            execute(raw, """
+            CREATE TABLE gateway_routing_identity(
+                gateway_id TEXT PRIMARY KEY,
+                scope TEXT NOT NULL,
+                main_session_key TEXT NOT NULL,
+                default_agent_id TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            INSERT INTO gateway_routing_identity(
+                gateway_id, scope, main_session_key, default_agent_id, updated_at
+            ) VALUES ('gw-a', 'per-sender', 'main', 'main', 10);
+            PRAGMA user_version = 5;
+            """)
+        }
+
+        let databases = try OpenClawClientDatabases(directoryURL: directory)
+
+        #expect(databases.loadSessionRoutingIdentity(gatewayID: "gw-a") == nil)
+        #expect(!FileManager.default.fileExists(atPath: legacyURL.path))
+    }
+
     @Test func `unknown or corrupt legacy files remain untouched`() async throws {
         let unknownURL = directory.appendingPathComponent("chat-cache.sqlite")
         try withRawDatabase(at: unknownURL) { raw in

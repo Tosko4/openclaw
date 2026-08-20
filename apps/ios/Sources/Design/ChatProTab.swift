@@ -479,13 +479,21 @@ struct ChatProTab: View {
             // Keep recording, staging, and delivery on their captured route.
             // The pin-change observer replays this rebuild with latest state.
             guard !viewModel.isAttachmentOwnerPinned else { return }
+            let replacementDraft = Self.composerDraftForReplacement(
+                viewModel.input,
+                currentOwnerID: self.viewModelOwnerID,
+                nextOwnerID: ownerID)
             viewModel.detachTransport()
             self.viewModelOwnerID = ownerID
             self.viewModelTransportAgentID = transportAgentID
             self.viewModelRoutingContract = routingContract
             self.viewModelAgentSelectionRequired = agentSelectionRequired
             self.captureCurrentPresentationIdentity()
-            self.viewModel = self.makeChatViewModel(sessionKey: sessionKey)
+            let replacement = self.makeChatViewModel(sessionKey: sessionKey)
+            if let replacementDraft {
+                replacement.input = replacementDraft
+            }
+            self.viewModel = replacement
             return
         }
         if self.viewModelRoutingContract != routingContract ||
@@ -991,6 +999,14 @@ struct ChatProTab: View {
         nextTransportAgentID: String) -> Bool
     {
         currentOwnerID != nextOwnerID || currentTransportAgentID != nextTransportAgentID
+    }
+
+    nonisolated static func composerDraftForReplacement(
+        _ input: String,
+        currentOwnerID: String,
+        nextOwnerID: String) -> String?
+    {
+        currentOwnerID == nextOwnerID ? input : nil
     }
 
     nonisolated static let emptyAssistantPrompts: [OpenClawChatView.StarterPrompt] = [

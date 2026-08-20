@@ -25,8 +25,8 @@ extension OpenClawChatViewModel {
         return self.agentSelectionRequired
     }
 
-    public func availableAgentsForSelection() async throws -> [OpenClawChatAgentChoice] {
-        try await self.transport.listAgents()?.agents ?? []
+    public func availableAgentsForSelection() async throws -> OpenClawChatAgentsListResponse? {
+        try await self.transport.listAgents()
     }
 
     public var hasDraftToSend: Bool {

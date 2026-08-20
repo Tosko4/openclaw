@@ -302,13 +302,19 @@ struct WebChatSwiftUISmokeTests {
         explicit.close()
     }
 
-    @Test func `routing refresh preserves an agent selected while metadata was pending`() throws {
+    @Test func `uncached selection waits for authoritative routing metadata`() throws {
         let controller = WebChatSwiftUIWindowController(
             sessionKey: "main",
             agentID: nil,
+            initialDraft: "keep this draft",
             cachedRoutingIdentity: nil,
             store: nil)
         controller._testSelectAgent("work")
+
+        #expect(controller._testSelectedAgentID == nil)
+        #expect(controller._testSessionKey == "main")
+        #expect(controller._testRequiresExplicitAgentSelection)
+
         let routingIdentity = try #require(OpenClawChatSessionRoutingIdentity(
             scope: "per-sender",
             mainSessionKey: "main",
@@ -318,9 +324,16 @@ struct WebChatSwiftUISmokeTests {
 
         controller._testApplyRoutingIdentity(routingIdentity)
 
+        #expect(controller._testSelectedAgentID == nil)
+        #expect(controller._testSessionKey == "main")
+        #expect(controller._testRequiresExplicitAgentSelection)
+
+        controller._testSelectAgent("work")
+
         #expect(controller._testSelectedAgentID == "work")
         #expect(controller._testSessionKey == "agent:work:main")
         #expect(!controller._testRequiresExplicitAgentSelection)
+        #expect(controller._testDraft == "keep this draft")
         controller.close()
     }
 

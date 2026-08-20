@@ -779,24 +779,25 @@ extension OpenClawClientDatabases {
             }
             if try db.tableExists("gateway_routing_identity") {
                 let columns = try Set(db.columns(in: "gateway_routing_identity").map(\.name))
-                func expression(_ name: String, fallback: String) -> String {
-                    columns.contains(name) ? name : fallback
-                }
+                guard columns.isSuperset(of: ["routing_contract", "selection_required"])
+                else { return snapshot }
                 let rows = try Row.fetchAll(db, sql: """
                 SELECT gateway_id, scope, main_session_key, default_agent_id,
-                       \(expression("routing_contract", fallback: "NULL")) AS routing_contract,
-                       \(expression("selection_required", fallback: "0")) AS selection_required,
+                       routing_contract, selection_required,
                        updated_at
                 FROM gateway_routing_identity
                 """)
-                snapshot.routingIdentities = rows.map { row in
-                    LegacyRoutingIdentity(
+                snapshot.routingIdentities = rows.compactMap { row in
+                    guard let routingContract = row["routing_contract"] as String?,
+                          let selectionRequired = row["selection_required"] as Int?
+                    else { return nil }
+                    return LegacyRoutingIdentity(
                         gatewayID: row["gateway_id"],
                         scope: row["scope"],
                         mainSessionKey: row["main_session_key"],
                         defaultAgentID: row["default_agent_id"],
-                        routingContract: row["routing_contract"],
-                        selectionRequired: (row["selection_required"] as Int?) == 1,
+                        routingContract: routingContract,
+                        selectionRequired: selectionRequired == 1,
                         updatedAt: row["updated_at"])
                 }
             }

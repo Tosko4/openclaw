@@ -438,7 +438,7 @@ extension OpenClawChatCommandOutbox {
     }
 }
 
-public struct OpenClawChatSessionRoutingIdentity: Equatable, Sendable {
+public struct OpenClawChatSessionRoutingIdentity: Codable, Equatable, Sendable {
     public let scope: String
     public let mainSessionKey: String
     public let defaultAgentID: String
