@@ -669,13 +669,6 @@ public final class OpenClawChatViewModel {
                 ?? self.agentSelectionRequired)
     }
 
-    public func syncSessionRoutingContract(_ contract: String?) {
-        self.syncDeliveryIdentity(
-            activeAgentId: self.deferredDeliveryIdentity?.activeAgentID ?? self.activeAgentId,
-            sessionRoutingContract: contract,
-            agentSelectionRequired: nil)
-    }
-
     /// Updates the alias owner and its gateway routing contract as one
     /// identity change so an intermediate bootstrap cannot win either value.
     public func syncDeliveryIdentity(
