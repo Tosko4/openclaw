@@ -8,7 +8,6 @@ authoring dates (2026), not package publication dates.
 
 ## Unreleased
 
-- Add the authoritative opaque session-routing contract to agent-list results.
 No changes outside the dated history below.
 
 ## Deferred to the next wire version
