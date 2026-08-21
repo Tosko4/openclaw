@@ -378,7 +378,7 @@ describe("tool search gateway e2e lane result", () => {
     let requestFailed = false;
     const { env, tempRoot } = await createLaneHarness(() =>
       requestFailed
-        ? `${"old-log-line\n".repeat(500)}OPENAI_API_KEY=${gatewaySecret}\ngateway-stage-tail`
+        ? `${"old-log-line\n".repeat(500)}OPENAI_API_KEY=${gatewaySecret}\n${promptSecret}\n${toolOutputSecret}\ntool_search_code\nfake_plugin_tool_17`
         : "before-request-log",
     );
     const sessionsDir = path.join(tempRoot, "state", "agents", "qa", "sessions");
@@ -439,8 +439,9 @@ describe("tool search gateway e2e lane result", () => {
       expect(renderedError).toContain(
         'sessionMentions={"tool_search_code":1,"tool_search":1,"tool_call":0,"fake_plugin_tool_17":1}',
       );
-      expect(renderedError).toContain("Gateway logs:");
-      expect(renderedError).toContain("gateway-stage-tail");
+      expect(renderedError).toContain(
+        'gatewayLogFacts={"captured":true,"mentions":{"tool_search_code":true,"tool_search":true,"tool_describe":false,"tool_call":false,"fake_plugin_tool_17":true}}',
+      );
       expect(renderedError).not.toContain(gatewaySecret);
       expect(renderedError).not.toContain(responseSecret);
       expect(renderedError).not.toContain(promptSecret);

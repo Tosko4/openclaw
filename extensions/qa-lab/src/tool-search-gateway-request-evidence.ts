@@ -1,18 +1,23 @@
 import path from "node:path";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { countSessionLogMentions, subtractMentionCounts } from "./fixture-utils.js";
-import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import { qaMockRequestsAfterUrl } from "./providers/shared/debug-request-cursor.js";
 
 const TOOL_SEARCH_REQUEST_EVIDENCE_LIMIT = 12;
-const TOOL_SEARCH_FAILURE_LOG_CHARS = 4_000;
 const SAFE_TOOL_SEARCH_STAGE_NAMES = new Set([
   "tool_search_code",
   "tool_search",
   "tool_describe",
   "tool_call",
 ]);
+
+export function projectToolSearchGatewayLogFacts(logs: string, targetTool: string) {
+  const safeTargets = [...SAFE_TOOL_SEARCH_STAGE_NAMES, targetTool].filter(Boolean);
+  return {
+    captured: logs.length > 0,
+    mentions: Object.fromEntries(safeTargets.map((name) => [name, logs.includes(name)])),
+  };
+}
 
 export function projectToolSearchProviderRequests(requests: unknown, targetTool: string) {
   if (!Array.isArray(requests)) {
@@ -91,9 +96,7 @@ export async function throwToolSearchGatewayRequestFailure(params: {
     ? subtractMentionCounts(mentionsAfter, params.mentionCountsBefore)
     : null;
   const providerRequests = projectToolSearchProviderRequests(requests, params.targetTool);
-  const safeLogs = formatQaGatewayLogsForError(
-    sliceUtf16Safe(redactQaGatewayDebugText(params.gatewayLogs), -TOOL_SEARCH_FAILURE_LOG_CHARS),
-  );
+  const gatewayLogFacts = projectToolSearchGatewayLogFacts(params.gatewayLogs, params.targetTool);
   const httpStatus = /^HTTP (\d{3})\b/u.exec(
     params.cause instanceof Error ? params.cause.message : "",
   )?.[1];
@@ -108,6 +111,7 @@ export async function throwToolSearchGatewayRequestFailure(params: {
   throw new Error(
     `Tool Search ${params.lane} lane gateway request failed (${safeFailure}); ` +
       `providerRequests=${JSON.stringify(providerRequests)}; ` +
-      `sessionMentions=${JSON.stringify(sessionMentions)}${safeLogs}`,
+      `sessionMentions=${JSON.stringify(sessionMentions)}; ` +
+      `gatewayLogFacts=${JSON.stringify(gatewayLogFacts)}`,
   );
 }

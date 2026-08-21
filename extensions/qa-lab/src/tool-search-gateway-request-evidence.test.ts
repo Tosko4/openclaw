@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { projectToolSearchProviderRequests } from "./tool-search-gateway-request-evidence.js";
+import {
+  projectToolSearchGatewayLogFacts,
+  projectToolSearchProviderRequests,
+} from "./tool-search-gateway-request-evidence.js";
 
 describe("Tool Search provider request evidence", () => {
   const targetTool = "fake_plugin_tool_17";
@@ -90,5 +93,28 @@ describe("Tool Search provider request evidence", () => {
     expect(serialized).not.toContain(secrets.prompt);
     expect(serialized).not.toContain(secrets.output);
     expect(serialized).not.toContain(secrets.planned);
+  });
+
+  it("projects only allowlisted Gateway log facts", () => {
+    const prompt = "arbitrary prompt sentinel";
+    const output = "arbitrary tool output sentinel";
+    const facts = projectToolSearchGatewayLogFacts(
+      `${prompt}\ntool_search_code\n${targetTool}\n${output}`,
+      targetTool,
+    );
+
+    expect(facts).toEqual({
+      captured: true,
+      mentions: {
+        tool_search_code: true,
+        tool_search: true,
+        tool_describe: false,
+        tool_call: false,
+        [targetTool]: true,
+      },
+    });
+    const serialized = JSON.stringify(facts);
+    expect(serialized).not.toContain(prompt);
+    expect(serialized).not.toContain(output);
   });
 });
