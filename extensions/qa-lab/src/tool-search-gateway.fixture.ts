@@ -416,6 +416,7 @@ export async function runToolSearchGatewayLane(params: {
   const requestCursorBefore = readQaMockRequestCursor(
     await fetchJson(qaMockRequestCursorUrl(providerBaseUrl)),
   );
+  const gatewayLogsBefore = env.gateway.logs?.() ?? "";
   const sessionKey = `tool-search-gateway-${lane}`;
   const response = await fetchJson(
     `${env.gateway.baseUrl}/v1/responses`,
@@ -451,7 +452,15 @@ export async function runToolSearchGatewayLane(params: {
     throwToolSearchGatewayRequestFailure({
       cause,
       fetchJson,
-      gatewayLogs: env.gateway.logs?.() ?? "",
+      gatewayLogs: (() => {
+        const current = env.gateway.logs?.() ?? "";
+        // Normal gateway logs are append-only. If the backing buffer was
+        // replaced or truncated, retain its current contents rather than
+        // applying a stale character cursor to a different snapshot.
+        return current.startsWith(gatewayLogsBefore)
+          ? current.slice(gatewayLogsBefore.length)
+          : current;
+      })(),
       lane,
       mentionCountsBefore,
       providerBaseUrl,

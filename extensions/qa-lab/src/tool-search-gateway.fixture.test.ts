@@ -376,10 +376,11 @@ describe("tool search gateway e2e lane result", () => {
     const promptSecret = "raw-prompt-secret";
     const toolOutputSecret = "raw-tool-output-secret";
     let requestFailed = false;
+    const logsBeforeRequest = "before-request-log tool_describe\n";
     const { env, tempRoot } = await createLaneHarness(() =>
       requestFailed
-        ? `${"old-log-line\n".repeat(500)}OPENAI_API_KEY=${gatewaySecret}\n${promptSecret}\n${toolOutputSecret}\ntool_search_code\nfake_plugin_tool_17-variant`
-        : "before-request-log",
+        ? `${logsBeforeRequest}${"old-log-line\n".repeat(500)}OPENAI_API_KEY=${gatewaySecret}\n${promptSecret}\n${toolOutputSecret}\ntool_search_code\nfake_plugin_tool_17-variant`
+        : logsBeforeRequest,
     );
     const sessionsDir = path.join(tempRoot, "state", "agents", "qa", "sessions");
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
