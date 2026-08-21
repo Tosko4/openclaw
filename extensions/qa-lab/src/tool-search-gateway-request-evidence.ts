@@ -11,7 +11,7 @@ const SAFE_TOOL_SEARCH_STAGE_NAMES = new Set([
   "tool_call",
 ]);
 
-export function projectToolSearchGatewayLogFacts(logs: string, targetTool: string) {
+function projectToolSearchGatewayLogFacts(logs: string, targetTool: string) {
   const safeTargets = [...SAFE_TOOL_SEARCH_STAGE_NAMES, targetTool].filter(Boolean);
   return {
     captured: logs.length > 0,
@@ -19,7 +19,7 @@ export function projectToolSearchGatewayLogFacts(logs: string, targetTool: strin
   };
 }
 
-export function projectToolSearchProviderRequests(requests: unknown, targetTool: string) {
+function projectToolSearchProviderRequests(requests: unknown, targetTool: string) {
   if (!Array.isArray(requests)) {
     return [];
   }
@@ -101,7 +101,9 @@ export async function throwToolSearchGatewayRequestFailure(params: {
     params.cause instanceof Error ? params.cause.message : "",
   )?.[1];
   const errorCode =
-    params.cause instanceof Error ? (params.cause as NodeJS.ErrnoException).code : undefined;
+    params.cause instanceof Error && "code" in params.cause && typeof params.cause.code === "string"
+      ? params.cause.code
+      : undefined;
   const safeFailure = httpStatus
     ? `HTTP ${httpStatus}`
     : errorCode === "ETIMEDOUT" || errorCode === "ETOOBIG"

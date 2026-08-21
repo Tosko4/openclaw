@@ -447,7 +447,7 @@ export async function runToolSearchGatewayLane(params: {
       }),
     },
     { timeoutMs: liveTurnTimeoutMs(env, 30_000) },
-  ).catch((cause) =>
+  ).catch((cause: unknown) =>
     throwToolSearchGatewayRequestFailure({
       cause,
       fetchJson,
