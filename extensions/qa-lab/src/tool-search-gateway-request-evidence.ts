@@ -72,6 +72,7 @@ export async function countToolSearchSessionLogMentions(params: {
     needles: {
       tool_search_code: "tool_search_code",
       tool_search: "tool_search",
+      tool_describe: "tool_describe",
       tool_call: "tool_call",
       [params.targetTool]: params.targetTool,
     },
