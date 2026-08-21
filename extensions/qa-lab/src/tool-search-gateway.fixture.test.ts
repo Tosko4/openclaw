@@ -378,7 +378,7 @@ describe("tool search gateway e2e lane result", () => {
     let requestFailed = false;
     const { env, tempRoot } = await createLaneHarness(() =>
       requestFailed
-        ? `${"old-log-line\n".repeat(500)}OPENAI_API_KEY=${gatewaySecret}\n${promptSecret}\n${toolOutputSecret}\ntool_search_code\nfake_plugin_tool_17`
+        ? `${"old-log-line\n".repeat(500)}OPENAI_API_KEY=${gatewaySecret}\n${promptSecret}\n${toolOutputSecret}\ntool_search_code\nfake_plugin_tool_17-variant`
         : "before-request-log",
     );
     const sessionsDir = path.join(tempRoot, "state", "agents", "qa", "sessions");
@@ -393,7 +393,10 @@ describe("tool search gateway e2e lane result", () => {
         await fs.writeFile(
           path.join(sessionsDir, "failed.jsonl"),
           `${JSON.stringify({
-            message: { role: "assistant", content: "tool_search_code fake_plugin_tool_17" },
+            message: {
+              role: "assistant",
+              content: "tool_search_code fake_plugin_tool_17-variant",
+            },
           })}\n`,
           "utf8",
         );
@@ -437,10 +440,10 @@ describe("tool search gateway e2e lane result", () => {
         'providerRequests=[{"plannedToolName":"tool_search_code","declaredToolCount":1,"targetDeclared":false,"bridgeDeclared":true,"targetResultObserved":true}]',
       );
       expect(renderedError).toContain(
-        'sessionMentions={"tool_search_code":1,"tool_search":1,"tool_call":0,"fake_plugin_tool_17":1}',
+        'sessionMentions={"tool_search_code":1,"tool_search":0,"tool_call":0,"fake_plugin_tool_17":0}',
       );
       expect(renderedError).toContain(
-        'gatewayLogFacts={"captured":true,"mentions":{"tool_search_code":true,"tool_search":true,"tool_describe":false,"tool_call":false,"fake_plugin_tool_17":true}}',
+        'gatewayLogFacts={"captured":true,"mentions":{"tool_search_code":true,"tool_search":false,"tool_describe":false,"tool_call":false,"fake_plugin_tool_17":false}}',
       );
       expect(renderedError).not.toContain(gatewaySecret);
       expect(renderedError).not.toContain(responseSecret);

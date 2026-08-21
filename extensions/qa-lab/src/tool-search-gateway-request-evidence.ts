@@ -1,6 +1,10 @@
 import path from "node:path";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { countSessionLogMentions, subtractMentionCounts } from "./fixture-utils.js";
+import {
+  countOccurrences,
+  countSessionLogMentions,
+  subtractMentionCounts,
+} from "./fixture-utils.js";
 import { qaMockRequestsAfterUrl } from "./providers/shared/debug-request-cursor.js";
 
 const TOOL_SEARCH_REQUEST_EVIDENCE_LIMIT = 12;
@@ -15,7 +19,9 @@ function projectToolSearchGatewayLogFacts(logs: string, targetTool: string) {
   const safeTargets = [...SAFE_TOOL_SEARCH_STAGE_NAMES, targetTool].filter(Boolean);
   return {
     captured: logs.length > 0,
-    mentions: Object.fromEntries(safeTargets.map((name) => [name, logs.includes(name)])),
+    mentions: Object.fromEntries(
+      safeTargets.map((name) => [name, countOccurrences(logs, name, true) > 0]),
+    ),
   };
 }
 
@@ -61,6 +67,7 @@ export async function countToolSearchSessionLogMentions(params: {
   targetTool: string;
 }) {
   return countSessionLogMentions({
+    identifierKeys: new Set([...SAFE_TOOL_SEARCH_STAGE_NAMES, params.targetTool]),
     sessionsDir: path.join(params.stateDir, "agents", "qa", "sessions"),
     needles: {
       tool_search_code: "tool_search_code",
