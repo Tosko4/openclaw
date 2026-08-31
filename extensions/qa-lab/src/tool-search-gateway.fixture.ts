@@ -454,12 +454,9 @@ export async function runToolSearchGatewayLane(params: {
       fetchJson,
       gatewayLogs: (() => {
         const current = env.gateway.logs?.() ?? "";
-        // Normal gateway logs are append-only. If the backing buffer was
-        // replaced or truncated, retain its current contents rather than
-        // applying a stale character cursor to a different snapshot.
-        return current.startsWith(gatewayLogsBefore)
-          ? current.slice(gatewayLogsBefore.length)
-          : current;
+        // A rolled bounded buffer cannot prove which surviving lines belong to
+        // this request, so omit Gateway facts instead of misattributing them.
+        return current.startsWith(gatewayLogsBefore) ? current.slice(gatewayLogsBefore.length) : "";
       })(),
       lane,
       mentionCountsBefore,
