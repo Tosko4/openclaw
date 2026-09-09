@@ -258,7 +258,7 @@ class RootScreenFoldTest {
   @Config(qualifiers = "w1000dp-h650dp-mdpi")
   @GraphicsMode(GraphicsMode.Mode.NATIVE)
   fun expandedWidthRoundTripPreservesAnOffTailLogicalGlyphAndExplicitFollowing() {
-    val text = (1..40).joinToString("\n") { "Reading point $it: this earlier response must remain readable while navigation changes beside it." }
+    val text = (1..80).joinToString("\n") { "Reading point $it: this earlier response must remain readable while navigation changes beside it." }
     withRoot(
       completed = true,
       destination = HomeDestination.Chat,
@@ -303,9 +303,14 @@ class RootScreenFoldTest {
       }
       val transcript = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex))
       transcript.performScrollToNode(hasText(text))
-      val initialText = renderedText(text).first
+      val (initialText, initialLayout) = renderedText(text)
       val initialClip = transcript.fetchSemanticsNode().boundsInRoot
-      assertTrue("The reader fixture must span the viewport", initialText.size.height > initialClip.height * 2)
+      assertTrue(
+        "The reader fixture must span the viewport: node=${initialText.size}, layout=${initialLayout.size}, " +
+          "lineCount=${initialLayout.lineCount}, viewport=$initialClip, " +
+          "density=${initialLayout.layoutInput.density.density}, fontScale=${initialLayout.layoutInput.density.fontScale}",
+        initialText.size.height > initialClip.height * 2,
+      )
       val towardInterior = if (initialText.positionInRoot.y < initialClip.top) 100f else -100f
       transcript.performTouchInput { swipeWithVelocity(center, center + Offset(0f, towardInterior), endVelocity = 0f) }
       composeRule.waitForIdle()
