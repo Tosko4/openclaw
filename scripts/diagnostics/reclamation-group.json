@@ -1,0 +1,45 @@
+[
+  {
+    "configs": [
+      "test/vitest/vitest.gateway-server.config.ts"
+    ],
+    "includePatterns": [
+      "src/gateway/server.agent-database-recreation-product-proof.test.ts",
+      "src/gateway/server.agent-execution-shutdown.test.ts",
+      "src/gateway/server.agent-late-admission.test.ts",
+      "src/gateway/server.agent.gateway-server-agent-a.test.ts",
+      "src/gateway/server.agent.gateway-server-agent-b.test.ts",
+      "src/gateway/server.agent.subagent-delivery-context.test.ts",
+      "src/gateway/server.chat-abort-sibling-fanout.test.ts",
+      "src/gateway/server.chat-first-turn-binding.test.ts",
+      "src/gateway/server.chat-history-cursor.test.ts",
+      "src/gateway/server.chat.acp-completion.test.ts",
+      "src/gateway/server.chat.gateway-server-chat-b.test.ts",
+      "src/gateway/server.chat.gateway-server-chat.test.ts",
+      "src/gateway/server.sessions.abort-authorization.test.ts",
+      "src/gateway/server.sessions.archive-lifecycle.test.ts",
+      "src/gateway/server.sessions.archive-terminal.test.ts",
+      "src/gateway/server.sessions.archive-worktree-lifecycle.test.ts",
+      "src/gateway/server.sessions.cleanup-partial.test.ts",
+      "src/gateway/server.sessions.create-worktree-spawn.test.ts",
+      "src/gateway/server.sessions.create.titles.test.ts",
+      "src/gateway/server.sessions.delete-state-lifecycle.test.ts",
+      "src/gateway/server.sessions.face.test.ts",
+      "src/gateway/server.sessions.inbound-worktree-writer.test.ts",
+      "src/gateway/server.sessions.list-connection-reuse.test.ts",
+      "src/gateway/server.sessions.list-store-materialization.test.ts",
+      "src/gateway/server.sessions.permission-root.test.ts",
+      "src/gateway/server.sessions.placement-projection.test.ts",
+      "src/gateway/server.sessions.preview-resolve.test.ts",
+      "src/gateway/server.sessions.reclamation.test.ts",
+      "src/gateway/server.sessions.recovery-order.test.ts",
+      "src/gateway/server.sessions.reset-concurrency.test.ts",
+      "src/gateway/server.sessions.reset-hooks.test.ts",
+      "src/gateway/server.sessions.store-paths.test.ts",
+      "src/gateway/server.sessions.thinking-e2e.test.ts",
+      "src/gateway/server.sessions.worker-placement-lifecycle.test.ts"
+    ],
+    "shard_name": "agentic-control-plane-agent-chat-hosted-2",
+    "timing_key": "agentic-control-plane-agent-chat#selector-67-0039c13234ea#generation-07d7c6a6c10c#part-2-of-2#include-34-7013a732488c"
+  }
+]
