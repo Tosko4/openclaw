@@ -14,7 +14,10 @@ import {
   type SqliteTransactionOptions,
 } from "./sqlite-transaction.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
-import { canCleanupLegacyManagedHandoff } from "./update-managed-service-handoff-cleanup.js";
+import {
+  canCleanupLegacyManagedHandoff,
+  readLegacyManagedHandoff,
+} from "./update-managed-service-handoff-cleanup.js";
 import {
   createManagedHandoffLeaseDatabase,
   leaseQueries,
@@ -628,7 +631,12 @@ export function createManagedHandoffLeaseStore(
         leaseQueries(db)
           .selectFrom("managed_update_handoffs")
           .select(["install_root", "owner", "payload_json", "updated_at"]),
-      ).rows.map((entry) => handle(entry.install_root, entry)),
+      ).rows.flatMap((entry) =>
+        // A complete retired v1 claim records no borrower source, so it cannot
+        // reserve this resource whatever its process state. Every other shape
+        // still decodes through handle(): unknown rows refuse the caller.
+        readLegacyManagedHandoff(entry.payload_json) ? [] : [handle(entry.install_root, entry)],
+      ),
     );
   }
   function assertSourceUnborrowed(resource: string) {

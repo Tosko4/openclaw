@@ -4,19 +4,20 @@ import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
-/** v1 shipped in 2026.8.2. This proves cleanup eligibility, never v2 authority. */
-export function canCleanupLegacyManagedHandoff(
+/**
+ * v1 shipped in 2026.8.2. Decoding the complete retired shape proves the row is
+ * a known released claim, never v2/v3 authority and never a native borrower.
+ */
+export function readLegacyManagedHandoff(
   payload: string,
-  processState: (identity: { pid: number; startIdentity: string }) => "live" | "dead" | "unknown",
-): boolean {
+): { pid: number; startIdentity: string } | null {
   let value: unknown;
   try {
     value = JSON.parse(payload);
   } catch {
-    return false;
+    return null;
   }
-  return (
-    isRecord(value) &&
+  return isRecord(value) &&
     Object.keys(value).length === 3 &&
     value.version === 1 &&
     typeof value.pid === "number" &&
@@ -25,10 +26,19 @@ export function canCleanupLegacyManagedHandoff(
     typeof value.startIdentity === "string" &&
     Number.isSafeInteger(Number(value.startIdentity)) &&
     Number(value.startIdentity) >= 0 &&
-    String(Number(value.startIdentity)) === value.startIdentity &&
-    // The recorded process may be the updater runner, not the surviving helper.
-    processState({ pid: value.pid, startIdentity: value.startIdentity }) === "dead"
-  );
+    String(Number(value.startIdentity)) === value.startIdentity
+    ? { pid: value.pid, startIdentity: value.startIdentity }
+    : null;
+}
+
+/** Cleanup eligibility for a retired v1 claim; never v2 authority. */
+export function canCleanupLegacyManagedHandoff(
+  payload: string,
+  processState: (identity: { pid: number; startIdentity: string }) => "live" | "dead" | "unknown",
+): boolean {
+  const legacy = readLegacyManagedHandoff(payload);
+  // The recorded process may be the updater runner, not the surviving helper.
+  return legacy !== null && processState(legacy) === "dead";
 }
 
 export const MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX = "openclaw-update-run-handoff-";
