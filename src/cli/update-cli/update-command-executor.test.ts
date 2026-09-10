@@ -474,136 +474,142 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
             interval: 25,
           });
         };
-        const failures: unknown[] = [];
-        try {
-          await (async () => {
-            await vi.waitFor(
-              () => {
-                const ready =
-                  mode === "refused" ? completed : mode === "before-grant" ? observation : receipt;
-                expect(fs.existsSync(ready), diagnostics).toBe(true);
-              },
-              { timeout: 25_000, interval: 25 },
-            );
-            if (mode === "refused") {
-              await closed;
-              const result = JSON.parse(fs.readFileSync(completed, "utf8"));
-              childPid = result.pid;
-              expect(result.error).toContain("cannot be adopted");
-              expect(result.bytesWritten).toBe(0);
-              expect(fs.existsSync(observation)).toBe(false);
-              expect(fs.existsSync(receipt)).toBe(false);
-              expect(Number.isSafeInteger(childPid)).toBe(true);
-              expect(isChildProcessTreeAlive({ pid: childPid! })).toBe(false);
-              expect(getUpdateRun(runId, options)?.reason).toBe("fixture-terminal");
-              return;
-            }
-            const observed = JSON.parse(fs.readFileSync(observation, "utf8"));
-            childPid = observed.bound.pid;
-            childStart = observed.bound.startIdentity;
-            expect(observed.bytesWritten).toBe(0);
-            expect(observed.run.origin.driver).toEqual({
-              host: observed.parent.host,
-              ...observed.bound,
-            });
-            expect(observed.run.origin.previousDrivers).toContainEqual(observed.parent);
-            expect(observed.renewed.updatedAtMs).toBeGreaterThan(observed.run.updatedAtMs);
-            expect(observed.renewed.origin).toEqual(observed.run.origin);
-            if (mode === "after-grant") {
-              expect(JSON.parse(fs.readFileSync(receipt, "utf8"))).toMatchObject({
-                pid: childPid,
-                run: { runId, origin: observed.run.origin },
-              });
-              parent.kill("SIGKILL");
-            } else {
-              expect(fs.existsSync(receipt)).toBe(false);
-            }
+        const verifyCustody = async () => {
+          await vi.waitFor(
+            () => {
+              const ready =
+                mode === "refused" ? completed : mode === "before-grant" ? observation : receipt;
+              expect(fs.existsSync(ready), diagnostics).toBe(true);
+            },
+            { timeout: 25_000, interval: 25 },
+          );
+          if (mode === "refused") {
             await closed;
-            expect(isPidDefinitelyDead(parent.pid!)).toBe(true);
-            expect(isPidDefinitelyDead(childPid!)).toBe(false);
-            vi.spyOn(Date, "now").mockReturnValue(
-              observed.renewed.updatedAtMs + ABANDONED_UPDATE_RUN_MS + 10,
-            );
-            expect(reconcileAbandonedUpdateRuns({}, options)).toEqual([]);
-            expect(getUpdateRun(runId, options)?.status).toBe("running");
-            let suspended = false;
-            overlays = createApplicationOverlays(
-              updateRunHarness(async (method) => {
-                reconcileAbandonedUpdateRuns({}, options);
-                const run = getUpdateRun(runId, options);
-                return method === "update.runs.get"
-                  ? { run }
-                  : {
-                      lastRun: run,
-                      ...(run?.status === "running" ? { activeRun: run } : {}),
-                    };
-              }).gateway,
-            );
-            stopInterlock = bindUpdateConfigWriteInterlock(overlays, {
-              setWritesSuspended(value) {
-                suspended = value;
-              },
-            });
-            await overlays.refreshUpdateStatus();
-            expect(overlays.snapshot.updateRunning).toBe(true);
-            expect(overlays.snapshot.updateReconciliationPending).toBe(true);
-            expect(suspended).toBe(true);
-            await expect(
-              withUpdateCommandExecutor(
-                randomUUID(),
-                async (executor) => executor.enter(packages.packageRoot),
-                { existingAuthority: authority },
-              ),
-            ).rejects.toThrow("Another update executor");
-            const journal = openPackageActivationJournal(
-              resolvePackageActivationAnchor(packages.packageRoot),
-            );
-            const retained = journal.read();
-            expect(retained.phase).toBe("publication-complete");
-            expect(() => assertNoPendingPackageActivation(packages.packageRoot)).toThrow(
-              "recovery is pending",
-            );
-            await stopCandidate();
-            expect(reconcileAbandonedUpdateRuns({}, options)).toMatchObject([
-              { runId, status: "failed", reason: "abandoned" },
-            ]);
-            await overlays.refreshUpdateStatus();
-            expect(suspended).toBe(false);
-            expect(journal.read()).toEqual(retained);
-            expect(() => assertNoPendingPackageActivation(packages.packageRoot)).toThrow(
-              "recovery is pending",
-            );
-          })();
-        } catch (error) {
-          failures.push(error);
-        }
-        try {
-          stopInterlock?.();
-          overlays?.dispose();
-          if (fs.existsSync(spawned)) {
-            const identity = JSON.parse(fs.readFileSync(spawned, "utf8"));
-            childPid ??= identity.pid;
-            childStart ??= String(identity.startIdentity);
+            const result = JSON.parse(fs.readFileSync(completed, "utf8"));
+            childPid = result.pid;
+            expect(result.error).toContain("cannot be adopted");
+            expect(result.bytesWritten).toBe(0);
+            expect(fs.existsSync(observation)).toBe(false);
+            expect(fs.existsSync(receipt)).toBe(false);
+            expect(Number.isSafeInteger(childPid)).toBe(true);
+            expect(isChildProcessTreeAlive({ pid: childPid! })).toBe(false);
+            expect(getUpdateRun(runId, options)?.reason).toBe("fixture-terminal");
+            return;
           }
-          await stopCandidate();
-        } catch (error) {
-          unjoinedProcess = true;
-          failures.push(error);
-        }
-        try {
-          if (parent.exitCode === null && parent.signalCode === null) {
+          const observed = JSON.parse(fs.readFileSync(observation, "utf8"));
+          childPid = observed.bound.pid;
+          childStart = observed.bound.startIdentity;
+          expect(observed.bytesWritten).toBe(0);
+          expect(observed.run.origin.driver).toEqual({
+            host: observed.parent.host,
+            ...observed.bound,
+          });
+          expect(observed.run.origin.previousDrivers).toContainEqual(observed.parent);
+          expect(observed.renewed.updatedAtMs).toBeGreaterThan(observed.run.updatedAtMs);
+          expect(observed.renewed.origin).toEqual(observed.run.origin);
+          if (mode === "after-grant") {
+            expect(JSON.parse(fs.readFileSync(receipt, "utf8"))).toMatchObject({
+              pid: childPid,
+              run: { runId, origin: observed.run.origin },
+            });
             parent.kill("SIGKILL");
+          } else {
+            expect(fs.existsSync(receipt)).toBe(false);
           }
           await closed;
-        } catch (error) {
-          unjoinedProcess = true;
-          failures.push(error);
+          expect(isPidDefinitelyDead(parent.pid!)).toBe(true);
+          expect(isPidDefinitelyDead(childPid!)).toBe(false);
+          vi.spyOn(Date, "now").mockReturnValue(
+            observed.renewed.updatedAtMs + ABANDONED_UPDATE_RUN_MS + 10,
+          );
+          expect(reconcileAbandonedUpdateRuns({}, options)).toEqual([]);
+          expect(getUpdateRun(runId, options)?.status).toBe("running");
+          let suspended = false;
+          overlays = createApplicationOverlays(
+            updateRunHarness(async (method) => {
+              reconcileAbandonedUpdateRuns({}, options);
+              const run = getUpdateRun(runId, options);
+              return method === "update.runs.get"
+                ? { run }
+                : {
+                    lastRun: run,
+                    ...(run?.status === "running" ? { activeRun: run } : {}),
+                  };
+            }).gateway,
+          );
+          stopInterlock = bindUpdateConfigWriteInterlock(overlays, {
+            setWritesSuspended(value) {
+              suspended = value;
+            },
+          });
+          await overlays.refreshUpdateStatus();
+          expect(overlays.snapshot.updateRunning).toBe(true);
+          expect(overlays.snapshot.updateReconciliationPending).toBe(true);
+          expect(suspended).toBe(true);
+          await expect(
+            withUpdateCommandExecutor(
+              randomUUID(),
+              async (executor) => executor.enter(packages.packageRoot),
+              { existingAuthority: authority },
+            ),
+          ).rejects.toThrow("Another update executor");
+          const journal = openPackageActivationJournal(
+            resolvePackageActivationAnchor(packages.packageRoot),
+          );
+          const retained = journal.read();
+          expect(retained.phase).toBe("publication-complete");
+          expect(() => assertNoPendingPackageActivation(packages.packageRoot)).toThrow(
+            "recovery is pending",
+          );
+          await stopCandidate();
+          expect(reconcileAbandonedUpdateRuns({}, options)).toMatchObject([
+            { runId, status: "failed", reason: "abandoned" },
+          ]);
+          await overlays.refreshUpdateStatus();
+          expect(suspended).toBe(false);
+          expect(journal.read()).toEqual(retained);
+          expect(() => assertNoPendingPackageActivation(packages.packageRoot)).toThrow(
+            "recovery is pending",
+          );
+        };
+        const failures: unknown[] = [];
+        // A body failure must not skip either process join, and a cleanup
+        // failure must retain the fixture without hiding the original error.
+        for (const phase of [
+          verifyCustody,
+          async () => {
+            stopInterlock?.();
+            overlays?.dispose();
+          },
+          async () => {
+            if (fs.existsSync(spawned)) {
+              const identity = JSON.parse(fs.readFileSync(spawned, "utf8"));
+              childPid ??= identity.pid;
+              childStart ??= String(identity.startIdentity);
+            }
+            await stopCandidate();
+          },
+          async () => {
+            if (parent.exitCode === null && parent.signalCode === null) {
+              parent.kill("SIGKILL");
+            }
+            await closed;
+          },
+        ]) {
+          try {
+            await phase();
+          } catch (error) {
+            if (phase !== verifyCustody) {
+              unjoinedProcess = true;
+            }
+            failures.push(error);
+          }
         }
         if (failures.length === 1) {
           throw failures[0];
         }
         if (failures.length > 1) {
-          throw new AggregateError(failures, "Executor control and process settlement failed");
+          throw new AggregateError(failures, "Driver custody proof and cleanup failed");
         }
       },
       40_000,

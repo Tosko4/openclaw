@@ -11,10 +11,8 @@ import {
   withDelegatedUpdateCommandExecutor,
   type UpdateCommandChildGrant,
 } from "./update-command-executor.js";
-import {
-  assertUpdatePackageActivationAdmission,
-  UpdateCommandPendingRecoveryFailure,
-} from "./update-command-result.js";
+import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
+import { assertUpdatePackageActivationAdmission } from "./update-command-run.js";
 
 export const POST_CORE_EXECUTOR_FD = 3;
 export const POST_CORE_EXECUTOR_MAX_BYTES = 64 * 1024;

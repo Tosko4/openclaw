@@ -63,6 +63,9 @@ export function withExistingSqliteRollbackDatabase<T>(
     if (!["delete", "truncate", "persist"].includes(String(mode))) {
       throw new Error("Existing SQLite storage requires rollback journal mode.");
     }
+    // Keep the snapshot open, but let ROLLBACK release its lock without waiting
+    // for Bun to finalize retained statements after close_v2.
+    reader.exec("PRAGMA locking_mode = NORMAL"); // sqlite-allow-raw -- Restore connection-local lock policy.
     options.validate(reader);
     options.assertIdentity();
     if (!options.write) {

@@ -5,7 +5,10 @@ import path from "node:path";
 import chokidar from "chokidar";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
-import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import {
+  releaseUpdateCommandPreflightForHandoff,
+  withUpdateCommandExecutor,
+} from "../cli/update-cli/update-command-executor.js";
 import { startGatewayConfigReloader } from "../gateway/config-reload.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
@@ -1455,6 +1458,7 @@ describe("config io write", () => {
         await fs.writeFile(secondConfigPath, "{}\n");
         const env = { OPENCLAW_CONFIG_PATH: firstConfigPath, OPENCLAW_TEST_FAST: "1" };
         const io = createHomeConfigIO(home, { env });
+        const priorAudit = listConfigAuditRecordsForTests({ env: io.env, homedir: () => home });
         const callerGuard = vi.fn();
         const writeOptions = {
           assertConfigPathForWrite: callerGuard,
@@ -1474,9 +1478,14 @@ describe("config io write", () => {
               });
 
         await expect(pending).rejects.toThrow("config path changed since last load");
+        await expect(pending).rejects.toBeInstanceOf(ConfigMutationConflictError);
+        await expect(pending).rejects.toHaveProperty("retryable", false);
         expect(callerGuard).toHaveBeenCalled();
         expect(await fs.readFile(firstConfigPath, "utf8")).toBe("{}\n");
         expect(await fs.readFile(secondConfigPath, "utf8")).toBe("{}\n");
+        expect(listConfigAuditRecordsForTests({ env: io.env, homedir: () => home })).toEqual(
+          priorAudit,
+        );
       });
     },
   );
@@ -1627,26 +1636,35 @@ describe("config io write", () => {
       await fs.writeFile(configPath, originalRaw, "utf-8");
       const io = createFastConfigIO(home, { configPath });
       const snapshot = await io.readConfigFileSnapshot();
+      const priorAudit = listConfigAuditRecordsForTests({ env: io.env, homedir: () => home });
       let activeConfigPath = configPath;
+      let originalConflict: ConfigMutationConflictError | undefined;
       const assertConfigPathForWrite = () => {
         if (fsNode.readFileSync(configPath, "utf-8") !== originalRaw) {
           activeConfigPath = secondConfigPath;
         }
         if (activeConfigPath !== configPath) {
-          throw new ConfigMutationConflictError("config path changed since last load", {
+          const conflict = new ConfigMutationConflictError("config path changed since last load", {
             retryable: false,
           });
+          originalConflict ??= conflict;
+          throw conflict;
         }
       };
 
-      await expect(
-        io.writeConfigFile(
-          { gateway: { mode: "local", port: 19002 } },
-          { baseSnapshot: snapshot, assertConfigPathForWrite },
-        ),
-      ).rejects.toThrow("config path changed since last load");
+      const pending = io.writeConfigFile(
+        { gateway: { mode: "local", port: 19002 } },
+        { baseSnapshot: snapshot, assertConfigPathForWrite },
+      );
+      await expect(pending).rejects.toThrow("config path changed since last load");
+      await expect(pending).rejects.toBeInstanceOf(ConfigMutationConflictError);
+      await expect(pending).rejects.toHaveProperty("retryable", false);
+      await expect(pending).rejects.toBe(originalConflict);
 
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
+      expect(listConfigAuditRecordsForTests({ env: io.env, homedir: () => home })).toEqual(
+        priorAudit,
+      );
     },
   );
 
@@ -3835,6 +3853,85 @@ describe("config io write", () => {
   }
 
   itWithHome(
+    "retains the primary write failure before revoked source authority without auditing",
+    async (home) => {
+      const { configPath, raw } = await writeConfigFixture(home, {
+        gateway: { mode: "local", port: 18789 },
+      });
+      const root = path.join(await fs.realpath(home), "package");
+      await fs.mkdir(root);
+      const databasePath = path.join(home, "control", "managed-update-handoffs.sqlite");
+      createManagedHandoffLeaseDatabase(databasePath)(true, () => undefined);
+      const primaryError = new Error("rename failed before publication");
+      const provenanceAfterRevocation = vi.fn(() => {
+        throw new ConfigMutationConflictError("config path changed since last load", {
+          retryable: false,
+        });
+      });
+
+      await withUpdateCommandExecutor(
+        "config-write-failure-fence",
+        async (executor) => {
+          const fence = await executor.enter(root, { preflight: true });
+          let revoked = false;
+          const io = createFastConfigIO(home, {
+            configPath,
+            fs: {
+              ...fsNode,
+              promises: {
+                ...fsNode.promises,
+                rename: async () => {
+                  releaseUpdateCommandPreflightForHandoff(fence);
+                  revoked = true;
+                  throw primaryError;
+                },
+              },
+            },
+          });
+          const priorAudit = listConfigAuditRecordsForTests({ env: io.env, homedir: () => home });
+          const failure = await io
+            .writeConfigFile(
+              { gateway: { mode: "local", port: 19001 } },
+              {
+                assertCurrent: fence.assertCurrent,
+                assertConfigPathForWrite: () => {
+                  if (revoked) {
+                    provenanceAfterRevocation();
+                  }
+                },
+              },
+            )
+            .catch((error: unknown) => error);
+
+          expect(failure).toBeInstanceOf(AggregateError);
+          if (!(failure instanceof AggregateError)) {
+            throw new Error("expected the write and authority failures");
+          }
+          expect(failure.message).toBe("Config write failed after source ownership changed");
+          expect(failure.errors).toHaveLength(2);
+          expect(failure.errors[0]).toBe(primaryError);
+          expect(failure.errors[1]).toHaveProperty(
+            "message",
+            expect.stringContaining("executor ownership is no longer current"),
+          );
+          expect(failure.cause).toBe(failure.errors[1]);
+          expect(provenanceAfterRevocation).not.toHaveBeenCalled();
+          expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+          expect(listConfigAuditRecordsForTests({ env: io.env, homedir: () => home })).toEqual(
+            priorAudit,
+          );
+        },
+        {
+          existingAuthority: {
+            ...captureManagedUpdateLeaseDatabaseIdentity(databasePath),
+            installKey: root,
+          },
+        },
+      );
+    },
+  );
+
+  itWithHome(
     "restores config env vars when post-write runtime refresh rollback succeeds",
     async (home) => {
       const configPath = configPathForHome(home);
@@ -4003,19 +4100,24 @@ describe("config io write", () => {
       });
       const io = createConfigIO({ env, fs: injectedFs, homedir: () => home, logger: silentLogger });
       const prepared = await io.readConfigFileSnapshotForWrite();
+      const priorAudit = listConfigAuditRecordsForTests({ env: io.env, homedir: () => home });
 
-      await expect(
-        io.writeConfigFile(
-          { gateway: { mode: "local", port: 19001 } },
-          {
-            baseSnapshot: prepared.snapshot,
-            ...prepared.writeOptions,
-          },
-        ),
-      ).rejects.toThrow("config path changed since last load");
+      const pending = io.writeConfigFile(
+        { gateway: { mode: "local", port: 19001 } },
+        {
+          baseSnapshot: prepared.snapshot,
+          ...prepared.writeOptions,
+        },
+      );
+      await expect(pending).rejects.toThrow("config path changed since last load");
+      await expect(pending).rejects.toBeInstanceOf(ConfigMutationConflictError);
+      await expect(pending).rejects.toHaveProperty("retryable", false);
 
       expect(rollbackReadUsedInjectedFs).toBe(true);
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
+      expect(listConfigAuditRecordsForTests({ env: io.env, homedir: () => home })).toEqual(
+        priorAudit,
+      );
     },
   );
 

@@ -621,7 +621,7 @@ export async function writeConfigFileFromContext(
     };
   } catch (error) {
     try {
-      options.assertConfigPathForWrite?.();
+      sourceGuard?.();
     } catch (ownershipError) {
       if (ownershipError === error) {
         throw error;
@@ -631,6 +631,12 @@ export async function writeConfigFileFromContext(
         "Config write failed after source ownership changed",
         { cause: ownershipError },
       );
+    }
+    try {
+      writeOptions.assertConfigPathForWrite?.();
+    } catch {
+      // Lost path provenance forbids auditing, but does not replace the original failure.
+      throw error;
     }
     await appendWriteAudit("failed", error);
     throw error;
