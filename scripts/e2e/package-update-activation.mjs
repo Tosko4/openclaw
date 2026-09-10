@@ -51,17 +51,22 @@ async function main() {
         stdio: ["ignore", "pipe", "pipe"],
         onReady(child) {
           const collect = (stream, bytes) => {
-            if (stream === "stdout") stdout += bytes.toString();
-            else stderr += bytes.toString();
-            if (stdout.length + stderr.length > (options.maxBuffer ?? 4 * 1024 * 1024))
+            if (stream === "stdout") {
+              stdout += bytes.toString();
+            } else {
+              stderr += bytes.toString();
+            }
+            if (stdout.length + stderr.length > (options.maxBuffer ?? 4 * 1024 * 1024)) {
               abort.abort();
+            }
           };
           child.stdout.on("data", (bytes) => collect("stdout", bytes));
           child.stderr.on("data", (bytes) => collect("stderr", bytes));
         },
       });
-      if (code !== 0)
+      if (code !== 0) {
         throw Object.assign(new Error(`${bin} exited ${code}`), { code, stdout, stderr });
+      }
       return { stdout, stderr };
     } catch (error) {
       unsettledCommand ||= hasUnjoinedWork(error);
@@ -133,13 +138,17 @@ async function main() {
     "unknown activation scenario",
   );
   const usesPublished = cases.includes("published-upgrade");
-  if (usesPublished) assert.ok(values["published-package"], "--published-package is required");
+  if (usesPublished) {
+    assert.ok(values["published-package"], "--published-package is required");
+  }
   const source = path.resolve(values.package);
   const candidate = path.resolve(values.candidate);
   const published = usesPublished ? path.resolve(values["published-package"]) : undefined;
   async function hash(file, algorithm = "sha256", encoding = "hex") {
     const digest = createHash(algorithm);
-    for await (const chunk of createReadStream(file)) digest.update(chunk);
+    for await (const chunk of createReadStream(file)) {
+      digest.update(chunk);
+    }
     return digest.digest(encoding);
   }
   assert.equal(await hash(source), values["package-sha256"]);
@@ -190,7 +199,9 @@ async function main() {
     const input = createReadStream(file);
     const unpacked = input.pipe(createGunzip());
     input.once("error", (error) => unpacked.destroy(error));
-    for await (const chunk of unpacked) bytes += chunk.length;
+    for await (const chunk of unpacked) {
+      bytes += chunk.length;
+    }
     return bytes;
   }
   const unpackedBytes =
@@ -272,7 +283,9 @@ setInterval(() => {}, 1000);
     try {
       process.kill(pid, 0);
     } catch (error) {
-      if (error.code === "ESRCH") return false;
+      if (error.code === "ESRCH") {
+        return false;
+      }
       throw error;
     }
     if (process.platform === "linux") {
@@ -281,7 +294,9 @@ setInterval(() => {}, 1000);
         const status = readFileSync(`/proc/${pid}/status`, "utf8");
         return !(/^State:\s+Z/mu.test(status) && /^Threads:[ \t]+1[ \t]*$/mu.test(status));
       } catch (error) {
-        if (error.code !== "ENOENT") throw error;
+        if (error.code !== "ENOENT") {
+          throw error;
+        }
       }
     }
     return true;
@@ -327,7 +342,7 @@ setInterval(() => {}, 1000);
       maxBuffer: 4 * 1024 * 1024,
     });
   }
-  function launch(root, args, faults = [], ancestors = false, liveRoot) {
+  function launch(root, args, { faults = [], ancestors = false, liveRoot } = {}) {
     const nodeArgs = ["--import", preload, ...args];
     const child = spawn(
       process.execPath,
@@ -376,7 +391,9 @@ setInterval(() => {}, 1000);
           process.kill(child.pid, 0);
           assert.equal(identity(child.pid), owned.get(child.pid), "output-limit owner changed");
         } catch (cause) {
-          if (cause.code !== "ESRCH") throw cause;
+          if (cause.code !== "ESRCH") {
+            throw cause;
+          }
         }
         terminateManagedChild(child, "SIGKILL", {
           processGroupFallback: "never",
@@ -392,7 +409,9 @@ setInterval(() => {}, 1000);
       }
     };
     const consume = (stream, bytes) => {
-      if (outputFailure) return;
+      if (outputFailure) {
+        return;
+      }
       try {
         const remainingBytes = maxOutputBytes - outputBytes;
         outputBuffers[stream].append(bytes.subarray(0, remainingBytes));
@@ -410,15 +429,21 @@ setInterval(() => {}, 1000);
         while ((end = buffered[stream].indexOf("\n")) >= 0) {
           const line = buffered[stream].slice(0, end);
           buffered[stream] = buffered[stream].slice(end + 1);
-          if (!line.startsWith(prefixMarker)) continue;
+          if (!line.startsWith(prefixMarker)) {
+            continue;
+          }
           const event = JSON.parse(line.slice(prefixMarker.length));
-          if (event.event === "observation-overflow") unsettledCommand = true;
+          if (event.event === "observation-overflow") {
+            unsettledCommand = true;
+          }
           if (event.event === "spawned") {
             owned.set(
               event.pid,
               event.startIdentity === undefined ? identity(event.pid) : String(event.startIdentity),
             );
-            if (event.detached) groups.add(event.pid);
+            if (event.detached) {
+              groups.add(event.pid);
+            }
           }
           events.push(event);
         }
@@ -431,7 +456,7 @@ setInterval(() => {}, 1000);
     const exited = once(child, "exit");
     const closed = once(child, "close");
     const group = (pid) => ({ pid, exitCode: alive(pid) ? null : 1, signalCode: null });
-    async function join() {
+    async function joinOwned() {
       try {
         await until(
           () =>
@@ -451,16 +476,23 @@ setInterval(() => {}, 1000);
           throw new AggregateError(
             [outputFailure, error],
             "Output capture and process join failed",
+            { cause: error },
           );
         }
         throw error;
       }
-      if (outputFailure) throw outputFailure;
+      if (outputFailure) {
+        throw outputFailure;
+      }
     }
     async function waitEvent(predicate, label) {
       await until(() => {
-        if (outputFailure) throw outputFailure;
-        if (events.some(predicate)) return true;
+        if (outputFailure) {
+          throw outputFailure;
+        }
+        if (events.some(predicate)) {
+          return true;
+        }
         assert.ok(
           child.exitCode === null && child.signalCode === null,
           `process exited before ${label}\n${outputBuffers.stdout.text()}\n${outputBuffers.stderr.text()}`,
@@ -481,7 +513,9 @@ setInterval(() => {}, 1000);
         );
         return false;
       }, label);
-      if (outputFailure) throw outputFailure;
+      if (outputFailure) {
+        throw outputFailure;
+      }
       return events.find(predicate);
     }
     async function kill(pid, reap = true) {
@@ -505,18 +539,24 @@ setInterval(() => {}, 1000);
     }
     async function killAll() {
       for (const pid of [...owned.keys()].toReversed()) {
-        if (alive(pid)) await kill(pid, child.signalCode === null);
+        if (alive(pid)) {
+          await kill(pid, child.signalCode === null);
+        }
       }
-      await join();
+      await joinOwned();
     }
     async function cleanup() {
       const errors = [];
       for (const pid of [...groups].toReversed()) {
         try {
           const state = inspectManagedProcessGroup(group(pid), { errorPolicy: "indeterminate" });
-          if (state === "dead") continue;
+          if (state === "dead") {
+            continue;
+          }
           assert.equal(state, "live", "task-owned process group could not be inspected");
-          if (alive(pid)) assert.equal(identity(pid), owned.get(pid));
+          if (alive(pid)) {
+            assert.equal(identity(pid), owned.get(pid));
+          }
           terminateManagedChild(
             { ...group(pid), kill: (signal) => process.kill(pid, signal) },
             "SIGKILL",
@@ -528,11 +568,13 @@ setInterval(() => {}, 1000);
         }
       }
       try {
-        await join();
+        await joinOwned();
       } catch (error) {
         errors.push(error);
       }
-      if (errors.length) throw new AggregateError(errors, "Task process cleanup remains unsettled");
+      if (errors.length) {
+        throw new AggregateError(errors, "Task process cleanup remains unsettled");
+      }
     }
     return {
       child,
@@ -542,15 +584,19 @@ setInterval(() => {}, 1000);
       kill,
       killAll,
       cleanup,
-      join,
+      joinOwned,
       observations: () => {
-        if (outputFailure) throw outputFailure;
+        if (outputFailure) {
+          throw outputFailure;
+        }
         return events.filter((event) => event.role);
       },
       checkpoint: (label) =>
         waitEvent((event) => event.event === "checkpoint" && event.label === label, label),
       output: () => {
-        if (outputFailure) throw outputFailure;
+        if (outputFailure) {
+          throw outputFailure;
+        }
         return { stdout: outputBuffers.stdout.text(), stderr: outputBuffers.stderr.text() };
       },
     };
@@ -560,20 +606,24 @@ setInterval(() => {}, 1000);
       await fs.lstat(file);
       return true;
     } catch (error) {
-      if (error.code === "ENOENT") return false;
+      if (error.code === "ENOENT") {
+        return false;
+      }
       throw error;
     }
   }
   async function runCase(name, index) {
     const publishedUpgrade = name === "published-upgrade";
     const root = path.join(runRoot, `${index}-${name}`);
-    for (const part of ["home", "tmp", "state"])
+    for (const part of ["home", "tmp", "state"]) {
       await fs.mkdir(path.join(root, part), { recursive: true });
+    }
     const prefix = path.join(root, "prefix");
     const live = path.join(prefix, "lib", "node_modules", "openclaw");
     const bin = path.join(prefix, "bin", "openclaw");
     const processes = [];
     let finished = false;
+    const caseErrors = [];
     try {
       await command(
         "npm",
@@ -662,21 +712,21 @@ setInterval(() => {}, 1000);
                   when: "after",
                 },
               ];
-      const updater = launch(
-        root,
-        updateArgs,
+      const updater = launch(root, updateArgs, {
         faults,
-        name !== "healthy" && !publishedUpgrade,
-        publishedUpgrade ? live : undefined,
-      );
+        ancestors: name !== "healthy" && !publishedUpgrade,
+        liveRoot: publishedUpgrade ? live : undefined,
+      });
       processes.push(updater);
       const runRecovery = async (action, succeeds = true) => {
         // No loader, repository dependency, authority environment, or canonical CLI.
         emit({ event: "helper", name, action, execution: "plain-node" });
-        const result = await command(process.execPath, [recovery, action], root).then(
-          (value) => ({ ...value, code: 0 }),
-          (error) => ({ stdout: error.stdout ?? "", stderr: error.stderr ?? "", code: error.code }),
-        );
+        let result;
+        try {
+          result = { ...(await command(process.execPath, [recovery, action], root)), code: 0 };
+        } catch (error) {
+          result = { stdout: error.stdout ?? "", stderr: error.stderr ?? "", code: error.code };
+        }
         assert.equal(result.code === 0, succeeds, `${action}: ${result.stdout}\n${result.stderr}`);
         return result;
       };
@@ -688,7 +738,7 @@ setInterval(() => {}, 1000);
           execution: "filesystem-checkpoint-preload",
           fault,
         });
-        const retiring = launch(root, [recovery, "retire"], [fault]);
+        const retiring = launch(root, [recovery, "retire"], { faults: [fault] });
         processes.push(retiring);
         await retiring.checkpoint(fault.label);
         await retiring.killAll();
@@ -700,7 +750,7 @@ setInterval(() => {}, 1000);
           () => pending.child.exitCode !== null || pending.child.signalCode !== null,
           "pending update refusal",
         );
-        await pending.join();
+        await pending.joinOwned();
         assert.notEqual(pending.child.exitCode, 0);
         assert.equal(pending.child.signalCode, null);
         const output = `${pending.output().stdout}\n${pending.output().stderr}`;
@@ -708,7 +758,9 @@ setInterval(() => {}, 1000);
           output,
           inspection ? /operator inspection/u : /recovery.*pending|publication is incomplete/u,
         );
-        if (inspection) assert.ok(!output.includes(recovery), "must not print a missing helper");
+        if (inspection) {
+          assert.ok(!output.includes(recovery), "must not print a missing helper");
+        }
       };
       if (name === "healthy" || publishedUpgrade) {
         await until(
@@ -716,7 +768,7 @@ setInterval(() => {}, 1000);
           "healthy update",
         );
         assert.deepEqual(await updater.exited, [0, null], JSON.stringify(updater.output()));
-        await updater.join();
+        await updater.joinOwned();
         assert.equal(await exists(anchor), false);
         if (publishedUpgrade) {
           assert.equal(unsettledCommand, false, "published observation/custody limit exceeded");
@@ -807,12 +859,14 @@ setInterval(() => {}, 1000);
         );
         if (name === "surviving-updater" || name === "delegated-child") {
           for (const pid of [...updater.owned.keys()].toReversed()) {
-            if (pid !== checkpoint.pid) await updater.kill(pid);
+            if (pid !== checkpoint.pid) {
+              await updater.kill(pid);
+            }
           }
           await runRecovery("repair", false);
           assert.equal(alive(checkpoint.pid), true);
           await updater.kill(checkpoint.pid, false);
-          await updater.join();
+          await updater.joinOwned();
         } else {
           await updater.killAll();
         }
@@ -900,37 +954,55 @@ setInterval(() => {}, 1000);
       assert.equal(await fs.readFile(unknown, "utf8"), "unrelated executable\n");
       finished = true;
       emit({ event: "case", name, status: "passed", version: selected.version });
-    } finally {
-      const errors = [];
-      for (const process of [...processes].toReversed()) {
-        try {
-          await process.cleanup();
-          processes.splice(processes.indexOf(process), 1);
-        } catch (error) {
-          errors.push(error);
-        }
+    } catch (error) {
+      caseErrors.push(error);
+    }
+    const cleanupErrors = [];
+    for (const process of [...processes].toReversed()) {
+      try {
+        await process.cleanup();
+        processes.splice(processes.indexOf(process), 1);
+      } catch (error) {
+        cleanupErrors.push(error);
       }
-      if (errors.length || unsettledCommand) {
-        emit({ event: "retained", name, path: root });
-        throw new AggregateError(errors, "Task custody remains unsettled; evidence retained");
-      }
-      if (finished) await fs.rm(root, { recursive: true });
-      else emit({ event: "retained", name, path: root });
+    }
+    if (cleanupErrors.length || unsettledCommand) {
+      emit({ event: "retained", name, path: root });
+      throw new AggregateError(
+        [...caseErrors, ...cleanupErrors],
+        "Task custody remains unsettled; evidence retained",
+        { cause: caseErrors.length ? caseErrors[0] : cleanupErrors[0] },
+      );
+    }
+    if (finished && caseErrors.length === 0) {
+      await fs.rm(root, { recursive: true });
+    } else {
+      emit({ event: "retained", name, path: root });
+    }
+    if (caseErrors.length) {
+      throw caseErrors[0];
     }
   }
   let complete = false;
   try {
-    for (const [index, name] of cases.entries()) await runCase(name, index);
+    for (const [index, name] of cases.entries()) {
+      await runCase(name, index);
+    }
     complete = true;
     emit({ event: "complete", status: "passed", cases: cases.length });
   } finally {
-    if (complete) await fs.rm(runRoot, { recursive: true });
-    else process.stderr.write(`Activation evidence retained at ${runRoot}\n`);
+    if (complete) {
+      await fs.rm(runRoot, { recursive: true });
+    } else {
+      process.stderr.write(`Activation evidence retained at ${runRoot}\n`);
+    }
   }
 }
 
-await main().catch((error) => {
+try {
+  await main();
+} catch (error) {
   console.error(error);
   process.exitCode = 1;
   console.error("[package-update-activation] FAILED (exit 1)");
-});
+}
