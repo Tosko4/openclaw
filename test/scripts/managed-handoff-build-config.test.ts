@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readdirSync, realpathSync } from "node:fs";
 import path from "node:path";
@@ -65,6 +65,23 @@ vi.mock("../../src/infra/runtime-worker-url.js", () => ({
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => vi.restoreAllMocks());
+
+it("loads the worker compiler with native Node before preparing artifacts", () => {
+  const output = execFileSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `
+await import("./scripts/lib/vitest-worker-compiler.mts");
+console.log("native worker compiler import verified");
+`,
+    ],
+    { encoding: "utf8", timeout: 30_000 },
+  );
+
+  expect(output.trim()).toBe("native worker compiler import verified");
+});
 
 it.each(
   (["managed", "package"] as const).filter(

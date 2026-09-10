@@ -357,6 +357,8 @@ describe("included config writer exclusion", () => {
           const env = { ...process.env };
           const io = createConfigIO({ env, observe: false, pluginValidation: "skip" });
           const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
+          const sourceConfig = structuredClone(snapshot.sourceConfig);
+          sourceConfig.gateway = { ...sourceConfig.gateway, port: 19001 };
           let preflightReached = false;
           await withConfigExecutor(stateDir, async (assertCurrent, revokeExecutor) => {
             const mutation = withConfigWriteLock(
@@ -364,7 +366,7 @@ describe("included config writer exclusion", () => {
               () =>
                 replaceConfigFile({
                   snapshot,
-                  nextConfig: { gateway: { mode: "local", port: 19001 } },
+                  sourceConfig,
                   writeOptions: {
                     ...writeOptions,
                     observe: false,

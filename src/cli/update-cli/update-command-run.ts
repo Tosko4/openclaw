@@ -11,6 +11,7 @@ import {
   formatExternalSupervisorUpdateRequired,
   isGatewayExternallySupervised,
 } from "../../infra/gateway-supervision.js";
+import { assertNoPendingPackageActivation } from "../../infra/package-update-activation.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { resolveUpdateInstallKind } from "../../infra/update-check.js";
 import {
@@ -22,7 +23,10 @@ import {
   type DevUpdateTarget,
   UPDATE_DEV_TARGET_REF_ENV,
 } from "../../infra/update-dev-target.js";
-import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
+import {
+  resolveUpdateInstallRoot,
+  updateInstallRootsMatch,
+} from "../../infra/update-install-root.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -61,7 +65,7 @@ import {
   admitMutableUpdateSignalRun,
   withMutableUpdateSignals,
 } from "./update-command-mutable-signals.js";
-import { assertUpdatePackageActivationAdmission } from "./update-command-result.js";
+import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import {
   resolveOwnedManagedUpdateEnv,
   resolveServiceRefreshEnv,
@@ -125,6 +129,29 @@ async function resolveUpdateCommandAdmissionEnv(params: {
     }
   }
   return env;
+}
+
+/** Package admission must not open history or launch diagnostics on a retained operation. */
+export function assertUpdatePackageActivationAdmission(
+  root: string,
+  options?: Parameters<typeof assertNoPendingPackageActivation>[1],
+): void {
+  try {
+    assertNoPendingPackageActivation(resolveUpdateInstallRoot(root), options);
+  } catch (cause) {
+    throw new UpdateCommandPendingRecoveryFailure(
+      {
+        status: "error",
+        mode: "unknown",
+        root,
+        reason: "update-recovery-pending",
+        steps: [],
+        durationMs: 0,
+      },
+      formatErrorMessage(cause),
+      { cause },
+    );
+  }
 }
 
 export async function admitUpdateCommandRun(params: {

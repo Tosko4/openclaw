@@ -61,7 +61,7 @@ import {
   POST_CORE_EXECUTOR_FD,
   POST_CORE_EXECUTOR_MAX_BYTES,
 } from "./update-command-post-core-admission.js";
-import { assertUpdatePackageActivationAdmission } from "./update-command-result.js";
+import { assertUpdatePackageActivationAdmission } from "./update-command-run.js";
 import { isPackageManagerUpdateMode } from "./update-command-service-command.js";
 import {
   disableUpdatedPackageCompileCacheEnv,

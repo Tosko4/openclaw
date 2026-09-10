@@ -54,14 +54,10 @@ import {
 } from "./update-command-executor.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { runUpdateCommandWithPostCoreExecutor } from "./update-command-post-core-executor.js";
-import {
-  assertUpdatePackageActivationAdmission,
-  reportPreMutationUpdateFailure,
-  UpdateCommandFailure,
-  withUpdateAdmissionReporting,
-} from "./update-command-result.js";
+import { UpdateCommandFailure, withUpdateAdmissionReporting } from "./update-command-result.js";
 import {
   admitUpdateCommandRun,
+  assertUpdatePackageActivationAdmission,
   createUpdateRunProgress,
   failUpdateCommandRun,
   prepareUpdateCommand,
@@ -77,7 +73,10 @@ import {
   type ManagedServiceRootRedirect,
 } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
-import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
+import {
+  reportPreMutationUpdateFailure,
+  withUpdateCommandTerminalResult,
+} from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 
