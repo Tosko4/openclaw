@@ -390,8 +390,13 @@ describe("Live Activity store", () => {
   });
 
   it("requires exact one-shot local claims and rejects asynchronous authority at both boundaries", async () => {
-    expectTypeOf<() => Promise<boolean>>().not.toExtend<LiveActivityOwnerIsCurrent>();
-    expectTypeOf<() => Promise<"ready">>().not.toExtend<LiveActivityDeliveryOwner>();
+    expectTypeOf<() => Promise<"ready">>().not.toExtend<
+      Parameters<LiveActivityStore["authorizeDispatch"]>[1]
+    >();
+    expectTypeOf<() => boolean>().not.toExtend<Parameters<LiveActivityStore["claim"]>[1]>();
+    expectTypeOf<() => Promise<"ready">>().not.toExtend<
+      Parameters<LiveActivityStore["claim"]>[1]
+    >();
     const f = await fixture();
     const saved = f.saved();
     f.observe(saved.registrationId);
@@ -411,8 +416,12 @@ describe("Live Activity store", () => {
     f.observe(saved.registrationId, { sequence: 2 });
     const next = value(f.store.claim(saved.registrationId, isReady, ATTEMPT_TIMEOUT_MS));
     // JavaScript callers cannot turn a Promise into synchronous SQLite authority.
-    // @ts-expect-error Async authority is deliberately outside the typed contract.
-    expect(f.store.authorizeDispatch(next, async () => "ready")).toEqual({
+    expect(
+      Reflect.apply(f.store.authorizeDispatch.bind(f.store), undefined, [
+        next,
+        async () => "ready",
+      ]),
+    ).toEqual({
       ok: false,
       error: "owner-changed",
     });
@@ -420,8 +429,13 @@ describe("Live Activity store", () => {
     for (const [index, owner] of [() => true, async () => "ready"].entries()) {
       const invalid = f.saved({ activityId: `invalid-${index}` });
       f.observe(invalid.registrationId);
-      // @ts-expect-error Neither boolean nor async results are delivery authority.
-      expect(f.store.claim(invalid.registrationId, owner, ATTEMPT_TIMEOUT_MS)).toEqual({
+      expect(
+        Reflect.apply(f.store.claim.bind(f.store), undefined, [
+          invalid.registrationId,
+          owner,
+          ATTEMPT_TIMEOUT_MS,
+        ]),
+      ).toEqual({
         ok: false,
         error: "owner-changed",
       });
@@ -980,6 +994,9 @@ describe("Live Activity store", () => {
   });
 
   it("requires current owner authority for revoke without mutating another owner's row", async () => {
+    expectTypeOf<() => Promise<boolean>>().not.toExtend<
+      Parameters<LiveActivityStore["revoke"]>[1]
+    >();
     const f = await fixture();
     const saved = f.saved();
     const input = { registrationId: saved.registrationId, expectedRevision: 1 };
@@ -992,8 +1009,12 @@ describe("Live Activity store", () => {
         throw new Error("authority unavailable");
       }),
     ).toEqual({ ok: false, error: "owner-changed" });
-    // @ts-expect-error Revoke has the same synchronous authority contract as dispatch.
-    expect(f.store.revoke(input, async () => true)).toEqual({ ok: false, error: "owner-changed" });
+    expect(
+      Reflect.apply(f.store.revoke.bind(f.store), undefined, [input, async () => true]),
+    ).toEqual({
+      ok: false,
+      error: "owner-changed",
+    });
     expect(f.row(saved.registrationId)).toEqual(before);
     value(f.store.revoke(input, isCurrent));
     const tombstone = f.row(saved.registrationId);
