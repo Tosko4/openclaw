@@ -26,7 +26,6 @@
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đọc câu trả lời mới nhất"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đang nói"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đang lắng nghe"</string>
-    <string name="stopping" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đang kết thúc cuộc gọi…"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đang kết nối"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đang suy nghĩ"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đang nhập"</string>

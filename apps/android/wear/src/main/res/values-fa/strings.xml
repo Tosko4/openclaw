@@ -26,7 +26,6 @@
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خواندن آخرین پاسخ با صدا"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال صحبت"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال گوش دادن"</string>
-    <string name="stopping" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال پایان دادن به تماس…"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال اتصال"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال فکر کردن"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال تایپ"</string>

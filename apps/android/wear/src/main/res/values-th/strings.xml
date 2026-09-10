@@ -26,7 +26,6 @@
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"อ่านคำตอบล่าสุดออกเสียง"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กำลังพูด"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กำลังฟัง"</string>
-    <string name="stopping" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กำลังวางสาย…"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กำลังเชื่อมต่อ"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กำลังคิด"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กำลังพิมพ์"</string>

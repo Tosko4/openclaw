@@ -26,7 +26,6 @@
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bacakan balasan terbaru"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Berbicara"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mendengarkan"</string>
-    <string name="stopping" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mengakhiri panggilan…"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Menghubungkan"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Berpikir"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mengetik"</string>

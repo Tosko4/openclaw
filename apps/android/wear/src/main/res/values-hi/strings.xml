@@ -26,7 +26,6 @@
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"नवीनतम जवाब बोलकर सुनाएँ"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बोलकर सुनाया जा रहा है"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सुन रहा है"</string>
-    <string name="stopping" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"कॉल समाप्त हो रही है…"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"कनेक्ट हो रहा है"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"विचार जारी है"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"टाइप किया जा रहा है"</string>

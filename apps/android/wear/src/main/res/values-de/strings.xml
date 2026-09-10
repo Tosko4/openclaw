@@ -26,7 +26,6 @@
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Letzte Antwort vorlesen"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sprachausgabe läuft"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hört zu"</string>
-    <string name="stopping" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Anruf wird beendet…"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Verbindung wird hergestellt"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nachdenken"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tippt"</string>
