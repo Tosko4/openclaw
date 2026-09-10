@@ -58,8 +58,9 @@ private final class ActivityRelayURLProtocol: URLProtocol, @unchecked Sendable {
                     let handler = try #require(handler)
                     let (status, data) = try await handler(self.request)
                     try Task.checkCancellation()
+                    let url = try #require(self.request.url)
                     let response = try #require(HTTPURLResponse(
-                        url: #require(self.request.url), statusCode: status,
+                        url: url, statusCode: status,
                         httpVersion: nil, headerFields: ["Content-Type": "application/json"]))
                     self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
                     self.client?.urlProtocol(self, didLoad: data)
@@ -273,7 +274,8 @@ struct PushRelayActivityTests {
         for (index, request) in requests.enumerated() {
             let body = try ActivityRelayServer.object(request)
             let proof = try #require(body["appAttest"] as? [String: Any])
-            let bytes = try #require(Data(base64Encoded: #require(proof["signedPayloadBase64"] as? String)))
+            let signedPayloadBase64 = try #require(proof["signedPayloadBase64"] as? String)
+            let bytes = try #require(Data(base64Encoded: signedPayloadBase64))
             let signed = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
             var expected = body
             expected.removeValue(forKey: "appAttest")
@@ -306,7 +308,8 @@ struct PushRelayActivityTests {
         _ = try await fixture.client.register(fixture.ordinary)
         let ordinary = try ActivityRelayServer.object(#require(await fixture.server.requests.last))
         let proof = try #require(ordinary["appAttest"] as? [String: Any])
-        let bytes = try #require(Data(base64Encoded: #require(proof["signedPayloadBase64"] as? String)))
+        let signedPayloadBase64 = try #require(proof["signedPayloadBase64"] as? String)
+        let bytes = try #require(Data(base64Encoded: signedPayloadBase64))
         let signed = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
         let ordinaryKeys: Set = [
             "challengeId", "installationId", "bundleId", "environment", "relayProfile",
