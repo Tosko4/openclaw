@@ -1264,7 +1264,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         agentSelectionRelay.onSelection = { [weak self, weak vm] agentID in
             guard let self,
                   let vm,
-                  let routingIdentity = agentSelectionRelay.routingIdentity
+                  let routingIdentity = self.agentSelectionRelay.routingIdentity
             else { return false }
             let selectedSessionKey = Self.sessionKey(
                 afterSelecting: agentID,
@@ -1284,7 +1284,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
                 sessionRoutingContract: routingIdentity.contract,
                 agentSelectionRequired: routingIdentity.selectionRequired)
             vm.errorText = nil
-            if agentSelectionRelay.selectedAgentID != agentID {
+            if self.agentSelectionRelay.selectedAgentID != agentID {
                 self.onAgentIDChanged?(agentID)
             }
             return true
