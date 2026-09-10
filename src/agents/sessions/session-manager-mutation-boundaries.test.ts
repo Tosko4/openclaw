@@ -69,6 +69,7 @@ async function prepareActivityFixture(bounded = false) {
   const dir = tempDirs.make("openclaw-prepared-activity-");
   const scope = {
     agentId: "main",
+    env: { ...process.env, OPENCLAW_STATE_DIR: dir },
     sessionId: "prepared-activity",
     sessionKey: "agent:main:prepared-activity",
     storePath: path.join(dir, "sessions.json"),
@@ -313,6 +314,7 @@ it("accepts an explicitly captured empty root in a persistent manager", async ()
   const dir = tempDirs.make("openclaw-prepared-root-");
   const scope = {
     agentId: "main",
+    env: { ...process.env, OPENCLAW_STATE_DIR: dir },
     sessionId: "prepared-root",
     sessionKey: "agent:main:prepared-root",
     storePath: path.join(dir, "sessions.json"),
@@ -342,6 +344,7 @@ it("publishes the rewritten view before commit observers append", async () => {
   const dir = tempDirs.make("openclaw-rewrite-observer-");
   const scope = {
     agentId: "main",
+    env: { ...process.env, OPENCLAW_STATE_DIR: dir },
     sessionId: "rewrite-observer",
     sessionKey: "agent:main:rewrite-observer",
     storePath: path.join(dir, "sessions.json"),
@@ -352,8 +355,10 @@ it("publishes the rewritten view before commit observers append", async () => {
   manager.appendMessage({ role: "user", content: "tail", timestamp: 2 });
   const database = openOpenClawAgentDatabase({
     agentId: scope.agentId,
+    env: scope.env,
     path: resolveSessionTranscriptDatabasePath(scope),
   });
+  expect(database.ownerEnv.OPENCLAW_STATE_DIR).toBe(dir);
   database.db.function("queue_observer_append", () => {
     expect(
       deferOpenClawAgentPostCommitPublication(database, () => {
@@ -384,6 +389,7 @@ it("does not certify stale navigation with a post-commit replacement version", a
   const dir = tempDirs.make("openclaw-postcommit-rewrite-race-");
   const scope = {
     agentId: "main",
+    env: { ...process.env, OPENCLAW_STATE_DIR: dir },
     sessionId: "postcommit-race",
     sessionKey: "agent:main:postcommit-race",
     storePath: path.join(dir, "sessions.json"),
@@ -401,8 +407,10 @@ it("does not certify stale navigation with a post-commit replacement version", a
   manager.appendMessage({ role: "user", content: "remove-tail", timestamp: 4 });
   const database = openOpenClawAgentDatabase({
     agentId: scope.agentId,
+    env: scope.env,
     path: resolveSessionTranscriptDatabasePath(scope),
   });
+  expect(database.ownerEnv.OPENCLAW_STATE_DIR).toBe(dir);
   let queued = false;
   database.db.function("queue_navigation_replacement", () => {
     if (!queued) {
@@ -459,6 +467,7 @@ it.each(["compaction", "reset"] as const)(
     const dir = tempDirs.make("openclaw-bounded-rewrite-boundary-");
     const scope = {
       agentId: "main",
+      env: { ...process.env, OPENCLAW_STATE_DIR: dir },
       sessionId: "rewrite-boundary",
       sessionKey: "agent:main:rewrite-boundary",
       storePath: path.join(dir, "sessions.json"),
@@ -495,6 +504,7 @@ it.each(["compaction", "reset"] as const)(
     const dir = tempDirs.make("openclaw-stale-boundary-count-");
     const scope = {
       agentId: "main",
+      env: { ...process.env, OPENCLAW_STATE_DIR: dir },
       sessionId: "stale-boundary-count",
       sessionKey: "agent:main:stale-boundary-count",
       storePath: path.join(dir, "sessions.json"),
@@ -522,6 +532,7 @@ it("appends an assistant without parsing transcript rows outside the bounded con
   const dir = tempDirs.make("openclaw-session-manager-bounded-assistant-");
   const scope = {
     agentId: "main",
+    env: { ...process.env, OPENCLAW_STATE_DIR: dir },
     sessionId: "bounded-assistant-append",
     sessionKey: "agent:main:bounded-assistant-append",
     storePath: path.join(dir, "sessions.json"),
@@ -545,8 +556,10 @@ it("appends an assistant without parsing transcript rows outside the bounded con
   });
   const database = openOpenClawAgentDatabase({
     agentId: scope.agentId,
+    env: scope.env,
     path: resolveSessionTranscriptDatabasePath(scope),
   });
+  expect(database.ownerEnv.OPENCLAW_STATE_DIR).toBe(dir);
   const excluded = database.db
     .prepare("SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?")
     .get(scope.sessionId, "excluded");
