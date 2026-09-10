@@ -128,8 +128,8 @@ function createRuntime() {
     path: "direct" | "steered" | "none";
     error?: string;
   };
-  const createRunningTaskRun = vi.fn(
-    (params): AgentHarnessTaskRecord => ({
+  const createRunningTaskRun = vi.fn((params): AgentHarnessTaskRecord => {
+    return {
       taskId: params.sourceId ?? params.runId,
       runtime: "subagent",
       taskKind: "codex-native",
@@ -148,8 +148,8 @@ function createRuntime() {
       startedAt: params.startedAt,
       lastEventAt: params.lastEventAt,
       progressSummary: params.progressSummary,
-    }),
-  );
+    };
+  });
   const taskRuntime = {
     createRunningTaskRun,
     tryCreateRunningTaskRun: vi.fn((params) => createRunningTaskRun(params)),
@@ -163,12 +163,12 @@ function createRuntime() {
   return {
     ...taskRuntime,
     createAgentHarnessTaskRuntime: vi.fn(() => taskRuntime),
-    deliverAgentHarnessTaskCompletion: vi.fn(
-      async (): Promise<DeliveryResult> => ({
+    deliverAgentHarnessTaskCompletion: vi.fn(async (): Promise<DeliveryResult> => {
+      return {
         delivered: true,
         path: "direct",
-      }),
-    ),
+      };
+    }),
   };
 }
 
