@@ -1237,7 +1237,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
             self.routingIdentityTask = Task { @MainActor [weak vm] in
                 let pushes = await chatConnection.subscribe()
                 for await delivery in pushes {
-                    guard !Task.isCancelled, let vm else { return }
+                    guard !Task.isCancelled, vm != nil else { return }
                     guard delivery.isCurrent, case .snapshot = delivery.push else { continue }
                     let routingIdentity = try? await chatConnection.sessionRoutingIdentity(
                         ifCurrentRoute: delivery.serverLease.route)
