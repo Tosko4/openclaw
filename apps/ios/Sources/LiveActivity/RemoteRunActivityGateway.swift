@@ -86,7 +86,7 @@ struct RemoteRunActivityGateway: Sendable {
 
     func identity(timeoutMs: Double = 3000) async throws -> PushRelayGatewayIdentity {
         let identity: PushRelayGatewayIdentity = try await self.call(
-            "gateway.identity.get", params: [String: AnyCodable](), timeoutMs: timeoutMs)
+            "gateway.identity.get", params: [String: OpenClawProtocol.AnyCodable](), timeoutMs: timeoutMs)
         try Self.identifier(identity.deviceId, maximum: 256)
         try Self.identifier(identity.publicKey, maximum: 512)
         return identity
@@ -227,7 +227,7 @@ struct RemoteRunActivityGateway: Sendable {
     {
         try await self.requireCurrent()
         let encoded = try JSONEncoder().encode(params)
-        let fields = try JSONDecoder().decode([String: AnyCodable].self, from: encoded)
+        let fields = try JSONDecoder().decode([String: OpenClawProtocol.AnyCodable].self, from: encoded)
         let data = try await self.request(.init(method: method, params: fields, timeoutMs: timeoutMs))
         try await self.requireCurrent()
         guard data.count <= 16384 else { throw Failure.invalidResponse }
@@ -295,7 +295,7 @@ struct RemoteRunActivityGateway: Sendable {
     private static func content(
         _ payload: AnyCodable, source: String) throws -> OpenClawRunActivityAttributes.ContentState
     {
-        let fields = try GatewayPayloadDecoding.decode(payload, as: [String: AnyCodable].self)
+        let fields = try GatewayPayloadDecoding.decode(payload, as: [String: OpenClawProtocol.AnyCodable].self)
         let rawStatus = try Self.string(fields, "status", maximum: 32)
         let statuses: [String: OpenClawRunActivityAttributes.ContentState.Status] = [
             "running": .running, "toolRunning": .toolRunning, "approvalNeeded": .approvalNeeded,
