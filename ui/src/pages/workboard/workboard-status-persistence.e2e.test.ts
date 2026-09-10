@@ -99,7 +99,7 @@ const editedCard = {
 const draggedRunningCard = {
   ...editedCard,
   status: "running",
-  position: 4_000,
+  position: 6_000,
   updatedAt: draggedRunningAt,
   events: [
     ...editedCard.events,
@@ -160,7 +160,14 @@ async function dispatchHtml5Drag(source: Locator, target: Locator): Promise<void
   try {
     await sourceHandle.evaluate((sourceElement, targetElement) => {
       const dataTransfer = new DataTransfer();
-      const init = { bubbles: true, cancelable: true, dataTransfer };
+      const targetRect = targetElement.getBoundingClientRect();
+      const init = {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer,
+        clientX: targetRect.x + targetRect.width / 2,
+        clientY: targetRect.top + 1,
+      };
       sourceElement.dispatchEvent(new DragEvent("dragstart", init));
       targetElement.dispatchEvent(new DragEvent("dragover", init));
       targetElement.dispatchEvent(new DragEvent("drop", init));
@@ -512,17 +519,27 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
 
       await dispatchHtml5Drag(
         workboardCard(page, "Todo", "Persisted renamed card"),
-        workboardColumn(page, "Running").locator(".workboard-column__cards"),
+        workboardCard(page, "Running", productRunningCard.title),
       );
       const moveRequest = await gateway.waitForRequest("workboard.cards.move");
-      expect(requestParams(moveRequest)).toMatchObject({
+      const move = requestParams(moveRequest);
+      expect(move).toMatchObject({
         id: "card-1",
-        position: 4_000,
         status: "running",
       });
+      expect(move.position).toBeGreaterThan(archivedDefaultRunningCard.position);
+      expect(move.position).toBeLessThan(productRunningCard.position);
       await workboardCard(page, "Running", "Persisted renamed card").waitFor({
         timeout: 10_000,
       });
+      await expect
+        .poll(() =>
+          workboardColumn(page, "Running")
+            .locator(".workboard-card")
+            .getByRole("heading")
+            .allTextContents(),
+        )
+        .toEqual([editedCard.title, productRunningCard.title]);
       await waitForRequestCount(gateway, "workboard.cards.update", 1);
       if (captureUiProofEnabled) {
         await writeFile(

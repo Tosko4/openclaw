@@ -44,7 +44,7 @@ import {
   formatUpdatedTime,
   type WorkboardProps,
 } from "./view-helpers.ts";
-import { workboardPopoverRef } from "./view-popover.ts";
+import { closeWorkboardPopoverOnAction, workboardPopoverRef } from "./view-popover.ts";
 import { workboardScrollFadeRef } from "./view-scroll-fade.ts";
 import { getSessionStatus } from "./view-session-status.ts";
 
@@ -52,15 +52,6 @@ function isCardActionTarget(event: Event): boolean {
   return event.target instanceof Element
     ? Boolean(event.target.closest("button, a, input, select, textarea, details"))
     : false;
-}
-
-function closeCardActions(event: MouseEvent) {
-  if (!(event.target instanceof Element) || !event.target.closest("button")) {
-    return;
-  }
-  if (event.currentTarget instanceof HTMLElement) {
-    event.currentTarget.hidePopover();
-  }
 }
 
 type WorkboardCardSurface = "page" | "widget" | "list";
@@ -159,7 +150,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
               aria-label=${t("workboard.cardActions")}
               class="workboard-card__action-menu-panel"
               ${ref(workboardPopoverRef("end"))}
-              @click=${closeCardActions}
+              @click=${closeWorkboardPopoverOnAction}
             >
               <div class="workboard-card__menu-group">${detailAction} ${editAction}</div>
               ${
@@ -410,7 +401,7 @@ export function renderColumn(
   props: WorkboardProps,
   status: WorkboardStatus,
   cards: WorkboardCard[],
-  options: { surface?: WorkboardCardSurface } = {},
+  options: { surface?: WorkboardCardSurface; boardFilter?: string } = {},
 ) {
   const state = getWorkboardState(props.host);
   const writable = canMutate(props);
@@ -553,6 +544,7 @@ export function renderColumn(
           cardId: card.id,
           status,
           beforeCardId,
+          boardFilter: options.boardFilter ?? state.boardFilter,
           requestUpdate: props.onRequestUpdate,
         });
       }}

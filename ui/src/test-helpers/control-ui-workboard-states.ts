@@ -1,4 +1,4 @@
-import type { CardSessionState } from "../../../extensions/workboard/browser/lib/workboard/session-state.ts";
+import { createControlUiMockSessionRow as sessionRow } from "./control-ui-session-fixtures.ts";
 
 export const MATRIX_STATES = [
   "unlinked",
@@ -15,12 +15,12 @@ export const MATRIX_STATES = [
   "cancelled",
   "stopped",
   "blocked",
-] as const satisfies readonly (CardSessionState | "blocked")[];
+] as const;
 const MATRIX_ALERTS = ["none", "same", "different"] as const;
 const MATRIX_COUNTS = ["off", "on"] as const;
 const MATRIX_PRIORITIES = ["normal", "high"] as const;
 
-export const WORKBOARD_STATE_LABELS: Record<CardSessionState | "blocked", string> = {
+export const WORKBOARD_STATE_LABELS: Record<(typeof MATRIX_STATES)[number], string> = {
   unlinked: "No linked session",
   unknown: "Unknown session",
   unavailable: "Session unavailable",
@@ -120,4 +120,38 @@ const cellsById = new Map(buildWorkboardStateCells(0).map((cell) => [cell.id, ce
 
 export function getWorkboardStateCell(id: string) {
   return cellsById.get(id);
+}
+
+export function buildWorkboardStateSessions(baseTime: number) {
+  return [
+    ...MATRIX_STATES.filter(
+      (state) => !["unlinked", "blocked", "unknown", "unavailable", "ambiguous"].includes(state),
+    ).map((state) =>
+      sessionRow(
+        `agent:main:matrix-${state}`,
+        "Release verification",
+        state === "stale" ? baseTime - 45 * 60_000 : baseTime - 120_000,
+        {
+          status:
+            state === "idle" || state === "cancelled" || state === "timed_out"
+              ? undefined
+              : state === "succeeded"
+                ? "done"
+                : state === "stopped"
+                  ? "killed"
+                  : state === "stale"
+                    ? "running"
+                    : state,
+          hasActiveRun: state === "running",
+          ...(state === "running"
+            ? { startedAt: baseTime - 8 * 60_000, activeRunIds: [`run-matrix-${state}`] }
+            : {}),
+        },
+      ),
+    ),
+    sessionRow("agent:main:card-states-stale", "Natural stale session", baseTime - 45 * 60_000, {
+      status: "running",
+      hasActiveRun: false,
+    }),
+  ];
 }

@@ -1,9 +1,12 @@
 import {
   getCardAlerts,
   type CardAlert,
-} from "../../../extensions/workboard/browser/lib/workboard/card-alerts.ts";
-import { getWorkboardLifecycle } from "../../../extensions/workboard/browser/lib/workboard/lifecycle.ts";
-import { getWorkboardStateCell, WORKBOARD_STATE_LABELS } from "./control-ui-workboard-states.ts";
+} from "../extensions/workboard/browser/lib/workboard/card-alerts.ts";
+import { getWorkboardLifecycle } from "../extensions/workboard/browser/lib/workboard/lifecycle.ts";
+import {
+  getWorkboardStateCell,
+  WORKBOARD_STATE_LABELS,
+} from "../ui/src/test-helpers/control-ui-workboard-states.ts";
 
 /** Only the opt-in native fixture imports these projections. Persisted cards stay unchanged. */
 export const getFixtureLifecycle: typeof getWorkboardLifecycle = (

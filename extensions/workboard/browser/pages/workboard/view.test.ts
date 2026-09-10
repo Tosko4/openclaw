@@ -10,7 +10,7 @@ import type {
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { nextWorkboardCardPosition } from "../../lib/workboard/card-state.ts";
+import { nextWorkboardCardPosition, setWorkboardCards } from "../../lib/workboard/card-state.ts";
 import { getWorkboardState, stopWorkboardLifecycleRefresh } from "../../lib/workboard/index.ts";
 import {
   createGatewaySession,
@@ -119,24 +119,6 @@ function statusButton(container: Element, label: string) {
       label,
     ),
     `${label} status`,
-  );
-}
-
-function filterGroup(container: Element, label: string) {
-  return expectDefined(
-    container.querySelector<HTMLElement>(
-      `.workboard-filter-section__options[aria-label="${label}"]`,
-    ),
-    label,
-  );
-}
-
-function filterCheckbox(container: Element, group: string, label: string) {
-  return expectDefined(
-    [...filterGroup(container, group).querySelectorAll("label")]
-      .find((option) => option.getAttribute("title") === label)
-      ?.querySelector<HTMLInputElement>('input[type="checkbox"]'),
-    `${label} filter`,
   );
 }
 
@@ -390,6 +372,53 @@ describe("renderWorkboard", () => {
       expect(state.selectedCardIds).toEqual(new Set([second.id]));
       expect(state.bulkResult).toEqual({ completed: 1, total: 2 });
       expect(state.error).toContain("Applied to 1 of 2 cards.");
+    },
+  );
+
+  it.each(["before confirmation", "during the first delete"] as const)(
+    "does not bulk-delete a card archived %s",
+    async (timing) => {
+      const first = createWorkboardCard({ id: "first" });
+      const second = createWorkboardCard({ id: "second", position: 2000 });
+      const archived = { ...second, metadata: { archivedAt: second.updatedAt + 1 } };
+      const firstWrite = createDeferred<{ deleted: boolean }>();
+      const request = vi
+        .fn()
+        .mockImplementationOnce(() => firstWrite.promise)
+        .mockResolvedValue({ deleted: true });
+      const { state, container, renderView } = createWorkboardView({
+        client: { request, addEventListener: () => () => undefined },
+        connected: true,
+        canWrite: true,
+      });
+      state.cards = [first, second];
+      state.selectedCardIds = new Set([first.id, second.id]);
+      renderView();
+      expectDefined(
+        container.querySelector<HTMLButtonElement>(".workboard-selection__delete"),
+        "bulk delete",
+      ).click();
+      renderView();
+      expect(state.bulkDialog?.cardIds).toEqual([first.id, second.id]);
+      if (timing === "before confirmation") {
+        setWorkboardCards(state, [first, archived]);
+        renderView();
+      }
+      expectDefined(
+        container.querySelector<HTMLButtonElement>('.workboard-bulk-dialog button[type="submit"]'),
+        "confirm delete",
+      ).click();
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+      if (timing === "during the first delete") {
+        setWorkboardCards(state, [first, archived]);
+      }
+      firstWrite.resolve({ deleted: true });
+      await vi.waitFor(() => expect(state.bulkSaving).toBe(false));
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(request).toHaveBeenCalledWith("workboard.cards.delete", { id: first.id });
+      expect(state.cards).toEqual([archived]);
+      expect(state.selectedCardIds.size).toBe(0);
+      expect(state.bulkDialog).toBeNull();
     },
   );
 

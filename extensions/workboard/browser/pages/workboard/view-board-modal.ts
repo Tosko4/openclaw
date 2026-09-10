@@ -36,6 +36,7 @@ export function renderBoardModal(props: {
   pageError?: string | null;
   toastOwner: object;
   client: GatewayBrowserClient | null;
+  readonly canWrite: boolean;
   onSaved: () => void;
   onCancel: () => void;
   requestUpdate: () => void;
@@ -48,7 +49,7 @@ export function renderBoardModal(props: {
     tone: "error",
   });
   const save = async () => {
-    if (!props.client || draft.saving || !draft.name.trim()) {
+    if (!props.client || !props.canWrite || draft.saving || !draft.name.trim()) {
       return;
     }
     const input: Record<string, string | null> = { id: draft.id };
@@ -113,7 +114,7 @@ export function renderBoardModal(props: {
               required
               maxlength="120"
               .value=${live(draft.name)}
-              ?disabled=${draft.saving}
+              ?disabled=${draft.saving || !props.canWrite}
               @input=${(event: Event) => {
                 if (!(event.currentTarget instanceof HTMLInputElement)) {
                   return;
@@ -131,7 +132,7 @@ export function renderBoardModal(props: {
           ${renderAppearancePicker({
             icon: draft.icon || null,
             color: draft.color || null,
-            disabled: draft.saving,
+            disabled: draft.saving || !props.canWrite,
             clearable: true,
             onChange: ({ icon, color }) => {
               draft.icon = icon ?? "";
@@ -147,7 +148,7 @@ export function renderBoardModal(props: {
           <button
             class="btn primary"
             type="submit"
-            ?disabled=${draft.saving || !props.client || !draft.name.trim()}
+            ?disabled=${draft.saving || !props.client || !props.canWrite || !draft.name.trim()}
           >
             ${t("common.save")}
           </button>

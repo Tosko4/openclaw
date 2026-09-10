@@ -1,4 +1,5 @@
 import type { CronJob } from "@openclaw/gateway-protocol";
+import type { WorkboardMetadata } from "@openclaw/workboard-contract";
 import { html, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
@@ -22,19 +23,21 @@ export async function loadBoardAutomation(
 
 function automationSchedule(job: CronJob): string {
   const schedule = job.schedule;
-  switch (schedule.kind) {
-    case "cron":
-      return `${schedule.expr}${schedule.tz ? ` · ${schedule.tz}` : ""}`;
-    case "every":
-      return t("workboard.automationEvery", {
-        duration: formatDurationCompact(schedule.everyMs) ?? String(schedule.everyMs),
-      });
-    case "at":
-      return t("workboard.automationAt", {
-        time: formatUpdatedTime(Date.parse(schedule.at)) || schedule.at,
-      });
-    case "on-exit":
-      return t("workboard.automationOnExit", { command: schedule.command });
+  if (schedule.kind === "cron") {
+    return `${schedule.expr}${schedule.tz ? ` · ${schedule.tz}` : ""}`;
+  }
+  if (schedule.kind === "every") {
+    return t("workboard.automationEvery", {
+      duration: formatDurationCompact(schedule.everyMs) ?? String(schedule.everyMs),
+    });
+  }
+  if (schedule.kind === "at") {
+    return t("workboard.automationAt", {
+      time: formatUpdatedTime(Date.parse(schedule.at)) || schedule.at,
+    });
+  }
+  if (schedule.kind === "on-exit") {
+    return t("workboard.automationOnExit", { command: schedule.command });
   }
   return t("workboard.automationStream", { command: schedule.command.join(" ") });
 }
@@ -169,4 +172,29 @@ export function renderBoardAutomation(automation: BoardAutomationState | undefin
         </section>
       `
     : nothing;
+}
+
+export function automationDetailFields(automation: WorkboardMetadata["automation"]) {
+  const fields: Array<readonly [string, string | number | undefined]> = automation
+    ? [
+        [t("workboard.detailScheduled"), formatUpdatedTime(automation.scheduledAt)],
+        [t("workboard.detailSkills"), automation.skills?.join(", ")],
+        [
+          t("workboard.detailWorkspace"),
+          [automation.workspace?.kind, automation.workspace?.path, automation.workspace?.branch]
+            .filter(Boolean)
+            .join(" · "),
+        ],
+        [t("workboard.detailDispatchCount"), automation.dispatchCount],
+        [t("workboard.detailLastDispatch"), formatUpdatedTime(automation.lastDispatchAt)],
+        [
+          t("workboard.detailRuntimeLimit"),
+          automation.maxRuntimeSeconds !== undefined
+            ? (formatDurationCompact(automation.maxRuntimeSeconds * 1000) ?? undefined)
+            : undefined,
+        ],
+        [t("workboard.detailRetryLimit"), automation.maxRetries],
+      ]
+    : [];
+  return fields.filter(([, value]) => value !== undefined && value !== "");
 }

@@ -646,10 +646,12 @@ suite.define(() => {
         )
         .toBe(1);
       expect(await editForm.getByLabel("Notes").inputValue()).toBe(unsavedNotes);
-      expect(await reviewedCardSurface.getByRole("heading").textContent()).toBe(reviewedCard.title);
+      expect(
+        await reviewedCardSurface.getByRole("heading", { includeHidden: true }).textContent(),
+      ).toBe(reviewedCard.title);
       expect(
         await writable.page
-          .getByRole("heading", { name: liveRefreshedCard.title, exact: true })
+          .getByRole("heading", { name: liveRefreshedCard.title, exact: true, includeHidden: true })
           .count(),
       ).toBe(0);
       expect(await writableGateway.getRequests("tasks.list")).toHaveLength(tasksBeforeLiveRefresh);
@@ -660,7 +662,7 @@ suite.define(() => {
         .getByRole("button", { name: "Cancel", exact: true })
         .click();
       await writable.page
-        .getByRole("dialog", { name: "Discard changes?", exact: true })
+        .locator(".workboard-discard")
         .getByRole("button", { name: "Discard", exact: true })
         .click();
       await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeDraftClose);

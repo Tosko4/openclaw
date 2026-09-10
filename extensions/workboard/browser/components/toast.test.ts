@@ -50,21 +50,30 @@ it.each([false, true])(
   },
 );
 
-it.each(["dismiss", "expire"] as const)(
-  "does not resurrect a board result after %s and an empty dialog",
-  async (action) => {
+it.each(
+  (["dismiss", "expire"] as const).flatMap((action) =>
+    (["empty dialog", "transient error"] as const).map((interruption) => ({
+      action,
+      interruption,
+    })),
+  ),
+)(
+  "does not resurrect a board result after $action and an $interruption",
+  async ({ action, interruption }) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const container = document.createElement("div");
     document.body.append(container);
     const owner = {};
     let result = { completed: 2, total: 2 };
+    let error = "";
     const update = async (dialogOpen: boolean) => {
       render(
         html`${renderWorkboardToast({
           owner,
           outcomeSource: true,
-          message: "Applied to 2 of 2 cards.",
-          key: result,
+          message: error || "Applied to 2 of 2 cards.",
+          key: error || result,
+          tone: error ? "error" : "info",
           hidden: dialogOpen,
         })}${renderWorkboardToast({ owner, message: "", hidden: !dialogOpen })}`,
         container,
@@ -87,9 +96,26 @@ it.each(["dismiss", "expire"] as const)(
     }
     await boardToast.updateComplete;
     expect(boardToast.shadowRoot?.querySelector('[role="status"]')).toBeNull();
-    await update(true);
-    await vi.advanceTimersByTimeAsync(12_000);
-    await update(false);
+    if (interruption === "empty dialog") {
+      await update(true);
+      await vi.advanceTimersByTimeAsync(12_000);
+      await update(false);
+    } else {
+      error = "Session unavailable";
+      await update(false);
+      expect(boardToast.shadowRoot?.querySelector('[role="alert"]')?.textContent).toBe(error);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await boardToast.updateComplete;
+      expect(boardToast.shadowRoot?.querySelector('[role="alert"]')).toBeNull();
+      error = "";
+      await update(false);
+      expect(boardToast.shadowRoot?.querySelector('[role="status"]')).toBeNull();
+      error = "Session unavailable";
+      await update(false);
+      expect(boardToast.shadowRoot?.querySelector('[role="alert"]')?.textContent).toBe(error);
+      error = "";
+      await update(false);
+    }
     expect(boardToast.shadowRoot?.querySelector('[role="status"]')).toBeNull();
     result = { completed: 2, total: 2 };
     await update(false);

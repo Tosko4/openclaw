@@ -1,5 +1,6 @@
 import { normalizeNullableString as normalizeString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { matchesBoardFilter } from "./board-filter.ts";
 import type {
   WorkboardCard,
   WorkboardDependencyState,
@@ -41,14 +42,14 @@ export function planWorkboardCardDrop(
   card: WorkboardCard,
   status: WorkboardStatus,
   beforeCardId: string | null,
+  boardFilter: WorkboardUiState["boardFilter"],
 ): Array<{ id: string; status: WorkboardStatus; position: number }> {
-  const boardId = card.metadata?.automation?.boardId?.trim() || "default";
   const peers = cards
     .filter(
       (candidate) =>
         candidate.id !== card.id &&
         candidate.status === status &&
-        (candidate.metadata?.automation?.boardId?.trim() || "default") === boardId,
+        matchesBoardFilter(candidate, boardFilter),
     )
     .toSorted((left, right) => left.position - right.position || left.createdAt - right.createdAt);
   const beforeIndex = peers.findIndex((candidate) => candidate.id === beforeCardId);
@@ -94,6 +95,14 @@ export function setWorkboardCards(state: WorkboardUiState, cards: WorkboardCard[
   for (const id of state.selectedCardIds) {
     if (!selectableIds.has(id)) {
       state.selectedCardIds.delete(id);
+    }
+  }
+  if (state.bulkDialog) {
+    state.bulkDialog.cardIds = state.bulkDialog.cardIds.filter((id) =>
+      state.selectedCardIds.has(id),
+    );
+    if (!state.bulkDialog.cardIds.length) {
+      state.bulkDialog = null;
     }
   }
 }

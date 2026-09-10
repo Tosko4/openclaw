@@ -9,7 +9,6 @@ import { icons } from "../../components/icons.ts";
 import { renderWorkboardToast } from "../../components/toast.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
-import { formatDurationCompact } from "../../lib/format.ts";
 import {
   workboardCardBoardId,
   WORKBOARD_ALL_BOARDS_FILTER,
@@ -24,7 +23,7 @@ import {
   type WorkboardUiState,
 } from "../../lib/workboard/index.ts";
 import { cardAgentLabel } from "./agent-filter.ts";
-import { renderBoardAutomation } from "./view-automation.ts";
+import { automationDetailFields, renderBoardAutomation } from "./view-automation.ts";
 import {
   getCardActionState,
   renderArchiveCardAction,
@@ -61,7 +60,7 @@ import {
   renderInlineStatus,
   renderInlineText,
 } from "./view-inline-properties.ts";
-import { workboardPopoverRef } from "./view-popover.ts";
+import { closeWorkboardPopoverOnAction, workboardPopoverRef } from "./view-popover.ts";
 import { workboardScrollFadeRef } from "./view-scroll-fade.ts";
 import { getSessionStatus, renderSessionStatusBadge } from "./view-session-status.ts";
 
@@ -158,27 +157,6 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
   const events = (card.events ?? []).toReversed();
   const dependencies = getWorkboardDependencyState(card, state.cards);
   const detailSections = getDetailSections(card);
-  const automationFields: Array<readonly [string, string | number | undefined]> = automation
-    ? [
-        [t("workboard.detailScheduled"), formatUpdatedTime(automation.scheduledAt)],
-        [t("workboard.detailSkills"), automation.skills?.join(", ")],
-        [
-          t("workboard.detailWorkspace"),
-          [automation.workspace?.kind, automation.workspace?.path, automation.workspace?.branch]
-            .filter(Boolean)
-            .join(" · "),
-        ],
-        [t("workboard.detailDispatchCount"), automation.dispatchCount],
-        [t("workboard.detailLastDispatch"), formatUpdatedTime(automation.lastDispatchAt)],
-        [
-          t("workboard.detailRuntimeLimit"),
-          automation.maxRuntimeSeconds !== undefined
-            ? (formatDurationCompact(automation.maxRuntimeSeconds * 1000) ?? undefined)
-            : undefined,
-        ],
-        [t("workboard.detailRetryLimit"), automation.maxRetries],
-      ]
-    : [];
   const hasTechnicalDetails = Boolean(
     task?.taskId ||
     card.taskId ||
@@ -267,9 +245,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
       ${renderOpenSessionCardAction(props, sessionTarget, { quiet: true })}
     </div>
   </div>`;
-  const visibleAutomationFields = automationFields.filter(
-    ([, value]) => value !== undefined && value !== "",
-  );
+  const visibleAutomationFields = automationDetailFields(automation);
   return renderDialog(
     {
       className: "drawer drawer--floating",
@@ -315,15 +291,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                         role="group"
                         aria-label=${t("workboard.cardActions")}
                         ${ref(workboardPopoverRef("end"))}
-                        @click=${(event: Event) => {
-                          if (
-                            event.currentTarget instanceof HTMLElement &&
-                            event.target instanceof Element &&
-                            event.target.closest("button")
-                          ) {
-                            event.currentTarget.hidePopover();
-                          }
-                        }}
+                        @click=${closeWorkboardPopoverOnAction}
                       >
                         ${!archived ? renderEditCardAction(props, card) : nothing}
                         ${renderArchiveCardAction(props, card, busy, archived)}

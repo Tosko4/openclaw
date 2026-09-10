@@ -18,19 +18,20 @@ type ToastOutcome = {
   dismissed: boolean;
 };
 
-const outcomes = new WeakMap<object, ToastOutcome>();
+const outcomes = new WeakMap<object, Partial<Record<ToastOutcome["tone"], ToastOutcome>>>();
 
 export function updateWorkboardToastOutcome(owner: object, props: WorkboardToastProps) {
   const { message, key, tone = "info" } = props;
-  const previous = outcomes.get(owner);
-  if (
-    !previous ||
-    previous.message !== message ||
-    !Object.is(previous.key, key) ||
-    previous.tone !== tone
-  ) {
-    outcomes.set(owner, { message, key, tone, dismissed: false });
+  const ownerOutcomes = outcomes.get(owner) ?? {};
+  // Recovery starts a new error lifetime without resurrecting an older result.
+  if (tone === "info") {
+    delete ownerOutcomes.error;
   }
+  const previous = ownerOutcomes[tone];
+  if (!previous || previous.message !== message || !Object.is(previous.key, key)) {
+    ownerOutcomes[tone] = { message, key, tone, dismissed: false };
+  }
+  outcomes.set(owner, ownerOutcomes);
 }
 
 class WorkboardToast extends LitElement {
@@ -159,7 +160,7 @@ class WorkboardToast extends LitElement {
     if (!this.props.owner) {
       updateWorkboardToastOutcome(owner, this.props);
     }
-    const outcome = outcomes.get(owner);
+    const outcome = outcomes.get(owner)?.[tone];
     const dismissed =
       outcome?.message === message &&
       Object.is(outcome.key, key) &&
@@ -203,7 +204,7 @@ class WorkboardToast extends LitElement {
 
   private dismiss() {
     this.pause();
-    const outcome = outcomes.get(this.lastOwner);
+    const outcome = outcomes.get(this.lastOwner)?.[this.lastTone];
     if (
       outcome?.message === this.lastMessage &&
       Object.is(outcome.key, this.lastKey) &&

@@ -37,10 +37,8 @@ import {
   createControlUiMockSessionRow as sessionRow,
 } from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
 import { workboardUi } from "../ui/src/test-helpers/control-ui-workboard-fixture.ts";
-import {
-  buildWorkboardMocks,
-  installWorkboardBoardMock,
-} from "../ui/src/test-helpers/control-ui-workboard-mocks.ts";
+import { buildWorkboardMocks } from "../ui/src/test-helpers/control-ui-workboard-fixtures.ts";
+import { installWorkboardBoardMock } from "../ui/src/test-helpers/control-ui-workboard-mocks.ts";
 import { createOfflineDeviceNode } from "../ui/src/test-helpers/devices-fixtures.ts";
 import {
   resolveExternalPackageAliasesForVite,
@@ -3514,7 +3512,7 @@ async function buildWorkboardStatesAssets() {
                 resolveDir: path.dirname(sourcePath),
                 contents:
                   source.replace(lifecycleImport, "").replace(alertImport, "") +
-                  `\nimport { getFixtureLifecycle as getWorkboardLifecycle, getFixtureAlerts as getCardAlerts } from ${JSON.stringify(fileURLToPath(new URL("../ui/src/test-helpers/control-ui-workboard-state-projections.ts", import.meta.url)))};\n`,
+                  `\nimport { getFixtureLifecycle as getWorkboardLifecycle, getFixtureAlerts as getCardAlerts } from ${JSON.stringify(fileURLToPath(new URL("./control-ui-workboard-state-projections.ts", import.meta.url)))};\n`,
               };
             },
           );

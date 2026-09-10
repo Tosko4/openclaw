@@ -345,6 +345,10 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
                   toastOwner: state,
                   pageError: workboardErrorMessage(state, pageError),
                   client: connected ? client : null,
+                  get canWrite() {
+                    const connection = host.connection;
+                    return connection.connected && connection.canWrite;
+                  },
                   requestUpdate,
                   onCancel: () => {
                     boardDraft = null;

@@ -4,7 +4,10 @@ import { icons } from "../../components/icons.ts";
 import { renderWorkboardToast } from "../../components/toast.ts";
 import { workboardHost } from "../../host.ts";
 import { t } from "../../i18n/index.ts";
-import { nextWorkboardCardPosition } from "../../lib/workboard/card-state.ts";
+import {
+  isActiveWorkboardCard,
+  nextWorkboardCardPosition,
+} from "../../lib/workboard/card-state.ts";
 import {
   archiveWorkboardCard,
   deleteWorkboardCard,
@@ -66,7 +69,7 @@ async function applySelection(props: WorkboardProps, cardIds: string[], action: 
         break;
       }
       const card = state.cards.find((entry) => entry.id === cardId);
-      if (!card) {
+      if (!card || !isActiveWorkboardCard(card) || !state.selectedCardIds.has(cardId)) {
         state.selectedCardIds.delete(cardId);
         continue;
       }

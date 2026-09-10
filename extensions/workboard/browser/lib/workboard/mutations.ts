@@ -176,7 +176,7 @@ export async function moveWorkboardCard(
     requestUpdate?: () => void;
   } & (
     | { position: number; beforeCardId?: never }
-    | { beforeCardId: string | null; position?: never }
+    | { beforeCardId: string | null; boardFilter: string; position?: never }
   ),
 ) {
   const state = getWorkboardState(params.host);
@@ -193,7 +193,13 @@ export async function moveWorkboardCard(
     params.beforeCardId === undefined
       ? [{ id: params.cardId, status: params.status, position: params.position }]
       : card
-        ? planWorkboardCardDrop(state.cards, card, params.status, params.beforeCardId)
+        ? planWorkboardCardDrop(
+            state.cards,
+            card,
+            params.status,
+            params.beforeCardId,
+            params.boardFilter,
+          )
         : [];
   if (!moves.length || moves.some((move) => state.busyCardIds.has(move.id))) {
     return;
