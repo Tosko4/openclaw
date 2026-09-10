@@ -26,6 +26,7 @@
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"최근 답변 읽어주기"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"말하는 중"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"듣는 중"</string>
+    <string name="stopping" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"통화 종료 중…"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"연결 중"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"생각 중"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"입력 중"</string>

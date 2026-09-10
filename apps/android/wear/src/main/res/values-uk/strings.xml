@@ -26,6 +26,7 @@
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Озвучити останню відповідь"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Озвучування"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Слухання"</string>
+    <string name="stopping" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Завершення виклику…"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Підключення"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Обмірковування"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Набирає текст"</string>

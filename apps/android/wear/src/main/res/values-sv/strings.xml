@@ -26,6 +26,7 @@
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Läs upp senaste svaret"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Talar"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Lyssnar"</string>
+    <string name="stopping" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Avslutar samtalet…"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ansluter"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tänker"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skriver"</string>

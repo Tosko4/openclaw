@@ -26,6 +26,7 @@
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Озвучить последний ответ"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Озвучивание"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Прослушивание"</string>
+    <string name="stopping" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Завершение вызова…"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключение"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Размышление"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ввод текста"</string>

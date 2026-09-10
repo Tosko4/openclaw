@@ -26,6 +26,7 @@
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Son yanıtı seslendir"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konuşuyor"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dinleniyor"</string>
+    <string name="stopping" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Arama sonlandırılıyor…"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bağlanıyor"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Düşünüyor"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yazıyor"</string>
