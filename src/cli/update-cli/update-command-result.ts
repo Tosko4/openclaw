@@ -10,7 +10,7 @@ import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.j
 import { formatErrorMessage, formatUncaughtError } from "../../infra/errors.js";
 import { assertNoPendingPackageActivation } from "../../infra/package-update-activation.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
-import { isSqliteLockError } from "../../infra/sqlite-transaction.js";
+import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import type { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
   markControlPlaneUpdateRestartSentinelFailure,
