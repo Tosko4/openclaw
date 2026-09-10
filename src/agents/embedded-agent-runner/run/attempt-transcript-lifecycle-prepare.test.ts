@@ -138,6 +138,51 @@ async function withInitialWriter(
 }
 
 describe("admitted lazy session writer", () => {
+  it.each(["closed", "replaced", "writer", "session", "lifecycle"] as const)(
+    "rejects prepared activity after its %s changes",
+    async (loss) => {
+      await withInitialWriter(
+        async ({ admission, manager, replaceAdmission, runParams, target }) => {
+          const parentId = manager.appendMessage(userMessage);
+          if (loss === "closed") {
+            admission.close();
+          } else if (loss === "replaced") {
+            await replaceAdmission();
+          } else {
+            runWithoutOwnedSessionTranscriptWrites(() =>
+              replaceSessionEntrySync(target, {
+                sessionId: loss === "session" ? "replacement-session" : target.sessionId,
+                activeWriterRunId: loss === "writer" ? "replacement-writer" : runParams.runId,
+                lifecycleRevision:
+                  loss === "lifecycle" ? "replacement-revision" : "existing-revision",
+                updatedAt: 2,
+              }),
+            );
+          }
+          const before = loadTranscriptEventsSync(target);
+          expect(() =>
+            runWithoutOwnedSessionTranscriptWrites(() =>
+              manager.appendMessage(
+                {
+                  role: "custom",
+                  customType: "prepared-activity",
+                  content: "",
+                  display: true,
+                  excludeFromContext: true,
+                  timestamp: 2,
+                },
+                { preparedTurnParentId: parentId },
+              ),
+            ),
+          ).toThrow();
+          expect(loadTranscriptEventsSync(target)).toEqual(before);
+          expect(manager.getAppendParentId()).toBe(parentId);
+        },
+        { existing: true },
+      );
+    },
+  );
+
   it.each([false, true])(
     "settles one terminal error after attempt teardown (existing=%s)",
     async (existing) => {

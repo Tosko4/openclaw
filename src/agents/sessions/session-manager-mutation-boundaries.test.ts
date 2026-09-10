@@ -1,6 +1,6 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
@@ -9,12 +9,20 @@ import {
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
+import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import {
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { rewriteTranscriptEntriesInSessionManager } from "../embedded-agent-runner/transcript-rewrite.js";
+import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
+import {
+  makeAgentAssistantMessage,
+  makeAgentToolResultMessage,
+} from "../test-helpers/agent-message-fixtures.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { SessionManager } from "./session-manager.js";
 
@@ -38,6 +46,243 @@ afterEach(async () => {
     throw new AggregateError(errors, "Session fixture cleanup failed");
   }
   tempDirs.cleanup();
+});
+
+function makePreparedActivity(parentId: string | null) {
+  return createNestedToolActivity({
+    runId: "prepared-run",
+    scopeId: "prepared-scope",
+    afterEntryId: parentId,
+    startOrder: 0,
+    parentToolCallId: "outer-call",
+    toolCallId: "nested-call",
+    toolName: "send",
+    input: { text: "delivered" },
+    result: { content: [{ type: "text", text: "sent" }] },
+    isError: false,
+    startedAt: 2,
+    timestamp: 3,
+  });
+}
+
+async function prepareActivityFixture(bounded = false) {
+  const dir = tempDirs.make("openclaw-prepared-activity-");
+  const scope = {
+    agentId: "main",
+    sessionId: "prepared-activity",
+    sessionKey: "agent:main:prepared-activity",
+    storePath: path.join(dir, "sessions.json"),
+  };
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  const writer = SessionManager.open(scope, dir);
+  const admission = writer.appendMessageWithTranscriptAnchor({
+    role: "user",
+    content: "current turn",
+    timestamp: 1,
+  });
+  assert(admission.anchor, "Missing prepared activity admission");
+  const manager = bounded
+    ? SessionManager.openBounded(scope, { cwd: dir, maxEvents: 20, maxBytes: 16_384 })
+    : writer;
+  const guard = installSessionToolResultGuard(manager);
+  const parentId = manager.appendMessage(
+    makeAgentAssistantMessage({
+      content: [
+        { type: "toolCall", id: "outer-call", name: "exec", arguments: { code: "source" } },
+      ],
+      stopReason: "toolUse",
+    }),
+  );
+  return {
+    scope,
+    manager,
+    guard,
+    admission: { ...admission, anchor: admission.anchor },
+    parentId,
+    activity: makePreparedActivity(parentId),
+  };
+}
+
+it.each([false, true])(
+  "persists a prepared activity after a real delivery mirror (bounded=%s)",
+  async (bounded) => {
+    const { scope, manager, guard, admission, parentId, activity } =
+      await prepareActivityFixture(bounded);
+    await runWithSessionTranscriptReadFence(
+      { ...admission.anchor, logicalTurnId: "current", role: "user" },
+      async () => {
+        const mirrored = await appendAssistantMessageToSessionTranscript({
+          ...scope,
+          expectedSessionId: scope.sessionId,
+          text: "delivered",
+          idempotencyKey: "delivery-once",
+        });
+        expect(mirrored.ok).toBe(true);
+        if (!mirrored.ok) {
+          throw new Error(mirrored.reason);
+        }
+        expect(manager.getAppendParentId()).toBe(parentId);
+        const activityId = manager.appendMessage(activity, { preparedTurnParentId: parentId });
+        expect(guard.getPendingIds()).toEqual(["outer-call"]);
+        const resultId = manager.appendMessage(
+          makeAgentToolResultMessage({
+            toolCallId: "outer-call",
+            toolName: "exec",
+            content: [{ type: "text", text: "completed" }],
+            isError: false,
+          }),
+        );
+        guard.flushPendingToolResults();
+        expect(manager.getBranch().map((entry) => entry.id)).toEqual([
+          admission.entryId,
+          parentId,
+          mirrored.messageId,
+          activityId,
+          resultId,
+        ]);
+        expect(manager.getEntry(activityId)).toMatchObject({
+          parentId: mirrored.messageId,
+          message: { details: { afterEntryId: parentId }, excludeFromContext: true },
+        });
+        expect(
+          manager.buildSessionContext().messages.some((message) => message.role === "custom"),
+        ).toBe(false);
+      },
+    );
+    expect(SessionManager.open(scope).getBranch()).toEqual(manager.getBranch());
+    expect(
+      loadTranscriptEventsSync(scope).filter(
+        (entry) => isRecord(entry) && entry.type === "message",
+      ),
+    ).toHaveLength(5);
+  },
+);
+
+it.each([
+  "ordinary-custom",
+  "other-writer-user",
+  "same-manager-user",
+  "new-admission",
+  "off-branch-user",
+  "unrelated-branch",
+  "deliberate",
+  "side",
+  "null-parent",
+] as const)("rejects prepared activity boundary drift: %s", async (change) => {
+  const { scope, manager, admission, parentId, activity } = await prepareActivityFixture();
+  const other = SessionManager.open(scope);
+  let nextAdmissionAnchor = admission.anchor;
+  if (change === "ordinary-custom") {
+    other.appendMessage(makeAgentAssistantMessage({ content: [{ type: "text", text: "mirror" }] }));
+  } else if (change === "other-writer-user") {
+    other.appendMessage({ role: "user", content: "new turn", timestamp: 4 });
+  } else if (change === "same-manager-user" || change === "new-admission") {
+    const nextAdmission = manager.appendMessageWithTranscriptAnchor({
+      role: "user",
+      content: "new turn",
+      timestamp: 4,
+    });
+    assert(nextAdmission.anchor, "Missing next user admission");
+    nextAdmissionAnchor = nextAdmission.anchor;
+  } else if (change === "off-branch-user") {
+    other.branch(admission.entryId);
+    other.appendMessage({ role: "user", content: "side turn", timestamp: 4 });
+    other.appendLeafControl({ targetId: parentId, appendParentId: parentId });
+    expect(SessionManager.open(scope).getAppendParentId()).toBe(parentId);
+  } else if (change === "unrelated-branch") {
+    other.branch(admission.entryId);
+    other.appendMessage(makeAgentAssistantMessage({ content: [{ type: "text", text: "branch" }] }));
+  } else if (change === "deliberate") {
+    manager.branch(parentId);
+  } else if (change === "side") {
+    manager.appendLeafControl({ targetId: parentId, appendParentId: parentId, appendMode: "side" });
+  }
+  const before = loadTranscriptEventsSync(scope);
+  const branchBefore = manager.getBranch();
+  const append = () =>
+    manager.appendMessage(
+      activity,
+      change === "ordinary-custom"
+        ? undefined
+        : { preparedTurnParentId: change === "null-parent" ? null : parentId },
+    );
+  const expectRejected = () =>
+    expect(append).toThrow("SQLite transcript changed while preparing rewrite");
+  if (change === "new-admission") {
+    runWithSessionTranscriptReadFence(
+      { ...nextAdmissionAnchor, logicalTurnId: "next", role: "user" },
+      expectRejected,
+    );
+  } else {
+    expectRejected();
+  }
+  expect(loadTranscriptEventsSync(scope)).toEqual(before);
+  expect(manager.getBranch()).toEqual(branchBefore);
+});
+
+it("does not adopt a newer user during a prepared activity retry", async () => {
+  const { scope, manager, parentId, activity } = await prepareActivityFixture();
+  const other = SessionManager.open(scope);
+  const persist = manager.persist.bind(manager);
+  const spy = vi.spyOn(manager, "persist").mockImplementationOnce((entry, options) => {
+    other.appendMessage({ role: "user", content: "racing turn", timestamp: 4 });
+    return persist(entry, options);
+  });
+  try {
+    expect(() => manager.appendMessage(activity, { preparedTurnParentId: parentId })).toThrow(
+      "SQLite transcript changed while preparing rewrite",
+    );
+    expect(manager.getAppendParentId()).toBe(parentId);
+    expect(
+      loadTranscriptEventsSync(scope).some(
+        (entry) =>
+          isRecord(entry) &&
+          entry.type === "message" &&
+          isRecord(entry.message) &&
+          entry.message.role === "custom",
+      ),
+    ).toBe(false);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+it("rejects prepared user replay before its idempotency shortcut", async () => {
+  const { manager } = await prepareActivityFixture();
+  const message = { role: "user" as const, content: "next", timestamp: 4, idempotencyKey: "next" };
+  const parentId = manager.appendMessage(message);
+  expect(() => manager.appendMessage(message, { preparedTurnParentId: parentId })).toThrow(
+    "Prepared turn appends require a persisted non-user message",
+  );
+});
+
+it("accepts an explicitly captured empty root in a persistent manager", async () => {
+  const dir = tempDirs.make("openclaw-prepared-root-");
+  const scope = {
+    agentId: "main",
+    sessionId: "prepared-root",
+    sessionKey: "agent:main:prepared-root",
+    storePath: path.join(dir, "sessions.json"),
+  };
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  const manager = SessionManager.open(scope, dir);
+  const entryId = manager.appendMessage(makePreparedActivity(null), { preparedTurnParentId: null });
+  expect(manager.getEntry(entryId)?.parentId).toBeNull();
+  expect(SessionManager.open(scope).getBranch()).toEqual(manager.getBranch());
+});
+
+it("keeps ordinary detached activities chained and rejects explicit preparation", () => {
+  const manager = SessionManager.inMemory();
+  const parentId = manager.appendMessage({ role: "user", content: "detached", timestamp: 1 });
+  const activity = makePreparedActivity(parentId);
+  const first = manager.appendMessage(activity);
+  const second = manager.appendMessage({ ...activity, timestamp: 4 });
+  expect(manager.getEntry(first)?.parentId).toBe(parentId);
+  expect(manager.getEntry(second)?.parentId).toBe(first);
+  expect(() => manager.appendMessage(activity, { preparedTurnParentId: null })).toThrow(
+    "Prepared turn appends require a persisted non-user message",
+  );
+  expect(manager.getAppendParentId()).toBe(second);
 });
 
 it("publishes the rewritten view before commit observers append", async () => {

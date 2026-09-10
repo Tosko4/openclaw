@@ -929,6 +929,7 @@ export function installSessionToolResultGuard(
       const result = appendMessageAndCacheTranscriptSeq(
         committedMessage,
         {
+          preparedTurnParentId: callerOptions?.preparedTurnParentId,
           invalidateSerializedPrefixCache:
             callerInvalidatesCache ||
             persistedToolResult !== normalizedToolResult ||
@@ -1031,6 +1032,7 @@ export function installSessionToolResultGuard(
     } = appendMessageAndCacheTranscriptSeq(
       finalMessage,
       {
+        preparedTurnParentId: callerOptions?.preparedTurnParentId,
         invalidateSerializedPrefixCache:
           callerInvalidatesCache ||
           transformedMessage !== nextMessage ||

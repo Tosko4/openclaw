@@ -76,6 +76,10 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       !this.pendingDeliberateAppend &&
       this.appendMode !== "side" &&
       !isSessionTranscriptSideAppendEntry(canonicalEntry);
+    const explicitPreparedTurn = options?.preparedTurnParentId !== undefined;
+    if (explicitPreparedTurn && !activeBranchAppend) {
+      throw this.createTranscriptMutationConflictError();
+    }
     const persistenceOptions = copyCodeModeSourceAppendOptions(options, {
       ...options,
       ...(activeBranchAppend ? { appendIntent: "active-branch" as const } : {}),
@@ -83,17 +87,22 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     const preparedTurnAppend =
       activeBranchAppend &&
       canonicalEntry.type === "message" &&
-      (canonicalEntry.message.role === "assistant" || canonicalEntry.message.role === "toolResult");
+      (explicitPreparedTurn ||
+        canonicalEntry.message.role === "assistant" ||
+        canonicalEntry.message.role === "toolResult");
     let attemptOptions: AppendPersistenceOptions & { expectedMutationAt?: number | null } =
       persistenceOptions;
     const admittedUserId = this.persistenceTarget
       ? resolveSessionTranscriptReadFence(this.persistenceTarget)?.entryId
       : undefined;
+    // Explicit preparation follows the admitted user; no later user can belong
+    // to that invocation, even if this manager has already consumed the new turn.
+    const validationUserId = explicitPreparedTurn ? undefined : admittedUserId;
     if (preparedTurnAppend && this.persistenceTarget) {
       const validatedMutationAt = validatePreparedAssistantAppendSync(
         this.persistenceTarget,
         canonicalEntry.parentId,
-        admittedUserId,
+        validationUserId,
       );
       if (validatedMutationAt === undefined) {
         throw this.createTranscriptMutationConflictError();
@@ -135,7 +144,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
                 ? validatePreparedAssistantAppendSync(
                     this.persistenceTarget,
                     canonicalEntry.parentId,
-                    admittedUserId,
+                    validationUserId,
                   )
                 : undefined;
               if (validatedMutationAt === undefined) {
@@ -319,6 +328,12 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     anchor?: TranscriptEntryAnchor;
     appended: boolean;
   } {
+    if (
+      options?.preparedTurnParentId !== undefined &&
+      (!this.persistenceTarget || message.role === "user")
+    ) {
+      throw new Error("Prepared turn appends require a persisted non-user message");
+    }
     if (message.role === "assistant") {
       applyAssistantDeliveryDirectives(message);
     }
@@ -354,7 +369,10 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     const entry: SessionMessageEntry = {
       type: "message",
       id: generateSessionEntryId(),
-      parentId: this.appendParentId,
+      parentId:
+        options?.preparedTurnParentId !== undefined
+          ? options.preparedTurnParentId
+          : this.appendParentId,
       timestamp: new Date().toISOString(),
       message,
     };
