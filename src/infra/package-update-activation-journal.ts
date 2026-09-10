@@ -12,8 +12,7 @@ import {
 } from "./sqlite-existing-database.js";
 
 export const PACKAGE_ACTIVATION_JOURNAL = "operation.sqlite";
-export { PACKAGE_ACTIVATION_HELPER } from "./package-update-activation-runtime-assets.js";
-export const MAX_PACKAGE_ACTIVATION_DESCRIPTOR_BYTES = 1024 * 1024;
+const MAX_PACKAGE_ACTIVATION_DESCRIPTOR_BYTES = 1024 * 1024;
 const absolutePath = z
   .string()
   .min(1)
@@ -30,7 +29,7 @@ const basename = z
   .min(1)
   .max(255)
   .refine((value) => value !== "." && value !== ".." && !/[\\/\0]/u.test(value));
-export const PackageActivationDescriptorSchema = z.strictObject({
+const PackageActivationDescriptorSchema = z.strictObject({
   version: z.literal(1),
   operationId: z.uuid(),
   authority: z.strictObject({
@@ -64,7 +63,7 @@ export const PackageActivationDescriptorSchema = z.strictObject({
     .max(64),
 });
 export type PackageActivationDescriptor = z.infer<typeof PackageActivationDescriptorSchema>;
-export const PackageActivationPhaseSchema = z.enum([
+const PackageActivationPhaseSchema = z.enum([
   "prepared",
   "publishing",
   "publication-complete",

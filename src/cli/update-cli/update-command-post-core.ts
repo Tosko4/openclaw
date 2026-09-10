@@ -60,7 +60,7 @@ import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import {
   POST_CORE_EXECUTOR_FD,
   POST_CORE_EXECUTOR_MAX_BYTES,
-} from "./update-command-post-core-executor.js";
+} from "./update-command-post-core-admission.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-result.js";
 import { isPackageManagerUpdateMode } from "./update-command-service-command.js";
 import {

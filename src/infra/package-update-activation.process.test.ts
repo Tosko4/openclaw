@@ -8,14 +8,16 @@ import {
 } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isPidAlive } from "../shared/pid-alive.js";
-import { resolvePackageActivationAnchor } from "./package-update-activation.js";
+import { resolvePackageActivationAnchor } from "./package-update-activation-journal.js";
+import {
+  startActivationProcess,
+  type ActivationFault,
+} from "./package-update-activation-process-owner.test-support.js";
 import {
   activationCommand,
   activationSourceArgs,
   createActivationFixture,
   startActivationHelper,
-  startActivationProcess,
-  type ActivationFault,
   type ActivationFixture,
 } from "./package-update-activation.process.test-support.js";
 
@@ -48,7 +50,9 @@ afterEach(async () => {
       errors.push(error);
     }
   }
-  if (errors.length) throw new AggregateError(errors, "Fixture owners remain unsettled");
+  if (errors.length) {
+    throw new AggregateError(errors, "Fixture owners remain unsettled");
+  }
   tempDirs.cleanup();
   for (const [owner, release] of commandOwners) {
     release?.();
@@ -214,14 +218,16 @@ describe.runIf(process.platform !== "win32")("package activation process interru
       child.events().find((event) => event.event === "spawned" && event.pid === admitted.pid)?.fd3,
     ).toBe(true);
     for (const pid of child.pids().toReversed()) {
-      if (pid !== admitted.pid) await child.killPid(pid);
+      if (pid !== admitted.pid) {
+        await child.killPid(pid);
+      }
     }
     const incumbent = await fs.lstat(value.packageRoot);
     expect((await helper(value, "repair")).code).not.toBe(0);
     expect(isPidAlive(admitted.pid)).toBe(true);
     expect((await fs.lstat(value.packageRoot)).ino).toBe(incumbent.ino);
     await child.killPid(admitted.pid);
-    await child.join();
+    await child.joinProcesses();
     expect((await child.closed).signal).toBe("SIGKILL");
     expect((await helper(value, "repair")).code).toBe(0);
     expect((await helper(value, "retire")).code).toBe(0);
@@ -237,7 +243,9 @@ describe.runIf(process.platform !== "win32")("package activation process interru
         failure === "timeout" ? "post-core-timeout" : "post-core",
         failure === "timeout" ? undefined : failure,
       );
-      if (failure === "timeout") await child.event("receiver-ready");
+      if (failure === "timeout") {
+        await child.event("receiver-ready");
+      }
       await child.event("post-core-failed-settled");
       for (const event of child
         .events()
@@ -290,7 +298,9 @@ describe.runIf(process.platform !== "win32")("package activation process interru
     async (pending) => {
       const value = await fixture();
       const owner = pending ? original(value, [], "retain") : undefined;
-      if (owner) await owner.event("update-returned");
+      if (owner) {
+        await owner.event("update-returned");
+      }
       const receiver = track(
         startActivationProcess({
           base: value.base,

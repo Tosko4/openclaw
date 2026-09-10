@@ -13,10 +13,8 @@ import {
 import * as nodeSqlite from "./node-sqlite.js";
 import {
   createPackageActivationJournal,
-  MAX_PACKAGE_ACTIVATION_DESCRIPTOR_BYTES,
   openPackageActivationJournal,
   PACKAGE_ACTIVATION_JOURNAL,
-  PACKAGE_ACTIVATION_HELPER,
   packageActivationIdentity,
   resolvePackageActivationAnchor,
   type PackageActivationDescriptor,
@@ -24,6 +22,7 @@ import {
   type PackageActivationPhase,
   type PackageActivationRecord,
 } from "./package-update-activation-journal.js";
+import { PACKAGE_ACTIVATION_HELPER } from "./package-update-activation-runtime-assets.js";
 import {
   readPackageActivationStatus,
   runPackageActivationRecovery,
@@ -322,8 +321,8 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
             candidate: "\u754c".repeat(4096),
           })),
         });
-        expect(value.length).toBeLessThan(MAX_PACKAGE_ACTIVATION_DESCRIPTOR_BYTES);
-        expect(Buffer.byteLength(value)).toBeGreaterThan(MAX_PACKAGE_ACTIVATION_DESCRIPTOR_BYTES);
+        expect(value.length).toBeLessThan(1024 * 1024);
+        expect(Buffer.byteLength(value)).toBeGreaterThan(1024 * 1024);
         return value;
       },
     },

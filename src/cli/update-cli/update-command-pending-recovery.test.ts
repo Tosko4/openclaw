@@ -5,17 +5,20 @@ import { DatabaseSync } from "node:sqlite";
 import { Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hasUnjoinedWork, runManagedCommand } from "../../../scripts/lib/managed-child-process.mts";
+import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.ts";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import * as triageUpdate from "../../commands/triage-update.js";
 import * as config from "../../config/config.js";
 import * as launchd from "../../daemon/launchd.js";
 import * as gatewayService from "../../daemon/service.js";
-import { resolvePackageActivationAnchor } from "../../infra/package-update-activation.js";
+import { resolvePackageActivationAnchor } from "../../infra/package-update-activation-journal.js";
 import {
   swapStagedPackageInstall,
   type PackageUpdateTransaction,
 } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
@@ -43,7 +46,7 @@ import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import {
   POST_CORE_EXECUTOR_FD,
   POST_CORE_EXECUTOR_MAX_BYTES,
-} from "./update-command-post-core-executor.js";
+} from "./update-command-post-core-admission.js";
 import {
   createManagedServiceIdentityFixture,
   finishSuccessfulPackageSwitch,
@@ -83,6 +86,28 @@ function materialSnapshot(root: string) {
             : null,
       };
     });
+}
+
+async function createCapablePackageSwapFixture(base: string) {
+  const packages = await createPackageSwapFixture(base);
+  const stageRoot = packages.params.stage.packageRoot;
+  const worker = runtimeProcessEntrypoints.updateMigratedFinalize;
+  const checkPath = path.join(stageRoot, "dist", worker.distWorkerPath);
+  fs.mkdirSync(path.dirname(checkPath), { recursive: true });
+  fs.writeFileSync(
+    path.join(stageRoot, "package.json"),
+    JSON.stringify({
+      name: "openclaw",
+      version: "2.0.0",
+      type: "module",
+    }),
+  );
+  fs.writeFileSync(
+    checkPath,
+    `await import(${JSON.stringify(resolveRuntimeWorkerUrl(worker).href)});\n`,
+  );
+  await writePackageDistInventory(stageRoot);
+  return packages;
 }
 
 function pendingPackageInvocation(
@@ -242,12 +267,12 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
           throw new Error("Original diagnostic run was not created");
         }
         const runId = f.runId;
-        const packages = await createPackageSwapFixture(f.home);
+        const packages = await createCapablePackageSwapFixture(f.home);
         const driverName = "pending-admission.mjs";
         fs.writeFileSync(
           path.join(packages.params.stage.packageRoot, driverName),
           `
-            import { withPostCoreUpdateExecutor } from ${JSON.stringify(new URL("./update-command-post-core-executor.ts", import.meta.url).href)};
+            import { withPostCoreUpdateExecutor } from ${JSON.stringify(new URL("./update-command-post-core-admission.ts", import.meta.url).href)};
             import { prepareUpdateCommand } from ${JSON.stringify(new URL("./update-command-run.ts", import.meta.url).href)};
             let preparationStarted = false;
             try {
@@ -265,7 +290,7 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
               });
             } catch (error) {
               process.stdout.write(JSON.stringify({
-                status: "refused", preparationStarted, name: error.name,
+                status: "refused", preparationStarted, name: error.name, message: error.message,
                 reason: error.result?.reason, cause: error.cause?.message
               }) + "\\n");
               process.exitCode = 1;
@@ -280,6 +305,10 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
             onTransaction: () => undefined,
           });
           expect(published.status, published.step.stderrTail ?? undefined).toBe("committed");
+          expect(
+            fs.existsSync(resolvePackageActivationAnchor(packages.packageRoot)),
+            published.step.stderrTail ?? undefined,
+          ).toBe(true);
           const authorityDatabase = path.relative(
             f.home,
             updateExecutor.captureUpdateCommandExecutorAuthority(fence).databasePath,
@@ -311,6 +340,8 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
                 cwd: f.home,
                 env: {
                   ...process.env,
+                  // The candidate runs outside the checkout but loads this source fixture.
+                  TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
                   [POST_CORE_UPDATE_ENV]: "1",
                   [POST_CORE_UPDATE_CHANNEL_ENV]: "stable",
                 },
@@ -362,7 +393,9 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
               return { code, stdout, stderr };
             },
           );
-          expect(observed.code, observed.stderr).toBe(inputKind === "valid" ? 0 : 1);
+          expect(observed.code, observed.stderr + observed.stdout).toBe(
+            inputKind === "valid" ? 0 : 1,
+          );
           const result = JSON.parse(observed.stdout.trim());
           if (inputKind === "valid") {
             expect(result).toEqual({
@@ -380,7 +413,7 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
               reason: "update-recovery-pending",
               cause: expect.stringMatching(
                 inputKind === "missing"
-                  ? /pipe is missing|EBADF|bad file descriptor/i
+                  ? /pipe is missing|EBADF|ENOTTY|bad file descriptor/i
                   : inputKind === "malformed"
                     ? /JSON|Unexpected|property/i
                     : inputKind === "oversized"
@@ -545,7 +578,7 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
     async (released) => {
       const f = pendingPackageInvocation();
       try {
-        const packages = await createPackageSwapFixture(f.home);
+        const packages = await createCapablePackageSwapFixture(f.home);
         const run: NonNullable<UpdateCommandOptions["run"]> = {
           runId: createUpdateRun({ trigger: "cli" }).runId,
           env: { ...process.env },
@@ -683,22 +716,23 @@ describe("pending recovery finalizer", () => {
   it("refuses standalone finalization before recreating a displaced canonical database", async () => {
     const f = await fixture();
     const before = fs.readFileSync(f.displaced);
-    const config = path.join(f.root, "openclaw.json");
-    const originalConfig = fs.readFileSync(config);
+    const configPath = path.join(f.root, "openclaw.json");
+    const originalConfig = fs.readFileSync(configPath);
     const resolveRoot = vi
       .spyOn(updateShared, "resolveUpdateRoot")
       .mockRejectedValue(new Error("ordinary finalization reached root discovery"));
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
     await expect(
-      withOwnedManagedUpdateEnv({ ...process.env, ...f.env, OPENCLAW_CONFIG_PATH: config }, () =>
-        updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true }),
+      withOwnedManagedUpdateEnv(
+        { ...process.env, ...f.env, OPENCLAW_CONFIG_PATH: configPath },
+        () => updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true }),
       ),
     ).rejects.toThrow("full-state recovery is deferred");
     expect(resolveRoot).not.toHaveBeenCalled();
     expect(fs.existsSync(f.file)).toBe(false);
     expect(fs.readFileSync(f.displaced)).toEqual(before);
-    expect(fs.readFileSync(config)).toEqual(originalConfig);
+    expect(fs.readFileSync(configPath)).toEqual(originalConfig);
   });
 
   it.each([true, false])(

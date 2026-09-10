@@ -38,7 +38,6 @@ import { assertManagedUpdateLeaseDatabaseIdentity } from "./update-managed-servi
 import { supportsPostCoreExecutor } from "./update-post-core-capability.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
-export { resolvePackageActivationAnchor } from "./package-update-activation-journal.js";
 export type { PackageActivationOptions } from "./package-update-activation-prepare.js";
 export type PackageActivationStatus = {
   phase: PackageActivationPhase;
