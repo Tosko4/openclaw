@@ -158,7 +158,11 @@ internal fun OpenClawWearScreens(
   initialPage: WearHomePage = WearHomePage.Chat,
   navigationRequest: WearNavigationRequest? = null,
   voiceSwipeHintEnabled: Boolean = true,
+  speechFailed: Boolean = false,
   realtimeStopping: Boolean = false,
+  microphonePermissionRequired: Boolean = false,
+  microphoneSettingsRequired: Boolean = false,
+  onMicrophoneRecovery: () -> Unit = {},
   onNavigationRequestHandled: (Int) -> Unit = {},
   onTalk: () -> Unit,
   onType: () -> Unit,
@@ -310,6 +314,7 @@ internal fun OpenClawWearScreens(
             onClearSessionSearch = onClearSessionSearch,
             onSearchModels = onSearchModels,
             onClearModelSearch = onClearModelSearch,
+            speechFailed = speechFailed,
             onSpeakLatest = onSpeakLatest,
             onStopSpeaking = onStopSpeaking,
           )
@@ -318,6 +323,9 @@ internal fun OpenClawWearScreens(
         WearHomePage.Voice -> {
           VoicePage(
             voicePagerState = voicePagerState,
+            microphonePermissionRequired = microphonePermissionRequired,
+            microphoneSettingsRequired = microphoneSettingsRequired,
+            onMicrophoneRecovery = onMicrophoneRecovery,
             showSwipeHint = showVoiceSwipeHint && homePages.getOrNull(pagerState.currentPage) == WearHomePage.Voice,
             realtimeTalk = snapshot.realtimeTalk,
             realtimeStopping = realtimeStopping,
@@ -381,6 +389,7 @@ internal fun wearLaunchPage(
 @Composable
 private fun ChatPage(
   snapshot: WearConversationSnapshot,
+  speechFailed: Boolean,
   interaction: WearInteractionState,
   speaking: Boolean,
   actionBusy: Boolean,
@@ -477,6 +486,7 @@ private fun ChatPage(
           speaking = speaking,
           gatewayConnected = snapshot.gatewayState == WearGatewayState.CONNECTED,
         )
+        if (speechFailed) InlineError(stringResource(R.string.real_time_audio_failed))
       }
       if (canAbort) {
         item {
@@ -604,6 +614,9 @@ private fun ChatPage(
 private fun VoicePage(
   voicePagerState: androidx.wear.compose.foundation.pager.PagerState,
   showSwipeHint: Boolean,
+  microphonePermissionRequired: Boolean,
+  microphoneSettingsRequired: Boolean,
+  onMicrophoneRecovery: () -> Unit,
   realtimeTalk: WearRealtimeTalkSnapshot,
   realtimeStopping: Boolean,
   speaking: Boolean,
@@ -621,6 +634,27 @@ private fun VoicePage(
   onStopSpeaking: () -> Unit,
 ) {
   val colors = OpenClawWearTheme.colors
+  if (microphonePermissionRequired) {
+    Column(
+      modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 42.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.Center,
+    ) {
+      Text(
+        text = stringResource(R.string.microphone_permission_required),
+        color = colors.danger,
+        textAlign = TextAlign.Center,
+        fontSize = 14.sp,
+      )
+      Spacer(modifier = Modifier.height(12.dp))
+      SecondaryButton(
+        label = stringResource(if (microphoneSettingsRequired) R.string.open_settings else R.string.retry),
+        enabled = true,
+        onClick = onMicrophoneRecovery,
+      )
+    }
+    return
+  }
   val voicePagerScope = rememberCoroutineScope()
   val view = LocalView.current
   var previousMode by remember { mutableIntStateOf(voicePagerState.currentPage) }
