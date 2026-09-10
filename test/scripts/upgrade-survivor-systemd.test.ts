@@ -309,7 +309,7 @@ raise SystemExit(code if code >= 0 else 128 - code)
       await waitForStarts(1);
       expect(await readLoadedSystemdServiceRuntime(env)).toMatchObject({
         status: "running",
-        pid: Number(readFileSync(paths.pid, "utf8").trim()),
+        pid: records()[0]?.pid,
         systemd: { managerUid: process.getuid?.() },
       });
       expect.soft(systemctl("is-active", "openclaw-gateway.service").status).toBe(0);
@@ -330,8 +330,31 @@ raise SystemExit(code if code >= 0 else 128 - code)
       const previousPid = readFileSync(paths.pid, "utf8").trim();
       expect(await readSystemdServiceRuntime(env)).toMatchObject({
         status: "running",
-        pid: Number(previousPid),
+        pid: records()[0]?.pid,
       });
+      const handoffQuery =
+        "Id,LoadState,ActiveState,MainPID,ExecMainStartTimestampMonotonic,InvocationID,FragmentPath";
+      const handoff = systemctl("show", "openclaw-gateway.service", `--property=${handoffQuery}`);
+      expect(handoff.status, handoff.stderr).toBe(0);
+      const native = Object.fromEntries(
+        handoff.stdout
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const separator = line.indexOf("=");
+            return [line.slice(0, separator), line.slice(separator + 1)];
+          }),
+      );
+      expect(native).toMatchObject({
+        Id: "openclaw-gateway.service",
+        LoadState: "loaded",
+        ActiveState: "active",
+        MainPID: String(records()[0]?.pid),
+        FragmentPath: unit,
+      });
+      expect(native.MainPID).not.toBe(previousPid);
+      expect(native.ExecMainStartTimestampMonotonic).toMatch(/^[1-9]\d*$/);
+      expect(native.InvocationID).toMatch(/^[a-f0-9]{32}$/);
       const previousLines = readFileSync(paths.log, "utf8").trim().split("\n").length;
       const assertion = () =>
         shell('assert_update_restart_service_replaced "$1" "$2"', [
@@ -383,6 +406,10 @@ raise SystemExit(code if code >= 0 else 128 - code)
       const { home, env, unit, paths } = fixture(custom);
       writeFileSync(unit, buildSystemdUnit({ programArguments: ["/usr/bin/fixture", "gateway"] }));
       writeFileSync(paths.pid, `${process.pid}\n`);
+      writeFileSync(
+        `${paths.daemonLog}.runtime.json`,
+        JSON.stringify({ pid: process.pid, entered: 1, invocation: "a".repeat(32), restarts: 0 }),
+      );
       writeFileSync(`${paths.daemonLog}.exit.json`, JSON.stringify({ last: { code: 78 } }));
       const driftedEnv = {
         ...env,

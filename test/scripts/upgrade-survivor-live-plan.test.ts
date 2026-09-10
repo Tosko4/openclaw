@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { resolveDockerE2ePlan } from "../../scripts/lib/docker-e2e-plan.mts";
 import { planTargetedDockerLaneGroups } from "../../scripts/plan-targeted-docker-lane-groups.mjs";
 
-function plan(selectedLaneNames: string[]) {
+function plan(
+  selectedLaneNames: string[],
+  overrides: Partial<Parameters<typeof resolveDockerE2ePlan>[0]> = {},
+) {
   return resolveDockerE2ePlan({
     includeOpenWebUI: false,
     liveMode: "all",
@@ -16,10 +19,19 @@ function plan(selectedLaneNames: string[]) {
     upgradeSurvivorBaselines:
       "2026.9.3,2026.9.2,2026.9.1,2026.8.2,2026.8.1,2026.7.1-2,2026.7.1-1,2026.7.1,2026.6.34,2026.6.33",
     upgradeSurvivorScenarios: "base,legacy-operator-state",
+    ...overrides,
   }).plan;
 }
 
 describe("explicit paired OpenAI upgrade lane", () => {
+  it("requires the inert target catalog for the live lane before scheduling", () => {
+    expect(() =>
+      plan(["live-upgrade-survivor-openai"], {
+        allowFrozenTargetScenarioOmissions: true,
+        frozenTarget: { mode: "inert", source: { readText: () => null } },
+      }),
+    ).toThrow(/unrecognized required inert scenario catalog/);
+  });
   it("keeps hosted jobs baseline-bound without inheriting operator scenarios", () => {
     const groups = planTargetedDockerLaneGroups({
       lanes: "live-upgrade-survivor-openai",

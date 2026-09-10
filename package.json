@@ -1997,6 +1997,7 @@
     "test:docker:update-migration": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest} OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:update-restart-auth": "env OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:update-run-package-self-upgrade": "bash scripts/e2e/update-run-package-self-upgrade-docker.sh",
+    "test:docker:update-run-package-candidate": "bash scripts/e2e/update-run-package-self-upgrade-docker.sh --managed-candidate",
     "test:docker:upgrade-survivor": "bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:live-upgrade-survivor-openai": "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=1 OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=base OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=manual bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:env-mutations:report": "node --import ./scripts/tsx.mjs scripts/test-env-mutation-report.ts",

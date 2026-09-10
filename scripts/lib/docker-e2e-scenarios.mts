@@ -261,6 +261,17 @@ function createPackageUpdateMaintenanceLanes() {
       timeoutMs: 45 * 60 * 1000,
       weight: 3,
     }),
+    npmLane(
+      "update-run-package-candidate",
+      "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-candidate",
+      {
+        needsPackage: true,
+        resources: ["service"],
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 30 * 60 * 1000,
+        weight: 3,
+      },
+    ),
   ];
 }
 

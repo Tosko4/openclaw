@@ -31,6 +31,40 @@ IMAGE_NAME="$(
 SKIP_BUILD="${OPENCLAW_UPDATE_RUN_SELF_UPGRADE_E2E_SKIP_BUILD:-0}"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_UPDATE_RUN_SELF_UPGRADE_DOCKER_RUN_TIMEOUT:-1800s}"
 ARTIFACT_DIR="${OPENCLAW_UPDATE_RUN_SELF_UPGRADE_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/update-run-package-self-upgrade}"
+if [ "$#" -gt 0 ]; then
+  if [ "$#" -ne 1 ] || [ "$1" != --managed-candidate ]; then
+    echo "usage: $0 [--managed-candidate]" >&2
+    exit 2
+  fi
+  # Historical 4.26 coverage owns its private QA closure. This explicit mode
+  # instead tests the selected, unchanged artifact through a published helper.
+  baseline="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.9.3}"
+  [[ "$baseline" =~ ^openclaw@[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]] || {
+    echo "managed candidate proof requires an exact released openclaw version" >&2
+    exit 2
+  }
+  PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz update-run-package-candidate)"
+  trap 'docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"' EXIT
+  # Hosted runners upload the target checkout's docker-tests directory; the
+  # harness checkout is separate and must not strand custody receipts there.
+  ARTIFACT_DIR="${OPENCLAW_UPDATE_RUN_SELF_UPGRADE_ARTIFACT_DIR:-${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}/.artifacts/docker-tests/update-run-package-candidate}"
+  mkdir -p "$ARTIFACT_DIR"
+  ARTIFACT_DIR="$(mktemp -d "$ARTIFACT_DIR/managed-candidate.XXXXXX")"
+  chmod a+rwx "$ARTIFACT_DIR"
+  docker_e2e_package_mount_args "$PACKAGE_TGZ"
+  docker_e2e_build_or_reuse "$IMAGE_NAME" update-run-package-candidate \
+    "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" bare "$SKIP_BUILD"
+  docker_e2e_run_with_harness \
+    -e OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 \
+    -e OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="$baseline" \
+    -e OPENCLAW_DOCKER_E2E_SELECTED_SHA="${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" \
+    -e OPENCLAW_UPDATE_RUN_SELF_UPGRADE_ARTIFACT_DIR=/tmp/openclaw-update-run-artifacts \
+    -v "$ARTIFACT_DIR:/tmp/openclaw-update-run-artifacts" \
+    "${DOCKER_E2E_PACKAGE_ARGS[@]}" "$IMAGE_NAME" \
+    timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" \
+    bash scripts/e2e/lib/upgrade-survivor/update-run-package-candidate.sh
+  exit 0
+fi
 QA_CHANNEL_FIXTURE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-update-run-qa-channel.XXXXXX")"
 HISTORICAL_DIST_ARCHIVE="$QA_CHANNEL_FIXTURE_ROOT/historical-dist.tar"
 

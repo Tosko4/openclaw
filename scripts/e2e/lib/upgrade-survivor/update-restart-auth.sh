@@ -113,6 +113,7 @@ start_gateway() {
   cat >"$supervisor_script" <<'SUPERVISOR'
 import fs from "node:fs";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 
 const command = process.env.OPENCLAW_SYSTEMCTL_SHIM_EXEC_START;
 const daemonLog = process.env.OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG;
@@ -237,9 +238,11 @@ const start = () => {
     stdio: ["ignore", output, output],
   });
   activeGroupPid = child.pid;
-  fs.writeFileSync(`${daemonLog}.runtime.json`, JSON.stringify({
-    restarts: totalStarts - 1, entered: Math.trunc(performance.now() * 1000),
+  fs.writeFileSync(`${daemonLog}.runtime.json.pending`, JSON.stringify({
+    pid: child.pid, restarts: totalStarts - 1,
+    entered: Number(process.hrtime.bigint() / 1000n), invocation: randomBytes(16).toString("hex"),
   }));
+  fs.renameSync(`${daemonLog}.runtime.json.pending`, `${daemonLog}.runtime.json`);
   const childGroupPid = activeGroupPid;
   child.on("error", (error) => {
     fs.writeSync(output, `[systemctl-shim] gateway spawn failed: ${String(error)}\n`);
@@ -360,31 +363,7 @@ case "$command" in
       exit 0
     fi
     [ "$unit_name" = openclaw-gateway.service ] || exit 1
-    # The published 2026.8.1 reader omits LoadState; current maintenance requires it.
-    # Keep both exact query contracts and reject unimplemented manager properties.
-    [ "${property/Id,LoadState,/Id,}" = 'Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent' ] || {
-      echo "systemctl shim unsupported user-scope show: $*" >&2
-      exit 1
-    }
-    if [[ "$property" == Id,LoadState,* ]]; then
-      load_state="$(node "$manager_script" load-state)"
-      printf 'Id=%s\nLoadState=%s\n' "$unit_name" "$load_state"
-    fi
-    if is_running; then
-      printf 'ActiveState=active\nSubState=running\nMainPID=%s\n' "$(cat "$pid_file")"
-    else
-      printf 'ActiveState=inactive\nSubState=dead\nMainPID=0\n'
-    fi
-    # Missing observations stay unknown, including bootstrap failures.
-    node - "${daemon_log}.exit.json" <<'EXIT_STATUS'
-const fs = require("node:fs");
-try {
-  const { last } = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-  if (Number.isInteger(last.code) && last.code >= 0 && last.code <= 255) {
-    process.stdout.write(`ExecMainStatus=${last.code}\nExecMainCode=exited\n`);
-  }
-} catch {}
-EXIT_STATUS
+    node "$manager_script" show "$property"
     exit 0
     ;;
   *)

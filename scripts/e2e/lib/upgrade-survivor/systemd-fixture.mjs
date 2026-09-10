@@ -172,31 +172,6 @@ function runtimePaths() {
 
 function nativeRuntime() {
   const paths = runtimePaths();
-  let pid;
-  let generation = 0;
-  try {
-    const raw = fs.readFileSync(paths.pidFile, "utf8").trim();
-    if (!/^[1-9][0-9]*$/.test(raw)) {
-      fail();
-    }
-    pid = Number(raw);
-    if (!Number.isSafeInteger(pid) || pid > 0xffffffff) {
-      fail();
-    }
-    process.kill(pid, 0);
-    generation = Math.trunc(fs.statSync(paths.pidFile).mtimeMs * 1000);
-    if (process.platform === "linux") {
-      const state = fs.readFileSync(`/proc/${pid}/stat`, "utf8").split(") ").at(-1);
-      if (state.startsWith("Z ")) {
-        pid = 0;
-      }
-    }
-  } catch (error) {
-    if (!["ENOENT", "ESRCH"].includes(error.code)) {
-      throw error;
-    }
-    pid = 0;
-  }
   const readOptional = (file) => {
     try {
       return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -207,14 +182,38 @@ function nativeRuntime() {
       throw error;
     }
   };
-  const last = readOptional(`${paths.daemonLog}.exit.json`)?.last;
   const counts = readOptional(`${paths.daemonLog}.runtime.json`);
+  // The supervisor owns control/cleanup; systemd MainPID names its spawned
+  // service, not that controller. All inspection dialects share this fact.
+  let pid = counts?.pid ?? 0;
+  try {
+    if (!fs.existsSync(paths.pidFile) || pid === 0) {
+      pid = 0;
+    } else if (!Number.isSafeInteger(pid) || pid < 1 || pid > 0xffffffff) {
+      fail();
+    } else {
+      process.kill(pid, 0);
+      if (process.platform === "linux") {
+        const state = fs.readFileSync(`/proc/${pid}/stat`, "utf8").split(") ").at(-1);
+        if (state.startsWith("Z ")) {
+          pid = 0;
+        }
+      }
+    }
+  } catch (error) {
+    if (!["ENOENT", "ESRCH"].includes(error.code)) {
+      throw error;
+    }
+    pid = 0;
+  }
+  const last = readOptional(`${paths.daemonLog}.exit.json`)?.last;
   const successful = !last || last.code === 0;
   return {
     pid,
     active: pid ? "active" : "inactive",
     sub: pid ? "running" : "dead",
-    generation,
+    generation: counts?.entered ?? 0,
+    invocation: counts?.invocation ?? "",
     restarts: counts?.restarts ?? 0,
     result: successful ? "success" : "exit-code",
     exitStatus: Number.isInteger(last?.code) ? last.code : (osConstants.signals[last?.signal] ?? 0),
@@ -324,6 +323,42 @@ function writeProperties(properties) {
 
 function run() {
   const [operation, ...args] = process.argv.slice(2);
+  if (operation === "show" && args.length === 1) {
+    const runtimeQuery =
+      "Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent";
+    const handoffQuery =
+      "Id,LoadState,ActiveState,MainPID,ExecMainStartTimestampMonotonic,InvocationID,FragmentPath";
+    const query = args[0];
+    if (query !== handoffQuery && query.replace("Id,LoadState,", "Id,") !== runtimeQuery) {
+      fail();
+    }
+    const unit = readUnit();
+    const runtime = nativeRuntime();
+    const properties = {
+      Id: unitName,
+      LoadState: unit ? "loaded" : "not-found",
+      ActiveState: runtime.active,
+      SubState: runtime.sub,
+      MainPID: runtime.pid,
+      ExecMainStartTimestampMonotonic: runtime.generation,
+      InvocationID: runtime.invocation,
+      FragmentPath: unit ? unitPath : "",
+      Result: runtime.result,
+      NRestarts: runtime.restarts,
+      StartLimitBurst: 5,
+      ExecMainStatus: runtime.exitCode ? runtime.exitStatus : undefined,
+      ExecMainCode: !runtime.exitCode ? undefined : runtime.exitCode === 2 ? "killed" : "exited",
+      KillMode: unit?.killMode ?? "control-group",
+      TasksCurrent: runtime.pid ? "[not set]" : 0,
+      MemoryCurrent: "[not set]",
+    };
+    for (const key of query.split(",")) {
+      if (properties[key] !== undefined) {
+        console.log(`${key}=${properties[key]}`);
+      }
+    }
+    return;
+  }
   if (operation === "busctl" && inspectLoadedRuntime(args)) {
     return;
   }
