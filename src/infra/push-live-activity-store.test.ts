@@ -83,7 +83,7 @@ describe("Live Activity store", () => {
     f.saved();
     expect(f.store.nextMaintenanceAtMs()).toBe(EPOCH + 8 * HOUR);
     expect(db.prepare("PRAGMA user_version").get()).toEqual(before);
-    expect(before).toEqual({ user_version: 16 });
+    expect(before).toEqual({ user_version: 17 });
     expect(db.prepare("SELECT strict FROM pragma_table_list WHERE name = ?").get(TABLE)).toEqual({
       strict: 1,
     });
