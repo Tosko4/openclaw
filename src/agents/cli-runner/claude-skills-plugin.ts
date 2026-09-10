@@ -5,6 +5,7 @@ import { accessSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { observeCliComponentProbe } from "../../infra/cli-component-probe.mjs";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { cliBackendLog } from "./log.js";
@@ -55,13 +56,26 @@ async function collectClaudePluginSkills(snapshot?: SkillSnapshot): Promise<Mate
   for (const skill of skills) {
     const name = skill.name?.trim();
     const skillFilePath = skill.filePath?.trim();
+    observeCliComponentProbe?.("native-selection", {
+      name,
+      filePath: skillFilePath,
+    });
     if (!name || !skillFilePath) {
       continue;
     }
     if (!isClaudeCliSkillFileAccessible(skillFilePath)) {
+      observeCliComponentProbe?.("native-unavailable", {
+        name,
+        filePath: skillFilePath,
+      });
       cliBackendLog.warn(`claude skill plugin skipped missing skill file: ${skillFilePath}`);
       continue;
     }
+    observeCliComponentProbe?.("native-available", {
+      name,
+      filePath: skillFilePath,
+      sourceDir: path.dirname(skillFilePath),
+    });
     materialized.push({
       name,
       sourceDir: path.dirname(skillFilePath),
@@ -78,6 +92,10 @@ async function linkOrCopySkillDir(params: { sourceDir: string; targetDir: string
       params.targetDir,
       process.platform === "win32" ? "junction" : "dir",
     );
+    observeCliComponentProbe?.("native-materialized", {
+      ...params,
+      reason: "symlink",
+    });
   } catch {
     // Symlinks are preferred to avoid copying skill trees, but Windows/TCC/filesystem policy can
     // reject them. Copying preserves the session-scoped plugin contract.
@@ -85,6 +103,10 @@ async function linkOrCopySkillDir(params: { sourceDir: string; targetDir: string
       recursive: true,
       force: true,
       verbatimSymlinks: true,
+    });
+    observeCliComponentProbe?.("native-materialized", {
+      ...params,
+      reason: "copy",
     });
   }
 }
@@ -100,6 +122,9 @@ export async function prepareClaudeCliSkillsPlugin(params: {
   // Library command identities are host-owned, not frontmatter names. Keep their
   // canonical catalog and immutable paths instead of registering colliding native aliases.
   if (params.skillsSnapshot?.librarySelections?.length) {
+    observeCliComponentProbe?.("native-library-skip", {
+      selections: params.skillsSnapshot.librarySelections,
+    });
     return { args: [], cleanup: async () => {} };
   }
 

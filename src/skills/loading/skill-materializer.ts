@@ -1,4 +1,5 @@
 import { extractFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
+import { observeCliComponentProbe } from "../../infra/cli-component-probe.mjs";
 import type { ParsedSkillFrontmatter } from "../types.js";
 import { resolveSkillInvocationPolicy } from "./frontmatter.js";
 import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
@@ -33,6 +34,11 @@ export function materializeSkill(params: {
   source: string;
   sourceOptions: Omit<Parameters<typeof createSyntheticSourceInfo>[1], "baseDir">;
 }): Skill {
+  observeCliComponentProbe?.("skill-body", {
+    filePath: params.filePath,
+    content: params.content,
+    name: params.name,
+  });
   return {
     name: params.name,
     displayName: resolveSkillDisplayName(params.content, params.frontmatter.name || params.name),

@@ -1,3 +1,4 @@
+import { observeCliComponentProbe } from "../../infra/cli-component-probe.mjs";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import type {
   CliBackendLiveSessionCapability,
@@ -233,6 +234,14 @@ export function createCliLiveSessionCapability(params: {
     current: () => {
       assertActive();
       const handle = liveSessions.get(ownerKey)?.handle;
+      observeCliComponentProbe?.("registry-current", {
+        ownerKey,
+        fingerprint,
+        existingFingerprint: handle?.fingerprint,
+        generation: handle?.generation,
+        requiredGeneration: params.requiredGeneration,
+        pendingCleanup: retiredSessionCleanup.has(ownerKey),
+      });
       if (params.requiredGeneration && handle?.generation !== params.requiredGeneration) {
         throw requiredSessionError(
           handle ? "cli_live_session_changed" : "cli_live_session_missing",
@@ -286,6 +295,12 @@ export function createCliLiveSessionCapability(params: {
           : {}),
       };
       liveSessions.set(ownerKey, record);
+      observeCliComponentProbe?.("registry-register", {
+        ownerKey,
+        generation: handle.generation,
+        fingerprint: handle.fingerprint,
+        activeCount: liveSessions.size,
+      });
       retainCleanup(params.context, record);
       cliBackendLog.info(
         `cli live session start: provider=${params.context.backendResolved.id} model=${params.context.normalizedModel} activeSessions=${liveSessions.size}`,
@@ -312,6 +327,11 @@ export function createCliLiveSessionCapability(params: {
       }
       record.capture?.revoke();
       liveSessions.delete(ownerKey);
+      observeCliComponentProbe?.("registry-remove", {
+        ownerKey,
+        generation: handle.generation,
+        fingerprint: handle.fingerprint,
+      });
       record.approvalGrants.clear();
       retiringSessionHandles.add(handle);
       // Native runtime artifacts remain process-owned until its child exits.

@@ -1,6 +1,7 @@
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { observeCliComponentProbe } from "../../infra/cli-component-probe.mjs";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { mergePathPrepend } from "../../infra/path-prepend.js";
@@ -558,6 +559,12 @@ export async function executePluginOwnedProcess(params: {
       if (params.liveSession.requiredGeneration) {
         throw new Error("The required CLI live session cannot be replaced by a fresh process.");
       }
+      observeCliComponentProbe?.("host-pre-restart", {
+        forceNewSession: params.forceNewSession,
+        useResume: params.useResume,
+        hasResumeArgs: Boolean(params.context.preparedBackend.backend.resumeArgs?.length),
+        runId: params.context.params.runId,
+      });
       await restartCliLiveSession(params.context, signal);
     }
     assertCurrent();
@@ -573,6 +580,13 @@ export async function executePluginOwnedProcess(params: {
       });
     }
     assertCurrent();
+    observeCliComponentProbe?.("host-execute", {
+      sentSystemPrompt: stripSystemPromptCacheBoundary(params.context.systemPrompt).trim(),
+      rawSystemPrompt: params.context.systemPrompt,
+      runId: params.context.params.runId,
+      useResume: params.useResume,
+      toolAvailability: params.context.params.cliToolAvailability,
+    });
     const execution = params.execute({
       command,
       argv0: params.executionArgv0,

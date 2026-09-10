@@ -7,6 +7,7 @@ import chokidar, { type FSWatcher } from "chokidar";
 import { isDefaultStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveRealpathOrAbsolute } from "../../infra/boundary-path.js";
+import { observeCliComponentProbe as probe } from "../../infra/cli-component-probe.mjs";
 import { getFileWatchCapacityCode } from "../../infra/fs-watch-errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -505,16 +506,19 @@ function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
     depth: target.depth,
     subscribers: new Set<string>(),
   };
+  probe?.("skills-watch-created", { target, state, owners: workspaceWatchOwnerDirs });
 
   const schedule = (changedPath?: string) => {
     // File-stability work may finish after this subscription has been closed.
     if (watcher.closed) {
       return;
     }
+    probe?.("skills-watch-schedule", { target, state, changedPath });
     state.pendingPath = changedPath ?? state.pendingPath;
     clearTimeout(state.timer);
     state.timer = setTimeout(() => {
       const pendingPath = state.pendingPath;
+      probe?.("skills-watch-fire", { target, state, owners: workspaceWatchOwnerDirs });
       state.pendingPath = undefined;
       state.timer = undefined;
       // Fan the change out to every workspace subscribed to this directory so a

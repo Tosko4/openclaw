@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import type {
@@ -15,6 +15,46 @@ import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { prepareClaudeCliTransportArgs } from "./cli-runtime-args.js";
 import { createClaudeCliTransport } from "./cli-transport.js";
 import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
+
+// The compiled plugin cannot share core module state. Only fixed-shape, locally
+// HMACed metadata crosses this bridge; a replaced sink cannot obtain raw values.
+type CliComponentSink = (event: string, data: unknown) => void;
+const componentProbeKeys = new WeakMap<CliComponentSink, Buffer>();
+function observeClaudeCliComponent(
+  event: "anthropic-close" | "anthropic-decision" | "anthropic-session",
+  data: Record<string, string | boolean | undefined>,
+) {
+  try {
+    const slot = Symbol.for("openclaw.release.cliComponentRedacted");
+    // SAFETY: Core installs this signature; only callable sinks receive redacted data.
+    const probeGlobal = globalThis as typeof globalThis & { [slot]?: CliComponentSink };
+    const sink = probeGlobal[slot];
+    if (typeof sink !== "function") {
+      return;
+    }
+    let key = componentProbeKeys.get(sink);
+    if (!key) {
+      key = randomBytes(32);
+      componentProbeKeys.set(sink, key);
+    }
+    const redacted = Object.fromEntries(
+      Object.entries(data).map(([name, value]) => [
+        name,
+        value === undefined
+          ? { present: false }
+          : typeof value === "boolean"
+            ? value
+            : name === "reason" &&
+                ["idle", "restart", "abort", "mcp-capture-rotation"].includes(value)
+              ? value
+              : { h: createHmac("sha256", key).update(value).digest("hex") },
+      ]),
+    );
+    sink(event, redacted);
+  } catch {
+    // Diagnostics must not change session admission, restart, or cleanup outcomes.
+  }
+}
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
 const RESULT_HOLDING_TASK_TYPES = new Set(["local_agent", "local_workflow"]);
@@ -164,6 +204,10 @@ function closeSession(
   if (session.closed) {
     return;
   }
+  observeClaudeCliComponent("anthropic-close", {
+    generation: session.handle.generation,
+    reason: _reason,
+  });
   session.closed = true;
   clearTimeout(session.idleTimer);
   session.capability?.remove(session.handle);
@@ -271,11 +315,29 @@ export async function* executeClaudeCli(
     existing && existing.fingerprint === capability?.fingerprint
       ? sessions.get(existing)
       : undefined;
+  observeClaudeCliComponent("anthropic-decision", {
+    fingerprint: capability?.fingerprint,
+    existingFingerprint: existing?.fingerprint,
+    generation: existing?.generation,
+    hasExisting: Boolean(existing),
+    fingerprintsEqual: Boolean(existing && existing.fingerprint === capability?.fingerprint),
+    sessionMapHasExisting: existing ? sessions.has(existing) : false,
+    reusable: Boolean(reusable),
+    willRestart: Boolean(!reusable && capability),
+    useResume: context.useResume,
+  });
   if (!reusable && capability) {
     await capability.restart();
   }
   context.assertCurrent?.();
   const session = reusable ?? createSession(capability);
+  observeClaudeCliComponent("anthropic-session", {
+    generation: session.handle.generation,
+    fingerprint: session.handle.fingerprint,
+    reused: Boolean(reusable),
+    closed: session.closed,
+    hasCurrentTurn: Boolean(session.currentTurn),
+  });
   session.capability = capability;
   if (session.closed || session.currentTurn) {
     throw new Error("Claude CLI live session is closed or already handling another turn.");

@@ -163,7 +163,7 @@ export function buildAnthropicCliBackend(
       defaultImageProbe: true,
       defaultMcpProbe: true,
       docker: {
-        npmPackage: "@anthropic-ai/claude-code",
+        npmPackage: "@anthropic-ai/claude-code@2.1.267",
         binaryName: "claude",
       },
     },

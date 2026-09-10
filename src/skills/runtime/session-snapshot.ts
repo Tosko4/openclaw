@@ -1,5 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { observeCliComponentProbe } from "../../infra/cli-component-probe.mjs";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { matchesSkillFilter } from "../discovery/filter.js";
@@ -144,5 +145,23 @@ export function resolveReusableWorkspaceSkillSnapshot(
       : params.hydrateExisting === false
         ? params.existingSnapshot
         : hydrateResolvedSkills(params.existingSnapshot, cachedRebuild);
+  observeCliComponentProbe?.("skills-snapshot", {
+    workspaceDir: watcherWorkspaceDir,
+    snapshotVersion,
+    previousVersion: params.existingSnapshot?.version,
+    version: snapshot.version,
+    shouldRefresh,
+    promptFormatChanged,
+    skillVersionChanged,
+    nodeSkillsEligibilityChanged,
+    skillOverridesChanged,
+    skillRootsChanged,
+    libraryChanged,
+    selected: snapshot.resolvedSkills?.map((skill) => ({
+      filePath: skill.filePath,
+      name: skill.name,
+    })),
+    librarySelections: snapshot.librarySelections,
+  });
   return { snapshot, shouldRefresh, snapshotVersion };
 }

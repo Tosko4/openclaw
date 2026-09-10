@@ -17,8 +17,13 @@ import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.
 import { parseModelRef } from "../agents/model-selection.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
 import { resolveSessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
+import { startCliComponentProbe } from "../infra/cli-component-probe.mjs";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import {
+  registerSkillsChangeListener,
+  getSkillsSnapshotVersion,
+} from "../skills/runtime/refresh-state.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import {
   CLI_CACHE_AUTH_PROFILE_ID,
@@ -273,6 +278,27 @@ describeLive("gateway live (cli backend)", () => {
   it(
     "runs the agent pipeline against the local CLI backend",
     async () => {
+      if (
+        process.env.OPENCLAW_LIVE_CLI_BACKEND_AUTH !== "subscription" ||
+        process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL !== "claude-cli/claude-sonnet-4-6" ||
+        CLI_CACHE_PROBE ||
+        !CLI_RESUME
+      ) {
+        throw new Error(
+          "CLI component diagnostic requires the original subscription two-turn flow.",
+        );
+      }
+      const componentProbe = startCliComponentProbe();
+      const stopComponentListener = registerSkillsChangeListener((event) =>
+        componentProbe.observe("skills-version", {
+          ...event,
+          version: getSkillsSnapshotVersion(event.workspaceDir),
+        }),
+      );
+      onTestFinished(() => {
+        stopComponentListener();
+        componentProbe.finish();
+      });
       const preservedEnv = new Set(
         parseJsonStringArray(
           "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV",
@@ -587,6 +613,7 @@ describeLive("gateway live (cli backend)", () => {
         logCliBackendLiveStep("client-connected");
         const activeClient = client;
 
+        componentProbe.observe("first-request", { sessionKey });
         logCliBackendLiveStep("agent-request:start", { sessionKey, nonce });
         const payload = await requestWithCodexTimeoutRetry(
           providerId,
@@ -719,6 +746,7 @@ describeLive("gateway live (cli backend)", () => {
             ),
           ).toBe(true);
         } else if (CLI_RESUME) {
+          componentProbe.observe("resume-request", { sessionKey });
           logCliBackendLiveStep("agent-resume:start", { sessionKey, resumeNonce });
           let continuityOwner: Parameters<typeof getCliLiveSessionGeneration>[0] | undefined;
           let expectedCliSessionId: string | undefined;
