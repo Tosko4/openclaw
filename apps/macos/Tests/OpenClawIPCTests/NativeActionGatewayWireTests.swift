@@ -455,6 +455,10 @@ struct NativeActionGatewayWireTests {
                     _ = try await gateway.actions.history(session: session)
                     let controller = try manager.presentNative(.session(session), gateway: gateway)
                     let deadline = ContinuousClock.now + .seconds(10)
+                    let initialPresented = controller.hasPresentedNative(.session(session))
+                    let initialWindowMatches = manager.approvalContext(connection: presenter)?.windowID ==
+                        ObjectIdentifier(controller)
+                    let initialBindingPresent = manager.approvalContext(connection: presenter)?.nativeBinding != nil
                     while ContinuousClock.now < deadline {
                         if controller.hasPresentedNative(.session(session)),
                            manager.approvalContext(connection: presenter)?.windowID == ObjectIdentifier(controller),
@@ -462,6 +466,28 @@ struct NativeActionGatewayWireTests {
                         { return }
                         try await Task.sleep(for: .milliseconds(20))
                     }
+                    let finalPresented = controller.hasPresentedNative(.session(session))
+                    let finalWindowMatches = manager.approvalContext(connection: presenter)?.windowID ==
+                        ObjectIdentifier(controller)
+                    let finalBindingPresent = manager.approvalContext(connection: presenter)?.nativeBinding != nil
+                    print([
+                        "native approval readiness failed: case=\(id == "allowed" ? "allowed" : "control")",
+                        "initialPresented=\(initialPresented)",
+                        "initialWindowMatches=\(initialWindowMatches)",
+                        "initialBindingPresent=\(initialBindingPresent)",
+                        "finalPresented=\(finalPresented)",
+                        "finalWindowMatches=\(finalWindowMatches)",
+                        "finalBindingPresent=\(finalBindingPresent)",
+                        "visible=\(controller.isVisible)",
+                        "key=\(controller.isKeyWindow)",
+                        "panelOwnsKey=\(ExecApprovalsPromptPresenter.ownsKeyWindow(for: ObjectIdentifier(controller)))",
+                        "transportBindingPresent=\(controller.gatewayTransport?.nativeBinding != nil)",
+                        "transportBindingCurrent=\(controller.gatewayTransport?.nativeBindingIsCurrent == true)",
+                        "sessionMatches=\(controller.viewModel.sessionKey.utf8.elementsEqual(session.sessionKey.utf8))",
+                        "agentMatches=\(controller.currentAgentID?.utf8.elementsEqual(session.agentID.utf8) == true)",
+                        "appActive=\(NSApp.isActive)",
+                        "leaseStateMatches=\(gateway.connection.serverLeaseMatchesCurrentState(gateway.lease))",
+                    ].joined(separator: "; "))
                     throw OpenClawNativeActionError("Native approval context did not become current.")
                 }
                 let prompter = ExecApprovalsGatewayPrompter(gateway: presenter) { [weak manager] in
