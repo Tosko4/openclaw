@@ -29,6 +29,7 @@ import {
 } from "../../../tasks/task-registry.js";
 import { configureTaskRegistryRuntime } from "../../../tasks/task-registry.store.js";
 import { loadTaskRegistryStateFromSqlite } from "../../../tasks/task-registry.store.sqlite.js";
+import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
@@ -394,6 +395,7 @@ describe("subagent task backing storage", () => {
       data: { text: "atomic old owner activity" },
     });
     let replaced = false;
+    const observedTasks: Array<Omit<TaskRecord, "detail">> = [];
     configureTaskRegistryRuntime({
       observers: {
         onEvent: (event) => {
@@ -406,6 +408,7 @@ describe("subagent task backing storage", () => {
           ) {
             return;
           }
+          observedTasks.push(event.task);
           replaced = true;
           updateTask(task.taskId, {
             detail: createSubagentTaskBackingDetail(2),
@@ -439,6 +442,8 @@ describe("subagent task backing storage", () => {
     });
 
     expect(replaced).toBe(true);
+    expect(observedTasks).toHaveLength(1);
+    expect(observedTasks[0]).not.toHaveProperty("detail");
     expect(getTaskById(task.taskId)?.detail).toEqual(createSubagentTaskBackingDetail(2));
     expect(getTaskActivitySnapshot(task.taskId)?.lastActivity).toBe("atomic successor activity");
     expect(loadTaskRegistryStateFromSqlite().tasks.get(task.taskId)?.detail).toEqual(

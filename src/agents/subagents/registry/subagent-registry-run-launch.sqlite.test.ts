@@ -15,6 +15,7 @@ import {
 } from "../../../tasks/task-registry.js";
 import { configureTaskRegistryRuntime } from "../../../tasks/task-registry.store.js";
 import { loadTaskRegistryStateFromSqlite } from "../../../tasks/task-registry.store.sqlite.js";
+import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
 import { spawnSubagentDirect } from "../spawn/subagent-spawn.js";
 import { testing as subagentSpawnTesting } from "../spawn/subagent-spawn.test-support.js";
@@ -390,6 +391,7 @@ describe("queued collector acceptance storage", () => {
   it("publishes both registration caches before either observer runs", () => {
     const runId = "registration-observer";
     const snapshots: Array<{ observer: string; run?: string; task?: string }> = [];
+    const observedTasks: Array<Omit<TaskRecord, "detail">> = [];
     const capture = (observer: string) => {
       snapshots.push({
         observer,
@@ -402,6 +404,7 @@ describe("queued collector acceptance storage", () => {
       observers: {
         onEvent: (event) => {
           if (event.kind === "upserted" && event.task.runId === runId) {
+            observedTasks.push(event.task);
             capture("task");
           }
         },
@@ -417,6 +420,12 @@ describe("queued collector acceptance storage", () => {
       { observer: "subagent", run: "queued", task: "queued" },
       { observer: "task", run: "queued", task: "queued" },
     ]);
+    expect(observedTasks).toHaveLength(1);
+    expect(observedTasks[0]).not.toHaveProperty("detail");
+    expect(findTaskByRunId(runId)?.detail).toMatchObject({
+      kind: "task_backing_instance",
+      generation: 1,
+    });
   });
 
   it("reopens one stable required registry and task generation", () => {
@@ -451,6 +460,7 @@ describe("queued collector acceptance storage", () => {
     const task = registerPreparedCollector(reservedRunId);
     expect(getSubagentRunsSnapshotForRead(new Map()).has(reservedRunId)).toBe(true);
     const snapshots: Array<{ observer: string; oldRun: boolean; run?: string; task?: string }> = [];
+    const observedTasks: Array<Omit<TaskRecord, "detail">> = [];
     const capture = (observer: string) => {
       const runs = getSubagentRunsSnapshotForRead(new Map());
       snapshots.push({
@@ -465,6 +475,10 @@ describe("queued collector acceptance storage", () => {
       observers: {
         onEvent: (event) => {
           if (event.kind === "upserted" && event.task.taskId === task.taskId) {
+            observedTasks.push(event.task);
+            if (event.previous) {
+              observedTasks.push(event.previous);
+            }
             capture("task");
           }
         },
@@ -480,6 +494,12 @@ describe("queued collector acceptance storage", () => {
       { observer: "subagent", oldRun: false, run: "running", task: "running" },
       { observer: "task", oldRun: false, run: "running", task: "running" },
     ]);
+    expect(observedTasks).toMatchObject([{ status: "running" }, { status: "queued" }]);
+    for (const observed of observedTasks) {
+      expect(observed).not.toHaveProperty("detail");
+    }
+    expect(findTaskByRunId(reservedRunId)?.detail).toEqual(task.detail);
+    expect(loadTaskRegistryStateFromSqlite().tasks.get(task.taskId)?.detail).toEqual(task.detail);
   });
 
   it("stops acceptance callbacks and waits when an observer replaces the accepted owner", async () => {

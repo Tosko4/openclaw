@@ -697,6 +697,7 @@ describe("task-registry", () => {
         data: { text: "old owner activity" },
       });
       let replaced = false;
+      const observedTasks: Array<Omit<TaskRecord, "detail">> = [];
       configureTaskRegistryRuntime({
         observers: {
           onEvent: (event) => {
@@ -709,6 +710,7 @@ describe("task-registry", () => {
             ) {
               return;
             }
+            observedTasks.push(event.task);
             replaced = true;
             publishTaskRecordAfterAtomicStore({
               ...event.task,
@@ -733,6 +735,8 @@ describe("task-registry", () => {
       markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 130 });
 
       expect(replaced).toBe(true);
+      expect(observedTasks).toHaveLength(1);
+      expect(observedTasks[0]).not.toHaveProperty("detail");
       expect(getTaskById(task.taskId)?.detail).toEqual(createSubagentTaskBackingDetail(2));
       expect(getTaskActivitySnapshot(task.taskId)?.lastActivity).toBe("successor activity");
     });
