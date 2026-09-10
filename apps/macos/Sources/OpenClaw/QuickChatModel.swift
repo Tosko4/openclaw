@@ -1257,7 +1257,7 @@ extension QuickChatModel {
         }
         guard let target else {
             self.setRoutingTarget(nil)
-            cancelModelControlRefresh()
+            self.cancelModelControlRefresh()
             return
         }
         let previousTarget = self.routingTarget
@@ -1270,7 +1270,7 @@ extension QuickChatModel {
             self.modelDefaultProvider = nil
             self.thinkingOptions = []
         }
-        refreshModelControls(for: target)
+        self.refreshModelControls(for: target)
     }
 
     private func setRoutingTarget(_ target: QuickChatRoutingTarget?) {

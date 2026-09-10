@@ -12,17 +12,6 @@ extension OpenClawChatViewModel {
         OpenClawChatThinkingLevelOption(id: "medium", label: "medium"),
         OpenClawChatThinkingLevelOption(id: "high", label: "high"),
     ]
-    public func selectThinkingLevel(_ level: String) {
-        self.performSelectThinkingLevel(level)
-    }
-
-    public func selectVerboseLevel(_ level: String) {
-        performSelectVerboseLevel(level)
-    }
-
-    public func selectFastMode(_ selectionID: String) {
-        performSelectFastMode(selectionID)
-    }
 
     func applyAdvertisedThinkingLevel(_ level: String) {
         guard level != thinkingLevel else { return }

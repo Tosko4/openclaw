@@ -753,27 +753,6 @@ public final class OpenClawChatViewModel {
         self.usesMutableContractRouting(sessionKey: self.sessionKey, contract: contract)
     }
 
-    func usesMutableContractRouting(sessionKey: String, contract: String?) -> Bool {
-        if OpenClawChatSessionKey.agentID(from: sessionKey) == nil {
-            return true
-        }
-        let parts = sessionKey
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
-        guard parts.count == 3 else { return false }
-        let normalizedSessionKey = parts[2].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let resolvedMainParts = self.resolvedMainSessionKey
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
-        let normalizedMainSessionKey = String(resolvedMainParts.last ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let contractMainKey = OpenClawChatSessionRoutingContract.parse(contract)?.mainKey ?? ""
-        return normalizedSessionKey == "global" ||
-            normalizedSessionKey == "main" ||
-            normalizedSessionKey == normalizedMainSessionKey ||
-            normalizedSessionKey == contractMainKey
-    }
-
     public var showsModelPicker: Bool {
         !self.modelChoices.isEmpty
     }

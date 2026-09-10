@@ -963,21 +963,6 @@ struct ChatProTab: View {
         AgentIdentityPresentation.initialsBadge(for: displayName)
     }
 
-    nonisolated static func presentationAgentID(
-        deliveryAgentID: String?,
-        displayAgentID: String,
-        selectionRequired: Bool) -> String
-    {
-        let delivery = deliveryAgentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        if !delivery.isEmpty {
-            return delivery
-        }
-        if selectionRequired {
-            return ""
-        }
-        return displayAgentID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    }
-
     private var requiresExplicitAgentSelection: Bool {
         !self.isAttachmentOwnerPinned &&
             self.appModel.gatewayAgentSelectionRequired &&
@@ -986,27 +971,6 @@ struct ChatProTab: View {
 
     nonisolated static func normalizedBadgeEmoji(_ value: String?) -> String? {
         AgentIdentityPresentation.normalizedBadgeEmoji(value)
-    }
-
-    nonisolated static func transportAgentID(_ value: String?) -> String {
-        value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-    }
-
-    nonisolated static func requiresViewModelRebuild(
-        currentOwnerID: String,
-        nextOwnerID: String,
-        currentTransportAgentID: String,
-        nextTransportAgentID: String) -> Bool
-    {
-        currentOwnerID != nextOwnerID || currentTransportAgentID != nextTransportAgentID
-    }
-
-    nonisolated static func composerDraftForReplacement(
-        _ input: String,
-        currentOwnerID: String,
-        nextOwnerID: String) -> String?
-    {
-        currentOwnerID == nextOwnerID ? input : nil
     }
 
     nonisolated static let emptyAssistantPrompts: [OpenClawChatView.StarterPrompt] = [
@@ -1028,5 +992,43 @@ struct ChatProTab: View {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+extension ChatProTab {
+    nonisolated static func presentationAgentID(
+        deliveryAgentID: String?,
+        displayAgentID: String,
+        selectionRequired: Bool) -> String
+    {
+        let delivery = deliveryAgentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if !delivery.isEmpty {
+            return delivery
+        }
+        if selectionRequired {
+            return ""
+        }
+        return displayAgentID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    nonisolated static func transportAgentID(_ value: String?) -> String {
+        value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    }
+
+    nonisolated static func requiresViewModelRebuild(
+        currentOwnerID: String,
+        nextOwnerID: String,
+        currentTransportAgentID: String,
+        nextTransportAgentID: String) -> Bool
+    {
+        currentOwnerID != nextOwnerID || currentTransportAgentID != nextTransportAgentID
+    }
+
+    nonisolated static func composerDraftForReplacement(
+        _ input: String,
+        currentOwnerID: String,
+        nextOwnerID: String) -> String?
+    {
+        currentOwnerID == nextOwnerID ? input : nil
     }
 }
