@@ -204,12 +204,19 @@ function assertExpectedConfigPathMatches(
 
 /** Serialize config writers without requiring a schema-valid snapshot. */
 export async function withConfigMutationLock<T>(
-  params: { io?: ConfigMutationIO; lockPath?: string },
+  params: { io?: ConfigMutationIO; lockPath?: string; assertCurrent?: () => void },
   fn: () => Promise<T>,
 ): Promise<T> {
+  const assertCurrent = params.assertCurrent;
+  assertCurrent?.();
   return params.io
     ? await fn()
-    : await withConfigWriteLock(params.lockPath ?? resolveConfigPath(), fn);
+    : await withConfigWriteLock(
+        params.lockPath ?? resolveConfigPath(),
+        fn,
+        undefined,
+        assertCurrent,
+      );
 }
 
 async function readConfigSnapshotForMutation(params: {
@@ -220,7 +227,10 @@ async function readConfigSnapshotForMutation(params: {
   snapshot: ConfigFileSnapshot;
   writeOptions: ConfigWriteOptions;
 }> {
-  const options = params.writeOptions?.skipPluginValidation ? { skipPluginValidation: true } : {};
+  const options = {
+    ...(params.writeOptions?.skipPluginValidation ? { skipPluginValidation: true } : {}),
+    ...(params.writeOptions?.observe === false ? { observe: false } : {}),
+  };
   if (params.io) {
     return await params.io.readConfigFileSnapshotForWrite(options);
   }
@@ -228,6 +238,7 @@ async function readConfigSnapshotForMutation(params: {
     const ioOptions = {
       configPath: params.ownedConfigPathForWrite,
       ...(params.writeOptions?.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
+      ...(params.writeOptions?.observe === false ? { observe: false } : {}),
     };
     const io = hasManagedRuntimeConfigWriteOwner(params.ownedConfigPathForWrite)
       ? createConfigIO({
@@ -285,19 +296,25 @@ async function withConfigMutationSnapshotLock<T>(
 ): Promise<T> {
   let lockPath = path.resolve(params.writeOptions?.ownedConfigPathForWrite ?? resolveConfigPath());
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const outcome = await withConfigMutationLock({ lockPath }, async () => {
-      const prepared = await readConfigSnapshotForMutation({
-        ...(params.writeOptions?.ownedConfigPathForWrite
-          ? { ownedConfigPathForWrite: params.writeOptions.ownedConfigPathForWrite }
-          : {}),
-        writeOptions: params.writeOptions,
-      });
-      const preparedPath = path.resolve(prepared.snapshot.path);
-      if (preparedPath !== lockPath) {
-        return { done: false as const, lockPath: preparedPath };
-      }
-      return { done: true as const, value: await fn(prepared) };
-    });
+    params.writeOptions?.assertConfigPathForWrite?.();
+    const outcome = await withConfigMutationLock(
+      { lockPath, assertCurrent: params.writeOptions?.assertCurrent },
+      async () => {
+        const prepared = await readConfigSnapshotForMutation({
+          ...(params.writeOptions?.ownedConfigPathForWrite
+            ? { ownedConfigPathForWrite: params.writeOptions.ownedConfigPathForWrite }
+            : {}),
+          writeOptions: params.writeOptions,
+        });
+        captureConfigWriteLockGuard(lockPath)?.();
+        params.writeOptions?.assertConfigPathForWrite?.();
+        const preparedPath = path.resolve(prepared.snapshot.path);
+        if (preparedPath !== lockPath) {
+          return { done: false as const, lockPath: preparedPath };
+        }
+        return { done: true as const, value: await fn(prepared) };
+      },
+    );
     if (outcome.done) {
       return outcome.value;
     }
@@ -621,16 +638,24 @@ async function rollbackJsonFileWriteIfUnchanged(params: {
   return true;
 }
 
-function createRootBoundBackupFs(target: RootBoundIncludeFile) {
+function createRootBoundBackupFs(
+  target: RootBoundIncludeFile,
+  assertConfigPathForWrite: () => void,
+) {
+  const assertCurrent = captureConfigWriteLockGuard(target.absolutePath);
   return {
     chmod: async (filePath: string, mode: number) => {
       const opened = await target.root.open(resolveRootBoundRelativePath(target, filePath));
       try {
+        assertCurrent?.();
+        assertConfigPathForWrite();
         await opened.handle.chmod(mode);
       } finally {
         await opened[Symbol.asyncDispose]();
       }
     },
+    // Root write/move/remove still lack a live mutation hook after their awaits.
+    // Full include-backup fencing is blocked by https://github.com/openclaw/fs-safe/issues/251.
     copyFile: async (from: string, to: string) => {
       const content = await target.root.readBytes(resolveRootBoundRelativePath(target, from));
       await target.root.write(resolveRootBoundRelativePath(target, to), content, {
@@ -675,7 +700,8 @@ async function writeRootBoundJsonFile(params: {
   if (await targetBeforeBackup.root.exists(targetBeforeBackup.relativePath)) {
     await maintainConfigBackups(
       targetBeforeBackup.absolutePath,
-      createRootBoundBackupFs(targetBeforeBackup),
+      createRootBoundBackupFs(targetBeforeBackup, params.assertConfigPathForWrite),
+      params.assertConfigPathForWrite,
     );
   }
   await params.preCommitRuntimePreflight?.();
@@ -1057,6 +1083,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
       }
     },
     writeEnv,
+    rootGuard,
   );
 }
 
@@ -1086,6 +1113,7 @@ type ConfigReplaceParams = ConfigReplaceInput & {
 };
 
 export async function replaceConfigFile(params: ConfigReplaceParams): Promise<ConfigReplaceResult> {
+  params.writeOptions?.assertConfigPathForWrite?.();
   if (!params.snapshot && !params.io) {
     return await withConfigMutationSnapshotLock(
       { writeOptions: params.writeOptions },
@@ -1098,7 +1126,11 @@ export async function replaceConfigFile(params: ConfigReplaceParams): Promise<Co
     );
   }
   return await withConfigMutationLock(
-    { io: params.io, lockPath: params.snapshot?.path },
+    {
+      io: params.io,
+      lockPath: params.snapshot?.path,
+      assertCurrent: params.writeOptions?.assertCurrent,
+    },
     async () => await replaceConfigFileUnlocked(params),
   );
 }
@@ -1269,6 +1301,7 @@ async function transformConfigFileAttempt<T>(
 export async function transformConfigFile<T = void>(
   params: TransformConfigFileParams<T>,
 ): Promise<ConfigMutationResult<T>> {
+  params.writeOptions?.assertConfigPathForWrite?.();
   if (!params.io) {
     return await withConfigMutationSnapshotLock(
       { writeOptions: params.writeOptions },
@@ -1282,7 +1315,7 @@ export async function transformConfigFile<T = void>(
     );
   }
   return await withConfigMutationLock(
-    { io: params.io },
+    { io: params.io, assertCurrent: params.writeOptions?.assertCurrent },
     async () => await transformConfigFileAttempt(params, 0),
   );
 }
@@ -1290,6 +1323,7 @@ export async function transformConfigFile<T = void>(
 export async function transformConfigFileWithRetry<T = void>(
   params: TransformConfigFileWithRetryParams<T>,
 ): Promise<ConfigMutationResult<T>> {
+  params.writeOptions?.assertConfigPathForWrite?.();
   const maxAttempts = params.maxAttempts ?? DEFAULT_CONFIG_MUTATION_RETRY_ATTEMPTS;
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
     throw new Error("Config mutation maxAttempts must be a positive integer.");
@@ -1330,7 +1364,10 @@ export async function transformConfigFileWithRetry<T = void>(
       runWithPrepared,
     );
   }
-  return await withConfigMutationLock({ io: params.io }, async () => await runWithPrepared());
+  return await withConfigMutationLock(
+    { io: params.io, assertCurrent: params.writeOptions?.assertCurrent },
+    async () => await runWithPrepared(),
+  );
 }
 
 type MutateConfigFileParams<T> = Omit<TransformConfigFileParams<T>, "transform" | "commit"> & {
