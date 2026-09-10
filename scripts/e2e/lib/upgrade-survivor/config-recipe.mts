@@ -260,6 +260,7 @@ const connectionOnlyScenarios = new Set(["mobile-pairing-reconnect", "watchos-di
 export function resolveUpgradeSurvivorConfigSteps(
   scenario = "base",
   configuredUpdateChannel = process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL,
+  liveOpenAI = process.env.OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI === "1",
 ): ConfigStep[] {
   const validateStep = sharedRecipe.at(-1);
   const updateChannel =
@@ -276,6 +277,15 @@ export function resolveUpgradeSurvivorConfigSteps(
     .map((step) => {
       if (scenario === "mobile-pairing-reconnect" && step.id === "gateway") {
         return configSetJsonFile("gateway", "gateway", "gateway", "gateway-password.json");
+      }
+      if (scenario === "base" && liveOpenAI && step.id === "plugins") {
+        const plugins = JSON.parse(step.argv[3]!);
+        // Live OpenAI uses the baseline's native runtime; the explicit fixture
+        // allowlist must admit its owner before inference or upgrade migration.
+        plugins.allow.push("codex");
+        plugins.entries.codex = { enabled: true };
+        const argv = [...step.argv.slice(0, 3), JSON.stringify(plugins), ...step.argv.slice(4)];
+        return Object.assign({}, step, { argv });
       }
       if (scenario !== "recovery-cleanup" || step.id !== "agents") {
         return step;

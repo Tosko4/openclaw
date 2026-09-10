@@ -2,6 +2,8 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { publishDiagnostics } from "../../scripts/e2e/lib/upgrade-survivor/diagnostics.mjs";
+import { redactSensitiveText } from "../../src/logging/redact.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -93,5 +95,55 @@ if (process.argv[2] === 'update') {
     expect(reports).toEqual([
       expect.objectContaining({ role: "update", event: "started", packageVersion: "2026.7.1-2" }),
     ]);
+  });
+});
+
+describe("upgrade survivor live failure diagnostics", () => {
+  it("captures both probe stages through the host redactor after validation fails", () => {
+    const root = realpathSync(tempDirs.make("survivor-live-diagnostics-"));
+    const artifacts = join(root, "artifacts");
+    const state = join(root, "state");
+    mkdirSync(artifacts);
+    mkdirSync(state);
+    const token = "sk-test-private-live-fixture-token-12345678901234567890";
+    for (const stage of ["baseline", "candidate"]) {
+      writeFileSync(
+        join(artifacts, `live-openai-${stage}.out`),
+        JSON.stringify({
+          meta: { agentMeta: { provider: "openai", model: "other-model" } },
+        }),
+      );
+      writeFileSync(
+        join(artifacts, `live-openai-${stage}.err`),
+        `Authorization: Bearer ${token}\n`,
+      );
+    }
+    const capture = spawnSync(
+      process.execPath,
+      [observer, "capture", artifacts, "live-openai-baseline", "1"],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+        env: { ...process.env, HOME: root, OPENCLAW_STATE_DIR: state },
+      },
+    );
+    expect(capture.status, capture.stderr).toBe(0);
+    const destination = join(root, "public");
+    publishDiagnostics(artifacts, destination, redactSensitiveText);
+    const published = readFileSync(join(destination, "failure.json"), "utf8");
+    const report = JSON.parse(published);
+    for (const stage of ["baseline", "candidate"]) {
+      expect(JSON.parse(report.logs[`live-openai-${stage}.out`]).meta.agentMeta).toEqual({
+        provider: "openai",
+        model: "other-model",
+      });
+      expect(report.logs[`live-openai-${stage}.err`]).toContain("Authorization: Bearer");
+    }
+    expect(published).not.toContain(token);
+    expect(report).toMatchObject({
+      phase: "live-openai-baseline",
+      outcome: "failed",
+      exitStatus: 1,
+    });
   });
 });

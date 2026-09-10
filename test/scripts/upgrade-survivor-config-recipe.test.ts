@@ -49,6 +49,7 @@ function runRecipeFixture(params: {
   scenario: string;
   entrypoint?: string;
   failPath?: string;
+  liveOpenAI?: boolean;
 }) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-recipe-"));
   try {
@@ -133,6 +134,7 @@ node() {
         OPENCLAW_CONFIG_PATH: join(root, "config.json"),
         OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: params.scenario,
         OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL: "",
+        OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI: params.liveOpenAI ? "1" : "0",
         RECIPE_FAIL_PATH: params.failPath ?? "",
         RECIPE_LEGACY_MARKER: legacyMarker,
         PATH: [binDir, join(process.cwd(), "node_modules/.bin"), process.env.PATH ?? ""].join(
@@ -582,6 +584,25 @@ esac
           expect.stringContaining("openClawToolsMcpBridge"),
         ]),
       );
+    },
+  );
+
+  it.each(["2026.6.33", "2026.9.1"])(
+    "authors an activatable live OpenAI runtime without changing migration specimens for %s",
+    (version) => {
+      const { result, loggedArgs } = runRecipeFixture({
+        scenario: "base",
+        version,
+        liveOpenAI: true,
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const plugins = JSON.parse(loggedArgs.find((argv) => argv[2] === "plugins")?.[3] ?? "{}");
+      expect(plugins.allow).toContain("codex");
+      expect(plugins.entries.codex).toEqual({ enabled: true });
+      const regular = resolveUpgradeSurvivorConfigStepsForBaseline("base", version);
+      const agents = loggedArgs.find((argv) => argv[2] === "agents");
+      expect(agents).toEqual(regular.find((step) => step.id === "agents")?.argv);
+      expect(loggedArgs.at(-1)).toEqual(["config", "validate"]);
     },
   );
 

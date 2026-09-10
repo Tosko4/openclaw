@@ -13,6 +13,10 @@ const publicLimit = 512 * 1024;
 const entryLimit = 128;
 const logNames = [
   "baseline-install.log",
+  "live-openai-baseline.out",
+  "live-openai-baseline.err",
+  "live-openai-candidate.out",
+  "live-openai-candidate.err",
   "install.log",
   "update.json",
   "update.err",
