@@ -135,40 +135,6 @@ function requestParams(request: MockGatewayRequest): Record<string, unknown> {
   return requireRecord(request.params);
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function workboardField(scope: Page | Locator, label: string) {
-  return scope.locator(".workboard-field").filter({
-    hasText: new RegExp(`^\\s*${escapeRegExp(label)}\\b`, "u"),
-  });
-}
-
-async function chooseWorkboardSelectOption(
-  scope: Page | Locator,
-  label: string,
-  optionLabel: string,
-): Promise<void> {
-  const field = workboardField(scope, label);
-  expect(await field.count()).toBe(1);
-  const optionValue = await field.locator("option").evaluateAll((options, optionText) => {
-    const option = options.find((candidate) =>
-      candidate.textContent?.trim().startsWith(optionText),
-    );
-    return option?.getAttribute("value") ?? null;
-  }, optionLabel);
-  await field
-    .locator("select")
-    .selectOption(expectDefined(optionValue, `Workboard option: ${optionLabel}`));
-}
-
-async function workboardSelectLabel(scope: Page | Locator, label: string): Promise<string> {
-  const field = workboardField(scope, label);
-  expect(await field.count()).toBe(1);
-  return (await field.locator("option:checked").textContent())?.trim() ?? "";
-}
-
 function workboardColumn(page: Page, title: string) {
   return page.locator(".workboard-column", {
     has: page.getByRole("heading", { name: title }),
@@ -177,6 +143,12 @@ function workboardColumn(page: Page, title: string) {
 
 function workboardCard(page: Page, columnTitle: string, title: string) {
   return workboardColumn(page, columnTitle).locator(".workboard-card", { hasText: title });
+}
+
+async function openCardEditor(card: Locator): Promise<void> {
+  await card.hover();
+  await card.getByRole("button", { name: "Card actions", exact: true }).click();
+  await card.getByRole("button", { name: "Edit card", exact: true }).click();
 }
 
 async function dispatchHtml5Drag(source: Locator, target: Locator): Promise<void> {
@@ -337,12 +309,17 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       });
       await executionCard.waitFor({ timeout: 10_000 });
 
-      await executionCard.locator('button[aria-label="Edit card"]').click();
+      await openCardEditor(executionCard);
       const editDialog = page.getByRole("dialog", { name: "Edit card" });
       await editDialog.waitFor({ timeout: 10_000 });
       await expect
-        .poll(() => workboardSelectLabel(page, "Session"))
-        .toBe("Execution linked session");
+        .poll(() =>
+          page
+            .locator(".workboard-card-draft")
+            .getByRole("button", { name: "Session: Execution linked session", exact: true })
+            .isVisible(),
+        )
+        .toBe(true);
 
       await page.getByLabel("Title").fill(updatedCard.title);
       await page.getByRole("button", { name: "Save" }).click();
@@ -470,14 +447,16 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       await expect.poll(() => page.getByText(archivedDefaultRunningCard.title).count()).toBe(0);
       await waitForRequestCount(gateway, "workboard.cards.update", 0);
 
-      await workboardCard(page, "Todo", "Persist queue status")
-        .locator('button[aria-label="Edit card"]')
-        .click();
+      await openCardEditor(workboardCard(page, "Todo", "Persist queue status"));
       const editDialog = page.getByRole("dialog", { name: "Edit card" });
       await editDialog.waitFor({ timeout: 10_000 });
       await page.getByLabel("Title").fill("Persisted renamed card");
       await page.getByLabel("Notes").fill("Edited notes survive reopening.");
-      await chooseWorkboardSelectOption(page, "Priority", "High");
+      await page
+        .locator(".workboard-card-draft")
+        .getByRole("radio", { name: "High", exact: true })
+        .focus();
+      await page.keyboard.press("Space");
       await page.getByRole("button", { name: "Save" }).click();
 
       const updateRequests = await waitForRequestCount(gateway, "workboard.cards.update", 1);
@@ -501,15 +480,20 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       }
       await workboardCard(page, "Todo", "Persisted renamed card").waitFor({ timeout: 10_000 });
 
-      await workboardCard(page, "Todo", "Persisted renamed card")
-        .locator('button[aria-label="Edit card"]')
-        .click();
+      await openCardEditor(workboardCard(page, "Todo", "Persisted renamed card"));
       await editDialog.waitFor({ timeout: 10_000 });
       await expect.poll(() => page.getByLabel("Title").inputValue()).toBe("Persisted renamed card");
       await expect
         .poll(() => page.getByLabel("Notes").inputValue())
         .toBe("Edited notes survive reopening.");
-      await expect.poll(() => workboardSelectLabel(page, "Priority")).toBe("High");
+      await expect
+        .poll(() =>
+          page
+            .locator(".workboard-card-draft")
+            .getByRole("radio", { name: "High", exact: true })
+            .isChecked(),
+        )
+        .toBe(true);
       if (captureUiProofEnabled) {
         await writeFile(
           path.join(artifactDir, "workboard-edit-reopen.png"),
