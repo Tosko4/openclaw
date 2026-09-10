@@ -1,43 +1,49 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
-import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import * as preparedRuntime from "../agents/prepared-model-runtime.js";
-import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
-import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import * as restartRecovery from "../agents/subagents/registry/subagent-registry-restart-recovery.js";
+import * as preparedRuntime from "../../../src/agents/prepared-model-runtime.js";
+import { createSubagentRunRecord } from "../../../src/agents/subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../../../src/agents/subagents/registry/subagent-registry-memory.js";
+import * as restartRecovery from "../../../src/agents/subagents/registry/subagent-registry-restart-recovery.js";
 import {
   expectReleasedCoreSubagentCandidatePersisted,
   settleSubagentRegistryPersistenceWork,
   writeReleasedCoreSubagentCandidateFixture,
   writeSubagentSessionEntry,
-} from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+} from "../../../src/agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { loadSubagentRegistryFromSqlite } from "../../../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   registerSubagentRun,
   releaseSubagentRun,
   resetSubagentRegistryForTests,
-} from "../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withTimeout } from "../infra/fs-safe.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import type { DB } from "../state/openclaw-state-db.generated.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { cancelTaskById, findTaskByRunId, getTaskById } from "../tasks/task-registry.js";
+} from "../../../src/agents/subagents/registry/subagent-registry.test-helpers.js";
+import { loadSessionEntry } from "../../../src/config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
+import type { GatewayRecoveryRuntime } from "../../../src/gateway/server-instance-runtime.types.js";
+import {
+  disconnectGatewayClient,
+  startGatewayWithClient,
+} from "../../../src/gateway/test-helpers.e2e.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../../../src/gateway/test-helpers.env.js";
+import { buildMockOpenAiResponsesProvider } from "../../../src/gateway/test-openai-responses-model.js";
+import { withTimeout } from "../../../src/infra/fs-safe.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../src/infra/kysely-sync.js";
+import type { DB } from "../../../src/state/openclaw-state-db.generated.js";
+import { openOpenClawStateDatabase } from "../../../src/state/openclaw-state-db.js";
+import * as taskControlRuntime from "../../../src/tasks/task-registry-control.runtime.js";
+import { cancelTaskById, findTaskByRunId, getTaskById } from "../../../src/tasks/task-registry.js";
 import {
   resetTaskFlowRegistryForTests,
+  resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryForTests,
-} from "../tasks/task-runtime.test-helpers.js";
-import { captureEnv } from "../test-utils/env.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
-import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
-import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
+  setTaskRegistryControlRuntimeForTests,
+} from "../../../src/tasks/task-runtime.test-helpers.js";
+import { captureEnv } from "../../../src/test-utils/env.js";
+import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.js";
+import { cleanupSessionStateForTest } from "../../../src/test-utils/session-state-cleanup.js";
+import { writeOpenAiResponsesText } from "../openai-responses-sse.js";
+import { createDeferred } from "../promise.js";
+import { runQaGatewayFixture } from "../qa-gateway-cleanup.js";
 
 function readDurableOwnership() {
   const { db } = openOpenClawStateDatabase();
@@ -242,6 +248,16 @@ describe("released subagent ownership through the real Gateway", () => {
           resetTaskRegistryForTests({ persist: false });
           resetTaskFlowRegistryForTests({ persist: false });
           await cleanupSessionStateForTest({ stateDir: state.stateDir });
+          if (mode === "cancelled") {
+            // Native require cannot resolve this source-only control graph.
+            // Inject the unchanged runtime through Vitest's module loader.
+            setTaskRegistryControlRuntimeForTests(taskControlRuntime);
+            restoreSpies.push(() => {
+              if (workJoined && gatewayClosed) {
+                resetTaskRegistryControlRuntimeForTests();
+              }
+            });
+          }
 
           const acquireSpy = vi
             .spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime")
@@ -337,8 +353,27 @@ describe("released subagent ownership through the real Gateway", () => {
             signal.addEventListener("abort", onInterrupt, { once: true });
             restoreSpies.push(() => signal.removeEventListener("abort", onInterrupt));
             cancellation = cancelTaskById({ cfg, taskId: released.task.taskId });
-            void cancellation.catch(() => {});
-            await withTimeout(interrupted.promise, 10_000, "public cancellation interruption");
+            await withTimeout(
+              Promise.race([
+                interrupted.promise,
+                cancellation.then(
+                  (result) => {
+                    throw new Error(
+                      `public cancellation settled before interruption: ${JSON.stringify({
+                        outcome: "resolved",
+                        found: result.found,
+                        cancelled: result.cancelled,
+                      })}`,
+                    );
+                  },
+                  () => {
+                    throw new Error("public cancellation rejected before interruption");
+                  },
+                ),
+              ]),
+              10_000,
+              "public cancellation interruption",
+            );
             expect(signal.aborted).toBe(true);
           } else if (mode !== "allowed") {
             expect(
@@ -388,11 +423,16 @@ describe("released subagent ownership through the real Gateway", () => {
                 { timeout: 10_000 },
               );
               expect(successorPosts).toHaveLength(1);
-              expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toMatchObject({
+              const successorSession = loadSessionEntry({
+                storePath,
+                sessionKey: childSessionKey,
+              });
+              expect(successorSession).toMatchObject({
                 sessionId,
                 status: "done",
-                lifecycleRunId: successorRunId,
+                lastRunId: successorRunId,
               });
+              expect(successorSession?.lifecycleRunId).toBeUndefined();
               if (mode === "removed") {
                 releaseSubagentRun(successorRunId);
                 expect(loadSubagentRegistryFromSqlite().has(successorRunId)).toBe(false);
