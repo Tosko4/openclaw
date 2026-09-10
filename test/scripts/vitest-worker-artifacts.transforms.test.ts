@@ -58,7 +58,7 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
           expect(observed.value).toBe(expectedValue);
           expect(observed.configValue).toBe(configValue);
           if (mode === "compiled") {
-            const generationDirectory = fileURLToPath(new URL("../../", generation));
+            const generationDirectory = path.resolve(fileURLToPath(new URL("../../", generation)));
             expect(result.stderr.match(/\[vitest-workers\] prepared/g)).toHaveLength(1);
             expect(generations).not.toContain(generation);
             generations.push(generation);
