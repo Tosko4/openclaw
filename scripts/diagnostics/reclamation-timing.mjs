@@ -283,6 +283,19 @@ edit("src/config/sessions/session-accessor.sqlite-reclamation-commit.ts", [
   ],
 ]);
 
+edit("test/vitest/vitest.gateway-server.config.ts", [
+  [
+    "diagnostic sequencer imports",
+    "import {\n  gatewayServerBackedHttpTestFiles,",
+    'import { mergeConfig } from "vitest/config";\nimport ReclamationDiagnosticSequencer from "../../.diagnostic/scripts/diagnostics/reclamation-sequencer.mjs";\nimport {\n  gatewayServerBackedHttpTestFiles,',
+  ],
+  [
+    "diagnostic sequencer configuration",
+    "export default createGatewayServerVitestConfig();",
+    "export default mergeConfig(createGatewayServerVitestConfig(), { test: { sequence: { sequencer: ReclamationDiagnosticSequencer } } });",
+  ],
+]);
+
 const test = changes.get("src/gateway/server.sessions.reclamation.test.ts").content;
 for (const required of [
   "const ROWS = 200_000;",
