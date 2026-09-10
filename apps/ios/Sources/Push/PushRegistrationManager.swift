@@ -43,6 +43,29 @@ actor PushRegistrationManager {
         _ operation: PushRelayActivityOperation,
         owner: PushRelayActivityOwner) async throws -> PushRelayActivityOutcome
     {
+        let relayClient = try self.activityRelayClient()
+        let (bundleId, installationId) = try Self.registrationIdentity()
+        // Activity credentials belong to one ActivityKit incarnation, never the app-token cache.
+        return try await relayClient.performActivityOperation(operation, input: PushRelayActivityInput(
+            owner: owner,
+            installationId: installationId,
+            bundleId: bundleId,
+            environment: self.buildConfig.apnsEnvironment,
+            relayProfile: self.buildConfig.relayProfile,
+            proofPolicy: self.buildConfig.proofPolicy))
+    }
+
+    func activityOperationsAvailable() -> Bool {
+        do {
+            _ = try self.activityRelayClient()
+            _ = try Self.registrationIdentity()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func activityRelayClient() throws -> PushRelayClient {
         guard self.buildConfig.transport == .relay, self.buildConfig.distribution == .official,
               self.buildConfig.relayProfile != .simulatorSandbox,
               let relayClient = self.relayClient
@@ -53,12 +76,7 @@ actor PushRegistrationManager {
             relayProfile: self.buildConfig.relayProfile,
             apnsEnvironment: self.buildConfig.apnsEnvironment,
             proofPolicy: self.buildConfig.proofPolicy)
-        let (bundleId, installationId) = try Self.registrationIdentity()
-        // Activity credentials belong to one ActivityKit incarnation, never the app-token cache.
-        return try await relayClient.performActivityOperation(operation, input: PushRelayActivityInput(
-            owner: owner, installationId: installationId, bundleId: bundleId,
-            environment: self.buildConfig.apnsEnvironment, relayProfile: self.buildConfig.relayProfile,
-            proofPolicy: self.buildConfig.proofPolicy))
+        return relayClient
     }
 
     func makeGatewayRegistrationPayload(
