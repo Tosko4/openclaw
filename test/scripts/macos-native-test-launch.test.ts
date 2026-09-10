@@ -14,6 +14,57 @@ const workflow = parse(fs.readFileSync(path.join(repo, ".github/workflows/ci.yml
 const swiftStep = workflow.jobs["macos-swift"].steps.find(
   (step: { name?: string }) => step.name === "Swift test",
 ).run as string;
+const nativeArgs = [
+  "--package-path",
+  "apps/macos",
+  "--build-system",
+  "native",
+  "--skip-build",
+  "--filter",
+  "NativeActionGatewayWireTests",
+];
+
+function nativeEvents() {
+  const declaration = (kind: string, id: string, name: string) => ({
+    version: 0,
+    kind: "test",
+    payload: {
+      kind,
+      id,
+      name,
+      sourceLocation: {
+        fileID: "OpenClawIPCTests/NativeActionGatewayWireTests.swift",
+        line: 139,
+        column: 5,
+      },
+      ...(kind === "function" ? { isParameterized: false } : {}),
+    },
+  });
+  const event = (kind: string, testID?: string) => ({
+    version: 0,
+    kind: "event",
+    payload: {
+      kind,
+      instant: { absolute: 1, since1970: 1 },
+      messages: [],
+      ...(testID ? { testID } : {}),
+    },
+  });
+  return [
+    declaration("suite", "opaque-suite", "NativeActionGatewayWireTests"),
+    declaration(
+      "function",
+      "opaque-function",
+      "`native submissions retain exact authority through real Gateway effects`()",
+    ),
+    event("runStarted"),
+    event("testStarted", "opaque-suite"),
+    event("testStarted", "opaque-function"),
+    event("testEnded", "opaque-function"),
+    event("testEnded", "opaque-suite"),
+    event("runEnded"),
+  ] as const;
+}
 
 function nativeActionDescriptor() {
   const wireCase = (id: string) => ({
@@ -88,10 +139,17 @@ function nativeActionDescriptor() {
 
 function fixture(
   defaultExitCode = 0,
-  waitForSignal: false | "swift" | "security" = false,
+  waitForSignal: false | "swift" | "security" | "NativeActionTestHost" = false,
   namedExitCode = 0,
   securityFailure = "",
   logicalCpu = "3",
+  native: {
+    records?: readonly unknown[];
+    raw?: string;
+    exitCode?: number;
+    compileExitCode?: number;
+    missingFramework?: boolean;
+  } = {},
 ) {
   const root = temps.make("native-launch-");
   const bin = path.join(root, "bin");
@@ -101,6 +159,18 @@ function fixture(
   for (const dir of [bin, home, runnerTemp]) {
     fs.mkdirSync(dir);
   }
+  const platform = path.join(root, "platform");
+  const framework = path.join(platform, "Developer/Library/Frameworks/Testing.framework/Testing");
+  fs.mkdirSync(path.dirname(framework), { recursive: true });
+  if (!native.missingFramework) {
+    fs.writeFileSync(framework, "");
+  }
+  const bundle = path.join(
+    root,
+    "apps/macos/.build/debug/OpenClawPackageTests.xctest/Contents/MacOS/OpenClawPackageTests",
+  );
+  fs.mkdirSync(path.dirname(bundle), { recursive: true });
+  fs.writeFileSync(bundle, "");
   const cache = path.join(home, "Library/Caches/org.swift.swiftpm");
   fs.mkdirSync(cache, { recursive: true });
   fs.writeFileSync(path.join(cache, "fixture-cache"), "reusable build cache");
@@ -121,7 +191,7 @@ const keychains = path.join(env.HOME, 'Library/Keychains');
 const settingsPath = path.join(preferences, 'fixture-keychain.json');
 const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
 const keychain = settings.default && fs.existsSync(settings.default) ? JSON.parse(fs.readFileSync(settings.default, 'utf8')) : null;
-fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({tool, args, env, present, cache, settings, keychain, pid: process.pid}) + '\\n');
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({tool, args, env, present, cache, settings, keychain, pid: process.pid, ...(tool === 'NativeActionTestHost' ? {eventMode: fs.statSync(args.at(-1)).mode & 0o777} : {})}) + '\\n');
 function awaitSignal(ownedKeychain) {
   process.on('SIGTERM', () => {
     fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({tool: 'shutdown', resourcesPresent: fs.existsSync(env.HOME) && fs.existsSync(env.OPENCLAW_STATE_DIR), keychainPresent: !!ownedKeychain && fs.existsSync(ownedKeychain)}) + '\\n');
@@ -172,8 +242,35 @@ if (tool === 'swift' && args[0] === 'test') {
   if (${JSON.stringify(waitForSignal)} === 'swift') awaitSignal(settings.default);
   else process.exit(env.OPENCLAW_PROFILE === 'default' ? ${defaultExitCode} : ${namedExitCode});
 }
+if (tool === 'xcrun') {
+  if (args.includes('--show-sdk-platform-path')) console.log(${JSON.stringify(platform)});
+  else if (args.includes('--show-sdk-path')) console.log(${JSON.stringify(path.join(root, "sdk"))});
+  else {
+    assert.equal(args[2], 'swiftc');
+    if (${native.compileExitCode ?? 0}) process.exit(${native.compileExitCode ?? 0});
+    fs.copyFileSync(process.argv[1], args.at(-1));
+    fs.chmodSync(args.at(-1), 0o755);
+  }
+}
+if (tool === 'NativeActionTestHost') {
+  if (${JSON.stringify(waitForSignal)} === 'NativeActionTestHost') awaitSignal(settings.default);
+  else {
+    fs.writeFileSync(args.at(-1), ${JSON.stringify(native.raw ?? (native.records ?? nativeEvents()).map((record) => JSON.stringify(record)).join("\n") + "\n")});
+    process.exit(${native.exitCode ?? 0});
+  }
+}
 `;
-  for (const tool of ["security", "swift", "pnpm", "node", "git", "uname", "sysctl", "rg"]) {
+  for (const tool of [
+    "security",
+    "swift",
+    "xcrun",
+    "pnpm",
+    "node",
+    "git",
+    "uname",
+    "sysctl",
+    "rg",
+  ]) {
     if (tool === "node") {
       fs.symlinkSync(process.execPath, path.join(bin, tool));
     } else {
@@ -206,6 +303,18 @@ if (tool === 'swift' && args[0] === 'test') {
     root,
     env,
     log,
+    nativeRun: (args = nativeArgs) =>
+      spawnSync(
+        process.execPath,
+        [
+          path.join(repo, "scripts/test-macos-native.mts"),
+          "default",
+          "--native-action-fixture",
+          JSON.stringify(nativeActionDescriptor()),
+          ...args,
+        ],
+        { cwd: root, env, encoding: "utf8" },
+      ),
     calls: () =>
       fs
         .readFileSync(log, "utf8")
@@ -350,36 +459,175 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
     expect(calls[0].env.HOME).not.toBe(calls[1].env.HOME);
   });
 
-  it("forwards only the explicit native descriptor without changing Swift arguments or isolation", () => {
+  it("hosts the exact native function under AppKit with a private completed event receipt", () => {
     const f = fixture();
-    const descriptor = nativeActionDescriptor();
-    const swiftArgs = ["--skip-build", "--filter", "NativeActionGatewayWireTests"];
-    const result = spawnSync(
-      process.execPath,
-      [
-        "scripts/test-macos-native.mts",
-        "default",
-        "--native-action-fixture",
-        JSON.stringify(descriptor),
-        ...swiftArgs,
-      ],
-      { cwd: repo, env: f.env, encoding: "utf8" },
-    );
+    const result = f.nativeRun();
     expect(result.status, result.stderr).toBe(0);
     const calls = f.calls();
-    const swift = calls.find((call) => call.tool === "swift");
-    expect(swift.args).toEqual(["test", ...swiftArgs]);
-    expect(JSON.parse(swift.env.OPENCLAW_NATIVE_ACTION_FIXTURE)).toEqual(descriptor);
-    expect(swift.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-    expect(swift.env.HOME).not.toBe(f.env.HOME);
-    expect(swift.keychain).toEqual({ locked: false, autoLock: false });
+    expect(calls.some((call) => call.tool === "swift")).toBe(false);
+    const host = calls.find((call) => call.tool === "NativeActionTestHost");
+    expect(host).toBeDefined();
+    const ownedRoot = path.dirname(host.env.HOME);
+    const build = path.join(f.root, "apps/macos/.build/debug");
+    expect(host.args).toEqual([
+      "--test-bundle-path",
+      path.join(build, "OpenClawPackageTests.xctest/Contents/MacOS/OpenClawPackageTests"),
+      "--filter",
+      "NativeActionGatewayWireTests",
+      "--event-stream-version",
+      "0",
+      "--event-stream-output-path",
+      path.join(ownedRoot, "events.jsonl"),
+    ]);
+    expect(host.eventMode).toBe(0o600);
+    expect(JSON.parse(host.env.OPENCLAW_NATIVE_ACTION_FIXTURE)).toEqual(nativeActionDescriptor());
+    expect(host.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+    expect(host.env.HOME).not.toBe(f.env.HOME);
+    expect(host.keychain).toEqual({ locked: false, autoLock: false });
+    const developer = path.join(f.root, "platform/Developer");
+    expect(host.env.DYLD_FRAMEWORK_PATH).toBe(
+      `${developer}/Library/Frameworks:${developer}/Library/PrivateFrameworks`,
+    );
+    expect(host.env.DYLD_LIBRARY_PATH).toBe(`${build}:${developer}/usr/lib`);
+    expect(
+      calls.find((call) => call.tool === "xcrun" && call.args.includes("swiftc")).args,
+    ).toEqual([
+      "--sdk",
+      "macosx",
+      "swiftc",
+      "-parse-as-library",
+      "-sdk",
+      path.join(f.root, "sdk"),
+      path.join(repo, "apps/macos/Tests/Fixtures/NativeActionTestHost.swift"),
+      "-o",
+      path.join(ownedRoot, "NativeActionTestHost"),
+    ]);
     expect(
       calls
-        .filter((call) => call.tool === "security")
+        .filter((call) => call.tool !== "NativeActionTestHost")
         .every((call) => call.env.OPENCLAW_NATIVE_ACTION_FIXTURE === undefined),
     ).toBe(true);
+    expect(result.stdout).toContain("[macos-native] native receipt: 1 function completed");
     expect(calls.at(-1).args[0]).toBe("delete-keychain");
-    expect(fs.existsSync(path.dirname(swift.env.HOME))).toBe(false);
+    expect(fs.existsSync(ownedRoot)).toBe(false);
+  });
+
+  it.each([
+    ["zero tests", []],
+    ["missing start", nativeEvents().filter((_, index) => index !== 4)],
+    ["missing end", nativeEvents().filter((_, index) => index !== 5)],
+    ["incomplete run", nativeEvents().slice(0, -1)],
+    ["duplicate run", [...nativeEvents(), nativeEvents()[2]]],
+    ["duplicate function", [nativeEvents()[1], ...nativeEvents()]],
+    [
+      "uncorrelated end",
+      nativeEvents().map((record, index) => {
+        if (index === 5) {
+          Object.assign(record.payload, { testID: "other-opaque-id" });
+        }
+        return record;
+      }),
+    ],
+    ...["testSkipped", "testCancelled", "testCaseCancelled"].map(
+      (kind) =>
+        [
+          kind,
+          nativeEvents().map((record, index) => {
+            if (index === 5) {
+              Object.assign(record.payload, { kind });
+            }
+            return record;
+          }),
+        ] as const,
+    ),
+    [
+      "wrong function",
+      nativeEvents().map((record, index) => {
+        if (index === 1) {
+          Object.assign(record.payload, { name: "another function()" });
+        }
+        return record;
+      }),
+    ],
+    [
+      "wrong module",
+      nativeEvents().map((record, index) => {
+        if (index === 1) {
+          Object.assign(record.payload, {
+            sourceLocation: {
+              fileID: "Other/NativeActionGatewayWireTests.swift",
+              line: 1,
+              column: 1,
+            },
+          });
+        }
+        return record;
+      }),
+    ],
+    [
+      "unexpected function",
+      [
+        nativeEvents()[0],
+        {
+          ...nativeEvents()[1],
+          payload: { ...nativeEvents()[1].payload, id: "extra", name: "other()" },
+        },
+        ...nativeEvents().slice(1),
+      ],
+    ],
+    ["wrong version", nativeEvents().map((record) => Object.assign(record, { version: "6.3" }))],
+  ] as const)("rejects a zero-exit native host with %s", (_label, records) => {
+    const f = fixture(0, false, 0, "", "3", { records });
+    const result = f.nativeRun();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("[macos-native] invalid native event receipt");
+    expect(result.stdout).not.toContain("1 function completed");
+    expect(f.calls().at(-1).args[0]).toBe("delete-keychain");
+    expect(fs.existsSync(path.dirname(f.calls()[0].env.HOME))).toBe(false);
+  });
+
+  it.each(["{", "", "x".repeat(1024 * 1024 + 1)])(
+    "rejects malformed, empty or oversized native event bytes (%#)",
+    (raw) => {
+      const f = fixture(0, false, 0, "", "3", { raw });
+      const result = f.nativeRun();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("[macos-native] invalid native event receipt");
+      expect(result.stdout).not.toContain("1 function completed");
+    },
+  );
+
+  it.each([
+    { exitCode: 23, raw: "", expected: 23 },
+    { exitCode: 23, expected: 23 },
+    { compileExitCode: 19, expected: 19 },
+    { missingFramework: true, expected: 1 },
+  ])("preserves native failure and cleans owned resources (%j)", (native) => {
+    const f = fixture(0, false, 0, "", "3", native);
+    const result = f.nativeRun();
+    expect(result.status, result.stderr).toBe(native.expected);
+    if (native.raw === "") {
+      expect(result.stderr).toContain("[macos-native] invalid native event receipt");
+    }
+    expect(result.stdout).not.toContain("1 function completed");
+    expect(f.calls().at(-1).args[0]).toBe("delete-keychain");
+    expect(fs.existsSync(path.dirname(f.calls()[0].env.HOME))).toBe(false);
+  });
+
+  it.each(
+    [
+      [...nativeArgs, "--skip", "NativeActionGatewayWireTests"],
+      [...nativeArgs, "--list-tests"],
+      [...nativeArgs, "--no-parallel"],
+      nativeArgs.map((arg) => (arg === "NativeActionGatewayWireTests" ? "OtherTests" : arg)),
+      nativeArgs.map((arg) => (arg === "apps/macos" ? "other/package" : arg)),
+    ].map((args) => ({ args })),
+  )("rejects unsupported native arguments before starting tools (%#)", ({ args }) => {
+    const f = fixture();
+    const result = f.nativeRun(args);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("native action invocation");
+    expect(fs.existsSync(f.log)).toBe(false);
   });
 
   it.each([
@@ -594,15 +842,21 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
     expect(fs.existsSync(f.log)).toBe(false);
   });
 
-  it.each(["security", "swift"] as const)(
+  it.each(["security", "swift", "NativeActionTestHost"] as const)(
     "keeps resources alive until interrupted %s has stopped",
     async (tool) => {
       const f = fixture(0, tool);
       const child = spawn(
         process.execPath,
-        ["scripts/test-macos-native.mts", "named", "--skip-build"],
+        [
+          path.join(repo, "scripts/test-macos-native.mts"),
+          "named",
+          ...(tool === "NativeActionTestHost"
+            ? ["--native-action-fixture", JSON.stringify(nativeActionDescriptor()), ...nativeArgs]
+            : ["--skip-build"]),
+        ],
         {
-          cwd: repo,
+          cwd: tool === "NativeActionTestHost" ? f.root : repo,
           env: f.env,
           stdio: ["ignore", "pipe", "pipe"],
         },

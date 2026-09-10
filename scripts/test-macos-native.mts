@@ -5,6 +5,104 @@ import path from "node:path";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 
+async function hasCompletedNativeReceipt(file: string): Promise<boolean> {
+  try {
+    const { isRecord } = await import("../packages/normalization-core/src/record-coerce.ts");
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.size === 0 || stat.size > 1024 * 1024) {
+      return false;
+    }
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(fs.readFileSync(file));
+    if (!text.endsWith("\n")) {
+      return false;
+    }
+    const lines = text.slice(0, -1).split("\n");
+    if (lines.length > 512) {
+      return false;
+    }
+    const tests = new Map<string, { state: number }>();
+    let functionID: string | undefined;
+    let runState = 0;
+    for (const line of lines) {
+      if (Buffer.byteLength(line) > 64 * 1024) {
+        return false;
+      }
+      const record: unknown = JSON.parse(line);
+      if (!isRecord(record) || record.version !== 0 || !isRecord(record.payload)) {
+        return false;
+      }
+      const value = record.payload;
+      if (record.kind === "test") {
+        if (
+          runState !== 0 ||
+          typeof value.id !== "string" ||
+          !value.id ||
+          value.id.length > 4096 ||
+          tests.has(value.id)
+        ) {
+          return false;
+        }
+        if (value.kind === "function") {
+          if (
+            functionID !== undefined ||
+            value.name !==
+              "`native submissions retain exact authority through real Gateway effects`()" ||
+            !isRecord(value.sourceLocation) ||
+            value.sourceLocation.fileID !== "OpenClawIPCTests/NativeActionGatewayWireTests.swift" ||
+            value.isParameterized !== false
+          ) {
+            return false;
+          }
+          functionID = value.id;
+        } else if (value.kind !== "suite") {
+          return false;
+        }
+        tests.set(value.id, { state: 0 });
+      } else if (record.kind === "event") {
+        if (value.kind === "runStarted") {
+          if (runState !== 0 || functionID === undefined || value.testID !== undefined) {
+            return false;
+          }
+          runState = 1;
+        } else if (value.kind === "runEnded") {
+          if (
+            runState !== 1 ||
+            value.testID !== undefined ||
+            functionID === undefined ||
+            tests.get(functionID)?.state !== 2 ||
+            [...tests.values()].some((test) => test.state === 1)
+          ) {
+            return false;
+          }
+          runState = 2;
+        } else {
+          const test = typeof value.testID === "string" ? tests.get(value.testID) : undefined;
+          if (runState !== 1 || !test) {
+            return false;
+          }
+          if (value.kind === "testStarted" && test.state === 0) {
+            test.state = 1;
+          } else if (value.kind === "testEnded" && test.state === 1) {
+            test.state = 2;
+          } else if (value.kind === "valueAttached" && test.state === 1) {
+            continue;
+          } else {
+            // Skips, cancellations and issues cannot certify this one required function.
+            // Nonparameterized functions do not emit testCaseStarted/testCaseEnded.
+            return false;
+          }
+        }
+      } else {
+        return false;
+      }
+    }
+    return runState === 2;
+  } catch {
+    // Event bytes may contain fixture data; report only the closed receipt outcome.
+    return false;
+  }
+}
+
 await runWithFailedTrailer("macos-native", async () => {
   const env = process.env;
   // Invocation checks prevent accidental local use; these markers are not a sandbox.
@@ -179,6 +277,20 @@ await runWithFailedTrailer("macos-native", async () => {
       "Build tests first with swift build --build-tests; this launcher requires --skip-build.",
     );
   }
+  if (nativeActionFixture) {
+    const expected = [
+      "--package-path",
+      "apps/macos",
+      "--build-system",
+      "native",
+      "--skip-build",
+      "--filter",
+      "NativeActionGatewayWireTests",
+    ];
+    if (args.length !== expected.length || args.some((value, index) => value !== expected[index])) {
+      throw new Error("Unsupported native action invocation.");
+    }
+  }
 
   // Keep paths short for tools honoring TMPDIR, independently of RUNNER_TEMP's length.
   // Foundation's Darwin temp directory belongs to the disposable OS worker instead.
@@ -268,9 +380,94 @@ await runWithFailedTrailer("macos-native", async () => {
       }
       try {
         if (nativeActionFixture) {
+          const selectedPath = async (option: string) => {
+            let output = "";
+            canRemove = false;
+            process.exitCode = await runManagedCommand({
+              bin: "xcrun",
+              args: ["--sdk", "macosx", option],
+              env: childEnv,
+              stdio: ["ignore", "pipe", "inherit"],
+              requireProcessTreeExit: true,
+              onReady: (child) =>
+                child.stdout?.on("data", (chunk) => {
+                  output = (output + String(chunk)).slice(0, 4097);
+                }),
+            });
+            canRemove = true;
+            if (process.exitCode !== 0) {
+              return undefined;
+            }
+            const selected = output.trim();
+            if (output.length > 4096 || !path.isAbsolute(selected) || /[\r\n\0]/.test(selected)) {
+              throw new Error("Invalid selected macOS toolchain path.");
+            }
+            return selected;
+          };
+          const sdk = await selectedPath("--show-sdk-path");
+          if (!sdk) {
+            return;
+          }
+          const platform = await selectedPath("--show-sdk-platform-path");
+          if (!platform) {
+            return;
+          }
+          const developer = path.join(platform, "Developer");
+          const build = fs.realpathSync("apps/macos/.build/debug");
+          const bundle = path.join(
+            build,
+            "OpenClawPackageTests.xctest/Contents/MacOS/OpenClawPackageTests",
+          );
+          if (
+            !fs.existsSync(bundle) ||
+            !fs.existsSync(path.join(developer, "Library/Frameworks/Testing.framework/Testing"))
+          ) {
+            throw new Error("Native test bundle or selected Testing.framework is missing.");
+          }
+          const host = path.join(root, "NativeActionTestHost");
+          process.exitCode = await run("xcrun", [
+            "--sdk",
+            "macosx",
+            "swiftc",
+            "-parse-as-library",
+            "-sdk",
+            sdk,
+            path.resolve(
+              import.meta.dirname,
+              "../apps/macos/Tests/Fixtures/NativeActionTestHost.swift",
+            ),
+            "-o",
+            host,
+          ]);
+          if (process.exitCode !== 0) {
+            return;
+          }
+          const events = path.join(root, "events.jsonl");
+          fs.writeFileSync(events, "", { mode: 0o600, flag: "wx" });
+          childEnv.DYLD_FRAMEWORK_PATH = `${developer}/Library/Frameworks:${developer}/Library/PrivateFrameworks`;
+          childEnv.DYLD_LIBRARY_PATH = `${build}:${developer}/usr/lib`;
           childEnv.OPENCLAW_NATIVE_ACTION_FIXTURE = nativeActionFixture;
+          process.exitCode = await run(host, [
+            "--test-bundle-path",
+            bundle,
+            "--filter",
+            "NativeActionGatewayWireTests",
+            "--event-stream-version",
+            "0",
+            "--event-stream-output-path",
+            events,
+          ]);
+          // A successful ABI return also covers zero tests. Only a complete,
+          // joined file receipt certifies that our native function actually ran.
+          if (!(await hasCompletedNativeReceipt(events))) {
+            console.error("[macos-native] invalid native event receipt");
+            process.exitCode ||= 1;
+          } else if (process.exitCode === 0) {
+            console.log("[macos-native] native receipt: 1 function completed");
+          }
+        } else {
+          process.exitCode = await run("swift", ["test", ...args]);
         }
-        process.exitCode = await run("swift", ["test", ...args]);
       } finally {
         delete childEnv.OPENCLAW_NATIVE_ACTION_FIXTURE;
       }
