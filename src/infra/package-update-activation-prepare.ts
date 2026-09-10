@@ -38,18 +38,12 @@ export type PackageActivationPreparation = {
   launchers: Array<{ name: string; previous: string | null }>;
 };
 
-function stagePackageActivationRuntime(anchor: string, assertCurrent: () => void): string {
+function readPackageActivationRuntime(): Buffer {
   const source = resolveRuntimeWorkerUrl(packageActivationRuntimeEntrypoint);
   if (!source.pathname.endsWith(".mjs")) {
     throw new Error("Package publication recovery requires its built sealed helper.");
   }
-  const bytes = fs.readFileSync(source);
-  assertCurrent();
-  fs.writeFileSync(path.join(anchor, PACKAGE_ACTIVATION_HELPER), bytes, {
-    flag: "wx",
-    mode: 0o600,
-  });
-  return createHash("sha256").update(bytes).digest("hex");
+  return fs.readFileSync(source);
 }
 
 export async function preparePackageActivationJournal(params: PackageActivationPreparation) {
@@ -100,12 +94,20 @@ export async function preparePackageActivationJournal(params: PackageActivationP
   ) {
     throw new Error("Package publication recovery requires same-filesystem directories.");
   }
+  // Resolve and read the sealed helper before creating an anchor that blocks
+  // future updates. Read failure must not leave unjournaled recovery state.
+  const helperBytes = readPackageActivationRuntime();
   assertCurrent();
   await fsp.mkdir(anchor, { mode: 0o700 });
   // From the first transfer onward the anchor owns these objects, even when a
   // later journal commit loses its acknowledgement. Stage-finally must not remove them.
   const anchorIdentity = packageActivationIdentity(anchor, true);
-  const helperDigest = stagePackageActivationRuntime(anchor, assertCurrent);
+  assertCurrent();
+  fs.writeFileSync(path.join(anchor, PACKAGE_ACTIVATION_HELPER), helperBytes, {
+    flag: "wx",
+    mode: 0o600,
+  });
+  const helperDigest = createHash("sha256").update(helperBytes).digest("hex");
   assertCurrent();
   await fsp.rename(params.stageRoot, path.join(anchor, "candidate"));
   assertCurrent();

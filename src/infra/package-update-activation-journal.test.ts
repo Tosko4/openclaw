@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assertReliabilityForcedExit } from "../../scripts/lib/sqlite-reliability-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -22,12 +23,16 @@ import {
   type PackageActivationPhase,
   type PackageActivationRecord,
 } from "./package-update-activation-journal.js";
+import { preparePackageActivationJournal } from "./package-update-activation-prepare.js";
 import { PACKAGE_ACTIVATION_HELPER } from "./package-update-activation-runtime-assets.js";
 import {
+  assertNoPendingPackageActivation,
   readPackageActivationStatus,
   runPackageActivationRecovery,
 } from "./package-update-activation.js";
+import { createPackageIntegrityReader } from "./package-update-integrity.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
+import * as workerUrl from "./runtime-worker-url.js";
 import * as tempRoot from "./tmp-openclaw-dir.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -142,6 +147,86 @@ function replaceField(
 }
 
 describe.skipIf(process.platform === "win32")("package activation journal", () => {
+  it.each(["missing", "unbuilt"] as const)(
+    "does not create pending recovery state when its helper is %s",
+    async (kind) => {
+      const packages = await createPackageSwapFixture(root);
+      const anchor = resolvePackageActivationAnchor(packages.packageRoot);
+      const source = path.join(root, kind === "missing" ? "missing.mjs" : "unbuilt.ts");
+      vi.spyOn(workerUrl, "resolveRuntimeWorkerUrl").mockReturnValue(pathToFileURL(source));
+      const onPrepared = vi.fn();
+      const observe = async () => {
+        const reader = createPackageIntegrityReader();
+        return {
+          live: await reader.tree(packages.packageRoot),
+          candidate: await reader.tree(packages.params.stage.packageRoot),
+          launcherIdentity: packageActivationIdentity(packages.launcher, "launcher"),
+          launcher: fs.readFileSync(packages.launcher, "utf8"),
+          stagedLauncherIdentity: packageActivationIdentity(
+            packages.params.stage.layout.binDir,
+            true,
+          ),
+          stagedLauncher: fs.readFileSync(
+            path.join(packages.params.stage.layout.binDir, "openclaw"),
+            "utf8",
+          ),
+          parentEntries: fs.readdirSync(packages.globalRoot).toSorted(),
+        };
+      };
+      const before = await observe();
+      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(packages.packageRoot);
+        await expect(
+          preparePackageActivationJournal({
+            options: { fence, nodeRunner: process.execPath, onPrepared },
+            liveRoot: packages.packageRoot,
+            stageRoot: packages.params.stage.packageRoot,
+            launcherRoot: packages.params.stage.layout.binDir,
+            binDir: path.dirname(packages.launcher),
+            previous: before.live,
+            launchers: [{ name: "openclaw", previous: before.launcher }],
+          }),
+        ).rejects.toThrow(kind === "missing" ? /ENOENT/u : /built sealed helper/u);
+      });
+      expect(onPrepared).not.toHaveBeenCalled();
+      expect(fs.existsSync(anchor)).toBe(false);
+      expect(() => assertNoPendingPackageActivation(packages.packageRoot)).not.toThrow();
+      expect(await observe()).toEqual(before);
+    },
+  );
+
+  it("prepares the same helper bytes after successful helper preflight", async () => {
+    const packages = await createPackageSwapFixture(root);
+    const source = path.join(root, "sealed-fixture.mjs");
+    const bytes = Buffer.from("// synthetic sealed bytes; never executed\n");
+    fs.writeFileSync(source, bytes, { mode: 0o600 });
+    vi.spyOn(workerUrl, "resolveRuntimeWorkerUrl").mockReturnValue(pathToFileURL(source));
+    const previous = await createPackageIntegrityReader().tree(packages.packageRoot);
+    const onPrepared = vi.fn();
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(packages.packageRoot);
+      const result = await preparePackageActivationJournal({
+        options: { fence, nodeRunner: process.execPath, onPrepared },
+        liveRoot: packages.packageRoot,
+        stageRoot: packages.params.stage.packageRoot,
+        launcherRoot: packages.params.stage.layout.binDir,
+        binDir: path.dirname(packages.launcher),
+        previous,
+        launchers: [{ name: "openclaw", previous: "old launcher\n" }],
+      });
+      expect(result.journal.read().descriptor.helperDigest).toBe(
+        createHash("sha256").update(bytes).digest("hex"),
+      );
+      expect(fs.readFileSync(path.join(result.anchor, PACKAGE_ACTIVATION_HELPER))).toEqual(bytes);
+      expect(onPrepared).toHaveBeenCalledExactlyOnceWith(`${result.command} status`);
+      expect(() => assertNoPendingPackageActivation(packages.packageRoot)).toThrow(
+        /publication is incomplete/u,
+      );
+      expect(await createPackageIntegrityReader().tree(packages.packageRoot)).toEqual(previous);
+      expect(fs.readFileSync(packages.launcher, "utf8")).toBe("old launcher\n");
+    });
+  });
+
   it.each(["exclusive create", "SQLite open"] as const)(
     "refuses a replacement journal after %s without initializing either file",
     async (cut) => {
