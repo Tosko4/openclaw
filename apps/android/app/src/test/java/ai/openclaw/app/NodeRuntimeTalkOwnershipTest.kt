@@ -21,6 +21,7 @@ import android.os.Looper
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -57,6 +58,162 @@ import java.util.concurrent.atomic.AtomicReference
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], shadows = [StartupPeerFactory::class, StartupPeerFactoryBuilder::class, StartupPeerConnection::class, StartupDataChannel::class, StartupMediaTrack::class, StartupMediaSource::class])
 class NodeRuntimeTalkOwnershipTest {
+  @Test fun pttMediaResumeAllowsCurrentActivation() = assertPttMediaResume("allowed")
+
+  @Test fun pttMediaResumeRejectsRetiredSelection() = assertPttMediaResume("selection")
+
+  @Test fun pttMediaResumeRejectsRetiredGateway() = assertPttMediaResume("gateway")
+
+  @Test fun pttMediaResumeDoesNotRestartAfterStop() = assertPttMediaResume("stop")
+
+  @Test fun pttMediaResumeRechecksAfterRouting() = assertPttMediaResume("routing-selection")
+
+  private fun assertPttMediaResume(retirement: String) =
+    runBlocking {
+      withRuntime(webRtc = true) { runtime, manager, frames ->
+        val app = RuntimeEnvironment.getApplication()
+        val speech = android.content.ComponentName(app, "PttResumeRecognitionService")
+        shadowOf(app.packageManager).apply {
+          addServiceIfNotPresent(speech)
+          addIntentFilterForService(speech, android.content.IntentFilter(android.speech.RecognitionService.SERVICE_INTERFACE))
+        }
+        StartupPeerConnection.reset()
+        StartupDataChannel.reset()
+        runtime.setTalkModeEnabled(true)
+        awaitState { StartupPeerConnection.offerCreated.isCompleted }
+        StartupPeerConnection.offerCreated.await().onCreateSuccess(SessionDescription(SessionDescription.Type.OFFER, "v=0"))
+        StartupDataChannel.open()
+        awaitState { manager.isListening.value }
+        val client = field<TalkRealtimeClient>(manager, "realtimeClient")
+        val gateway = field<GatewaySession>(runtime, "operatorSession")
+        val connection = field<Any>(gateway, "currentConnection")
+        val lease = checkNotNull(gateway.captureRequestLease())
+        val chat = field<ChatController>(runtime, "chat")
+        val activation = field<ai.openclaw.app.voice.TalkActivation>(manager, "activeActivation")
+        val pauseLock = field<Any>(manager, "realtimeCapturePauseLock")
+        val locks = listOf(field<Any>(gateway, "lifecycleLock"), field<Any>(chat, "gatewayScopeApplyLock"), pauseLock, field<Any>(client, "callLifecycleLock"))
+        val effects = mutableListOf<String>()
+        val enabled = mutableListOf<String>()
+        val disabled = mutableListOf<String>()
+        val violations = mutableListOf<String>()
+        val admissionOutsidePause = mutableListOf<Boolean>()
+
+        fun observe(
+          kind: String,
+          value: Boolean,
+        ) {
+          val current = manager.isCurrentActivation(activation)
+          val locked = locks.all(Thread::holdsLock)
+          effects += "$kind=$value current=$current locked=$locked"
+          if (value) {
+            enabled += kind
+            if (!current || !locked) violations += "$kind current=$current locked=$locked"
+          } else {
+            disabled += kind
+          }
+        }
+        StartupPeerConnection.onAudioRecording = { observe("recording", it) }
+        StartupPeerConnection.onAudioPlayout = { observe("playout", it) }
+        StartupMediaTrack.onEnabled = { observe("track", it) }
+        var retiring: Thread? = null
+        val retirementError = AtomicReference<Throwable>()
+        try {
+          val starting = async { manager.beginPushToTalk(allowNewCapture = true) }
+          awaitState { starting.isCompleted }
+          val captureId = starting.await().captureId
+          assertTrue(disabled.containsAll(listOf("recording", "playout", "track")))
+          assertTrue(enabled.isEmpty())
+          effects.clear()
+          disabled.clear()
+          val admission = field<(() -> Unit) -> Unit>(client, "withAdmission")
+          val observedAdmission: (() -> Unit) -> Unit = { action ->
+            admissionOutsidePause += !Thread.holdsLock(pauseLock)
+            admission(action)
+          }
+          ReflectionHelpers.setField(client, "withAdmission", observedAdmission)
+          var retiredDuringRouting = false
+          if (retirement == "routing-selection") {
+            val peer = field<Any>(client, "peer")
+            val onInput = field<(String?) -> Unit>(peer, "onInputRequested")
+            val retiringInput: (String?) -> Unit = { key ->
+              onInput(key)
+              if (!retiredDuringRouting) {
+                retiredDuringRouting = true
+                chat.switchSession("agent:work:b", "work")
+              }
+            }
+            ReflectionHelpers.setField(peer, "onInputRequested", retiringInput)
+          }
+          synchronized(field<Any>(runtime, "voiceCaptureOwnershipLock")) {
+            if (retirement == "selection") chat.switchSession("agent:work:b", "work")
+            if (retirement == "gateway") {
+              retiring =
+                Thread {
+                  try {
+                    val socket = field<WebSocket?>(connection, "socket")
+                    connection.javaClass
+                      .getDeclaredMethod("finishTransport", String::class.java, Throwable::class.java)
+                      .apply { isAccessible = true }
+                      .invoke(connection, "fixture retirement", IllegalStateException("fixture retirement"))
+                    socket?.cancel()
+                  } catch (error: Throwable) {
+                    retirementError.set(error)
+                  }
+                }.also { it.start() }
+              runBlocking { awaitState { !lease.isCurrent() } }
+            }
+            if (retirement == "stop") manager.setEnabled(false)
+            if (retirement != "stop") {
+              assertTrue("Runtime cleanup is held before PTT completion", field<Any?>(manager, "realtimeClient") === client)
+              assertFalse(field<Boolean>(client, "closed"))
+              // Disable remains a permitted handoff after selection/lease retirement.
+              val disabling =
+                async {
+                  client.setCaptureEnabled(false)
+                  client.setPlaybackEnabled(false)
+                }
+              runBlocking { awaitState { disabling.isCompleted } }
+              runBlocking { disabling.await() }
+              assertTrue(disabled.containsAll(listOf("recording", "playout", "track")))
+              assertTrue(admissionOutsidePause.isEmpty())
+            }
+            val ending = async { manager.endPushToTalk(captureId) }
+            if (retirement != "stop") {
+              runBlocking { awaitState { field<Any?>(manager, "pttReleaseCompletion") != null } }
+              val recognizer =
+                checkNotNull(
+                  org.robolectric.shadows.ShadowSpeechRecognizer
+                    .getLatestSpeechRecognizer(),
+                )
+              shadowOf(recognizer).triggerOnResults(android.os.Bundle())
+            }
+            runBlocking { awaitState { ending.isCompleted } }
+            runBlocking { ending.await() }
+            shadowOf(Looper.getMainLooper()).idle()
+            println("ptt-media retirement=$retirement enabled=$enabled effects=$effects admissionOutsidePause=$admissionOutsidePause")
+            assertEquals(if (retirement == "allowed") listOf("playout", "track", "recording") else emptyList<String>(), enabled)
+            assertTrue("Native enables must hold current physical/selection/capture/call authority: $violations", violations.isEmpty())
+            if (retirement == "routing-selection") assertTrue(retiredDuringRouting)
+            if (retirement != "stop") assertTrue(admissionOutsidePause.isNotEmpty())
+            assertTrue("Admission must start outside capture lock", admissionOutsidePause.all { it })
+          }
+        } finally {
+          retiring?.join(8_000)
+          StartupPeerConnection.onAudioRecording = null
+          StartupPeerConnection.onAudioPlayout = null
+          StartupMediaTrack.onEnabled = null
+          runtime.setTalkModeEnabled(false)
+          awaitState { StartupPeerConnection.disposed }
+        }
+        assertFalse(retiring?.isAlive == true)
+        retirementError.get()?.let { throw it }
+        if (retirement != "gateway") {
+          awaitState { frames.any { it["method"]?.jsonPrimitive?.content == "talk.client.close" } }
+          assertEquals(1, frames.count { it["method"]?.jsonPrimitive?.content == "talk.client.close" })
+        }
+      }
+    }
+
   @Test
   fun startupSdpContinuationsRequireCurrentSelection() =
     runBlocking {

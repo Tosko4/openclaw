@@ -213,30 +213,41 @@ internal class TalkRealtimePeer(
     }
   }
 
-  suspend fun setCaptureEnabled(enabled: Boolean) =
-    withContext(Dispatchers.Main.immediate) {
-      // Disabling capture is a physical handoff even when close already owns cleanup.
-      closing?.let { return@withContext if (enabled) Unit else it.await() }
-      updateAudioState {
-        captureEnabled = enabled
-        // Muting samples alone leaves AudioRecord alive and races PTT microphone ownership.
-        if (enabled) updateAudioRouting()
+  suspend fun setCaptureEnabled(
+    enabled: Boolean,
+    withEnable: (() -> Unit) -> Unit,
+  ) = withContext(Dispatchers.Main.immediate) {
+    // Disabling capture is a physical handoff even when close already owns cleanup.
+    closing?.let { return@withContext if (enabled) Unit else it.await() }
+    updateAudioState {
+      if (enabled) withEnable {}
+      captureEnabled = enabled
+      // Muting samples alone leaves AudioRecord alive and races PTT microphone ownership.
+      if (enabled) updateAudioRouting()
+      val apply: () -> Unit = {
         track?.setEnabled(enabled)
         peer?.setAudioRecording(enabled)
-        if (!enabled) updateAudioRouting()
       }
+      // Routing callbacks may retire the activation. Fence the final synchronous SDK effects.
+      if (enabled) withEnable(apply) else apply()
+      if (!enabled) updateAudioRouting()
     }
+  }
 
-  suspend fun setPlaybackEnabled(enabled: Boolean) =
-    withContext(Dispatchers.Main.immediate) {
-      if (closed) return@withContext
-      updateAudioState {
-        playbackEnabled = enabled
-        if (enabled) updateAudioRouting()
-        peer?.setAudioPlayout(enabled)
-        if (!enabled) updateAudioRouting()
-      }
+  suspend fun setPlaybackEnabled(
+    enabled: Boolean,
+    withEnable: (() -> Unit) -> Unit,
+  ) = withContext(Dispatchers.Main.immediate) {
+    if (closed) return@withContext
+    updateAudioState {
+      if (enabled) withEnable {}
+      playbackEnabled = enabled
+      if (enabled) updateAudioRouting()
+      val apply: () -> Unit = { peer?.setAudioPlayout(enabled) }
+      if (enabled) withEnable(apply) else apply()
+      if (!enabled) updateAudioRouting()
     }
+  }
 
   private inline fun updateAudioState(action: () -> Unit) {
     try {

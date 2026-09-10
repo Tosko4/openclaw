@@ -183,6 +183,8 @@ class StartupPeerConnection {
     var offerCreated = CompletableDeferred<SdpObserver>()
     var onLocalDescription: (() -> Unit)? = null
     var onRemoteDescription: (() -> Unit)? = null
+    var onAudioRecording: ((Boolean) -> Unit)? = null
+    var onAudioPlayout: ((Boolean) -> Unit)? = null
     var disposed = false
 
     fun reset() {
@@ -191,6 +193,8 @@ class StartupPeerConnection {
       offerCreated = CompletableDeferred()
       onLocalDescription = null
       onRemoteDescription = null
+      onAudioRecording = null
+      onAudioPlayout = null
       disposed = false
     }
   }
@@ -224,9 +228,13 @@ class StartupPeerConnection {
     init: DataChannel.Init,
   ): DataChannel = Shadow.newInstanceOf(DataChannel::class.java)
 
-  @Implementation fun setAudioRecording(enabled: Boolean) = Unit
+  @Implementation fun setAudioRecording(enabled: Boolean) {
+    onAudioRecording?.invoke(enabled)
+  }
 
-  @Implementation fun setAudioPlayout(enabled: Boolean) = Unit
+  @Implementation fun setAudioPlayout(enabled: Boolean) {
+    onAudioPlayout?.invoke(enabled)
+  }
 
   @Implementation fun addTrack(
     track: MediaStreamTrack,
@@ -298,7 +306,14 @@ class StartupDataChannel {
 
 @Implements(value = MediaStreamTrack::class, isInAndroidSdk = false)
 class StartupMediaTrack {
-  @Implementation fun setEnabled(enabled: Boolean): Boolean = true
+  companion object {
+    var onEnabled: ((Boolean) -> Unit)? = null
+  }
+
+  @Implementation fun setEnabled(enabled: Boolean): Boolean {
+    onEnabled?.invoke(enabled)
+    return true
+  }
 
   @Implementation fun dispose() = Unit
 }
