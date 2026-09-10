@@ -34,6 +34,7 @@ import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { resolvePluginCapabilityConsentCliOptions } from "../plugin-capability-consent.js";
 import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
 import { readPackageVersion } from "./shared.js";
+import { withUpdateConfigWriteAuthority } from "./update-command-config.js";
 import {
   buildInvalidConfigPostCoreUpdateResult,
   type PostCorePluginUpdateResult,
@@ -118,7 +119,9 @@ export async function updatePluginsAfterCoreUpdate(params: {
   acceptCapabilities?: boolean;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   runtime?: RuntimeEnv;
+  assertCurrent?: () => void;
 }): Promise<PostCorePluginUpdateResult> {
+  params.assertCurrent?.();
   const runtime = params.runtime ?? defaultRuntime;
   if (!params.configSnapshot.valid) {
     const invalid = buildInvalidConfigPostCoreUpdateResult();
@@ -238,6 +241,10 @@ export async function updatePluginsAfterCoreUpdate(params: {
     return false;
   };
 
+  const externalizedBundledPluginBridges = await listPersistedBundledPluginLocationBridges({
+    workspaceDir: params.root,
+  });
+  params.assertCurrent?.();
   const cohort = await convergePluginReleaseCohort({
     config: withPluginInstallRecords(params.configSnapshot.sourceConfig, pluginInstallRecords),
     channel: pluginUpdateChannel,
@@ -245,13 +252,13 @@ export async function updatePluginsAfterCoreUpdate(params: {
     versionBoundPluginIds: VERSION_BOUND_RUNTIME_PLUGIN_IDS,
     timeoutMs: params.timeoutMs,
     workspaceDir: params.root,
-    externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
-      workspaceDir: params.root,
-    }),
+    externalizedBundledPluginBridges,
+    beforePersistentEffect: params.assertCurrent,
     logger: pluginLogger,
     onIntegrityDrift: onPluginIntegrityDrift,
     ...capabilityConsent,
   });
+  params.assertCurrent?.();
   for (const error of cohort.sync.summary.errors) {
     collectPluginOutcome({ ...error, status: "error" });
   }
@@ -289,8 +296,10 @@ export async function updatePluginsAfterCoreUpdate(params: {
     env: process.env,
     compatibilityHostVersion: coreVersion ?? undefined,
     baselineInstallRecords: convergenceBaselineRecords,
+    beforePersistentEffect: params.assertCurrent,
     ...capabilityConsent,
   });
+  params.assertCurrent?.();
   for (const change of convergence.changes) {
     if (!params.json) {
       runtime.log(theme.muted(change));
@@ -370,12 +379,17 @@ export async function updatePluginsAfterCoreUpdate(params: {
       nextInstallRecords,
       nextConfig,
       baseHash: params.configSnapshot.hash,
-      writeOptions: {
-        ...params.configWriteOptions,
-        inputBase: "source",
-        skipPluginValidation: true,
-      },
+      beforePersistentEffect: params.assertCurrent,
+      writeOptions: withUpdateConfigWriteAuthority(
+        {
+          ...params.configWriteOptions,
+          inputBase: "source",
+          skipPluginValidation: true,
+        },
+        params.assertCurrent,
+      ),
     });
+    params.assertCurrent?.();
     await refreshPluginRegistryAfterConfigMutation({
       configPath: params.configSnapshot.path,
       reason: "source-changed",
