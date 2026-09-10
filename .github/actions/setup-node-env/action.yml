@@ -255,24 +255,51 @@ runs:
       run: |
         echo "value=${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}" >> "$GITHUB_OUTPUT"
 
+    - name: Require fresh exact-cache destinations
+      shell: bash
+      env:
+        CACHE_GENERATION: ${{ steps.vitest-cache-generation.outputs.value }}
+      run: |
+        set -euo pipefail
+        test "$CACHE_GENERATION" = efb8c624da11f6979212e0fa0fdc4c2f0065755f2ac11da01091e86126099c0d
+        test "$(node --version)" = v24.19.0
+        test "$(uname -s)" = Linux
+        command -v zstd
+        node -e 'const {createHash}=require("node:crypto"); for(const [root,expected] of [["/var/tmp/openclaw-vitest-fs-cache","55769a139ffc7a46c79c5399a38f44ea971b92a16fe001046c05821148ef2f8c"],["/var/tmp/openclaw-node-compile-cache","85158b890389de90c2bacb35f3b03715442d2943643d6152cb1f8de7b5c3d3fe"]]) {const version=createHash("sha256").update([root,"zstd-without-long","1.0"].join("|")).digest("hex"); if(version!==expected) throw new Error("Cache version mismatch"); console.log(root,version);}'
+        for cache_root in /var/tmp/openclaw-vitest-fs-cache /var/tmp/openclaw-node-compile-cache; do
+          test ! -L "$cache_root"
+          if test -e "$cache_root"; then
+            test -d "$cache_root"
+            test -w "$cache_root"
+            cache_entry="$(find "$cache_root" -mindepth 1 -maxdepth 1 -print -quit)"
+            test -z "$cache_entry"
+          else
+            mkdir "$cache_root"
+          fi
+        done
+
     - name: Restore Vitest transform cache
       id: vitest-cache
       if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /var/tmp/openclaw-vitest-fs-cache
-        key: ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-${{ github.run_id }}-${{ github.run_attempt }}
-        restore-keys: |
-          ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-
+        key: openclaw/openclaw-vitest-fs-v3-protected-Linux-X64-node-24.x-efb8c624da11f6979212e0fa0fdc4c2f0065755f2ac11da01091e86126099c0d-34510988653-1
+        fail-on-cache-miss: true
 
     - name: Configure Vitest transform cache
       if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       env:
         CACHE_GENERATION: ${{ steps.vitest-cache-generation.outputs.value }}
         CACHE_WRITER: "0"
+        EXACT_CACHE_HIT: ${{ steps.vitest-cache.outputs.cache-hit }}
+        MATCHED_CACHE_KEY: ${{ steps.vitest-cache.outputs.cache-matched-key }}
       shell: bash
       run: |
         set -euo pipefail
+        test "$EXACT_CACHE_HIT" = true
+        test "$MATCHED_CACHE_KEY" = openclaw/openclaw-vitest-fs-v3-protected-Linux-X64-node-24.x-efb8c624da11f6979212e0fa0fdc4c2f0065755f2ac11da01091e86126099c0d-34510988653-1
+        echo "Verified exact filesystem cache: $MATCHED_CACHE_KEY"
         cache_root=/var/tmp/openclaw-vitest-fs-cache
         generation_file="$cache_root/.openclaw-transform-generation"
         mkdir -p "$cache_root"
@@ -284,8 +311,8 @@ runs:
         # Every restore is runner-local. Never mix incompatible transform
         # inputs even when an older archive was selected through a prefix.
         if [[ -n "$cache_entry" ]] && [[ "$cache_generation" != "$CACHE_GENERATION" ]]; then
-          echo "Vitest transform inputs changed; clearing incompatible cache generation"
-          find "$cache_root" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          echo "Original cache generation does not match; refusing diagnostic execution" >&2
+          exit 1
         fi
         printf '%s\n' "$CACHE_GENERATION" > "$generation_file"
         # The shard runner treats this as a persistent root and assigns one
@@ -313,15 +340,20 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /var/tmp/openclaw-node-compile-cache
-        key: ${{ github.repository }}-node-compile-v3-${{ inputs.node-compile-cache-scope }}-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.node-compile-cache-epoch.outputs.value }}
-        restore-keys: |
-          ${{ github.repository }}-node-compile-v3-${{ inputs.node-compile-cache-scope }}-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
+        key: openclaw/openclaw-node-compile-v3-test-protected-Linux-X64-node-24.x-34510988653-1
+        fail-on-cache-miss: true
 
     - name: Configure Node compile cache
       if: inputs.cache-mode != 'off' && (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
+      env:
+        EXACT_CACHE_HIT: ${{ steps.node-compile-cache.outputs.cache-hit }}
+        MATCHED_CACHE_KEY: ${{ steps.node-compile-cache.outputs.cache-matched-key }}
       shell: bash
       run: |
         set -euo pipefail
+        test "$EXACT_CACHE_HIT" = true
+        test "$MATCHED_CACHE_KEY" = openclaw/openclaw-node-compile-v3-test-protected-Linux-X64-node-24.x-34510988653-1
+        echo "Verified exact Node cache: $MATCHED_CACHE_KEY"
         cache_root=/var/tmp/openclaw-node-compile-cache
         mkdir -p "$cache_root"
         echo "NODE_COMPILE_CACHE=$cache_root" >> "$GITHUB_ENV"

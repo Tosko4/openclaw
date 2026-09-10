@@ -19,6 +19,20 @@ jobs:
         with:
           ref: 3baf393d5bb9acfe62e01e023ec5ef0543de1f8d
           persist-credentials: false
+      - name: Checkout exact-cache setup input
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          path: .exact-cache-setup
+          sparse-checkout: .github/actions/setup-node-env/action.yml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Apply exact-cache setup input
+        run: |
+          set -euo pipefail
+          git diff --exit-code -- .github/actions/setup-node-env/action.yml
+          cp .github/actions/setup-node-env/action.yml "$RUNNER_TEMP/original-setup-node-env.yml"
+          cp .exact-cache-setup/.github/actions/setup-node-env/action.yml .github/actions/setup-node-env/action.yml
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -29,6 +43,12 @@ jobs:
           vitest-fs-cache: "true"
           node-compile-cache: "true"
           node-compile-cache-scope: test
+      - name: Restore original setup source
+        run: |
+          set -euo pipefail
+          cmp .github/actions/setup-node-env/action.yml .exact-cache-setup/.github/actions/setup-node-env/action.yml
+          mv "$RUNNER_TEMP/original-setup-node-env.yml" .github/actions/setup-node-env/action.yml
+          git diff --exit-code -- .github/actions/setup-node-env/action.yml
       - name: Checkout diagnostic inputs
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
