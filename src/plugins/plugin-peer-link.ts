@@ -273,44 +273,58 @@ async function linkOpenClawPeerDependency(params: {
     return "unchanged";
   }
 
+  const warnFailure = (err: unknown): OpenClawPeerLinkResult => {
+    params.beforePersistentEffect?.();
+    params.logger.warn?.(`Failed to symlink peerDependency "${params.peerName}": ${String(err)}`);
+    return "skipped";
+  };
+  let existing;
   try {
-    const existing = await fs.lstat(linkPath).catch((err: unknown) => {
+    existing = await fs.lstat(linkPath).catch((err: unknown) => {
       if (hasErrnoCode(err, "ENOENT")) {
         return null;
       }
       throw err;
     });
-    if (existing) {
-      if (!existing.isSymbolicLink()) {
-        if (params.peerName === "openclaw" && existing.isDirectory()) {
-          const existingPackageName = await readPackageName(linkPath);
-          if (existingPackageName === "openclaw") {
-            params.beforePersistentEffect?.();
-            await fs.rm(linkPath, { recursive: true, force: true });
-            params.beforePersistentEffect?.();
-            await fs.symlink(params.hostRoot, linkPath, "junction");
-            params.logger.info?.(
-              `Linked peerDependency "${params.peerName}" -> ${params.hostRoot}`,
-            );
-            return "linked";
-          }
-        }
-        params.logger.warn?.(
-          `Skipping openclaw peerDependency link because ${linkPath} already exists and is not a symlink.`,
-        );
-        return "skipped";
-      }
-      params.beforePersistentEffect?.();
-      await fs.unlink(linkPath);
+    if (
+      existing &&
+      !existing.isSymbolicLink() &&
+      !(
+        params.peerName === "openclaw" &&
+        existing.isDirectory() &&
+        (await readPackageName(linkPath)) === "openclaw"
+      )
+    ) {
+      params.logger.warn?.(
+        `Skipping openclaw peerDependency link because ${linkPath} already exists and is not a symlink.`,
+      );
+      return "skipped";
     }
+  } catch (err) {
+    return warnFailure(err);
+  }
+
+  // Authority refusal must escape filesystem warning conversion. Keep each
+  // synchronous assertion adjacent to the mutation it admits.
+  if (existing) {
     params.beforePersistentEffect?.();
+    try {
+      if (existing.isSymbolicLink()) {
+        await fs.unlink(linkPath);
+      } else {
+        await fs.rm(linkPath, { recursive: true, force: true });
+      }
+    } catch (err) {
+      return warnFailure(err);
+    }
+  }
+  params.beforePersistentEffect?.();
+  try {
     await fs.symlink(params.hostRoot, linkPath, "junction");
     params.logger.info?.(`Linked peerDependency "${params.peerName}" -> ${params.hostRoot}`);
     return "linked";
   } catch (err) {
-    params.beforePersistentEffect?.();
-    params.logger.warn?.(`Failed to symlink peerDependency "${params.peerName}": ${String(err)}`);
-    return "skipped";
+    return warnFailure(err);
   }
 }
 
