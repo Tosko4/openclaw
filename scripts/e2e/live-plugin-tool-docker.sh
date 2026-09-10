@@ -129,9 +129,8 @@ dump_debug_logs() {
   local agent_output_dump_bytes="${OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_DUMP_BYTES:-16384}"
   echo "Live plugin tool scenario failed with exit code $status" >&2
   if [ -f /tmp/openclaw-agent.json ]; then
-    echo "--- /tmp/openclaw-agent.json (last ${agent_output_dump_bytes} bytes) ---" >&2
-    tail -c "$agent_output_dump_bytes" /tmp/openclaw-agent.json >&2 || true
-    echo >&2
+    OPENCLAW_E2E_LOG_TAIL_BYTES="$agent_output_dump_bytes" \
+      openclaw_e2e_print_log /tmp/openclaw-agent.json >&2
   fi
   openclaw_e2e_dump_logs \
     /tmp/openclaw-install.log \
@@ -142,7 +141,7 @@ dump_debug_logs() {
     /tmp/openclaw-live-plugin-tool-pack.log \
     /tmp/openclaw-agent.err
 }
-trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE" || true

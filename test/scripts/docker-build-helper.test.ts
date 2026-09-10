@@ -6004,7 +6004,9 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
       '-e "OPENCLAW_LIVE_PLUGIN_TOOL_SESSION_SCAN_MAX_ENTRIES=$SESSION_SCAN_MAX_ENTRIES"',
       '-e "OPENCLAW_E2E_COMMAND_TIMEOUT=$COMMAND_TIMEOUT"',
       "OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_DUMP_BYTES",
-      'tail -c "$agent_output_dump_bytes" /tmp/openclaw-agent.json',
+      'OPENCLAW_E2E_LOG_TAIL_BYTES="$agent_output_dump_bytes"',
+      "openclaw_e2e_print_log /tmp/openclaw-agent.json >&2",
+      "openclaw_e2e_enable_failure_diagnostics",
     ]);
     const earlyTimeoutEnvIndex = runner.indexOf(
       "openclaw_e2e_read_positive_int_env OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS 300",
