@@ -276,7 +276,7 @@ struct WebChatSwiftUISmokeTests {
         var publishedSessionKeys: [String] = []
         unresolved.onSessionKeyChanged = { publishedSessionKeys.append($0) }
 
-        #expect(unresolved._testActiveAgentID == nil)
+        #expect(unresolved.viewModel.activeAgentId == nil)
         #expect(unresolved.viewModel.requiresExplicitAgentSelection)
         unresolved._testSelectAgent(" Work ")
         #expect(!unresolved.viewModel.requiresExplicitAgentSelection)
@@ -287,7 +287,7 @@ struct WebChatSwiftUISmokeTests {
         #expect(unresolved._testSelectedAgentID == "research")
         #expect(unresolved.viewModel.input == "keep this draft")
         #expect(publishedSessionKeys == ["agent:work:main", "agent:research:main"])
-        #expect(explicit._testActiveAgentID == "work")
+        #expect(explicit.viewModel.activeAgentId == "work")
         unresolved.close()
         explicit.close()
     }

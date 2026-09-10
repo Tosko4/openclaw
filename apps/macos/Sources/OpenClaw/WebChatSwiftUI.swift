@@ -1218,20 +1218,20 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         self.viewModel = vm
         let gatewayTransport = transport as? MacGatewayChatTransport
         let usesPrimaryAppRuntime = gatewayTransport.map { $0.connection === GatewayConnection.shared } ?? false
-        let applyRoutingIdentity: @MainActor @Sendable (OpenClawChatSessionRoutingIdentity) async -> Void = {
-            [weak vm] identity in
-            guard let vm else { return }
-            let effectiveAgentID = Self.applyRefreshedRoutingIdentity(
-                routingIdentity: identity,
-                selectionRelay: agentSelectionRelay,
-                viewModel: vm)
-            gatewayTransport?.updateDefaultGlobalAgentID(effectiveAgentID)
-            if let store = transcriptCache as? OpenClawChatSQLiteTranscriptCache,
-               !usesPrimaryAppRuntime || store.gatewayID == MacChatTranscriptCache.currentGatewayID()
-            {
-                await store.storeSessionRoutingIdentity(identity)
+        let applyRoutingIdentity: @MainActor @Sendable (OpenClawChatSessionRoutingIdentity) async
+            -> Void = { [weak vm] identity in
+                guard let vm else { return }
+                let effectiveAgentID = Self.applyRefreshedRoutingIdentity(
+                    routingIdentity: identity,
+                    selectionRelay: agentSelectionRelay,
+                    viewModel: vm)
+                gatewayTransport?.updateDefaultGlobalAgentID(effectiveAgentID)
+                if let store = transcriptCache as? OpenClawChatSQLiteTranscriptCache,
+                   !usesPrimaryAppRuntime || store.gatewayID == MacChatTranscriptCache.currentGatewayID()
+                {
+                    await store.storeSessionRoutingIdentity(identity)
+                }
             }
-        }
         // Custom transports have no Gateway owner; never attach them to the primary connection.
         if let gatewayTransport {
             let chatConnection = gatewayTransport.connection
