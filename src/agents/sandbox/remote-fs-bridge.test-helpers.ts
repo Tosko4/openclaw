@@ -67,10 +67,10 @@ export function createLocalRemoteShellScriptRunner(params?: {
   return async (command) => {
     params?.onCommand?.(command);
     const runsPinnedMutation = command.script.includes(PINNED_MUTATION_MARKER);
-    const spawn = params?.spawn ?? spawnLocalRemoteShell;
+    const spawnShell = params?.spawn ?? spawnLocalRemoteShell;
     // Execute the remote command unchanged, with helper source separate from
     // stdin so mutation payload bytes reach the Python process intact.
-    const result = await spawn(
+    const result = await spawnShell(
       "/bin/sh",
       ["-c", command.script, params?.shellArg0 ?? "openclaw-sandbox-fs", ...(command.args ?? [])],
       command.stdin,
