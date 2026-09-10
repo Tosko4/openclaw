@@ -663,13 +663,13 @@ internal class TalkRealtimeClient(
 
   suspend fun setCaptureEnabled(enabled: Boolean) =
     withContext(Dispatchers.Main.immediate) {
-      peer.setCaptureEnabled(enabled)
+      peer.setCaptureEnabled(enabled, ::withCurrentCall)
       if (enabled && !closed) {
         if (started) publishResponseStatus() else onStatus("Connecting")
       }
     }
 
-  suspend fun setPlaybackEnabled(enabled: Boolean) = peer.setPlaybackEnabled(enabled)
+  suspend fun setPlaybackEnabled(enabled: Boolean) = peer.setPlaybackEnabled(enabled, ::withCurrentCall)
 
   suspend fun cancelOutput() =
     withContext(Dispatchers.Main.immediate) {

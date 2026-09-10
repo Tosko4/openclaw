@@ -106,22 +106,22 @@ class TalkRealtimePeerAudioTest {
       val failures = mutableListOf<String>()
       val peer = TalkRealtimePeer(context, this, {}, { failures.add(it) })
       try {
-        peer.setCaptureEnabled(false)
-        peer.setPlaybackEnabled(false)
+        peer.setCaptureEnabled(false) { it() }
+        peer.setPlaybackEnabled(false) { it() }
         // The Java module can be configured before JNI allocation; this exercises the
         // real peer toggle path without making a provider call or creating a recorder.
         ReflectionHelpers.setField(peer, "audioDevice", JavaAudioDeviceModule.builder(context).createAudioDeviceModule())
-        peer.setCaptureEnabled(true)
+        peer.setCaptureEnabled(true) { it() }
         assertEquals(AudioManager.MODE_IN_COMMUNICATION, manager.mode)
         val first = shadowOf(manager).lastAudioFocusRequest.audioFocusRequest
-        peer.setCaptureEnabled(false)
+        peer.setCaptureEnabled(false) { it() }
         assertEquals(AudioManager.MODE_NORMAL, manager.mode)
-        peer.setPlaybackEnabled(true)
+        peer.setPlaybackEnabled(true) { it() }
         assertEquals(AudioManager.MODE_IN_COMMUNICATION, manager.mode)
         assertNotSame(first, shadowOf(manager).lastAudioFocusRequest.audioFocusRequest)
         peer.close()
         assertEquals(AudioManager.MODE_NORMAL, manager.mode)
-        peer.setPlaybackEnabled(true)
+        peer.setPlaybackEnabled(true) { it() }
         assertEquals(AudioManager.MODE_NORMAL, manager.mode)
         assertTrue(failures.isEmpty())
       } finally {
@@ -141,11 +141,11 @@ class TalkRealtimePeerAudioTest {
       val requested = mutableListOf<String?>()
       val peer = TalkRealtimePeer(context, this, {}, { failures.add(it) }, { audioInputDeviceKey(device) }, { requested.add(it) })
       try {
-        peer.setCaptureEnabled(false)
-        peer.setPlaybackEnabled(false)
+        peer.setCaptureEnabled(false) { it() }
+        peer.setPlaybackEnabled(false) { it() }
         ReflectionHelpers.setField(peer, "audioDevice", JavaAudioDeviceModule.builder(context).createAudioDeviceModule())
         ReflectionHelpers.setField(peer, "selectedAudioInputKey", audioInputDeviceKey(device))
-        peer.setCaptureEnabled(true)
+        peer.setCaptureEnabled(true) { it() }
         assertEquals(audioInputDeviceKey(device), requested.last())
         shadowOf(manager).removeInputDevice(device, true)
         shadowOf(Looper.getMainLooper()).idle()
@@ -169,11 +169,11 @@ class TalkRealtimePeerAudioTest {
       val failures = mutableListOf<String>()
       val peer = TalkRealtimePeer(context, this, {}, { failures.add(it) })
       try {
-        peer.setCaptureEnabled(false)
-        peer.setPlaybackEnabled(false)
+        peer.setCaptureEnabled(false) { it() }
+        peer.setPlaybackEnabled(false) { it() }
         ReflectionHelpers.setField(peer, "audioDevice", JavaAudioDeviceModule.builder(context).createAudioDeviceModule())
         shadowOf(manager).setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
-        peer.setCaptureEnabled(true)
+        peer.setCaptureEnabled(true) { it() }
         assertEquals(listOf("Realtime audio routing or focus unavailable"), failures)
         assertEquals(AudioManager.MODE_NORMAL, manager.mode)
       } finally {

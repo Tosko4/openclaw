@@ -1958,6 +1958,7 @@ class TalkModeManager internal constructor(
 
   internal fun resumeRealtimeCaptureAfterPushToTalk(captureId: String) {
     val generation = startGeneration.get()
+    var clientToResume: TalkRealtimeClient? = null
     val outcome =
       synchronized(realtimeCapturePauseLock) {
         val current = realtimeCapturePause ?: return@synchronized RealtimeCaptureResume.Skipped
@@ -1971,13 +1972,7 @@ class TalkModeManager internal constructor(
         realtimeClient?.let { client ->
           realtimeCapturePause = null
           listeningMode = true
-          // PTT admission and native enablement share Main, not a pre-dispatch IO check.
-          scope.launch(Dispatchers.Main.immediate) {
-            if (realtimeClient === client && activePttCaptureId == null && !stopRequested) {
-              client.setPlaybackEnabled(playbackEnabled)
-              client.setCaptureEnabled(true)
-            }
-          }
+          clientToResume = client
           return@synchronized RealtimeCaptureResume.Resumed
         }
         if (configCache.get().value.usesNativeSpeech && current.sessionId == null && !listeningMode) {
@@ -2011,7 +2006,14 @@ class TalkModeManager internal constructor(
       }
 
       RealtimeCaptureResume.Resumed -> {
-        return
+        val client = clientToResume ?: return
+        // Dispatch outside capture ownership: final media admission acquires physical ownership first.
+        scope.launch(Dispatchers.Main.immediate) {
+          if (realtimeClient === client && activePttCaptureId == null && !stopRequested) {
+            client.setPlaybackEnabled(playbackEnabled)
+            client.setCaptureEnabled(true)
+          }
+        }
       }
 
       RealtimeCaptureResume.Restart -> {
