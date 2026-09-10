@@ -4808,7 +4808,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(mocks.installPluginFromNpmSpec).toHaveBeenCalled();
   });
 
-  it.each([false, true])(
+  it.each([false, true, "one-shot-callback", "one-shot-lease"] as const)(
     "rechecks live authority after async replacement planning (revoked: %s)",
     async (revoke) => {
       const root = tempDirs.make("openclaw-doctor-payload-fence-");
@@ -4853,8 +4853,12 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       const before = await readPersistedInstalledPluginIndex({ env });
       const failure = new Error("update authority revoked after replacement planning");
       let current = true;
+      let callbackChecks = 0;
       const beforePersistentEffect = vi.fn(async () => {
-        if (revoke) {
+        if (revoke === "one-shot-callback" && callbackChecks++ === 0) {
+          throw failure;
+        }
+        if (revoke === true || (revoke === "one-shot-lease" && callbackChecks++ === 0)) {
           queueMicrotask(() => {
             current = false;
           });
@@ -4868,6 +4872,9 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             env,
             assertCurrent: () => {
               if (!current) {
+                if (revoke === "one-shot-lease") {
+                  current = true;
+                }
                 throw failure;
               }
             },

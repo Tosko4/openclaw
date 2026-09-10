@@ -25,7 +25,7 @@ function makeTempDir() {
 describe("plugin peer links", () => {
   describe.each(["direct", "managed", "registered"] as const)("%s repair authority", (entry) => {
     it.each(["missing-modules", "missing-link", "stale-link", "package-copy"] as const)(
-      "preserves %s when authority is revoked during preparation",
+      "preserves %s on a one-shot authority refusal during preparation",
       async (layout) => {
         const root = makeTempDir();
         const extensionsDir = path.join(root, "extensions");
@@ -40,6 +40,12 @@ describe("plugin peer links", () => {
         fs.writeFileSync(
           path.join(packageDir, "package.json"),
           JSON.stringify({ name: "peer-plugin", peerDependencies: { openclaw: "*" } }),
+        );
+        const siblingDir = path.join(path.dirname(packageDir), "z-peer-plugin");
+        fs.mkdirSync(siblingDir);
+        fs.writeFileSync(
+          path.join(siblingDir, "package.json"),
+          JSON.stringify({ name: "z-peer-plugin", peerDependencies: { openclaw: "*" } }),
         );
         if (layout !== "missing-modules") {
           fs.mkdirSync(nodeModulesDir);
@@ -58,6 +64,7 @@ describe("plugin peer links", () => {
           logger: { warn: (message: string) => warnings.push(message) },
           beforePersistentEffect: () => {
             if (!current) {
+              current = true;
               throw failure;
             }
           },
@@ -68,7 +75,10 @@ describe("plugin peer links", () => {
             : entry === "registered"
               ? reconcileRegisteredOpenClawHostLinks({
                   extensionsDir,
-                  installRecords: { "peer-plugin": { source: "npm", installPath: packageDir } },
+                  installRecords: {
+                    "peer-plugin": { source: "npm", installPath: packageDir },
+                    "z-peer-plugin": { source: "npm", installPath: siblingDir },
+                  },
                   mode: "repair",
                   ...guarded,
                 })
@@ -81,6 +91,7 @@ describe("plugin peer links", () => {
         current = false;
         await expect(operation).rejects.toBe(failure);
         expect(warnings).toEqual([]);
+        expect(fs.existsSync(path.join(siblingDir, "node_modules"))).toBe(false);
         if (layout === "stale-link") {
           expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
           expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(oldHost));
@@ -98,7 +109,7 @@ describe("plugin peer links", () => {
   });
 
   it.each(["symlink", "directory"] as const)(
-    "stops before replacement when authority is revoked after removing the old %s",
+    "stops before replacement on a one-shot refusal after removing the old %s",
     async (existingKind) => {
       const root = makeTempDir();
       const packageDir = path.join(root, "peer-plugin");
@@ -132,12 +143,13 @@ describe("plugin peer links", () => {
           logger: { warn: (message) => warnings.push(message) },
           beforePersistentEffect: () => {
             if (!current) {
+              current = true;
               throw failure;
             }
           },
         }),
       ).rejects.toBe(failure);
-      expect(current).toBe(false);
+      expect(current).toBe(true);
       expect(fs.existsSync(linkPath)).toBe(false);
       expect(warnings).toEqual([]);
     },

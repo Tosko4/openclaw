@@ -81,11 +81,14 @@ describe("managed npm retention", () => {
     });
     const markerPath = resolveRetainedManagedNpmInstallMarkerPath(packageDir);
     const before = fs.readFileSync(markerPath, "utf8");
-    const failure = new Error("update authority revoked");
+    const failure = Object.assign(new Error("update authority revoked"), { code: "ENOENT" });
+    let checks = 0;
 
     await expect(
       clearRetainedManagedNpmInstallMarker(packageDir, () => {
-        throw failure;
+        if (checks++ === 0) {
+          throw failure;
+        }
       }),
     ).rejects.toBe(failure);
     expect(fs.readFileSync(markerPath, "utf8")).toBe(before);
@@ -94,7 +97,7 @@ describe("managed npm retention", () => {
     expect(fs.existsSync(packageDir)).toBe(true);
   });
 
-  it("does not swallow revoked authority or remove the marker directory after awaited removal", async () => {
+  it("does not swallow a one-shot refusal or remove the marker directory after awaited removal", async () => {
     const stateDir = retentionTempDirs.make("openclaw-retention-clear-fence-");
     const packageDir = path.join(stateDir, "npm", "node_modules", "retained-plugin");
     fs.mkdirSync(packageDir, { recursive: true });
@@ -115,6 +118,7 @@ describe("managed npm retention", () => {
       await expect(
         clearRetainedManagedNpmInstallMarker(packageDir, () => {
           if (!current) {
+            current = true;
             throw failure;
           }
         }),
