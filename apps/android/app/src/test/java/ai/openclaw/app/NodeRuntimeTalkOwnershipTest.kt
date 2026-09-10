@@ -258,7 +258,11 @@ class NodeRuntimeTalkOwnershipTest {
               nativeAdmission += locks.all(Thread::holdsLock)
             }
             synchronized(field<Any>(runtime, "voiceCaptureOwnershipLock")) {
-              if (retirement == "offer") chat.switchSession("agent:work:b", "work")
+              if (retirement == "offer") {
+                chat.switchSession("agent:work:b", "work")
+                // The rejected startup continuation can close itself after the callback.
+                assertFalse("Runtime cleanup remains held", field<Boolean>(client, "closed"))
+              }
               StartupPeerConnection.offer!!.onCreateSuccess(SessionDescription(SessionDescription.Type.OFFER, "v=0"))
               if (retirement != "offer") {
                 runBlocking { awaitState { offered.count == 0L } }
@@ -267,7 +271,7 @@ class NodeRuntimeTalkOwnershipTest {
                 if (retirement == "answer") chat.switchSession("agent:work:b", "work")
               }
               assertTrue("Physical connection remains current", gateway.captureRequestLease()!!.isCurrent())
-              assertFalse("Runtime cleanup remains held", field<Boolean>(client, "closed"))
+              if (retirement != "offer") assertFalse("Runtime cleanup remains held", field<Boolean>(client, "closed"))
               releaseAnswer.countDown()
               StartupDataChannel.open()
               runBlocking { awaitState { setup.isCompleted } }
