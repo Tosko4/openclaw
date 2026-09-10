@@ -446,8 +446,16 @@ export function emitAgentEventForAdmittedRun(
     return false;
   }
   try {
-    if (!validateAgentRunDelegatedAuthority(root) || (isCurrent && isCurrent() !== true)) {
+    if (!validateAgentRunDelegatedAuthority(root)) {
       return false;
+    }
+    if (isCurrent) {
+      switch (isCurrent()) {
+        case true:
+          break;
+        default:
+          return false;
+      }
     }
   } catch {
     return false;

@@ -1,20 +1,21 @@
 import { EventEmitter } from "node:events";
 import http2 from "node:http2";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   loadExactSessionEntryReadOnly,
   upsertSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
-import * as apns from "../infra/push-apns.js";
-import { createLiveActivityCoordinator } from "./live-activity-coordinator.js";
+} from "../../config/sessions/session-accessor.js";
+import * as apns from "../../infra/push-apns.js";
+import { createLiveActivityCoordinator } from "../live-activity-coordinator.js";
 import {
   ACTIVITY_EPOCH,
   activityAuth,
   activityDirect,
   activityRelay,
+  readActivityRequestBody,
   withLiveActivityFixture,
-} from "./live-activity.test-support.js";
+} from "../live-activity.test-support.js";
 
 function http2Boundary(status: number, reason?: string) {
   const requests: Array<{ headers: http2.OutgoingHttpHeaders; body: string }> = [];
@@ -179,7 +180,7 @@ it("coalesces progress and preserves an accepted terminal after cleanup and a su
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(fetch).toHaveBeenCalledTimes(2);
-    const body = JSON.parse(String(vi.mocked(fetch).mock.calls[1]?.[1]?.body));
+    const body = JSON.parse(readActivityRequestBody(vi.mocked(fetch).mock.calls[1]?.[1]));
     expect(body).toMatchObject({
       purpose: "liveActivity",
       priority: 10,
@@ -217,7 +218,9 @@ it("ignores obsolete relay outcomes after rotation and sends only the current re
         rotationRevision: 2,
       });
       expect(f.log.warn).not.toHaveBeenCalled();
-      expect(JSON.parse(String(vi.mocked(fetch).mock.calls[1]?.[1]?.body))).toMatchObject({
+      expect(
+        JSON.parse(readActivityRequestBody(vi.mocked(fetch).mock.calls[1]?.[1])),
+      ).toMatchObject({
         relayHandle: "rotated-handle",
         revision: 2,
       });
@@ -372,7 +375,18 @@ it.each(["deadline", "shutdown"] as const)(
               throw new Error("Activity delivery requires cancellation");
             }
             sent.resolve(signal);
-            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            signal.addEventListener(
+              "abort",
+              () => {
+                const reason = signal.reason;
+                reject(
+                  reason instanceof Error
+                    ? reason
+                    : new Error("Activity delivery aborted", { cause: reason }),
+                );
+              },
+              { once: true },
+            );
           }),
       );
       await f.emit("lifecycle", { phase: "start", startedAt: ACTIVITY_EPOCH });

@@ -160,7 +160,12 @@ export function bindWorkerTurnOwner(
     publishEvent: (event, isCurrent) =>
       emitAgentEventForAdmittedRun(event, delegatedAuthority, () => {
         assertActive();
-        return isCurrent() === true && isBoundOwner();
+        switch (isCurrent()) {
+          case true:
+            return isBoundOwner();
+          default:
+            return false;
+        }
       }),
     runtime: {
       delegatedAuthority,

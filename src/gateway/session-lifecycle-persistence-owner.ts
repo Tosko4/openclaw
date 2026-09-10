@@ -206,7 +206,14 @@ export function createSessionLifecyclePersistenceOwner(
       return remember(key, track(promise, release));
     } catch (error) {
       release?.();
-      return remember(key, Promise.reject(error));
+      return remember(
+        key,
+        Promise.reject(
+          error instanceof Error
+            ? error
+            : new Error("Session lifecycle persistence failed", { cause: error }),
+        ),
+      );
     }
   };
 

@@ -74,7 +74,7 @@ export function createHostAdmissionTestFixture() {
   return {
     admittedAttempt,
     policyRevocations,
-    closeAdmissions() {
+    closeAdmissions(this: void) {
       for (const admission of admissions.splice(0)) {
         admission.close();
       }

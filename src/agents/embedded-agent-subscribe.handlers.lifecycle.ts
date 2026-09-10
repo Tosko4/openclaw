@@ -271,7 +271,7 @@ export function handleAgentEnd(
 
   const flushPendingMediaAndChannel = () => {
     if (!ctx.isCurrent()) {
-      return;
+      return undefined;
     }
     if (ctx.params.onBlockReply && !ctx.state.pendingToolMediaDeliveryFailed) {
       const pendingToolMediaReply = readPendingToolMediaReply(ctx.state);
@@ -284,7 +284,7 @@ export function handleAgentEnd(
     if (isPromiseLike<void>(postMediaFlushResult)) {
       return postMediaFlushResult.then(() => {
         if (!ctx.isCurrent()) {
-          return;
+          return undefined;
         }
         const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({ reason: "terminal" });
         if (isPromiseLike<void>(onBlockReplyFlushResult)) {

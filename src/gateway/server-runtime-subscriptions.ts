@@ -356,7 +356,7 @@ export function startGatewayEventSubscriptions(params: {
     let terminalPreparation: Promise<void> | undefined;
     // Abort listeners can replace the public registration before its terminal
     // event reaches us. Bind the captured predecessor before any owner lookup.
-    sessionLifecyclePersistence.attachLocalAbortSource(evt);
+    void sessionLifecyclePersistence.attachLocalAbortSource(evt);
     try {
       params.liveActivityCoordinator?.observeRuntimeEvent(evt);
     } catch {

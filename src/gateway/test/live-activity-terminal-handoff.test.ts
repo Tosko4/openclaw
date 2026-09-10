@@ -1,47 +1,48 @@
 import http2 from "node:http2";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
-import * as config from "../config/io.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import * as config from "../../config/io.js";
 import {
   loadExactSessionEntryReadOnly,
   patchSessionEntryCore,
   upsertSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
+} from "../../config/sessions/session-accessor.js";
 import {
   emitAgentEventForOwner,
   onAgentRuntimeEvent,
   type AgentEventRuntimePayload,
-} from "../infra/agent-events.js";
-import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
-import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import * as apns from "../infra/push-apns.js";
-import type { SubsystemLogger } from "../logging/subsystem.js";
-import type { DB } from "../state/openclaw-state-db.generated.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { setUserProfileRole } from "../state/user-profiles.js";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
-import { installInMemoryTaskRegistryRuntime } from "../test-utils/task-registry-runtime.js";
-import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+} from "../../infra/agent-events.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
+import { verifyDeviceToken } from "../../infra/device-pairing-tokens.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import * as apns from "../../infra/push-apns.js";
+import type { SubsystemLogger } from "../../logging/subsystem.js";
+import type { DB } from "../../state/openclaw-state-db.generated.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { setUserProfileRole } from "../../state/user-profiles.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
+import { installInMemoryTaskRegistryRuntime } from "../../test-utils/task-registry-runtime.js";
+import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
 import {
   ACTIVITY_EPOCH,
   activityAuth,
   activityDirect,
   activityRelay,
+  readActivityRequestBody,
   withLiveActivityFixture,
-} from "./live-activity.test-support.js";
+} from "../live-activity.test-support.js";
 import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
-} from "./server-chat-state.js";
-import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
-import { disconnectStaleSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
-import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
-import * as lifecycleState from "./session-lifecycle-state.js";
+} from "../server-chat-state.js";
+import { startGatewayEventSubscriptions } from "../server-runtime-subscriptions.js";
+import { disconnectStaleSharedGatewayAuthClients } from "../server-shared-auth-generation.js";
+import { createSessionLifecyclePersistenceOwner } from "../session-lifecycle-persistence-owner.js";
+import * as lifecycleState from "../session-lifecycle-state.js";
 
 // Isolate unrelated background audit work; lifecycle, SQLite, and delivery owners stay real.
-vi.mock("../audit/audit-recorder.js", () => ({
+vi.mock("../../audit/audit-recorder.js", () => ({
   createAuditEventRecorder: () => ({
     record: vi.fn(),
     recordTool: vi.fn(),
@@ -130,7 +131,7 @@ function expectTerminalDelivery(
   requestIndex = 1,
 ) {
   expect(fetch).toHaveBeenCalledTimes(requestIndex + 1);
-  const body = JSON.parse(String(vi.mocked(fetch).mock.calls[requestIndex]?.[1]?.body));
+  const body = JSON.parse(readActivityRequestBody(vi.mocked(fetch).mock.calls[requestIndex]?.[1]));
   expect(body).toMatchObject({
     relayHandle: "activity-handle",
     purpose: "liveActivity",
@@ -184,7 +185,7 @@ it.each([false, true])(
           await vi.advanceTimersByTimeAsync(5_000);
           expect(fetch).toHaveBeenCalledTimes(2);
           const progressRequest = vi.mocked(fetch).mock.calls[1]!;
-          expect(JSON.parse(String(progressRequest[1]?.body))).toMatchObject({
+          expect(JSON.parse(readActivityRequestBody(progressRequest[1]))).toMatchObject({
             purpose: "liveActivity",
             payload: { aps: { event: "update", "content-state": { status: "toolRunning" } } },
           });
@@ -236,8 +237,8 @@ it.each([false, true])(
           expect(new Headers(terminalRequest[1]?.headers).get("authorization")).toBe(
             new Headers(progressRequest[1]?.headers).get("authorization"),
           );
-          expect(JSON.parse(String(terminalRequest[1]?.body)).relayHandle).toBe(
-            JSON.parse(String(progressRequest[1]?.body)).relayHandle,
+          expect(JSON.parse(readActivityRequestBody(terminalRequest[1])).relayHandle).toBe(
+            JSON.parse(readActivityRequestBody(progressRequest[1])).relayHandle,
           );
         } finally {
           response.resolve(new Response(null, { status: 410 }));
@@ -501,7 +502,7 @@ it.each(["claimed predecessor", "synchronous public abort"] as const)(
         expect.soft(readStoredDestination(registered.registrationId)).toEqual(expect.any(String));
         const deliveries = vi
           .mocked(fetch)
-          .mock.calls.map(([, init]) => JSON.parse(String(init?.body)))
+          .mock.calls.map(([, init]) => JSON.parse(readActivityRequestBody(init)))
           .filter((body) => body.relayHandle === destination.relayHandle);
         expect(deliveries.map((body) => body.payload.aps.event)).toEqual(["update", "update"]);
         expect(deliveries[1]?.payload.aps["content-state"].status).toBe("toolRunning");
@@ -735,7 +736,7 @@ it("retains the approved offline lease when shared-key rotation fences the origi
       leaseExpiresAtMs: registered.leaseExpiresAtMs,
       binding: registered.binding,
     });
-    expect(JSON.parse(String(vi.mocked(fetch).mock.calls[1]?.[1]?.body))).toMatchObject({
+    expect(JSON.parse(readActivityRequestBody(vi.mocked(fetch).mock.calls[1]?.[1]))).toMatchObject({
       payload: { aps: { event: "update", "content-state": { status: "toolRunning" } } },
     });
   });

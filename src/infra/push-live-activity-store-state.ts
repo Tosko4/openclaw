@@ -427,8 +427,11 @@ export function ownerCurrent(
 ): boolean {
   const binding = Object.freeze(rowBinding(row));
   try {
-    if (isCurrent(binding, row.source_incarnation, db) !== true) {
-      return false;
+    switch (isCurrent(binding, row.source_incarnation, db)) {
+      case true:
+        break;
+      default:
+        return false;
     }
   } catch {
     return false;

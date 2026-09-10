@@ -268,6 +268,10 @@ describe("push-apns.relay", () => {
           const [url, request] = fetchMock.mock.calls[attempt] ?? [];
           expect(url).toBe("https://relay.example.com/v1/push/send");
           expect(request?.body).toBe(expectedBody);
+          const body = request?.body;
+          if (typeof body !== "string") {
+            throw new Error("Activity request requires a string body");
+          }
           expect(request?.redirect).toBe("manual");
           expect(request?.signal?.aborted).toBe(false);
           controller.abort(new Error("attempt deadline reached"));
@@ -281,7 +285,7 @@ describe("push-apns.relay", () => {
                 "openclaw-relay-send-v1",
                 headers.get("x-openclaw-gateway-device-id"),
                 headers.get("x-openclaw-gateway-signed-at-ms"),
-                request?.body,
+                body,
               ].join("\n"),
               headers.get("x-openclaw-gateway-signature") ?? "",
             ),

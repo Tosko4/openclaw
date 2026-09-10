@@ -1,31 +1,31 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   emitAgentEventForOwner,
   onAgentRuntimeEvent,
   resetAgentEventsForTest,
-} from "../infra/agent-events.js";
-import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
+} from "../../infra/agent-events.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
 
 const persist = vi.hoisted(() => vi.fn());
-vi.mock("./session-lifecycle-state.js", () => ({
+vi.mock("../session-lifecycle-state.js", () => ({
   persistGatewaySessionLifecycleEvent: persist,
   isRestartRecoveryLifecycleEvent: () => false,
 }));
-vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
-vi.mock("./session-utils.js", () => ({
+vi.mock("../../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
+vi.mock("../session-utils.js", () => ({
   loadGatewaySessionEntryReadOnly: () => ({ entry: undefined }),
   loadGatewaySessionLifecycleSnapshot: () => ({ row: undefined }),
 }));
-vi.mock("../logger.js", () => ({ logError: vi.fn(), logWarn: vi.fn() }));
+vi.mock("../../logger.js", () => ({ logError: vi.fn(), logWarn: vi.fn() }));
 
 import {
   createAgentEventHandler,
   createChatRunState,
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
-} from "./server-chat.js";
-import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
+} from "../server-chat.js";
+import { createSessionLifecyclePersistenceOwner } from "../session-lifecycle-persistence-owner.js";
 
 afterEach(() => {
   resetAgentEventsForTest({ preserveListeners: true });
@@ -38,7 +38,7 @@ it("cannot commit a start after its exact producer claim retires during persiste
   persist.mockImplementation(
     async (
       params: Parameters<
-        typeof import("./session-lifecycle-state.js").persistGatewaySessionLifecycleEvent
+        typeof import("../session-lifecycle-state.js").persistGatewaySessionLifecycleEvent
       >[0],
     ) => {
       await gate.promise;

@@ -56,6 +56,14 @@ export const activityDirect: LiveActivityDestination = {
   environment: "sandbox",
 };
 
+export function readActivityRequestBody(request: RequestInit | undefined): string {
+  const body = request?.body;
+  if (typeof body !== "string") {
+    throw new Error("Activity request requires a string body");
+  }
+  return body;
+}
+
 type ActivityFixtureOptions = { publicRunId?: string; internalRunId?: string };
 
 async function createFixture(stateDir: string, options: ActivityFixtureOptions) {

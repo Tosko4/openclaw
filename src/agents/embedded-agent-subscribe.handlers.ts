@@ -31,7 +31,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
     const run = () => {
       try {
         if (!ctx.isCurrent(purpose)) {
-          return;
+          return undefined;
         }
         if (evt.type !== "message_update" && !ctx.state.unsubscribed) {
           ctx.flushAssistantStream();

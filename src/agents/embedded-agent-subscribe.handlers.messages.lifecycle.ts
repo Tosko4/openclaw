@@ -335,7 +335,7 @@ export function handleMessageEnd(
       return flushBlockReplyBufferResult
         .then(() => {
           if (!ctx.isCurrent()) {
-            return;
+            return undefined;
           }
           const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
             reason: "message_end",
