@@ -76,6 +76,15 @@ approve people who message that account. These are separate flows.
 
 Supported channels (any installed channel plugin that declares pairing; external plugins such as `openclaw-weixin` can add more): `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `matrix`, `mattermost`, `msteams`, `nextcloud-talk`, `nostr`, `signal`, `slack`, `sms`, `synology-chat`, `telegram`, `twitch`, `whatsapp`, `zalo`, `zalouser`.
 
+Two of those declare the pairing helpers without offering a request-and-approve
+flow you can turn on:
+
+- `synology-chat` accepts only `dmPolicy: "open" | "allowlist" | "disabled"`.
+  Approve senders by adding their numeric Synology user IDs to `allowedUserIds`
+  — see [Synology Chat](/channels/synology-chat).
+- `twitch` runs with `dmPolicy: "open"` and never raises a pairing request.
+  Restrict access with roles and allowlists instead — see [Twitch](/channels/twitch).
+
 ### Reusable sender groups
 
 Use top-level `accessGroups` when the same trusted sender set should apply to
