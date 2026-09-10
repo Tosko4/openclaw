@@ -67,6 +67,15 @@ assert.equal(process.env.OPENCLAW_SKIP_PROVIDERS, undefined);
 const stage = process.env.FIXTURE_INSTALLED_VERSION === "2026.7.1" ? "baseline" : "candidate";
 fs.appendFileSync(process.env.HOME + "/events", stage + "\\n");
 fs.appendFileSync(process.env.HOME + "/calls", JSON.stringify({ agent: value("--agent"), stage }) + "\\n");
+const identityPath = process.env.OPENCLAW_TEST_WORKSPACE_DIR + "/ops/IDENTITY.md";
+const identity = fs.readFileSync(identityPath, "utf8");
+assert.match(identity, /Name:.*Ops/);
+if (stage === "baseline") {
+  assert.equal(fs.existsSync(process.env.OPENCLAW_TEST_WORKSPACE_DIR + "/IDENTITY.md"), false);
+  fs.appendFileSync(identityPath, "\\nExisting operator customization.\\n");
+} else {
+  assert(identity.includes("Existing operator customization."));
+}
 if (process.env.FIXTURE_FAILURE === stage) process.exit(42);
 const marker = value("--message").match(/OPENCLAW_UPGRADE_SURVIVOR_\\w+/)[0];
 console.log(JSON.stringify({
@@ -89,6 +98,7 @@ console.log(JSON.stringify({
       HOME: home,
       OPENCLAW_STATE_DIR: join(home, "state"),
       OPENCLAW_CONFIG_PATH: join(home, "openclaw.json"),
+      OPENCLAW_TEST_WORKSPACE_DIR: join(home, "workspace"),
       OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: join(home, "runtime"),
       OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: summary,
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.7.1",

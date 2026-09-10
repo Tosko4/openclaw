@@ -1865,6 +1865,17 @@ run_live_openai() {
   # keeping main untouched preserves the existing database-migration assertions.
   if [ "$SCENARIO" = "base" ]; then
     agent=ops
+    if [ "$stage" = "baseline" ]; then
+      # A configured agent can still have a fresh workspace. Author its identity
+      # once so the shipped bootstrap lifecycle does not replace the probe turn.
+      mkdir -p "$OPENCLAW_TEST_WORKSPACE_DIR/ops"
+      cat >"$OPENCLAW_TEST_WORKSPACE_DIR/ops/IDENTITY.md" <<'IDENTITY'
+# Upgrade Survivor Ops
+
+- Name: Ops
+- Purpose: Synthetic operator assistant for package upgrade verification.
+IDENTITY
+    fi
   fi
   version="$(read_installed_version)"
   local timeout_seconds
