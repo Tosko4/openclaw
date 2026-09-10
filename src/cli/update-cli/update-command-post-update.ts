@@ -13,13 +13,13 @@ import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
 import { formatCliCommand } from "../command-format.js";
 import { tryWriteCompletionCache } from "./shared.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
-import type { FinishUpdateParams } from "./update-command-finish-types.js";
-import { retireStandaloneGitWrapper } from "./update-command-git.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import {
   assertUpdateCommandPackageFinalization,
   createUpdateCommandFinalizationFence,
-} from "./update-command-recovery.js";
+} from "./update-command-finalization-fence.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import { retireStandaloneGitWrapper } from "./update-command-git.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { repairUpdateService } from "./update-command-repair-service.js";
 import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import {
@@ -441,15 +441,13 @@ export async function finishUpdate(
 
     const postUpdateRoot = params.result.root ?? params.root;
     const convergePlugins = async (beforeDoctor?: () => Promise<void>) => {
-      const phase = await convergeUpdatePlugins({ ...params, beforeDoctor, candidateRuntime });
+      const pluginParams = { ...params, candidateRuntime, beforePersistentEffect: assertCurrent };
+      const phase = await convergeUpdatePlugins({ ...pluginParams, beforeDoctor });
       if (phase.resultWithPostUpdate.status === "error") {
         triageAllowed = !phase.cancelled;
         const reported = await reportResult(phase.resultWithPostUpdate);
-        throw createFailure(
-          reported,
-          resolveManagedServiceUpdateFailureExitCode(reported),
-          phase.detail,
-        );
+        const exitCode = resolveManagedServiceUpdateFailureExitCode(reported);
+        throw createFailure(reported, exitCode, phase.detail);
       }
       return phase;
     };
@@ -708,6 +706,7 @@ export async function finishUpdate(
       // Staging may already have changed files. Keep intent/material for fenced reconciliation.
       throw error;
     }
+    assertCurrent();
     const message = formatErrorMessage(error);
     defaultRuntime.error(`Post-update verification failed: ${message}`);
     const reported = await reportResult({

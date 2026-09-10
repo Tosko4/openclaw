@@ -4829,6 +4829,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       fs.writeFileSync(path.join(installDir, "package.json"), '{"name":"brave"}');
       const payloadPath = path.join(installDir, "index.ts");
       fs.writeFileSync(payloadPath, "export const retained = true;\n");
+      fs.mkdirSync(replacementDir, { recursive: true });
       createColdPluginFixture({
         rootDir: replacementDir,
         pluginId: "brave",

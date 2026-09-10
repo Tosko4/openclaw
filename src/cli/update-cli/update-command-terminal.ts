@@ -12,7 +12,7 @@ import {
   UpdateCommandFinalizedRecoveryFailure,
   UpdateCommandPendingRecoveryFailure,
 } from "./update-command-result.js";
-import { completeUpdateCommandRun } from "./update-command-run.js";
+import { completeUpdateCommandRun } from "./update-command-run-completion.js";
 
 type Run = NonNullable<UpdateCommandOptions["run"]>;
 type Publisher = (failure?: unknown) => Promise<UpdateRunResult>;

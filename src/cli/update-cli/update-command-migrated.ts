@@ -22,15 +22,13 @@ import {
   withUpdateCommandExecutorChild,
   type UpdateCommandChildGrant,
 } from "./update-command-executor.js";
+import { createUpdateCommandFinalizationFence } from "./update-command-finalization-fence.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import type {
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
 } from "./update-command-migrated-types.js";
-import {
-  createUpdateCommandFinalizationFence,
-  UpdateCommandRecoveryPendingError,
-} from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 import {
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,

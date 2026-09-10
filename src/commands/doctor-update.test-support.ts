@@ -15,7 +15,9 @@ const mocks = vi.hoisted(() => ({
   admitUpdateCommandRun:
     vi.fn<typeof import("../cli/update-cli/update-command-run.js").admitUpdateCommandRun>(),
   completeUpdateCommandRun:
-    vi.fn<typeof import("../cli/update-cli/update-command-run.js").completeUpdateCommandRun>(),
+    vi.fn<
+      typeof import("../cli/update-cli/update-command-run-completion.js").completeUpdateCommandRun
+    >(),
   failUpdateCommandRun:
     vi.fn<typeof import("../cli/update-cli/update-command-run.js").failUpdateCommandRun>(),
   inspectActivatedUpdateState:
@@ -110,10 +112,12 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
 }));
+vi.mock("../cli/update-cli/update-command-run-completion.js", () => ({
+  completeUpdateCommandRun: mocks.completeUpdateCommandRun,
+}));
 vi.mock("../cli/update-cli/update-command-run.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../cli/update-cli/update-command-run.js")>()),
   admitUpdateCommandRun: mocks.admitUpdateCommandRun,
-  completeUpdateCommandRun: mocks.completeUpdateCommandRun,
   failUpdateCommandRun: mocks.failUpdateCommandRun,
 }));
 vi.mock("../infra/update-run-ledger.js", () => ({

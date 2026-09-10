@@ -24,9 +24,9 @@ import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createUpdateProgress } from "./progress.js";
+import { completeUpdateCommandRun } from "./update-command-run-completion.js";
 import {
   admitUpdateCommandRun,
-  completeUpdateCommandRun,
   createUpdateRunProgress,
   failUpdateCommandRun,
   withUpdatePreviewSignals,

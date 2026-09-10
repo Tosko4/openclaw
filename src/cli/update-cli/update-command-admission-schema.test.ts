@@ -21,7 +21,8 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { admitUpdateCommandRun, completeUpdateCommandRun } from "./update-command-run.js";
+import { completeUpdateCommandRun } from "./update-command-run-completion.js";
+import { admitUpdateCommandRun } from "./update-command-run.js";
 
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readCommand: async () => null }),

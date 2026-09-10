@@ -10,7 +10,8 @@ import {
   UpdateCommandPendingRecoveryFailure,
   mergeWindowsTaskRecoveryFailure,
 } from "./update-command-result.js";
-import { completeUpdateCommandRun, failUpdateCommandRun } from "./update-command-run.js";
+import { completeUpdateCommandRun } from "./update-command-run-completion.js";
+import { failUpdateCommandRun } from "./update-command-run.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service-maintenance.js";
 import { hasDeferredUpdateCommandTerminalResult } from "./update-command-terminal.js";
 

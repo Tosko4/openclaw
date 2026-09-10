@@ -31,7 +31,6 @@ import {
   createManagedUpdateRequesterAuthority,
   resolveManagedUpdateRequester,
 } from "../../infra/update-requester-authority.js";
-import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   adoptUpdateRun,
@@ -40,14 +39,13 @@ import {
   finishUpdateRun,
   getUpdateRun,
   heartbeatUpdateRun,
-  recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord, UpdateRunStep } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
-import { inspectUpdateRecoveries, loadUpdateRecovery } from "../../infra/update-run-recovery.js";
+import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
-import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner.js";
+import type { UpdateStepProgress } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
@@ -305,90 +303,6 @@ export function createUpdateRunProgress(
       progress.onStepComplete?.(step, committed);
     },
   };
-}
-
-export function completeUpdateCommandRun(
-  result: UpdateRunResult,
-  run: UpdateCommandOptions["run"],
-  downtimeMs?: number,
-): UpdateRunResult {
-  if (!run) {
-    return result;
-  }
-  // A process-local result cannot complete an operationally pending update or
-  // authorize package retirement. Only the durable finalizer may close it.
-  const inspected = inspectUpdateRecoveries({ env: run.env }).find(
-    (entry) => entry.record.runId === run.runId,
-  );
-  // A matching historical record can only project its saved outcome or remain
-  // pending below. The mutable fallback still uses strict execution admission;
-  // unrelated legacy evidence must not become an absent/clean recovery state.
-  const recovery =
-    inspected?.format === "legacy-serving"
-      ? inspected.record
-      : loadUpdateRecovery(run.runId, { env: run.env });
-  if (
-    recovery?.terminal &&
-    getUpdateRun(run.runId, { env: run.env })?.status === recovery.terminal.status
-  ) {
-    // Read the atomic durable outcome; diagnostics never authorize retention cleanup.
-    return {
-      ...result,
-      status: recovery.terminal.status === "succeeded" ? "ok" : "error",
-      reason:
-        recovery.terminal.status === "succeeded"
-          ? undefined
-          : (recovery.primaryFailure?.code ?? "update-rolled-back"),
-      runId: run.runId,
-    };
-  }
-  if (recovery) {
-    return {
-      ...result,
-      status: "error",
-      reason: result.reason ?? "update-recovery-pending",
-      runId: run.runId,
-    };
-  }
-  const normalized = normalizeControlPlaneUpdateResult({ ...result, runId: run.runId });
-  const recordOptions = { env: run.env, redactPaths: result.root ? [result.root] : [] };
-  const active = getUpdateRun(run.runId, recordOptions);
-  if (active) {
-    recordUpdateRunPhase(
-      run.runId,
-      active.phase,
-      { before: result.before, after: result.after },
-      recordOptions,
-    );
-  }
-  for (const step of result.steps.flatMap(updateRunStepsFromResultStep)) {
-    recordUpdateRunStep(run.runId, step, recordOptions);
-  }
-  // Both finalization and outer CLI unwind come here. A verified restored generation
-  // stays with its helper until native recovery finishes; neither caller may close it early.
-  const helperRecoveryPending =
-    process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" &&
-    result.recovery?.serviceRestartSafe === true &&
-    result.recovery.packageRollbackVerified === true &&
-    result.recovery.service === undefined;
-  if (!helperRecoveryPending) {
-    finishUpdateRun(
-      run.runId,
-      {
-        status:
-          normalized.status === "ok"
-            ? "succeeded"
-            : normalized.status === "error"
-              ? "failed"
-              : "skipped",
-        reason: normalized.reason,
-        after: normalized.after,
-        downtimeMs,
-      },
-      recordOptions,
-    );
-  }
-  return { ...result, runId: run.runId };
 }
 
 export function readDevUpdateTarget(): DevUpdateTarget | undefined {

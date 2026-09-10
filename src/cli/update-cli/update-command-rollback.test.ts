@@ -54,7 +54,7 @@ import * as updateShared from "./shared.js";
 import { inspectActivatedUpdateState } from "./update-command-migrated.js";
 import * as packageModule from "./update-command-package.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
-import { completeUpdateCommandRun } from "./update-command-run.js";
+import { completeUpdateCommandRun } from "./update-command-run-completion.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);

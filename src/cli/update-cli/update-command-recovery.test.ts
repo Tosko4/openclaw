@@ -21,7 +21,7 @@ import {
   finishSuccessfulPackageSwitch,
   validConfigSnapshot,
 } from "./update-command-post-update.test-support.js";
-import { completeUpdateCommandRun } from "./update-command-run.js";
+import { completeUpdateCommandRun } from "./update-command-run-completion.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());

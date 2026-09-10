@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.ts";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -625,7 +626,15 @@ if (process.argv[2] === "doctor" && process.argv[3] === "--lint") {
       const readFile = fs.readFile.bind(fs);
       vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
         const value = await readFile(...args);
-        if (path.basename(String(args[0])) === "result.json") {
+        const readPath =
+          typeof args[0] === "string"
+            ? args[0]
+            : args[0] instanceof URL
+              ? fileURLToPath(args[0])
+              : Buffer.isBuffer(args[0])
+                ? args[0].toString()
+                : undefined;
+        if (readPath !== undefined && path.basename(readPath) === "result.json") {
           terminalAtCompletion = terminalRow();
           expect(terminalAtCompletion?.status).toBe(
             kind === "failed-child" ? "failed" : "succeeded",

@@ -42,6 +42,7 @@ export async function convergeUpdatePlugins(params: {
   packageUpdateNodeRunner?: string;
   updateStepTimeoutMs: number;
   beforeDoctor?: () => Promise<void>;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<{
   resultWithPostUpdate: UpdateRunResult;
   postUpdateConfigSnapshot?: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
@@ -180,6 +181,7 @@ export async function convergeUpdatePlugins(params: {
             timeoutMs: params.updateStepTimeoutMs,
             pluginInstallRecords,
             assertCurrent,
+            beforePersistentEffect: params.beforePersistentEffect,
           });
         });
       }

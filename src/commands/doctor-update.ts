@@ -14,9 +14,9 @@ import {
   inspectActivatedUpdateState,
 } from "../cli/update-cli/update-command-migrated.js";
 import { UpdateCommandFailure } from "../cli/update-cli/update-command-result.js";
+import { completeUpdateCommandRun } from "../cli/update-cli/update-command-run-completion.js";
 import {
   admitUpdateCommandRun,
-  completeUpdateCommandRun,
   createUpdateRunProgress,
   failUpdateCommandRun,
 } from "../cli/update-cli/update-command-run.js";

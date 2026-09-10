@@ -108,6 +108,7 @@ function isActionableSkippedPostUpdateOutcome(outcome: PluginUpdateOutcome): boo
 
 export async function updatePluginsAfterCoreUpdate(params: {
   root: string;
+  beforePersistentEffect?: () => void | Promise<void>;
   channel: UpdateChannel;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   configWriteOptions: ConfigWriteOptions;
@@ -122,6 +123,16 @@ export async function updatePluginsAfterCoreUpdate(params: {
   assertCurrent?: () => void;
 }): Promise<PostCorePluginUpdateResult> {
   params.assertCurrent?.();
+  // Retain the synchronous original-owner fence as well as the caller's
+  // persistence hook. An awaited hook cannot carry stale owner authority.
+  const beforePersistentEffect: (() => void | Promise<void>) | undefined =
+    params.beforePersistentEffect
+      ? async () => {
+          params.assertCurrent?.();
+          await params.beforePersistentEffect?.();
+          params.assertCurrent?.();
+        }
+      : params.assertCurrent;
   const runtime = params.runtime ?? defaultRuntime;
   if (!params.configSnapshot.valid) {
     const invalid = buildInvalidConfigPostCoreUpdateResult();
@@ -253,6 +264,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     timeoutMs: params.timeoutMs,
     workspaceDir: params.root,
     externalizedBundledPluginBridges,
+    // Cohort effects use a synchronous callback, unlike the commit hook below.
     beforePersistentEffect: params.assertCurrent,
     logger: pluginLogger,
     onIntegrityDrift: onPluginIntegrityDrift,
@@ -296,7 +308,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     env: process.env,
     compatibilityHostVersion: coreVersion ?? undefined,
     baselineInstallRecords: convergenceBaselineRecords,
-    beforePersistentEffect: params.assertCurrent,
+    beforePersistentEffect,
     ...capabilityConsent,
   });
   params.assertCurrent?.();
@@ -379,7 +391,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
       nextInstallRecords,
       nextConfig,
       baseHash: params.configSnapshot.hash,
-      beforePersistentEffect: params.assertCurrent,
+      beforePersistentEffect,
       writeOptions: withUpdateConfigWriteAuthority(
         {
           ...params.configWriteOptions,
@@ -389,7 +401,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
         params.assertCurrent,
       ),
     });
-    params.assertCurrent?.();
+    await beforePersistentEffect?.();
     await refreshPluginRegistryAfterConfigMutation({
       configPath: params.configSnapshot.path,
       reason: "source-changed",

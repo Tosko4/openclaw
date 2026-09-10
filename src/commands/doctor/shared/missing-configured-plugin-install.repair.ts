@@ -144,10 +144,35 @@ async function repairMissingPluginInstalls(params: {
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<RepairMissingPluginInstallsResult> {
-  // Baseline, awaited review, package publication, and the index write share one generation.
-  return await withPluginLifecycleLease({ env: params.env }, (lease) =>
-    repairMissingPluginInstallsWithLease(params, lease),
-  );
+  // Install attempts can normalize exceptions into ordinary repair outcomes.
+  // Preserve the initiating owner's first refusal, including transient read
+  // failures, across that conversion and every later persistent effect.
+  let effectFailure: { error: unknown } | undefined;
+  const beforePersistentEffect = params.beforePersistentEffect
+    ? async () => {
+        if (effectFailure) {
+          throw effectFailure.error;
+        }
+        try {
+          await params.beforePersistentEffect?.();
+        } catch (error) {
+          effectFailure ??= { error };
+          throw effectFailure.error;
+        }
+      }
+    : undefined;
+  try {
+    // Baseline, awaited review, package publication, and the index write share one generation.
+    const result = await withPluginLifecycleLease({ env: params.env }, (lease) =>
+      repairMissingPluginInstallsWithLease({ ...params, beforePersistentEffect }, lease),
+    );
+    if (effectFailure) {
+      throw effectFailure.error;
+    }
+    return result;
+  } catch (error) {
+    throw effectFailure ? effectFailure.error : error;
+  }
 }
 
 async function repairMissingPluginInstallsWithLease(
@@ -413,6 +438,7 @@ async function repairMissingPluginInstallsWithLease(
         (!installedRecord?.installPath ||
           !installPathsEqual(resolveUserPath(installedRecord.installPath, env), removalPath))
       ) {
+        // Authority refusal is not a recoverable package-cleanup warning.
         try {
           await params.beforePersistentEffect?.();
           // Planning may yield; inherited executor and plugin authority must
