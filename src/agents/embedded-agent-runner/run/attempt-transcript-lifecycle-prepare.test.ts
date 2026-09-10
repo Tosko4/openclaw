@@ -160,21 +160,23 @@ describe("admitted lazy session writer", () => {
             );
           }
           const before = loadTranscriptEventsSync(target);
-          expect(() =>
-            runWithoutOwnedSessionTranscriptWrites(() =>
-              manager.appendMessage(
-                {
-                  role: "custom",
-                  customType: "prepared-activity",
-                  content: "",
-                  display: true,
-                  excludeFromContext: true,
-                  timestamp: 2,
-                },
-                { preparedTurnParentId: parentId },
-              ),
-            ),
-          ).toThrow();
+          const append = () =>
+            manager.appendMessage(
+              {
+                role: "custom",
+                customType: "prepared-activity",
+                content: "",
+                display: true,
+                excludeFromContext: true,
+                timestamp: 2,
+              },
+              { preparedTurnParentId: parentId },
+            );
+          if (loss === "closed" || loss === "replaced") {
+            expect(append).toThrow("admitted run authority is no longer active");
+          } else {
+            expect(append).toThrow();
+          }
           expect(loadTranscriptEventsSync(target)).toEqual(before);
           expect(manager.getAppendParentId()).toBe(parentId);
         },

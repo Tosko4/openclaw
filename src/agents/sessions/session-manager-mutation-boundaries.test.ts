@@ -81,9 +81,11 @@ async function prepareActivityFixture(bounded = false) {
     timestamp: 1,
   });
   assert(admission.anchor, "Missing prepared activity admission");
-  const manager = bounded
-    ? SessionManager.openBounded(scope, { cwd: dir, maxEvents: 20, maxBytes: 16_384 })
-    : writer;
+  const reopen = () =>
+    bounded
+      ? SessionManager.openBounded(scope, { cwd: dir, maxEvents: 20, maxBytes: 16_384 })
+      : SessionManager.open(scope, dir);
+  const manager = bounded ? reopen() : writer;
   const guard = installSessionToolResultGuard(manager);
   const parentId = manager.appendMessage(
     makeAgentAssistantMessage({
@@ -96,6 +98,7 @@ async function prepareActivityFixture(bounded = false) {
   return {
     scope,
     manager,
+    reopen,
     guard,
     admission: { ...admission, anchor: admission.anchor },
     parentId,
@@ -106,9 +109,20 @@ async function prepareActivityFixture(bounded = false) {
 it.each([false, true])(
   "persists a prepared activity after a real delivery mirror (bounded=%s)",
   async (bounded) => {
-    const { scope, manager, guard, admission, parentId, activity } =
+    const { scope, manager, reopen, guard, admission, parentId, activity } =
       await prepareActivityFixture(bounded);
-    await runWithSessionTranscriptReadFence(
+    const before = loadTranscriptEventsSync(scope);
+    const resultMessage = makeAgentToolResultMessage({
+      toolCallId: "outer-call",
+      toolName: "exec",
+      content: [{ type: "text", text: "completed" }],
+      isError: false,
+    });
+    const {
+      mirrorId,
+      activityId: storedActivityId,
+      resultId: storedResultId,
+    } = await runWithSessionTranscriptReadFence(
       { ...admission.anchor, logicalTurnId: "current", role: "user" },
       async () => {
         const mirrored = await appendAssistantMessageToSessionTranscript({
@@ -123,38 +137,77 @@ it.each([false, true])(
         }
         expect(manager.getAppendParentId()).toBe(parentId);
         const activityId = manager.appendMessage(activity, { preparedTurnParentId: parentId });
+        expect(manager.getAppendParentId()).toBe(activityId);
+        expect(manager.getLeafId()).toBe(bounded ? mirrored.messageId : activityId);
         expect(guard.getPendingIds()).toEqual(["outer-call"]);
-        const resultId = manager.appendMessage(
-          makeAgentToolResultMessage({
-            toolCallId: "outer-call",
-            toolName: "exec",
-            content: [{ type: "text", text: "completed" }],
-            isError: false,
-          }),
-        );
+        if (bounded) {
+          expect(manager.getEntry(activityId)).toBeUndefined();
+        }
+        const resultId = manager.appendMessage(resultMessage);
+        expect(manager.getAppendParentId()).toBe(resultId);
+        expect(manager.getLeafId()).toBe(resultId);
+        expect(guard.getPendingIds()).toEqual([]);
         guard.flushPendingToolResults();
+        expect(guard.getPendingIds()).toEqual([]);
         expect(manager.getBranch().map((entry) => entry.id)).toEqual([
           admission.entryId,
           parentId,
           mirrored.messageId,
-          activityId,
+          ...(bounded ? [] : [activityId]),
           resultId,
         ]);
-        expect(manager.getEntry(activityId)).toMatchObject({
-          parentId: mirrored.messageId,
-          message: { details: { afterEntryId: parentId }, excludeFromContext: true },
-        });
+        if (bounded) {
+          expect(manager.getEntry(activityId)).toBeUndefined();
+        } else {
+          expect(manager.getEntry(activityId)).toMatchObject({
+            parentId: mirrored.messageId,
+            message: activity,
+          });
+        }
         expect(
           manager.buildSessionContext().messages.some((message) => message.role === "custom"),
         ).toBe(false);
+        return { mirrorId: mirrored.messageId, activityId, resultId };
       },
     );
-    expect(SessionManager.open(scope).getBranch()).toEqual(manager.getBranch());
+    // Raw/full reads run outside the admission fence; the tested bounded view stays bounded.
+    const stored = loadTranscriptEventsSync(scope);
+    expect(stored.slice(0, before.length)).toEqual(before);
+    expect(stored).toHaveLength(before.length + 3);
+    const messages = stored.filter(isRecord).filter((entry) => entry.type === "message");
+    const chain = [
+      { id: admission.entryId, parentId: null },
+      { id: parentId, parentId: admission.entryId },
+      { id: mirrorId, parentId },
+      { id: storedActivityId, parentId: mirrorId },
+      { id: storedResultId, parentId: storedActivityId },
+    ];
     expect(
-      loadTranscriptEventsSync(scope).filter(
-        (entry) => isRecord(entry) && entry.type === "message",
-      ),
-    ).toHaveLength(5);
+      messages.map(({ id, parentId: entryParentId }) => ({ id, parentId: entryParentId })),
+    ).toEqual(chain);
+    expect(messages[3]).toMatchObject({ message: activity });
+    expect(messages[4]).toMatchObject({ message: resultMessage });
+    const full = SessionManager.open(scope);
+    expect(
+      full.getBranch().map(({ id, parentId: entryParentId }) => ({ id, parentId: entryParentId })),
+    ).toEqual(chain);
+    expect(full.getEntry(storedActivityId)).toMatchObject({
+      parentId: mirrorId,
+      message: activity,
+    });
+    expect(full.getEntry(storedResultId)).toMatchObject({
+      parentId: storedActivityId,
+      message: resultMessage,
+    });
+    const reopened = reopen();
+    expect(reopened.getBranch()).toEqual(manager.getBranch());
+    expect(reopened.getAppendParentId()).toBe(storedResultId);
+    expect(reopened.getLeafId()).toBe(storedResultId);
+    if (bounded) {
+      expect(reopened.getEntry(storedActivityId)).toBeUndefined();
+    }
+    expect(reopened.buildSessionContext()).toEqual(manager.buildSessionContext());
+    expect(full.buildSessionContext()).toEqual(manager.buildSessionContext());
   },
 );
 

@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -202,9 +202,12 @@ describe("AgentSession runtime and transcript projections", () => {
           beforeResults,
         );
         if (rejected) {
-          expect(String(failure ?? session.state.errorMessage)).toContain(
-            "SQLite transcript changed while preparing rewrite",
-          );
+          let failureMessage = session.state.errorMessage;
+          if (failure !== undefined) {
+            assert(failure instanceof Error);
+            failureMessage = failure.message;
+          }
+          expect(failureMessage).toContain("SQLite transcript changed while preparing rewrite");
           expect(results).toEqual([]);
           expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
         } else {
