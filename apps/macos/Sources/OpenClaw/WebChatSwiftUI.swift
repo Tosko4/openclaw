@@ -1218,7 +1218,8 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         self.viewModel = vm
         let gatewayTransport = transport as? MacGatewayChatTransport
         let usesPrimaryAppRuntime = gatewayTransport.map { $0.connection === GatewayConnection.shared } ?? false
-        let applyRoutingIdentity = { @MainActor [weak vm] (identity: OpenClawChatSessionRoutingIdentity) async in
+        let applyRoutingIdentity: @MainActor @Sendable (OpenClawChatSessionRoutingIdentity) async -> Void = {
+            [weak vm] identity in
             guard let vm else { return }
             let effectiveAgentID = Self.applyRefreshedRoutingIdentity(
                 routingIdentity: identity,

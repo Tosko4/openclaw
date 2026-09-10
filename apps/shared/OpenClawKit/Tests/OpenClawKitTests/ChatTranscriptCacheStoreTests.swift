@@ -955,7 +955,7 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
                 """)
         }
         #expect((owner?["default_agent_id"] as String?) == "main")
-        try legacy.write { db in
+        try await legacy.write { db in
             try db.execute(
                 sql: """
                 UPDATE gateway_routing_identity SET
