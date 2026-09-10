@@ -36,7 +36,7 @@ private final class ActivityRelayURLProtocol: URLProtocol, @unchecked Sendable {
     private static let lock = NSLock()
     private nonisolated(unsafe) static var handlers: [String: Handler] = [:]
     private let taskLock = NSLock()
-    private var task: Task<Void, Never>?
+    private var loadingTask: Task<Void, Never>?
 
     static func install(host: String, handler: Handler?) {
         self.lock.withLock { self.handlers[host] = handler }
@@ -53,7 +53,7 @@ private final class ActivityRelayURLProtocol: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         let handler = Self.lock.withLock { Self.handlers[self.request.url?.host ?? ""] }
         self.taskLock.withLock {
-            self.task = Task {
+            self.loadingTask = Task {
                 do {
                     let handler = try #require(handler)
                     let (status, data) = try await handler(self.request)
@@ -72,7 +72,7 @@ private final class ActivityRelayURLProtocol: URLProtocol, @unchecked Sendable {
     }
 
     override func stopLoading() {
-        self.taskLock.withLock { self.task?.cancel() }
+        self.taskLock.withLock { self.loadingTask?.cancel() }
     }
 }
 
