@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
+import { execFileUtf8 } from "../../src/daemon/exec-file.js";
 import { readLoadedSystemdServiceRuntime } from "../../src/daemon/systemd-loaded-runtime.js";
 import { readSystemdServiceRuntime } from "../../src/daemon/systemd-runtime.js";
 import {
@@ -60,6 +61,103 @@ function fixture(customPaths = true, registry?: string, managerSetup = "") {
 }
 
 describe.skipIf(process.platform === "win32")("survivor manager fixture", () => {
+  it("retains isolated npm ownership through the native manager client and caller drift", async () => {
+    const { home, env, unit, paths } = fixture(
+      true,
+      undefined,
+      'npm config set prefix "$npm_config_prefix" --location=user',
+    );
+    env.NPM_CONFIG_PREFIX = home;
+    const report = join(home, "native-npm-owner.json");
+    const program = join(home, "native-npm-owner.mjs");
+    const expectedRoot = join(home, "lib/node_modules");
+    writeFileSync(
+      program,
+      `import fs from "node:fs";
+import { spawnSync } from "node:child_process";
+const npm = spawnSync("npm", ["root", "-g"], { encoding: "utf8", timeout: 15000 });
+const version = spawnSync("npm", ["--version"], { encoding: "utf8", timeout: 15000 });
+const record = ${JSON.stringify(report)};
+fs.writeFileSync(record + ".pending", JSON.stringify({ pid: process.pid, status: npm.status, root: npm.stdout.trim(), npmVersion: version.stdout.trim(), upperPrefix: process.env.NPM_CONFIG_PREFIX ?? null, lowerPrefix: process.env.npm_config_prefix ?? null }));
+fs.renameSync(record + ".pending", record);
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+    );
+    writeFileSync(
+      unit,
+      buildSystemdUnit({ programArguments: [process.execPath, program], workingDirectory: home }),
+    );
+    const observed: number[] = [];
+    const inspect = async (phase: string) => {
+      await expect.poll(() => existsSync(report), { timeout: 10000 }).toBe(true);
+      const sample: {
+        pid: number;
+        status: number;
+        root: string;
+        npmVersion: string;
+        upperPrefix: string | null;
+        lowerPrefix: string | null;
+      } = JSON.parse(readFileSync(report, "utf8"));
+      observed.push(sample.pid);
+      console.log(
+        "[managed-prefix] " +
+          JSON.stringify({
+            phase,
+            npmVersion: sample.npmVersion,
+            status: sample.status,
+            matchesInstalledOwner: sample.root === expectedRoot,
+            upperPrefixAbsent: sample.upperPrefix === null,
+            lowerPrefixAbsent: sample.lowerPrefix === null,
+          }),
+      );
+      expect(sample.status).toBe(0);
+      expect(sample.upperPrefix).toBeNull();
+      expect(sample.lowerPrefix).toBeNull();
+      expect(sample.root, "native-launched service lost its isolated global npm owner").toBe(
+        expectedRoot,
+      );
+      expect(await readSystemdServiceRuntime(env)).toMatchObject({
+        status: "running",
+        pid: sample.pid,
+      });
+      return sample.pid;
+    };
+    const native = (operation: string, callerEnv = env) =>
+      execFileUtf8(join(home, "bin/systemctl"), ["--user", operation, "openclaw-gateway.service"], {
+        env: callerEnv,
+        timeout: 40000,
+      });
+    try {
+      const started = await native("start");
+      expect(started.code, started.stderr).toBe(0);
+      const originalPid = await inspect("initial-native-start");
+      rmSync(report);
+      const restarted = await native("restart", {
+        ...env,
+        NPM_CONFIG_PREFIX: join(home, "wrong-upper-prefix"),
+        npm_config_prefix: join(home, "wrong-lower-prefix"),
+      });
+      expect(restarted.code, restarted.stderr).toBe(0);
+      const replacementPid = await inspect("drifted-caller-native-restart");
+      expect(replacementPid).not.toBe(originalPid);
+      expect(() => process.kill(originalPid, 0)).toThrow();
+    } finally {
+      const stopped = await native("stop");
+      expect(stopped.code, stopped.stderr).toBe(0);
+      for (const pid of observed) {
+        try {
+          expect.soft(() => process.kill(pid, 0)).toThrow();
+        } finally {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {}
+        }
+      }
+      expect(existsSync(paths.pid)).toBe(false);
+    }
+  }, 60000);
+
   it("keeps self-upgrade target channels enabled despite historical source suppression", async () => {
     const lane = readFileSync(
       resolve("scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh"),

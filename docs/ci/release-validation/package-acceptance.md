@@ -28,9 +28,36 @@ Use `Package Acceptance` when the question is "does this installable OpenClaw pa
 - `source=ref` packs a trusted `package_ref` branch, tag, or full commit SHA. The resolver fetches OpenClaw branches/tags, verifies the selected commit is reachable from repository branch history or a release tag, installs deps in a detached worktree, and packs it with `scripts/package-openclaw-for-docker.mjs`.
 - `source=url` downloads a public HTTPS `.tgz`; `package_sha256` is required. This path rejects URL credentials, non-default HTTPS ports, private/internal/special-use hostnames or resolved IPs, and redirects outside the same public safety policy.
 - `source=trusted-url` downloads an HTTPS `.tgz` from a named trusted-source policy in `.github/package-trusted-sources.json`; `package_sha256` and `trusted_source_id` are required. Use this only for maintainer-owned enterprise mirrors or private package repositories that need configured hosts, ports, path prefixes, redirect hosts, or private-network resolution. If the policy declares bearer auth, the workflow uses the fixed `OPENCLAW_TRUSTED_PACKAGE_TOKEN` secret; URL-embedded credentials are still rejected.
-- `source=artifact` downloads one `.tgz` from `artifact_run_id` and `artifact_name`; `package_sha256` is optional but should be supplied for externally shared artifacts.
+- `source=artifact` downloads one `.tgz` using the complete immutable artifact identity: `artifact_run_id`, `artifact_name`, `artifact_id`, `artifact_digest`, and `artifact_run_attempt`. It also requires `package_file_name`, `package_sha256`, `package_source_sha`, and `package_version` to verify the exact package. Artifact digests use 64 lowercase hexadecimal characters without the `sha256:` prefix.
 
 Keep `workflow_ref` and `package_ref` separate. `workflow_ref` is the trusted workflow/harness code that runs the test. `package_ref` is the source commit that gets packed when `source=ref`. This lets the current test harness validate older trusted source commits without running old workflow logic.
+
+### Reuse an unpublished plugin registry
+
+For an unpublished candidate, pass `prepublish_plugin_registry_json` with the
+registry prepared for that exact package source SHA and version. This avoids
+rebuilding a smaller registry that lacks unpublished dependencies required by
+the candidate. The value is one JSON object containing exactly these fields:
+
+- `prepublishPluginRegistryArtifactName`
+- `prepublishPluginRegistryArtifactId`
+- `prepublishPluginRegistryArtifactDigest`
+- `prepublishPluginRegistryArtifactRunId`
+- `prepublishPluginRegistryArtifactRunAttempt`
+- `prepublishPluginRegistryManifestSha256`
+
+Copy the tuple from the producer's candidate manifest. Package Acceptance
+checks the artifact identity, manifest checksum, source SHA, package version,
+and package tarball checksums before using the registry. The registry producer
+may be a different run from the root package producer; both must describe the
+same candidate. Omit the input for published packages.
+
+Manual dispatches no longer accept `shared_image_artifact_namespace`. Remove
+that flag from existing `gh workflow run package-acceptance.yml` commands.
+Manual runs use `package-acceptance`; shared image artifact names still include
+the target SHA, run ID, and attempt. Reusable `workflow_call` callers retain
+their namespace input unchanged. This frees one of GitHub's 25 manual-dispatch
+input slots for the immutable registry tuple.
 
 ### Suite profiles
 
@@ -161,13 +188,22 @@ gh workflow run package-acceptance.yml \
   -f package_sha256=<64-char-sha256> \
   -f suite_profile=smoke
 
-# Reuse a tarball uploaded by another Actions run.
+# Reuse a tarball and its unpublished plugin registry from recorded artifacts.
+# registry-tuple.json contains only the six registry fields listed above.
 gh workflow run package-acceptance.yml \
   --ref main \
   -f workflow_ref=main \
   -f source=artifact \
-  -f artifact_run_id=<run-id> \
-  -f artifact_name=package-under-test \
+  -f artifact_run_id='<package-run-id>' \
+  -f artifact_name='<package-artifact-name>' \
+  -f artifact_id='<package-artifact-id>' \
+  -f artifact_digest='<64-char-artifact-sha256>' \
+  -f artifact_run_attempt='<package-run-attempt>' \
+  -f package_file_name='<package-tarball-filename>' \
+  -f package_sha256='<64-char-tarball-sha256>' \
+  -f package_source_sha='<40-char-source-sha>' \
+  -f package_version='<exact-package-version>' \
+  -f prepublish_plugin_registry_json="$(cat registry-tuple.json)" \
   -f suite_profile=custom \
   -f docker_lanes='install-e2e plugin-update'
 ```

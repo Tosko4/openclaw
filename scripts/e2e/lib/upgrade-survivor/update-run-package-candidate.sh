@@ -35,6 +35,9 @@ export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG="$artifact_dir/systemctl.log
 export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE="$artifact_dir/systemctl.pid"
 export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG="$artifact_dir/gateway.log"
 mkdir -p "$artifact_dir" "$OPENCLAW_STATE_DIR" "$npm_config_prefix" "$npm_config_cache"
+# Native service controls drop shell npm settings. Configure this isolated user
+# so the serving baseline discovers the same global owner after manager launch.
+npm config set prefix "$npm_config_prefix" --location=user
 
 tar -xOf "$candidate" package/package.json >"$artifact_dir/candidate-package.json"
 tar -xOf "$candidate" package/dist/build-info.json >"$artifact_dir/candidate-build-info.json"

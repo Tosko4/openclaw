@@ -1311,8 +1311,14 @@ describe("release validation no-push transport", () => {
       type: "string",
     });
     expect(standardAcceptance.with?.shared_image_policy).toBe("${{ inputs.shared_image_policy }}");
+    expect(packageAcceptance.on?.workflow_dispatch?.inputs).not.toHaveProperty(
+      "shared_image_artifact_namespace",
+    );
+    expect(
+      packageAcceptance.on?.workflow_call?.inputs?.shared_image_artifact_namespace,
+    ).toMatchObject({ default: "package-acceptance", required: false, type: "string" });
     expect(standardAcceptance.with?.shared_image_artifact_namespace).toBe(
-      "${{ inputs.shared_image_artifact_namespace }}",
+      "${{ inputs.shared_image_artifact_namespace || 'package-acceptance' }}",
     );
     expect(standardAcceptance.with).toMatchObject({
       package_artifact_digest: "${{ needs.resolve_package.outputs.package_artifact_digest }}",

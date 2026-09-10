@@ -7830,6 +7830,64 @@ done
     expect(staleObject.stdout).not.toContain('"loaded"');
   });
 
+  it.each(["selected", "default"] as const)(
+    "mounts the %s Doctor contract and canonical-path shims from the same checkout",
+    (targetMode) => {
+      const workDir = tempDirs.make("openclaw-doctor-contract-mounts-");
+      const targetRoot =
+        targetMode === "selected" ? join(workDir, "selected target") : process.cwd();
+      const contractPath = "scripts/e2e/lib/doctor-install-switch";
+      const shimNames = ["systemctl", "loginctl", "busctl", "systemd-exec-start.mjs"];
+      if (targetMode === "selected") {
+        const targetContract = join(targetRoot, contractPath);
+        mkdirSync(join(targetContract, "shims"), { recursive: true });
+        copyFileSync(DOCTOR_SWITCH_SCENARIO_PATH, join(targetContract, "scenario.sh"));
+        for (const name of shimNames) {
+          copyFileSync(join(contractPath, "shims", name), join(targetContract, "shims", name));
+        }
+      }
+      writeFileSync(join(workDir, "openclaw-current.tgz"), "unused package transport fixture");
+      writeExecutables(join(workDir, "bin"), {
+        timeout: PASSTHROUGH_TIMEOUT_SCRIPT,
+        docker: `#!/bin/bash
+set -euo pipefail
+case "$1 \${2:-}" in
+  "image inspect") exit 0 ;;
+  "run "*) printf '%s\\0' "$@" >"$TMPDIR/docker-run-args" ;;
+  *) exit 9 ;;
+esac
+`,
+      });
+      const script = repoShell(workDir)`
+export PATH="$TMPDIR/bin:$PATH"
+export OPENCLAW_SKIP_DOCKER_BUILD=1
+export OPENCLAW_DOCKER_E2E_IMAGE=doctor-contract-fixture
+export OPENCLAW_CURRENT_PACKAGE_TGZ="$TMPDIR/openclaw-current.tgz"
+unset DOCKER_E2E_HARNESS_ROOT_DIR OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR OPENCLAW_DOCKER_E2E_REPO_ROOT
+${targetMode === "selected" ? `export OPENCLAW_DOCKER_E2E_REPO_ROOT=${shellQuote(targetRoot)}` : ""}
+bash "$ROOT_DIR/scripts/e2e/doctor-install-switch-docker.sh"
+`;
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
+        encoding: "utf8",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const args = readFileSync(join(workDir, "docker-run-args"), "utf8").split("\0");
+      const mounts = args.flatMap((arg, index) => (arg === "-v" ? [args[index + 1]] : []));
+      // Service inspection uses /usr/local/bin, outside the target directory overlay.
+      // Both views must select one fixture while shared helpers stay trusted.
+      expect(mounts.filter((mount) => mount?.includes(":/usr/local/bin/"))).toEqual(
+        shimNames.map(
+          (name) => `${targetRoot}/${contractPath}/shims/${name}:/usr/local/bin/${name}:ro`,
+        ),
+      );
+      expect(mounts).toContain(`${targetRoot}/${contractPath}:/app/${contractPath}:ro`);
+      expect(mounts).toContain(`${process.cwd()}/scripts/e2e:/app/scripts/e2e:ro`);
+      expect(mounts).toContain(`${process.cwd()}/scripts/lib:/app/scripts/lib:ro`);
+      expect(args).toContain("doctor-contract-fixture");
+      expect(args).toContain(`${contractPath}/scenario.sh`);
+    },
+  );
+
   it("routes doctor install switch commands through the E2E timeout helper", () => {
     const runner = readFileSync(DOCTOR_SWITCH_DOCKER_E2E_PATH, "utf8");
     const scenario = readFileSync(DOCTOR_SWITCH_SCENARIO_PATH, "utf8");

@@ -5525,7 +5525,6 @@ test "$package_manager" = "pnpm@12.1.0"
     });
     const dispatchInputs = parsedWorkflow.on?.workflow_dispatch?.inputs;
     const callInputs = parsedWorkflow.on?.workflow_call?.inputs;
-    expect(dispatchInputs?.prepublish_plugin_registry_json).toBeUndefined();
     expect(dispatchInputs?.advisory).toEqual(callInputs?.advisory);
     expect(callInputs?.advisory).toEqual({
       description: "Treat acceptance failures as advisory for the caller",
@@ -5715,6 +5714,23 @@ test "$package_manager" = "pnpm@12.1.0"
   });
 
   it("normalizes one closed prerelease registry tuple before child workflows", () => {
+    const workflow = readWorkflow(PACKAGE_ACCEPTANCE_WORKFLOW);
+    const dispatchInputs = workflow.on?.workflow_dispatch?.inputs ?? {};
+    expect(Object.keys(dispatchInputs).length).toBeLessThanOrEqual(25);
+    for (const entry of [workflow.on?.workflow_dispatch, workflow.on?.workflow_call]) {
+      expect(entry?.inputs?.prepublish_plugin_registry_json).toMatchObject({
+        default: "",
+        required: false,
+        type: "string",
+      });
+    }
+    const validation = workflowStep(
+      workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package"),
+      "Validate prerelease plugin registry input",
+    );
+    expect(validation.env?.PREPUBLISH_PLUGIN_REGISTRY_JSON).toBe(
+      "${{ inputs.prepublish_plugin_registry_json || '' }}",
+    );
     const tuple = packageAcceptanceRegistryTuple();
     const direct = runPackageAcceptanceRegistryInputValidation({
       prepublishPluginRegistryJson: JSON.stringify(tuple),
@@ -7477,7 +7493,7 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("suite_id: native-live-src-infra");
     expect(workflow).toContain(
-      "command: OPENCLAW_LIVE_APNS_REACHABILITY=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra",
+      "command: OPENCLAW_LIVE_APNS_REACHABILITY=1 OPENCLAW_LIVE_SESSION_EVENT_WAKE=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra",
     );
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-smoke");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_SETUP_TIMEOUT_MS=300000");

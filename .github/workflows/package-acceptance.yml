@@ -92,10 +92,10 @@ on:
         options:
           - existing-only
           - no-push-artifact
-      shared_image_artifact_namespace:
-        description: Unique artifact namespace when shared_image_policy=no-push-artifact
+      prepublish_plugin_registry_json:
+        description: Immutable prerelease plugin registry artifact tuple for an unpublished candidate
         required: false
-        default: package-acceptance
+        default: ""
         type: string
       suite_profile:
         description: "Acceptance profile: smoke, package, telegram, product, full, or custom"
@@ -1128,7 +1128,7 @@ jobs:
       prepublish_plugin_registry_manifest_sha256: ${{ startsWith(fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactName || '', 'docker-e2e-prepublish-plugin-registry-') && fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}
       include_live_suites: ${{ needs.resolve_package.outputs.include_live_suites == 'true' }}
       live_models_only: false
-      shared_image_artifact_namespace: ${{ inputs.shared_image_artifact_namespace }}
+      shared_image_artifact_namespace: ${{ inputs.shared_image_artifact_namespace || 'package-acceptance' }}
       shared_image_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactName || '' }}
       shared_image_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactId || '' }}
       shared_image_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactDigest || '' }}

@@ -97,11 +97,21 @@ export function readManagedCandidateState(DatabaseSync, launch) {
   return { run, lease };
 }
 
+function assertManagedCandidateAdmission(rpc, baseline) {
+  const reason =
+    typeof rpc?.result?.reason === "string" ? rpc.result.reason.slice(0, 200) : "unknown";
+  assert.equal(rpc?.ok, true, `update.run rejected: ${reason}; see update-rpc.json`);
+  assert.equal(rpc.handoff?.status, "started", "update.run must launch the managed helper");
+  assert.equal(
+    rpc.result?.before?.version,
+    baseline.version,
+    "update.run baseline identity changed",
+  );
+}
+
 export function assertManagedCandidateProof(proof) {
   assert.equal(proof.manager, "simulated-systemd");
-  assert.equal(proof.rpc.ok, true, "update.run must admit the update");
-  assert.equal(proof.rpc.handoff?.status, "started", "update.run must launch the managed helper");
-  assert.equal(proof.rpc.result?.before?.version, proof.baseline.version);
+  assertManagedCandidateAdmission(proof.rpc, proof.baseline);
   assert.equal(proof.rpc.runId, proof.launch.runId);
   assert.equal(proof.rpc.handoff.pid, proof.launch.helper.pid);
   assert.deepEqual(proof.launch.parent, proof.nativeBefore, "handoff came from another process");
@@ -193,6 +203,7 @@ async function observeUpdate(artifactDir, installedRoot) {
   });
   let launch;
   let run;
+  let rpc;
   let helperLeaseObserved = false;
   let runnerLeaseObserved = false;
   const history = [];
@@ -202,8 +213,12 @@ async function observeUpdate(artifactDir, installedRoot) {
     const deadline = Date.now() + 25 * 60_000;
     while (Date.now() < deadline) {
       launch ??= readOptional(path.join(artifactDir, "scope.json"));
-      if (rpcExit !== undefined) {
+      if (rpcExit !== undefined && rpc === undefined) {
         assert.equal(rpcExit, 0, "update.run CLI failed; see update-rpc.err");
+        // A successful RPC transport can carry a rejected update. Consume its
+        // settled receipt before waiting for a helper that was never admitted.
+        rpc = json(rpcFile);
+        assertManagedCandidateAdmission(rpc, baseline);
       }
       if (launch) {
         const observation = readManagedCandidateState(DatabaseSync, launch);
@@ -278,7 +293,7 @@ async function observeUpdate(artifactDir, installedRoot) {
       manager: "simulated-systemd",
       candidate,
       baseline,
-      rpc: json(rpcFile),
+      rpc,
       launch,
       helperLeaseObserved,
       runnerLeaseObserved,

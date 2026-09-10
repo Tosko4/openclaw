@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -60,6 +60,68 @@ function successfulProof() {
 }
 
 describe("managed candidate update proof", () => {
+  it.skipIf(process.platform !== "linux").each([
+    {
+      label: "rejected RPC",
+      rpc: { ok: false, result: { status: "skipped", reason: "not-git-install" } },
+      diagnostic: "not-git-install; see update-rpc.json",
+    },
+    {
+      label: "missing handoff",
+      rpc: { ok: true, result: { before: { version: "2026.9.3" } } },
+      diagnostic: "update.run must launch the managed helper",
+    },
+    {
+      label: "wrong baseline",
+      rpc: {
+        ok: true,
+        handoff: { status: "started", pid: 20 },
+        result: { before: { version: "2026.4.26" } },
+      },
+      diagnostic: "update.run baseline identity changed",
+    },
+  ])("stops promptly after an exit-zero $label without a scope", ({ rpc, diagnostic }) => {
+    const root = tempDirs.make("openclaw-managed-rejected-rpc-");
+    const bin = path.join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(path.join(root, "candidate-build-info.json"), JSON.stringify(candidate));
+    writeFileSync(
+      path.join(root, "baseline-build-info.json"),
+      JSON.stringify({ version: "2026.9.3" }),
+    );
+    writeFileSync(
+      path.join(bin, "systemctl"),
+      `#!${process.execPath}\nconsole.log("MainPID=${process.pid}");\n`,
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      path.join(bin, "openclaw"),
+      `#!${process.execPath}\nconsole.log(${JSON.stringify(JSON.stringify(rpc))});\n`,
+      { mode: 0o755 },
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/e2e/lib/upgrade-survivor/update-run-package-candidate.mjs"),
+        "run",
+        root,
+        root,
+      ],
+      {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        encoding: "utf8",
+        timeout: 5_000,
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stderr).toContain(diagnostic);
+    expect(result.stderr).toContain("[managed-candidate] FAILED (exit 1)");
+    expect(JSON.parse(readFileSync(path.join(root, "update-rpc.json"), "utf8"))).toEqual(rpc);
+    expect(existsSync(path.join(root, "scope.json"))).toBe(false);
+    expect(existsSync(path.join(root, "summary.json"))).toBe(false);
+  });
+
   it.each([
     { terminal: true, retained: false, accepted: true },
     { terminal: false, retained: false, accepted: false },
