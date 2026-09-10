@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createServer } from "node:http";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import * as preparedRuntime from "../../../src/agents/prepared-model-runtime.js";
 import { createSubagentRunRecord } from "../../../src/agents/subagent-test-fixtures.test-helpers.js";
@@ -18,7 +19,12 @@ import {
   resetSubagentRegistryForTests,
 } from "../../../src/agents/subagents/registry/subagent-registry.test-helpers.js";
 import { loadSessionEntry } from "../../../src/config/sessions/session-accessor.js";
+import {
+  SQLITE_SESSION_WRITER_QUEUES,
+  WRITER_QUEUES,
+} from "../../../src/config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
+import type { AgentTurnStartOwner } from "../../../src/gateway/agent-turn/internal-facade.types.js";
 import type { GatewayRecoveryRuntime } from "../../../src/gateway/server-instance-runtime.types.js";
 import {
   disconnectGatewayClient,
@@ -45,6 +51,73 @@ import { writeOpenAiResponsesText } from "../openai-responses-sse.js";
 import { createDeferred } from "../promise.js";
 import { runQaGatewayFixture } from "../qa-gateway-cleanup.js";
 
+type RecoverySource = "A" | "B" | "other";
+type MarkerLocation =
+  | "instructions"
+  | "latest-user"
+  | "earlier-user"
+  | "assistant"
+  | "tool"
+  | "other-unknown";
+
+function summarizePostMarkers(body: string) {
+  const released: MarkerLocation[] = [];
+  const successor: MarkerLocation[] = [];
+  const inspect = (value: unknown, location: MarkerLocation) => {
+    const text = typeof value === "string" ? value : (JSON.stringify(value) ?? "");
+    for (const [marker, locations] of [
+      ["RELEASED_OWNER_WORK", released],
+      ["NEW_OWNER_WORK", successor],
+    ] as const) {
+      if (text.includes(marker) && !locations.includes(location)) {
+        locations.push(location);
+      }
+    }
+  };
+  try {
+    const payload = asOptionalRecord(JSON.parse(body));
+    if (!payload) {
+      inspect(body, "other-unknown");
+      return { released, successor };
+    }
+    inspect(payload.instructions, "instructions");
+    const input = payload.input;
+    if (Array.isArray(input)) {
+      const lastUser = input.findLastIndex((item) => asOptionalRecord(item)?.role === "user");
+      for (const [index, item] of input.entries()) {
+        const entry = asOptionalRecord(item);
+        const role = entry?.role;
+        inspect(
+          item,
+          role === "user"
+            ? index === lastUser
+              ? "latest-user"
+              : "earlier-user"
+            : role === "assistant"
+              ? "assistant"
+              : role === "system" || role === "developer"
+                ? "instructions"
+                : role === "tool" ||
+                    entry?.type === "function_call" ||
+                    entry?.type === "function_call_output"
+                  ? "tool"
+                  : "other-unknown",
+        );
+      }
+    } else {
+      inspect(input, typeof input === "string" ? "latest-user" : "other-unknown");
+    }
+    for (const [key, value] of Object.entries(payload)) {
+      if (key !== "instructions" && key !== "input") {
+        inspect(value, "other-unknown");
+      }
+    }
+  } catch {
+    inspect(body, "other-unknown");
+  }
+  return { released, successor };
+}
+
 function readDurableOwnership() {
   const { db } = openOpenClawStateDatabase();
   const query = getNodeSqliteKysely<Pick<DB, "subagent_runs" | "task_runs" | "flow_runs">>(db);
@@ -61,10 +134,10 @@ function readDurableOwnership() {
 }
 
 describe("released subagent ownership through the real Gateway", () => {
-  it.each(["allowed", "cancelled", "retained", "completed", "removed"] as const)(
+  it.for(["allowed", "cancelled", "retained", "completed", "removed"] as const)(
     "revalidates %s after real runtime preparation",
     { timeout: 90_000 },
-    async (mode) => {
+    async (mode, { onTestFailed }) => {
       const token = "released-subagent-ownership-token";
       const state = await createOpenClawTestState({
         label: "released-subagent-ownership",
@@ -93,6 +166,98 @@ describe("released subagent ownership through the real Gateway", () => {
       const marker = "RELEASED_OWNER_COMPLETED";
       const recoveryPosts: string[] = [];
       const successorPosts: string[] = [];
+      const diagnosticStarted = performance.now();
+      const events: Array<{
+        n: number;
+        ms: number;
+        phase:
+          | "recovery"
+          | "dispatch"
+          | "start-owner"
+          | "execution"
+          | "settled"
+          | "rejected"
+          | "lease-held"
+          | "lease-released"
+          | "snapshot";
+        source: RecoverySource;
+        target?: "child" | "requester" | "other";
+        guard?: boolean;
+        accepted?: boolean;
+      }> = [];
+      const posts: Array<
+        ReturnType<typeof summarizePostMarkers> & { n: number; dispatchEvent: number }
+      > = [];
+      const checkpoints = {
+        aOwnerObserved: false,
+        aPreexecution: false,
+        aCallbackUnseen: false,
+        aDispatchPending: false,
+        bTerminal: false,
+        bDelivered: false,
+        bTaskSucceeded: false,
+        bSessionDone: false,
+        bLastRunMatches: false,
+        bLifecycleCleared: false,
+        bWritesSettled: false,
+      };
+      let eventCount = 0;
+      let postCount = 0;
+      let droppedEvents = 0;
+      let lastDispatchEvent = 0;
+      let diagnosticEmitted = false;
+      const sourceOf = (source: string | undefined): RecoverySource =>
+        source === runId ? "A" : source === successorRunId ? "B" : "other";
+      const record = (
+        phase: (typeof events)[number]["phase"],
+        source: RecoverySource,
+        fields: Pick<(typeof events)[number], "target" | "guard" | "accepted"> = {},
+      ) => {
+        const n = ++eventCount;
+        events.push({
+          n,
+          ms: Math.round(performance.now() - diagnosticStarted),
+          phase,
+          source,
+          ...fields,
+        });
+        if (events.length > 24) {
+          events.shift();
+          droppedEvents++;
+        }
+        return n;
+      };
+      const emitFailureDiagnostic = () => {
+        if (diagnosticEmitted) {
+          return;
+        }
+        diagnosticEmitted = true;
+        const render = () =>
+          `[released-ownership] ${JSON.stringify({
+            mode,
+            checkpoints,
+            events,
+            posts,
+            droppedEvents,
+            droppedPosts: postCount - posts.length,
+          })}\n`;
+        let line = render();
+        while (Buffer.byteLength(line) > 4_096 && (events.length > 0 || posts.length > 0)) {
+          if (events.length > 0) {
+            events.shift();
+            droppedEvents++;
+          } else {
+            posts.pop();
+          }
+          line = render();
+        }
+        try {
+          process.stderr.write(line);
+        } catch {
+          // Diagnostics must not replace the fixture's original failure.
+        }
+      };
+      onTestFailed(emitFailureDiagnostic);
       const providerWork = new Set<Promise<void>>();
       const providerErrors: unknown[] = [];
       const provider = createServer((request, response) => {
@@ -106,6 +271,15 @@ describe("released subagent ownership through the real Gateway", () => {
             chunks.push(Buffer.from(chunk));
           }
           const body = Buffer.concat(chunks).toString("utf8");
+          postCount++;
+          if (posts.length < 4) {
+            // Marker locations and ordering do not identify a POST's originating run.
+            posts.push({
+              n: postCount,
+              dispatchEvent: lastDispatchEvent,
+              ...summarizePostMarkers(body),
+            });
+          }
           if (body.includes("RELEASED_OWNER_WORK")) {
             recoveryPosts.push(body);
           }
@@ -139,6 +313,9 @@ describe("released subagent ownership through the real Gateway", () => {
       let returnedLease: preparedRuntime.PreparedModelRuntimeLease | undefined;
       let recoveryWork: ReturnType<typeof originalRecover> | undefined;
       let dispatchWork: Promise<unknown> | undefined;
+      let dispatchSettled = false;
+      let recoveryStartOwner: AgentTurnStartOwner | undefined;
+      let recoveryExecutionStarted = false;
       let runtime: GatewayRecoveryRuntime | undefined;
       let recoveryRunId: string | undefined;
       let terminalWork: Promise<{ status: string }> | undefined;
@@ -273,9 +450,11 @@ describe("released subagent ownership through the real Gateway", () => {
                 // authority check, including the revalidation after this await.
                 heldLease = lease;
                 heldSignal = args[1]?.abortSignal;
+                record("lease-held", "A");
                 entered.resolve(lease);
                 await release.promise;
                 returnedLease = lease;
+                record("lease-released", "A");
               }
               return lease;
             });
@@ -283,35 +462,78 @@ describe("released subagent ownership through the real Gateway", () => {
           const recoverySpy = vi
             .spyOn(restartRecovery, "recoverInterruptedSubagentRow")
             .mockImplementation((params) => {
-              if (params.runId !== runId || recoveryWork) {
-                return originalRecover(params);
+              record("recovery", sourceOf(params.runId));
+              if (!runtime && params.gatewayRuntime) {
+                runtime = params.gatewayRuntime;
+                const originalDispatch = runtime.dispatchAgent;
+                const dispatchSpy = vi.spyOn(runtime, "dispatchAgent").mockImplementation(function <
+                  T,
+                >(...args: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>): Promise<T> {
+                  const source = sourceOf(recoveryScope.getStore());
+                  const captureRecovery =
+                    !dispatchWork &&
+                    source === "A" &&
+                    args[0].sessionKey === childSessionKey &&
+                    args[0].inputProvenance?.sourceTool === "subagent_interrupted_resume";
+                  const options = args[2];
+                  lastDispatchEvent = record("dispatch", source, {
+                    target:
+                      args[0].sessionKey === childSessionKey
+                        ? "child"
+                        : args[0].sessionKey === "agent:main:main"
+                          ? "requester"
+                          : "other",
+                    guard: options?.assertAdmissionCurrent !== undefined,
+                  });
+                  const work = originalDispatch<T>(args[0], args[1], {
+                    ...options,
+                    onStartOwner: (owner) => {
+                      record("start-owner", source);
+                      if (captureRecovery) {
+                        recoveryStartOwner = owner;
+                      }
+                      options?.onStartOwner?.(owner);
+                    },
+                    onExecutionStarted: () => {
+                      record("execution", source);
+                      if (captureRecovery) {
+                        recoveryExecutionStarted = true;
+                      }
+                      options?.onExecutionStarted?.();
+                    },
+                  });
+                  if (captureRecovery) {
+                    recoveryRunId = args[0].idempotencyKey;
+                    dispatchWork = work;
+                  }
+                  void work.then(
+                    (value) => {
+                      const status = asOptionalRecord(value)?.status;
+                      record("settled", source, {
+                        accepted: status === "accepted" || status === "in_flight",
+                      });
+                      if (captureRecovery) {
+                        dispatchSettled = true;
+                      }
+                    },
+                    () => {
+                      record("rejected", source);
+                      if (captureRecovery) {
+                        dispatchSettled = true;
+                      }
+                    },
+                  );
+                  return work;
+                });
+                restoreSpies.push(() => dispatchSpy.mockRestore());
+                const noticeSpy = vi.spyOn(runtime, "sendRecoveryNotice");
+                restoreSpies.push(() => noticeSpy.mockRestore());
               }
-              runtime = params.gatewayRuntime;
-              if (!runtime) {
-                return originalRecover(params);
+              const work = recoveryScope.run(params.runId, () => originalRecover(params));
+              if (params.runId === runId && !recoveryWork && runtime) {
+                recoveryWork = work;
               }
-              const originalDispatch = runtime.dispatchAgent;
-              const dispatchSpy = vi.spyOn(runtime, "dispatchAgent").mockImplementation(function <
-                T,
-              >(...args: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>): Promise<T> {
-                const work = originalDispatch<T>(...args);
-                if (
-                  !dispatchWork &&
-                  recoveryScope.getStore() === runId &&
-                  args[0].sessionKey === childSessionKey &&
-                  args[0].inputProvenance?.sourceTool === "subagent_interrupted_resume"
-                ) {
-                  recoveryRunId = args[0].idempotencyKey;
-                  dispatchWork = work;
-                  void work.catch(() => {});
-                }
-                return work;
-              });
-              restoreSpies.push(() => dispatchSpy.mockRestore());
-              const noticeSpy = vi.spyOn(runtime, "sendRecoveryNotice");
-              restoreSpies.push(() => noticeSpy.mockRestore());
-              recoveryWork = recoveryScope.run(runId, () => originalRecover(params));
-              return recoveryWork;
+              return work;
             });
           restoreSpies.push(() => recoverySpy.mockRestore());
           starting = startGatewayWithClient({
@@ -343,6 +565,14 @@ describe("released subagent ownership through the real Gateway", () => {
           if (!runtime || !heldSignal) {
             throw new Error("real recovery did not publish its Gateway admission");
           }
+          checkpoints.aOwnerObserved = recoveryStartOwner !== undefined;
+          checkpoints.aPreexecution = recoveryStartOwner?.observe()?.executionStarted === false;
+          checkpoints.aCallbackUnseen = !recoveryExecutionStarted;
+          checkpoints.aDispatchPending = dispatchWork !== undefined && !dispatchSettled;
+          expect(checkpoints.aOwnerObserved).toBe(true);
+          expect(checkpoints.aPreexecution).toBe(true);
+          expect(checkpoints.aCallbackUnseen).toBe(true);
+          expect(checkpoints.aDispatchPending).toBe(true);
           if (mode === "cancelled") {
             // The operator is outside recovery's admission context. Public cancel
             // interrupts first, then waits for this preparation before claiming.
@@ -401,7 +631,6 @@ describe("released subagent ownership through the real Gateway", () => {
                   message: "Complete NEW_OWNER_WORK.",
                   deliver: false,
                   lane: "subagent",
-                  sessionEffects: "internal",
                   inputProvenance: {
                     kind: "inter_session",
                     sourceSessionKey: "agent:main:main",
@@ -415,24 +644,38 @@ describe("released subagent ownership through the real Gateway", () => {
                 35_000,
               );
               await expect(successorTerminal).resolves.toMatchObject({ status: "ok" });
+              checkpoints.bTerminal = true;
               await vi.waitFor(
                 () => {
-                  expect(subagentRuns.get(successorRunId)?.cleanupCompletedAt).toBeTypeOf("number");
+                  const successor = subagentRuns.get(successorRunId);
+                  const successorSession = loadSessionEntry({
+                    storePath,
+                    sessionKey: childSessionKey,
+                  });
+                  checkpoints.bDelivered = successor?.delivery?.status === "delivered";
+                  checkpoints.bTaskSucceeded =
+                    findTaskByRunId(successorRunId)?.status === "succeeded";
+                  checkpoints.bSessionDone = successorSession?.status === "done";
+                  checkpoints.bLastRunMatches = successorSession?.lastRunId === successorRunId;
+                  checkpoints.bLifecycleCleared = successorSession?.lifecycleRunId === undefined;
+                  // A still owns a held Gateway root. Observe settled writer queues
+                  // without the cleanup drain, which rejects pending writes.
+                  checkpoints.bWritesSettled =
+                    WRITER_QUEUES.size === 0 && SQLITE_SESSION_WRITER_QUEUES.size === 0;
+                  expect(successor?.cleanupCompletedAt).toBeTypeOf("number");
+                  expect(successor?.delivery?.status).toBe("delivered");
                   expect(findTaskByRunId(successorRunId)?.status).toBe("succeeded");
+                  expect(successorSession).toMatchObject({
+                    sessionId,
+                    status: "done",
+                    lastRunId: successorRunId,
+                  });
+                  expect(successorSession?.lifecycleRunId).toBeUndefined();
+                  expect(checkpoints.bWritesSettled).toBe(true);
                 },
                 { timeout: 10_000 },
               );
               expect(successorPosts).toHaveLength(1);
-              const successorSession = loadSessionEntry({
-                storePath,
-                sessionKey: childSessionKey,
-              });
-              expect(successorSession).toMatchObject({
-                sessionId,
-                status: "done",
-                lastRunId: successorRunId,
-              });
-              expect(successorSession?.lifecycleRunId).toBeUndefined();
               if (mode === "removed") {
                 releaseSubagentRun(successorRunId);
                 expect(loadSubagentRegistryFromSqlite().has(successorRunId)).toBe(false);
@@ -444,6 +687,7 @@ describe("released subagent ownership through the real Gateway", () => {
             protectedSession = structuredClone(
               loadSessionEntry({ storePath, sessionKey: childSessionKey }),
             );
+            record("snapshot", "B");
           }
           release.resolve();
           gateway = await starting;
@@ -594,7 +838,10 @@ describe("released subagent ownership through the real Gateway", () => {
         },
         // Restoring selectors does not close databases or remove retained state.
         () => environment.restore(),
-      );
+      ).catch((error: unknown) => {
+        emitFailureDiagnostic();
+        throw error;
+      });
     },
   );
 });
