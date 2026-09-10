@@ -1,16 +1,24 @@
 /** Verifies plugin loader behavior for native module loading and resolver hooks. */
 import fs from "node:fs";
 import path from "node:path";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createCompiledSdkHost } from "./compiled-sdk-host.test-support.js";
 import { createPluginModuleLoader } from "./loader-module-runtime.js";
 import { publishedSdkBridgeEntrypoints } from "./loader-sdk-bridge-artifacts.test-support.js";
 import { loadOpenClawPlugins } from "./loader.js";
-import { resetPluginCache } from "./plugin-cache.js";
-import { getPluginModuleLoaderStats } from "./plugin-module-loader-cache.js";
+import { createPluginCache, resetPluginCache, withPluginCache } from "./plugin-cache.js";
+import {
+  getPluginModuleLoaderStats,
+  type PluginModuleLoaderFactory,
+} from "./plugin-module-loader-cache.js";
 
 const tempDirs = createTempDirTracker();
+
+function asPluginModuleLoaderFactory(factory: unknown): PluginModuleLoaderFactory {
+  return factory as PluginModuleLoaderFactory;
+}
 
 function writeJavaScriptPluginFixture(id: string) {
   const pluginRoot = tempDirs.make("openclaw-plugin-loader-");
@@ -303,5 +311,97 @@ describe("createPluginModuleLoader", () => {
       expect(after.nativeHits).toBeGreaterThan(before.nativeHits);
       expect(after.sourceTransformFallbacks).toBe(before.sourceTransformFallbacks);
     }
+  });
+
+  it("reuses successful source-transform module exports inside one loader", async () => {
+    vi.stubEnv("OPENCLAW_DIAGNOSTICS", "plugin.load-profile");
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
+    const moduleExport = { marker: "source-cached" };
+    const fromSourceTransformer = vi.fn(() => moduleExport);
+    const createJiti = vi.fn(() => fromSourceTransformer);
+    const nativeStub = vi.fn(() => ({ ok: true, moduleExport: { fromNative: true } }));
+    try {
+      vi.doMock("./native-module-require.js", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("./native-module-require.js")>()),
+        tryNativeRequireJavaScriptModule: nativeStub,
+      }));
+      const { getCachedPluginModuleLoader, getPluginModuleLoaderStats: getFreshLoaderStats } =
+        await importFreshModule<typeof import("./plugin-module-loader-cache.js")>(
+          import.meta.url,
+          "./plugin-module-loader-cache.js?scope=native-loader-source-export-profile",
+        );
+      const loader = withPluginCache(createPluginCache(), () =>
+        getCachedPluginModuleLoader({
+          modulePath: "/repo/extensions/demo/api.ts",
+          importerUrl: "file:///repo/src/plugins/bundled-capability-runtime.ts",
+          loaderFilename: "file:///repo/src/plugins/bundled-capability-runtime.ts",
+          tryNative: false,
+          createLoader: asPluginModuleLoaderFactory(createJiti),
+        }),
+      );
+
+      expect(loader("/repo/extensions/demo/api.ts")).toBe(moduleExport);
+      expect(loader("/repo/extensions/demo/api.ts")).toBe(moduleExport);
+      expect(loader("/repo/extensions/demo/other.ts")).toBe(moduleExport);
+      expect(nativeStub).not.toHaveBeenCalled();
+      expect(createJiti).toHaveBeenCalledOnce();
+      expect(fromSourceTransformer).toHaveBeenCalledTimes(2);
+      const stats = getFreshLoaderStats();
+      expect(stats).toMatchObject({
+        calls: 2,
+        nativeHits: 0,
+        nativeMisses: 0,
+        sourceTransformFallbacks: 0,
+        sourceTransformForced: 2,
+      });
+      expect(stats.topSourceTransformTargets).toEqual([
+        { target: "/repo/extensions/demo/api.ts", count: 1 },
+        { target: "/repo/extensions/demo/other.ts", count: 1 },
+      ]);
+      expect(output).toHaveBeenCalledExactlyOnceWith(
+        expect.stringMatching(
+          /^\[plugin-load-profile\] phase=source-transform-prepare plugin=\(core\) elapsedMs=\d+\.\d source=\(module\)$/,
+        ),
+      );
+    } finally {
+      vi.doUnmock("./native-module-require.js");
+    }
+  });
+
+  it("preserves transform preparation errors while profiling", async () => {
+    vi.stubEnv("OPENCLAW_DIAGNOSTICS", "plugin.load-profile");
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
+    const expectedError = new Error("fixture preparation failed");
+    const createLoader = vi.fn(() => {
+      throw expectedError;
+    });
+    const { getCachedPluginModuleLoader } = await importFreshModule<
+      typeof import("./plugin-module-loader-cache.js")
+    >(
+      import.meta.url,
+      "./plugin-module-loader-cache.js?scope=native-loader-source-preparation-error",
+    );
+    const loader = withPluginCache(createPluginCache(), () =>
+      getCachedPluginModuleLoader({
+        modulePath: "/repo/extensions/demo/api.ts",
+        importerUrl: import.meta.url,
+        aliasMap: {},
+        tryNative: false,
+        createLoader: asPluginModuleLoaderFactory(createLoader),
+      }),
+    );
+    let thrown: unknown;
+    try {
+      loader("/repo/extensions/demo/api.ts");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBe(expectedError);
+    expect(createLoader).toHaveBeenCalledOnce();
+    expect(output).toHaveBeenCalledExactlyOnceWith(
+      expect.stringMatching(
+        /^\[plugin-load-profile\] phase=source-transform-prepare plugin=\(core\) elapsedMs=\d+\.\d source=\(module\)$/,
+      ),
+    );
   });
 });
