@@ -516,8 +516,10 @@ final class PushRelayClient: @unchecked Sendable {
         let envelope = try PushRelayActivityRequest(
             operation: operation, input: input, challengeId: challenge.challengeId)
         let scope = PushRelayRegistrationStore.AppAttestScope(
-            relayOrigin: self.normalizedBaseURLString, apnsEnvironment: input.environment.rawValue,
-            relayProfile: input.relayProfile.rawValue, proofPolicy: input.proofPolicy.rawValue)
+            relayOrigin: self.normalizedBaseURLString,
+            apnsEnvironment: input.environment.rawValue,
+            relayProfile: input.relayProfile.rawValue,
+            proofPolicy: input.proofPolicy.rawValue)
         var freshAttestation = false
         var submitted = false
         do {
@@ -542,7 +544,9 @@ final class PushRelayClient: @unchecked Sendable {
                 throw PushRelayError.invalidResponse("Activity relay response too large")
             }
             let outcome = try self.jsonDecoder.decode(PushRelayActivityResponse.self, from: data).outcome(
-                httpStatus: Self.statusCode(from: response), operation: operation, input: input,
+                httpStatus: Self.statusCode(from: response),
+                operation: operation,
+                input: input,
                 relayOrigin: self.normalizedBaseURLString)
             if freshAttestation, [.unauthorized, .rateLimited, .unavailable].contains(outcome) {
                 return .freshAttestationUnacknowledged

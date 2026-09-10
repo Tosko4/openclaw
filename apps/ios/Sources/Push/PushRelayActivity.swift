@@ -223,9 +223,13 @@ struct PushRelayActivityResponse: Decodable {
                       expectedRevision < PushRelayActivityRevision.maximum, revision == expectedRevision + 1
                 else { throw invalid }
                 return .grant(PushRelayActivityGrant(
-                    metadata: metadata, relayHandle: relayHandle, sendGrant: sendGrant,
-                    installationId: input.installationId, topic: input.bundleId,
-                    environment: input.environment.rawValue, relayOrigin: relayOrigin))
+                    metadata: metadata,
+                    relayHandle: relayHandle,
+                    sendGrant: sendGrant,
+                    installationId: input.installationId,
+                    topic: input.bundleId,
+                    environment: input.environment.rawValue,
+                    relayOrigin: relayOrigin))
             case .revoke:
                 throw invalid
             }

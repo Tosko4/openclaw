@@ -760,8 +760,8 @@ public struct OpenClawChatSendResponse: Codable, Sendable {
     public let runId: String
     public let status: String
     public let summary: String?
-    // Local receipt handling captures the transport owner; it is never wire data.
-    public var onAcceptedRun: (@MainActor @Sendable (_ sessionID: String?) -> Void)? = nil
+    /// Local receipt handling captures the transport owner; it is never wire data.
+    public var onAcceptedRun: (@MainActor @Sendable (_ sessionID: String?) -> Void)?
 
     private enum CodingKeys: String, CodingKey {
         case runId, status, summary
