@@ -768,12 +768,16 @@ struct NativeActionGatewayWireTests {
             outcome = .failure(error)
         }
         talk.suspendForBackground()
-        for start in starts { start.cancel() }
+        for start in starts {
+            start.cancel()
+        }
         firstGate.release()
         successorGate.release()
         if holding { _ = try? await fixture.control("release-response") }
         await cleanup?.value
-        for start in starts { _ = await start.result }
+        for start in starts {
+            _ = await start.result
+        }
         talk._test_setStartEntryHandler(nil)
         if let previous {
             defaults.set(previous, forKey: "talk.enabled")
