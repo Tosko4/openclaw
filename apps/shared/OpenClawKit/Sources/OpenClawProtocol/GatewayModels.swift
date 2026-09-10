@@ -4925,7 +4925,7 @@ public struct CronAddJobResult: Codable, Sendable {
     public let deleteafterrun: Bool?
     public let createdatms: Int
     public let updatedatms: Int
-    public let configrevision: String?
+    public let configrevision: UserProfileId?
     public let schedule: AnyCodable
     public let pacing: [String: AnyCodable]?
     public let trigger: [String: AnyCodable]?
@@ -4962,7 +4962,7 @@ public struct CronAddJobResult: Codable, Sendable {
         deleteafterrun: Bool? = nil,
         createdatms: Int,
         updatedatms: Int,
-        configrevision: String? = nil,
+        configrevision: UserProfileId? = nil,
         schedule: AnyCodable,
         pacing: [String: AnyCodable]? = nil,
         trigger: [String: AnyCodable]? = nil,
@@ -5210,7 +5210,7 @@ public struct CronJob: Codable, Sendable {
     public let deleteafterrun: Bool?
     public let createdatms: Int
     public let updatedatms: Int
-    public let configrevision: String?
+    public let configrevision: UserProfileId?
     public let schedule: AnyCodable
     public let pacing: [String: AnyCodable]?
     public let trigger: [String: AnyCodable]?
@@ -5246,7 +5246,7 @@ public struct CronJob: Codable, Sendable {
         deleteafterrun: Bool? = nil,
         createdatms: Int,
         updatedatms: Int,
-        configrevision: String? = nil,
+        configrevision: UserProfileId? = nil,
         schedule: AnyCodable,
         pacing: [String: AnyCodable]? = nil,
         trigger: [String: AnyCodable]? = nil,
@@ -6010,7 +6010,7 @@ public struct DevicePairSetupCodeParams: Codable, Sendable {
 }
 
 public struct DevicePairSetupCodeResult: Codable, Sendable {
-    public let setupid: String?
+    public let setupid: UserProfileId?
     public let setupcode: String
     public let joinurl: String?
     public let qrdataurl: String?
@@ -6023,7 +6023,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
     public let expiresatms: Int?
 
     public init(
-        setupid: String? = nil,
+        setupid: UserProfileId? = nil,
         setupcode: String,
         joinurl: String? = nil,
         qrdataurl: String? = nil,
@@ -6064,14 +6064,14 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
 }
 
 public struct DevicePairSetupCompletedEvent: Codable, Sendable {
-    public let setupid: String
+    public let setupid: UserProfileId
     public let deviceid: String
     public let devicename: String?
     public let access: AnyCodable
     public let ts: Int
 
     public init(
-        setupid: String,
+        setupid: UserProfileId,
         deviceid: String,
         devicename: String? = nil,
         access: AnyCodable,
@@ -6094,14 +6094,14 @@ public struct DevicePairSetupCompletedEvent: Codable, Sendable {
 }
 
 public struct DevicePairSetupDeliveryUncertainEvent: Codable, Sendable {
-    public let setupid: String
+    public let setupid: UserProfileId
     public let deviceid: String
     public let devicename: String?
     public let access: AnyCodable
     public let ts: Int
 
     public init(
-        setupid: String,
+        setupid: UserProfileId,
         deviceid: String,
         devicename: String? = nil,
         access: AnyCodable,
@@ -6124,10 +6124,10 @@ public struct DevicePairSetupDeliveryUncertainEvent: Codable, Sendable {
 }
 
 public struct DevicePairSetupStatusParams: Codable, Sendable {
-    public let setupid: String
+    public let setupid: UserProfileId
 
     public init(
-        setupid: String)
+        setupid: UserProfileId)
     {
         self.setupid = setupid
     }
@@ -6244,7 +6244,7 @@ public struct EnvironmentSummary: Codable, Sendable {
     public let lastseenreason: String?
     public let trust: String?
     public let capabilities: [String]?
-    public let invocablecommands: [String]?
+    public let invocablecommands: [UserProfileId]?
     public let desktop: Bool?
     public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
@@ -6266,7 +6266,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         lastseenreason: String? = nil,
         trust: String? = nil,
         capabilities: [String]? = nil,
-        invocablecommands: [String]? = nil,
+        invocablecommands: [UserProfileId]? = nil,
         desktop: Bool? = nil,
         issues: [[String: AnyCodable]]? = nil,
         worker: WorkerEnvironmentMetadata? = nil,
@@ -6352,7 +6352,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
     public let lastseenreason: String?
     public let trust: String?
     public let capabilities: [String]?
-    public let invocablecommands: [String]?
+    public let invocablecommands: [UserProfileId]?
     public let desktop: Bool?
     public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
@@ -6373,7 +6373,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         lastseenreason: String? = nil,
         trust: String? = nil,
         capabilities: [String]? = nil,
-        invocablecommands: [String]? = nil,
+        invocablecommands: [UserProfileId]? = nil,
         desktop: Bool? = nil,
         issues: [[String: AnyCodable]]? = nil,
         worker: WorkerEnvironmentMetadata? = nil,
@@ -6456,7 +6456,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
     public let lastseenreason: String?
     public let trust: String?
     public let capabilities: [String]?
-    public let invocablecommands: [String]?
+    public let invocablecommands: [UserProfileId]?
     public let desktop: Bool?
     public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
@@ -6477,7 +6477,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         lastseenreason: String? = nil,
         trust: String? = nil,
         capabilities: [String]? = nil,
-        invocablecommands: [String]? = nil,
+        invocablecommands: [UserProfileId]? = nil,
         desktop: Bool? = nil,
         issues: [[String: AnyCodable]]? = nil,
         worker: WorkerEnvironmentMetadata? = nil,
@@ -6528,10 +6528,10 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
 }
 
 public struct EnvironmentsListParams: Codable, Sendable {
-    public let runtimeid: String?
+    public let runtimeid: UserProfileId?
 
     public init(
-        runtimeid: String? = nil)
+        runtimeid: UserProfileId? = nil)
     {
         self.runtimeid = runtimeid
     }
@@ -6623,7 +6623,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
     public let lastseenreason: String?
     public let trust: String?
     public let capabilities: [String]?
-    public let invocablecommands: [String]?
+    public let invocablecommands: [UserProfileId]?
     public let desktop: Bool?
     public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
@@ -6644,7 +6644,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         lastseenreason: String? = nil,
         trust: String? = nil,
         capabilities: [String]? = nil,
-        invocablecommands: [String]? = nil,
+        invocablecommands: [UserProfileId]? = nil,
         desktop: Bool? = nil,
         issues: [[String: AnyCodable]]? = nil,
         worker: WorkerEnvironmentMetadata? = nil,
@@ -6730,19 +6730,22 @@ public struct EventFrame: Codable, Sendable {
     public let payload: AnyCodable?
     public let seq: Int?
     public let stateversion: StateVersion?
+    public let recipientprofileid: UserProfileId?
 
     public init(
         type: String,
         event: String,
         payload: AnyCodable? = nil,
         seq: Int? = nil,
-        stateversion: StateVersion? = nil)
+        stateversion: StateVersion? = nil,
+        recipientprofileid: UserProfileId? = nil)
     {
         self.type = type
         self.event = event
         self.payload = payload
         self.seq = seq
         self.stateversion = stateversion
+        self.recipientprofileid = recipientprofileid
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6751,6 +6754,7 @@ public struct EventFrame: Codable, Sendable {
         case payload
         case seq
         case stateversion = "stateVersion"
+        case recipientprofileid = "recipientProfileId"
     }
 }
 
@@ -7350,12 +7354,12 @@ public struct ExpiredApprovalSnapshot: Codable, Sendable {
 
 public struct ExternalPostApprovalScope: Codable, Sendable {
     public let kind: String
-    public let target: String
+    public let target: UserProfileId
     public let visibility: AnyCodable
 
     public init(
         kind: String,
-        target: String,
+        target: UserProfileId,
         visibility: AnyCodable)
     {
         self.kind = kind
@@ -8199,16 +8203,16 @@ public struct MessageActionParams: Codable, Sendable {
 
 public struct MessageSendApprovalScope: Codable, Sendable {
     public let kind: String
-    public let target: String
+    public let target: UserProfileId
     public let recipientcount: Int
-    public let recipients: [String]?
+    public let recipients: [UserProfileId]?
     public let audience: AnyCodable?
 
     public init(
         kind: String,
-        target: String,
+        target: UserProfileId,
         recipientcount: Int,
-        recipients: [String]? = nil,
+        recipients: [UserProfileId]? = nil,
         audience: AnyCodable? = nil)
     {
         self.kind = kind
@@ -9144,13 +9148,13 @@ public struct PaymentApprovalScope: Codable, Sendable {
     public let kind: String
     public let amount: String
     public let currency: String
-    public let target: String
+    public let target: UserProfileId
 
     public init(
         kind: String,
         amount: String,
         currency: String,
-        target: String)
+        target: UserProfileId)
     {
         self.kind = kind
         self.amount = amount
@@ -11278,11 +11282,11 @@ public struct ProjectSummary: Codable, Sendable {
 
 public struct ProjectsAddParams: Codable, Sendable {
     public let giturl: String
-    public let name: String?
+    public let name: UserProfileId?
 
     public init(
         giturl: String,
-        name: String? = nil)
+        name: UserProfileId? = nil)
     {
         self.giturl = giturl
         self.name = name
@@ -11366,11 +11370,11 @@ public struct ProjectsListResult: Codable, Sendable {
 
 public struct ProjectsRegisterParams: Codable, Sendable {
     public let path: String
-    public let name: String?
+    public let name: UserProfileId?
 
     public init(
         path: String,
-        name: String? = nil)
+        name: UserProfileId? = nil)
     {
         self.path = path
         self.name = name
@@ -11889,28 +11893,40 @@ public struct RequestFrame: Codable, Sendable {
     public let method: String
     public let params: AnyCodable?
     public let traceparent: String?
+    public let expectedprofileid: UserProfileId?
 
     public init(
         type: String,
         id: String,
         method: String,
         params: AnyCodable? = nil,
-        traceparent: String? = nil)
+        traceparent: String? = nil,
+        expectedprofileid: UserProfileId? = nil)
     {
         self.type = type
         self.id = id
         self.method = method
         self.params = params
         self.traceparent = traceparent
+        self.expectedprofileid = expectedprofileid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case id
+        case method
+        case params
+        case traceparent
+        case expectedprofileid = "expectedProfileId"
     }
 }
 
 public struct RequiredNodeCommand: Codable, Sendable {
-    public let command: String
+    public let command: UserProfileId
     public let state: RequiredNodeCommandState
 
     public init(
-        command: String,
+        command: UserProfileId,
         state: RequiredNodeCommandState)
     {
         self.command = command
@@ -14805,7 +14821,7 @@ public struct SessionsCatalogListParams: Codable, Sendable {
     public let catalogid: String?
     public let cursors: [String: AnyCodable]?
     public let agentid: String?
-    public let progressid: String?
+    public let progressid: UserProfileId?
     public let search: String?
     public let limitperhost: Int?
     public let hostids: [String]?
@@ -14814,7 +14830,7 @@ public struct SessionsCatalogListParams: Codable, Sendable {
         catalogid: String? = nil,
         cursors: [String: AnyCodable]? = nil,
         agentid: String? = nil,
-        progressid: String? = nil,
+        progressid: UserProfileId? = nil,
         search: String? = nil,
         limitperhost: Int? = nil,
         hostids: [String]? = nil)
@@ -15883,7 +15899,7 @@ public struct SessionsGoalClearParams: Codable, Sendable {
     public let agentid: String?
     public let sessionid: String?
     public let goalid: String
-    public let operationid: String
+    public let operationid: UserProfileId
     public let issuedatms: Int
 
     public init(
@@ -15891,7 +15907,7 @@ public struct SessionsGoalClearParams: Codable, Sendable {
         agentid: String? = nil,
         sessionid: String? = nil,
         goalid: String,
-        operationid: String,
+        operationid: UserProfileId,
         issuedatms: Int)
     {
         self.sessionkey = sessionkey
@@ -18377,13 +18393,13 @@ public struct Snapshot: Codable, Sendable {
 
 public struct StandingGrantApprovalScope: Codable, Sendable {
     public let kind: String
-    public let automation: String
+    public let automation: UserProfileId
     public let command: String
     public let expiresindays: Int?
 
     public init(
         kind: String,
-        automation: String,
+        automation: UserProfileId,
         command: String,
         expiresindays: Int? = nil)
     {
@@ -19915,23 +19931,23 @@ public struct TalkSpeakResult: Codable, Sendable {
 }
 
 public struct TaskSuggestion: Codable, Sendable {
-    public let id: String
+    public let id: UserProfileId
     public let title: String
     public let prompt: String
     public let tldr: String
     public let cwd: String
     public let sessionkey: String
-    public let agentid: String?
+    public let agentid: UserProfileId?
     public let createdat: Int
 
     public init(
-        id: String,
+        id: UserProfileId,
         title: String,
         prompt: String,
         tldr: String,
         cwd: String,
         sessionkey: String,
-        agentid: String? = nil,
+        agentid: UserProfileId? = nil,
         createdat: Int)
     {
         self.id = id
@@ -19957,14 +19973,14 @@ public struct TaskSuggestion: Codable, Sendable {
 }
 
 public struct TaskSuggestionsAcceptParams: Codable, Sendable {
-    public let taskid: String
+    public let taskid: UserProfileId
     public let mode: String?
-    public let cloudprofileid: String?
+    public let cloudprofileid: UserProfileId?
 
     public init(
-        taskid: String,
+        taskid: UserProfileId,
         mode: String? = nil,
-        cloudprofileid: String? = nil)
+        cloudprofileid: UserProfileId? = nil)
     {
         self.taskid = taskid
         self.mode = mode
@@ -19979,11 +19995,11 @@ public struct TaskSuggestionsAcceptParams: Codable, Sendable {
 }
 
 public struct TaskSuggestionsAcceptResult: Codable, Sendable {
-    public let taskid: String
+    public let taskid: UserProfileId
     public let key: String
 
     public init(
-        taskid: String,
+        taskid: UserProfileId,
         key: String)
     {
         self.taskid = taskid
@@ -20002,7 +20018,7 @@ public struct TaskSuggestionsCreateParams: Codable, Sendable {
     public let tldr: String
     public let cwd: String
     public let sessionkey: String
-    public let agentid: String?
+    public let agentid: UserProfileId?
 
     public init(
         title: String,
@@ -20010,7 +20026,7 @@ public struct TaskSuggestionsCreateParams: Codable, Sendable {
         tldr: String,
         cwd: String,
         sessionkey: String,
-        agentid: String? = nil)
+        agentid: UserProfileId? = nil)
     {
         self.title = title
         self.prompt = prompt
@@ -20031,11 +20047,11 @@ public struct TaskSuggestionsCreateParams: Codable, Sendable {
 }
 
 public struct TaskSuggestionsCreateResult: Codable, Sendable {
-    public let taskid: String
+    public let taskid: UserProfileId
     public let suggestion: TaskSuggestion
 
     public init(
-        taskid: String,
+        taskid: UserProfileId,
         suggestion: TaskSuggestion)
     {
         self.taskid = taskid
@@ -20049,11 +20065,11 @@ public struct TaskSuggestionsCreateResult: Codable, Sendable {
 }
 
 public struct TaskSuggestionsDismissParams: Codable, Sendable {
-    public let taskid: String
+    public let taskid: UserProfileId
     public let reason: String?
 
     public init(
-        taskid: String,
+        taskid: UserProfileId,
         reason: String? = nil)
     {
         self.taskid = taskid
@@ -20067,11 +20083,11 @@ public struct TaskSuggestionsDismissParams: Codable, Sendable {
 }
 
 public struct TaskSuggestionsDismissResult: Codable, Sendable {
-    public let taskid: String
+    public let taskid: UserProfileId
     public let dismissed: Bool
 
     public init(
-        taskid: String,
+        taskid: UserProfileId,
         dismissed: Bool)
     {
         self.taskid = taskid
@@ -20086,11 +20102,11 @@ public struct TaskSuggestionsDismissResult: Codable, Sendable {
 
 public struct TaskSuggestionsListParams: Codable, Sendable {
     public let sessionkey: String?
-    public let agentid: String?
+    public let agentid: UserProfileId?
 
     public init(
         sessionkey: String? = nil,
-        agentid: String? = nil)
+        agentid: UserProfileId? = nil)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
@@ -22320,14 +22336,14 @@ public struct UpdateStatusResult: Codable, Sendable {
 
 public struct UserModelAccount: Codable, Sendable {
     public let authprofileid: String
-    public let provider: String
+    public let provider: UserProfileId
     public let label: String
     public let authtype: AnyCodable
     public let selected: Bool
 
     public init(
         authprofileid: String,
-        provider: String,
+        provider: UserProfileId,
         label: String,
         authtype: AnyCodable,
         selected: Bool)
@@ -22371,12 +22387,12 @@ public struct UserPrefsLimitExceededErrorDetails: Codable, Sendable {
 }
 
 public struct UserProfileAuthLink: Codable, Sendable {
-    public let provider: String
+    public let provider: UserProfileId
     public let authprofileid: String
     public let updatedat: Int
 
     public init(
-        provider: String,
+        provider: UserProfileId,
         authprofileid: String,
         updatedat: Int)
     {
@@ -22393,14 +22409,14 @@ public struct UserProfileAuthLink: Codable, Sendable {
 }
 
 public struct UsersAuthConnectAnswerParams: Codable, Sendable {
-    public let profileid: String
-    public let connectid: String
+    public let profileid: UserProfileId
+    public let connectid: UserProfileId
     public let stepid: String
     public let value: AnyCodable?
 
     public init(
-        profileid: String,
-        connectid: String,
+        profileid: UserProfileId,
+        connectid: UserProfileId,
         stepid: String,
         value: AnyCodable? = nil)
     {
@@ -22419,12 +22435,12 @@ public struct UsersAuthConnectAnswerParams: Codable, Sendable {
 }
 
 public struct UsersAuthConnectCancelParams: Codable, Sendable {
-    public let profileid: String
-    public let connectid: String
+    public let profileid: UserProfileId
+    public let connectid: UserProfileId
 
     public init(
-        profileid: String,
-        connectid: String)
+        profileid: UserProfileId,
+        connectid: UserProfileId)
     {
         self.profileid = profileid
         self.connectid = connectid
@@ -22437,10 +22453,10 @@ public struct UsersAuthConnectCancelParams: Codable, Sendable {
 }
 
 public struct UsersAuthConnectCatalogParams: Codable, Sendable {
-    public let profileid: String
+    public let profileid: UserProfileId
 
     public init(
-        profileid: String)
+        profileid: UserProfileId)
     {
         self.profileid = profileid
     }
@@ -22479,13 +22495,13 @@ public struct UsersAuthConnectResult: Codable, Sendable {
 }
 
 public struct UsersAuthConnectStartParams: Codable, Sendable {
-    public let profileid: String
-    public let provider: String
+    public let profileid: UserProfileId
+    public let provider: UserProfileId
     public let method: String
 
     public init(
-        profileid: String,
-        provider: String,
+        profileid: UserProfileId,
+        provider: UserProfileId,
         method: String)
     {
         self.profileid = profileid
@@ -22501,11 +22517,11 @@ public struct UsersAuthConnectStartParams: Codable, Sendable {
 }
 
 public struct UsersAuthConnectStartResult: Codable, Sendable {
-    public let connectid: String
+    public let connectid: UserProfileId
     public let expiresatms: Int
 
     public init(
-        connectid: String,
+        connectid: UserProfileId,
         expiresatms: Int)
     {
         self.connectid = connectid
@@ -22519,12 +22535,12 @@ public struct UsersAuthConnectStartResult: Codable, Sendable {
 }
 
 public struct UsersAuthConnectStatusParams: Codable, Sendable {
-    public let profileid: String
-    public let connectid: String
+    public let profileid: UserProfileId
+    public let connectid: UserProfileId
 
     public init(
-        profileid: String,
-        connectid: String)
+        profileid: UserProfileId,
+        connectid: UserProfileId)
     {
         self.profileid = profileid
         self.connectid = connectid
@@ -22634,11 +22650,11 @@ public struct UsersGitHubStatusResult: Codable, Sendable {
 }
 
 public struct UsersLinkAuthProfileParams: Codable, Sendable {
-    public let profileid: String
+    public let profileid: UserProfileId
     public let authprofileid: String
 
     public init(
-        profileid: String,
+        profileid: UserProfileId,
         authprofileid: String)
     {
         self.profileid = profileid
@@ -22662,10 +22678,10 @@ public struct UsersLinkAuthProfileResult: Codable, Sendable {
 }
 
 public struct UsersListAuthLinksParams: Codable, Sendable {
-    public let profileid: String
+    public let profileid: UserProfileId
 
     public init(
-        profileid: String)
+        profileid: UserProfileId)
     {
         self.profileid = profileid
     }
@@ -22686,11 +22702,11 @@ public struct UsersListAuthLinksResult: Codable, Sendable {
 }
 
 public struct UsersListModelAccountsParams: Codable, Sendable {
-    public let profileid: String?
+    public let profileid: UserProfileId?
     public let cursor: String?
 
     public init(
-        profileid: String? = nil,
+        profileid: UserProfileId? = nil,
         cursor: String? = nil)
     {
         self.profileid = profileid
@@ -22704,13 +22720,13 @@ public struct UsersListModelAccountsParams: Codable, Sendable {
 }
 
 public struct UsersListModelAccountsResult: Codable, Sendable {
-    public let profileid: String
+    public let profileid: UserProfileId
     public let accounts: [UserModelAccount]
     public let nextcursor: String?
     public let links: [UserProfileAuthLink]
 
     public init(
-        profileid: String,
+        profileid: UserProfileId,
         accounts: [UserModelAccount],
         nextcursor: String? = nil,
         links: [UserProfileAuthLink])
@@ -22743,11 +22759,11 @@ public struct UsersMentionableResult: Codable, Sendable {
 }
 
 public struct UsersPrefsChangedEvent: Codable, Sendable {
-    public let profileid: String
+    public let profileid: UserProfileId
     public let keys: [String]
 
     public init(
-        profileid: String,
+        profileid: UserProfileId,
         keys: [String])
     {
         self.profileid = profileid
@@ -22761,11 +22777,11 @@ public struct UsersPrefsChangedEvent: Codable, Sendable {
 }
 
 public struct UsersSelectModelAccountParams: Codable, Sendable {
-    public let profileid: String?
+    public let profileid: UserProfileId?
     public let authprofileid: String
 
     public init(
-        profileid: String? = nil,
+        profileid: UserProfileId? = nil,
         authprofileid: String)
     {
         self.profileid = profileid
@@ -22789,12 +22805,12 @@ public struct UsersSelectModelAccountResult: Codable, Sendable {
 }
 
 public struct UsersUnlinkAuthProfileParams: Codable, Sendable {
-    public let profileid: String
-    public let provider: String
+    public let profileid: UserProfileId
+    public let provider: UserProfileId
 
     public init(
-        profileid: String,
-        provider: String)
+        profileid: UserProfileId,
+        provider: UserProfileId)
     {
         self.profileid = profileid
         self.provider = provider
@@ -23153,14 +23169,14 @@ public struct WizardStep: Codable, Sendable {
 
 public struct WorkerAdmissionHandshake: Codable, Sendable {
     public let bundlehash: String
-    public let openclawversion: String
-    public let protocolfeatures: [String]
+    public let openclawversion: UserProfileId
+    public let protocolfeatures: [UserProfileId]
     public let bundleprewarm: Int?
 
     public init(
         bundlehash: String,
-        openclawversion: String,
-        protocolfeatures: [String],
+        openclawversion: UserProfileId,
+        protocolfeatures: [UserProfileId],
         bundleprewarm: Int? = nil)
     {
         self.bundlehash = bundlehash
@@ -23836,14 +23852,14 @@ public struct SessionPlacementRunner: Codable, Sendable {
 }
 
 public struct SessionPlacementMachine: Codable, Sendable {
-    public let _class: String?
+    public let _class: UserProfileId?
     public let os: String?
     public let oslabel: String?
     public let cpu: Int?
     public let memorygb: Int?
 
     public init(
-        _class: String? = nil,
+        _class: UserProfileId? = nil,
         os: String? = nil,
         oslabel: String? = nil,
         cpu: Int? = nil,
@@ -24503,7 +24519,7 @@ public struct SessionsDispatchParams: Codable, Sendable {
     public let profileid: String?
     public let deviceid: String?
     public let autodevice: Bool?
-    public let machineclass: String?
+    public let machineclass: UserProfileId?
     public let os: String?
 
     public init(
@@ -24512,7 +24528,7 @@ public struct SessionsDispatchParams: Codable, Sendable {
         profileid: String? = nil,
         deviceid: String? = nil,
         autodevice: Bool? = nil,
-        machineclass: String? = nil,
+        machineclass: UserProfileId? = nil,
         os: String? = nil)
     {
         self.key = key
@@ -24673,12 +24689,12 @@ public struct SessionMoveGatewayTarget: Codable, Sendable {
 public struct SessionMoveProfileTarget: Codable, Sendable {
     public let kind: String
     public let profileid: String
-    public let machineclass: String?
+    public let machineclass: UserProfileId?
     public let os: String?
 
     public init(
         profileid: String,
-        machineclass: String? = nil,
+        machineclass: UserProfileId? = nil,
         os: String? = nil
     )
     {
@@ -24719,7 +24735,7 @@ public struct SessionMoveProfileTarget: Codable, Sendable {
         }
         self.kind = "profile"
         self.profileid = try container.decode(String.self, forKey: .profileid)
-        self.machineclass = try container.decodeIfPresent(String.self, forKey: .machineclass)
+        self.machineclass = try container.decodeIfPresent(UserProfileId.self, forKey: .machineclass)
         self.os = try container.decodeIfPresent(String.self, forKey: .os)
     }
 
@@ -28243,11 +28259,11 @@ public struct TaskSuggestionEventCreated: Codable, Sendable {
 
 public struct TaskSuggestionEventResolved: Codable, Sendable {
     public let action: String
-    public let taskid: String
+    public let taskid: UserProfileId
     public let resolution: TaskSuggestionResolution
 
     public init(
-        taskid: String,
+        taskid: UserProfileId,
         resolution: TaskSuggestionResolution
     )
     {
@@ -28285,7 +28301,7 @@ public struct TaskSuggestionEventResolved: Codable, Sendable {
             )
         }
         self.action = "resolved"
-        self.taskid = try container.decode(String.self, forKey: .taskid)
+        self.taskid = try container.decode(UserProfileId.self, forKey: .taskid)
         self.resolution = try container.decode(TaskSuggestionResolution.self, forKey: .resolution)
     }
 
