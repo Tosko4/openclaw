@@ -149,11 +149,9 @@ requires their original identities; a missing or replaced database or parent
 causes refusal. The helper does not create replacement authority.
 
 Recovery stores use SQLite rollback-journal mode. If another tool converts one
-to WAL mode, the helper refuses it. SQLite can still create `-wal` or `-shm`
-sidecar files through a read-only connection before that refusal. A failed
-`status` command is therefore not a guarantee of zero filesystem changes for an
-externally converted WAL database. Preserve the database and any sidecars for
-inspection; do not delete them or change journaling mode to force recovery.
+to WAL mode, the helper refuses it without creating or changing its `-wal` or
+`-shm` sidecars. Preserve the database and any existing sidecars for inspection;
+do not delete them or change journaling mode to force recovery.
 
 Use `retire` only when you no longer need the retained package backup. This is
 separate from [`openclaw update cleanup`](/cli/update/repair-and-recovery#update-cleanup),

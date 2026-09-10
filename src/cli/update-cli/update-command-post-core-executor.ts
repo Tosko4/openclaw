@@ -109,6 +109,7 @@ export async function withPostCoreUpdateExecutor<T>(
     }
     // Shape checks only bound parsing. The existing receiver rereads both leases,
     // compares the complete parent row, and verifies this child's PID/start pair.
+    // SAFETY: The delegated receiver verifies both full live lease rows before using this bounded input.
     const grant = input as UpdateCommandChildGrant;
     return await withDelegatedUpdateCommandExecutor(grant, grant.runId, root, async (fence) => {
       assertUpdatePackageActivationAdmission(root, { continuation: fence });

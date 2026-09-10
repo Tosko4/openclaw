@@ -17,7 +17,10 @@ try {
     throw new Error("Package publication recovery requires supported external Node on POSIX.");
   }
   const action = process.argv[2];
-  if (process.argv.length !== 3 || !["status", "repair", "retire"].includes(action ?? "")) {
+  if (
+    process.argv.length !== 3 ||
+    (action !== "status" && action !== "repair" && action !== "retire")
+  ) {
     throw new Error("Usage: node recovery.mjs status|repair|retire");
   }
   const anchor = path.dirname(fileURLToPath(import.meta.url));
@@ -29,7 +32,7 @@ try {
   const result =
     action === "status"
       ? await readPackageActivationStatus(anchor)
-      : await runPackageActivationRecovery(anchor, action as "repair" | "retire");
+      : await runPackageActivationRecovery(anchor, action);
   console.log(JSON.stringify(result));
 } catch (error) {
   console.error(`Package publication recovery refused: ${formatErrorMessage(error)}`);

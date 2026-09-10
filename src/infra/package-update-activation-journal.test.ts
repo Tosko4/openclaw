@@ -212,29 +212,32 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
     expect(fs.existsSync(`${f.journalPath}-shm`)).toBe(false);
   });
 
-  it("status refuses a foreign WAL database without changing its stored operation", async () => {
-    const f = await fixture();
-    const database = new DatabaseSync(f.journalPath);
-    try {
-      database.exec("PRAGMA journal_mode = WAL");
-    } finally {
-      database.close();
-    }
-    expect(fs.readFileSync(f.journalPath)[18]).toBe(2);
-    expect(fs.existsSync(`${f.journalPath}-wal`)).toBe(false);
-    expect(fs.existsSync(`${f.journalPath}-shm`)).toBe(false);
-    const before = journalFiles(f.anchor);
-    await expect(readPackageActivationStatus(f.anchor)).rejects.toThrow(
-      "requires rollback journal mode",
-    );
-    // WAL is outside this store's contract. SQLite's native read-only open may
-    // create WAL/SHM files; refusal still preserves the database and its operation.
-    const nativeSidecars = new Set([
-      `${PACKAGE_ACTIVATION_JOURNAL}-wal`,
-      `${PACKAGE_ACTIVATION_JOURNAL}-shm`,
-    ]);
-    expect(journalFiles(f.anchor).filter(({ name }) => !nativeSidecars.has(name))).toEqual(before);
-  });
+  it.each([false, true])(
+    "status refuses foreign WAL without touching its files (liveWriter=%s)",
+    async (liveWriter) => {
+      const f = await fixture();
+      const database = new DatabaseSync(f.journalPath);
+      try {
+        database.exec("PRAGMA journal_mode = WAL");
+        if (liveWriter) {
+          database.exec("UPDATE package_activation SET revision = revision + 1; BEGIN IMMEDIATE");
+          expect(fs.statSync(`${f.journalPath}-wal`).size).toBeGreaterThan(0);
+        } else {
+          database.close();
+        }
+        expect(fs.readFileSync(f.journalPath)[18]).toBe(2);
+        expect(fs.existsSync(`${f.journalPath}-wal`)).toBe(liveWriter);
+        expect(fs.existsSync(`${f.journalPath}-shm`)).toBe(liveWriter);
+        const before = journalFiles(f.anchor);
+        await expect(readPackageActivationStatus(f.anchor)).rejects.toThrow();
+        expect(journalFiles(f.anchor)).toEqual(before);
+      } finally {
+        if (database.isOpen) {
+          database.close();
+        }
+      }
+    },
+  );
 
   it("keeps one bounded descriptor while exact-revision intents advance", async () => {
     const f = await fixture();

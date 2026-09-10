@@ -447,12 +447,15 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
         { stdio: ["ignore", "ignore", "pipe", "ipc"], env: {} },
       );
       let stderr = "";
-      child.stderr.on("data", (chunk) => {
-        stderr += chunk.toString();
-      });
       const closed = once(child, "close");
       void closed.catch(() => undefined);
       try {
+        if (!child.stderr) {
+          throw new Error("Child fixture stderr pipe is missing");
+        }
+        child.stderr.on("data", (chunk) => {
+          stderr += chunk.toString();
+        });
         expect((await once(child, "message", { signal: AbortSignal.timeout(10_000) }))[0]).toEqual({
           ready: true,
           changes: 1,
@@ -509,12 +512,15 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
       { stdio: ["ignore", "ignore", "pipe", "ipc"], env: {}, detached: true },
     );
     let stderr = "";
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
     const closed = once(child, "close", { signal: AbortSignal.timeout(10_000) });
     void closed.catch(() => undefined);
     try {
+      if (!child.stderr) {
+        throw new Error("Child fixture stderr pipe is missing");
+      }
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
       expect((await once(child, "message", { signal: AbortSignal.timeout(10_000) }))[0]).toEqual({
         ready: true,
       });
@@ -554,7 +560,7 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
             expect(values).toContain(parent.lease.owner);
             boundaries.push("before-write");
             expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
-            const result = run(...values);
+            const result = Reflect.apply(run, statement, values);
             boundaries.push("after-write");
             expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
             return result;
@@ -714,7 +720,7 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
             if (/^(insert into|delete from) "managed_update_handoffs"/u.test(sql)) {
               const run = statement.run.bind(statement);
               statement.run = (...values) => {
-                const result = run(...values);
+                const result = Reflect.apply(run, statement, values);
                 replace();
                 return result;
               };

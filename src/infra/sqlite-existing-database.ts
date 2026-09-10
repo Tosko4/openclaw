@@ -50,6 +50,11 @@ export function withExistingSqliteRollbackDatabase<T>(
   try {
     options.assertIdentity();
     setSqliteBusyTimeout(reader, options.busyTimeoutMs);
+    // Disable WAL shared-memory admission before the first pager read. A foreign
+    // WAL database cannot acquire an exclusive writer lock through a read-only
+    // connection, so SQLite refuses without creating WAL/SHM coordination files.
+    // This is connection-local, not a journal-mode change or an immutable snapshot.
+    reader.exec("PRAGMA locking_mode = EXCLUSIVE"); // sqlite-allow-raw -- Refuse foreign WAL without creating sidecars.
     reader.exec("BEGIN"); // sqlite-allow-raw -- Hold the read lock across writer admission.
     snapshotOpen = true;
     // These stores use rollback journals. SQLite itself distinguishes a healthy
