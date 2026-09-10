@@ -13,6 +13,10 @@ import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloa
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { hasReplyOperationExecutionStarted } from "./reply-run-registry.js";
+import {
+  createFollowupRunToolAuthorityProjector,
+  resolveFollowupRunToolAuthorityFingerprint,
+} from "./reply-tool-authority.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
 
 export type FollowupExecutionResult = {
@@ -213,10 +217,12 @@ export async function executeFollowupTurn(params: {
     onItemEvent: sourceOpts?.onItemEvent
       ? (item) =>
           enqueueProgressResult(async () => {
-            // Only an explicit draft-vs-durable owner contract may bypass hidden
-            // tool-progress filtering for queued preambles.
+            // The dispatcher has already resolved durable commentary ownership.
+            // Preserve the channel's separate preamble capability across queuing.
             const draftOwnsPreamble =
-              progressAllowed() && item.kind === "preamble" && draftOwnsCommentaryProgress;
+              progressAllowed() &&
+              item.kind === "preamble" &&
+              (draftOwnsCommentaryProgress || sourceOpts.progressPreambleEnabled === true);
             if (!draftOwnsPreamble && !shouldEmitToolResult()) {
               return false;
             }
@@ -315,6 +321,13 @@ export async function executeFollowupTurn(params: {
     };
   } else {
     try {
+      turn.operation.bindToolAuthorityProjector(
+        createFollowupRunToolAuthorityProjector(turn.queued),
+      );
+      turn.operation.bindToolAuthorityFingerprint(
+        resolveFollowupRunToolAuthorityFingerprint(turn.queued),
+      );
+      turn.operation.setPhase("running");
       execution = await executeAgentTurn({
         commandBody: turn.queued.prompt,
         transcriptCommandBody: turn.queued.transcriptPrompt,

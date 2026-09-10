@@ -2,7 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
+import { resolveReplyQueueAdmissionState } from "./queue-policy.js";
+import {
+  beginReplyMessageInjectionTarget,
+  createReplyOperation,
+  replyRunRegistry,
+} from "./reply-run-registry.js";
 import { markReplyOperationExecutionStarted } from "./reply-run-registry.state.js";
+import { createMockReplyOperation } from "./test-helpers.js";
 
 const state = vi.hoisted(() => ({
   execute: vi.fn(),
@@ -67,7 +74,7 @@ function createTurn(overrides: Partial<AdmittedFollowupTurn> = {}): AdmittedFoll
         blockReplyBreak: "message_end",
       },
     },
-    operation: { abortSignal: new AbortController().signal } as AdmittedFollowupTurn["operation"],
+    operation: createMockReplyOperation().replyOperation,
     config: {},
     session: {
       kind: "session",
@@ -92,6 +99,61 @@ beforeEach(() => {
 });
 
 describe("executeFollowupTurn", () => {
+  it("accepts same-authority steering while a queued turn runs and rejects changed authority", async () => {
+    const operation = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      turnKind: "queued_followup",
+      resetTriggered: false,
+    });
+    const turn = createTurn({ operation });
+    const queueMessage = vi.fn(async () => {});
+    state.execute.mockImplementation(async () => {
+      operation.bindToolAuthorityRoute({ provider: "anthropic", model: "claude" });
+      operation.attachBackend({ kind: "embedded", cancel: vi.fn(), queueMessage });
+      expect(operation.phase).toBe("running");
+      expect(
+        resolveReplyQueueAdmissionState(
+          { items: [turn.queued], inFlight: new Set([turn.queued]), droppedCount: 0 },
+          operation,
+        ),
+      ).toBe("steering");
+      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget("main");
+      expect(target).toBeDefined();
+      const overlay = {
+        originatingChannel: turn.queued.originatingChannel,
+        messageProvider: turn.queued.run.messageProvider,
+        senderId: "user-2",
+        senderIsOwner: false,
+        disableTools: false,
+        traceAuthorized: false,
+      };
+      await expect(
+        beginReplyMessageInjectionTarget(target!, "Use the revised request", {
+          isInboundUserMessage: true,
+          toolAuthorityOverlay: overlay,
+        }).outcome,
+      ).resolves.toMatchObject({ status: "accepted" });
+      await expect(
+        beginReplyMessageInjectionTarget(target!, "Change tool permissions", {
+          isInboundUserMessage: true,
+          toolAuthorityOverlay: { ...overlay, disableTools: true },
+        }).outcome,
+      ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+      expect(queueMessage).toHaveBeenCalledOnce();
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+    try {
+      await executeFollowupTurn({
+        turn,
+        defaults: { typing: createTypingController(), typingMode: "never", defaultModel: "claude" },
+        onToolResult: vi.fn(async () => {}),
+        onCompactionNoticePayload: vi.fn(async () => {}),
+      });
+    } finally {
+      operation.complete();
+    }
+  });
   it("normalizes queued route facts into the canonical execution call", async () => {
     const turn = createTurn();
     const typing = createTypingController();
@@ -268,58 +330,63 @@ describe("executeFollowupTurn", () => {
     },
   );
 
-  it("routes a queued verbose-off preamble to the draft commentary owner", async () => {
-    const onItemEvent = vi.fn(async () => true as const);
-    let preambleVisible: boolean | void = false;
-    let toolVisible: boolean | void = true;
-    const turn = createTurn({
-      session: {
-        kind: "session",
-        key: "main",
-        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "off" }),
-        publish: () => undefined,
-        adopt: () => undefined,
-      },
-    });
-    state.execute.mockImplementation(async (params: AgentTurnParams) => {
-      expect(params.opts?.commentaryPayloadsEnabled).toBe(false);
-      preambleVisible = await params.opts?.onItemEvent?.({
+  it.each([
+    { commentaryPayloadsEnabled: true, shouldDeliverCommentaryPayloads: () => false },
+    { commentaryPayloadsEnabled: false, progressPreambleEnabled: true },
+  ])(
+    "routes a queued verbose-off preamble to the draft commentary owner (%j)",
+    async (ownerOptions) => {
+      const onItemEvent = vi.fn(async () => true as const);
+      let preambleVisible: boolean | void = false;
+      let toolVisible: boolean | void = true;
+      const turn = createTurn({
+        session: {
+          kind: "session",
+          key: "main",
+          current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "off" }),
+          publish: () => undefined,
+          adopt: () => undefined,
+        },
+      });
+      state.execute.mockImplementation(async (params: AgentTurnParams) => {
+        expect(params.opts?.commentaryPayloadsEnabled).toBe(false);
+        preambleVisible = await params.opts?.onItemEvent?.({
+          kind: "preamble",
+          progressText: "Checking the queued request",
+        });
+        toolVisible = await params.opts?.onItemEvent?.({
+          kind: "tool",
+          progressText: "running exec",
+        });
+        return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+      });
+
+      const result = await executeFollowupTurn({
+        turn,
+        defaults: {
+          typing: createTypingController(),
+          typingMode: "never",
+          defaultModel: "claude",
+          opts: {
+            ...ownerOptions,
+            onItemEvent,
+          },
+        },
+        onToolResult: vi.fn(async () => {}),
+        onCompactionNoticePayload: vi.fn(async () => {}),
+      });
+      await result.progress.drain();
+
+      expect(result.commentaryPayloadsEnabled).toBe(false);
+      expect(preambleVisible).toBe(true);
+      expect(toolVisible).toBe(false);
+      expect(onItemEvent).toHaveBeenCalledOnce();
+      expect(onItemEvent).toHaveBeenCalledWith({
         kind: "preamble",
         progressText: "Checking the queued request",
       });
-      toolVisible = await params.opts?.onItemEvent?.({
-        kind: "tool",
-        progressText: "running exec",
-      });
-      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
-    });
-
-    const result = await executeFollowupTurn({
-      turn,
-      defaults: {
-        typing: createTypingController(),
-        typingMode: "never",
-        defaultModel: "claude",
-        opts: {
-          commentaryPayloadsEnabled: true,
-          shouldDeliverCommentaryPayloads: () => false,
-          onItemEvent,
-        },
-      },
-      onToolResult: vi.fn(async () => {}),
-      onCompactionNoticePayload: vi.fn(async () => {}),
-    });
-    await result.progress.drain();
-
-    expect(result.commentaryPayloadsEnabled).toBe(false);
-    expect(preambleVisible).toBe(true);
-    expect(toolVisible).toBe(false);
-    expect(onItemEvent).toHaveBeenCalledOnce();
-    expect(onItemEvent).toHaveBeenCalledWith({
-      kind: "preamble",
-      progressText: "Checking the queued request",
-    });
-  });
+    },
+  );
 
   it.each([
     {
@@ -775,9 +842,9 @@ describe("executeFollowupTurn", () => {
     const updateSessionId = vi.fn();
     const turn = createTurn({
       operation: {
-        abortSignal: new AbortController().signal,
+        ...createMockReplyOperation().replyOperation,
         updateSessionId,
-      } as unknown as AdmittedFollowupTurn["operation"],
+      },
     });
     state.reset.mockImplementation(async (params) => {
       params.onActiveSessionEntry({ sessionId: "reset-session", updatedAt: 2 });
@@ -837,9 +904,9 @@ describe("executeFollowupTurn", () => {
     const onItemEvent = vi.fn(async () => {});
     const fail = vi.fn();
     const operation = {
-      abortSignal: new AbortController().signal,
+      ...createMockReplyOperation().replyOperation,
       fail,
-    } as unknown as AdmittedFollowupTurn["operation"];
+    };
     const turn = createTurn({ operation });
     turn.queued.originatingChatType = "direct";
     state.execute.mockImplementation(async (params: AgentTurnParams) => {

@@ -23,6 +23,7 @@ import {
   buildSlackMessageDispatchReplayKey,
   claimSlackMessageDispatchReplay,
   createSlackMessageDispatchReplayGuard,
+  SlackMessageDispatchRetryError,
   type SlackMessageDispatchReplayClaim,
   type SlackMessageDispatchReplayGuard,
 } from "./message-dispatch-dedupe.js";
@@ -68,7 +69,9 @@ const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization con
 
 function isRetryableSlackInboundError(error: unknown): boolean {
   return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
-    (candidate) => REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
+    (candidate) =>
+      candidate instanceof SlackMessageDispatchRetryError ||
+      REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
   );
 }
 
@@ -223,6 +226,11 @@ export function createSlackMessageHandler(params: {
               // them. Same-flush twins share one claim and one logical message while
               // retaining the latest event's routing and any earlier mention.
               const claims: SlackMessageDispatchReplayClaim[] = [];
+              const releaseClaims = (error?: unknown) => {
+                for (const handle of claims) {
+                  handle.release(error === undefined ? {} : { error });
+                }
+              };
               const claimedKeys = new Map<string, number>();
               const surviving: typeof entries = [];
               let latestSurviving: (typeof entries)[number] | undefined;
@@ -258,6 +266,16 @@ export function createSlackMessageHandler(params: {
                 const claim = await claimSlackMessageDispatchReplay({
                   guard: dispatchReplayGuard,
                   key: replayKey,
+                  onWaiting: () => {
+                    entry.opts.turnAdoptionLifecycle?.onDispatchWaiting?.();
+                    // The logical owner already holds this message's ordering.
+                    // Release both ingress and debounce admission so later input
+                    // can reach the active turn while the twin awaits settlement.
+                    admissionLifecycle.onDeferred();
+                  },
+                }).catch((error: unknown) => {
+                  releaseClaims(error);
+                  throw error;
                 });
                 if (claim.kind === "claimed") {
                   claims.push(claim.handle);
@@ -266,11 +284,6 @@ export function createSlackMessageHandler(params: {
                   latestSurviving = entry;
                 }
               }
-              const releaseClaims = (error?: unknown) => {
-                for (const handle of claims) {
-                  handle.release(error === undefined ? {} : { error });
-                }
-              };
               const commitClaims = async () => {
                 for (const handle of claims) {
                   await handle.commit();
