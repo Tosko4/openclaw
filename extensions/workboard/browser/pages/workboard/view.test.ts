@@ -2,7 +2,11 @@ import "../../test/dom.setup.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 // Control UI tests cover workboard behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
+import { render, type LitElement } from "lit";
+import type {
+  ControlUiAgentPickerProps,
+  ControlUiComponents,
+} from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -17,6 +21,8 @@ import {
 import { workboardTestHost } from "../../test/host.setup.ts";
 import { waitForFast } from "../../test/wait-for.ts";
 import { renderWorkboard } from "./view.ts";
+
+type ControlUiSelectPickerProps = Parameters<ControlUiComponents["mountSelectPicker"]>[1];
 
 type WorkboardRenderProps = Parameters<typeof renderWorkboard>[0];
 
@@ -45,6 +51,9 @@ function createWorkboardRenderProps(
 
 function renderInto(container: HTMLElement, props: WorkboardRenderProps) {
   workboardTestHost().connection.connected = props.connected;
+  if (!container.isConnected) {
+    document.body.append(container);
+  }
   render(renderWorkboard(props), container);
 }
 
@@ -64,7 +73,8 @@ function createWorkboardView(
 function buttonByLabel(container: Element, label: string): HTMLButtonElement | null {
   return (
     Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.getAttribute("aria-label") === label,
+      (button) =>
+        button.getAttribute("aria-label") === label || button.textContent?.trim() === label,
     ) ?? null
   );
 }
@@ -77,24 +87,66 @@ function buttonByText(container: Element, text: string): HTMLButtonElement | nul
   );
 }
 
-function changeWorkboardSelect(select: Element | null | undefined, value: string) {
-  const control = select as (HTMLElement & { value: string }) | null | undefined;
-  expect(control).not.toBeNull();
-  if (!control) {
-    return;
-  }
-  Object.defineProperty(control, "value", { configurable: true, value, writable: true });
-  control.dispatchEvent(new Event("change", { bubbles: true }));
-  Reflect.deleteProperty(control, "value");
+function sessionPicker(container: Element) {
+  return expectDefined(
+    container.querySelector<HTMLElement & ControlUiSelectPickerProps>(
+      ".workboard-draft .workboard-session-select [data-test-select-picker]",
+    ),
+    "card session picker",
+  );
 }
 
-function selectWorkboardAgent(select: Element | null | undefined, value: string) {
-  const control = select as
-    | (HTMLElement & { onSelect: (value: string) => void })
-    | null
-    | undefined;
-  expect(control).not.toBeNull();
-  control?.onSelect(value);
+function filterPicker(container: Element, label: string) {
+  return expectDefined(
+    [
+      ...container.querySelectorAll<HTMLElement & ControlUiSelectPickerProps>(
+        label === "Agent"
+          ? ".workboard-heading__agent [data-test-select-picker]"
+          : ".workboard-filter-popover [data-test-select-picker]",
+      ),
+    ].find((picker) => picker.accessibleLabel === label),
+    `filter picker ${label}`,
+  );
+}
+
+function statusButton(container: Element, label: string) {
+  return expectDefined(
+    buttonByLabel(
+      expectDefined(
+        container.querySelector('.workboard-status-tabs[role="group"][aria-label="Status"]'),
+        "status tabs",
+      ),
+      label,
+    ),
+    `${label} status`,
+  );
+}
+
+function filterGroup(container: Element, label: string) {
+  return expectDefined(
+    container.querySelector<HTMLElement>(
+      `.workboard-filter-section__options[aria-label="${label}"]`,
+    ),
+    label,
+  );
+}
+
+function filterCheckbox(container: Element, group: string, label: string) {
+  return expectDefined(
+    [...filterGroup(container, group).querySelectorAll("label")]
+      .find((option) => option.getAttribute("title") === label)
+      ?.querySelector<HTMLInputElement>('input[type="checkbox"]'),
+    `${label} filter`,
+  );
+}
+
+function toast(container: Element) {
+  return expectDefined(
+    container.querySelector<HTMLElement & { props: { message: string; hidden?: boolean } }>(
+      "openclaw-workboard-toast:not([hidden])",
+    ),
+    "visible error toast",
+  );
 }
 
 describe("nextWorkboardCardPosition", () => {
@@ -206,7 +258,142 @@ describe("nextWorkboardCardPosition", () => {
 });
 
 describe("renderWorkboard", () => {
-  it("shows a card dashboard only for linked cards", () => {
+  it.each([
+    { path: "quick", agentId: "" },
+    { path: "quick", agentId: "main" },
+    { path: "edit", agentId: "" },
+    { path: "edit", agentId: "main" },
+  ])(
+    "bulk $path preserves raw assignment '$agentId' independently of Keep unchanged",
+    async ({ path, agentId }) => {
+      const card = createWorkboardCard({ agentId: "writer" });
+      const saved = { ...card, agentId, updatedAt: card.updatedAt + 1 };
+      const request = vi.fn(async () => ({ card: saved }));
+      const { state, container, renderView } = createWorkboardView({
+        client: { request } as unknown as GatewayBrowserClient,
+        agentsList: {
+          defaultId: "main",
+          agents: [
+            { id: "main", name: "Molty" },
+            { id: "writer", name: "Writer" },
+          ],
+        },
+      });
+      state.cards = [card];
+      state.selectedCardIds.add(card.id);
+      renderView();
+      if (path === "edit") {
+        expectDefined(buttonByLabel(container, "Edit properties"), "bulk edit").click();
+        renderView();
+        expect(
+          expectDefined(buttonByLabel(container, "Apply changes"), "apply changes").disabled,
+        ).toBe(true);
+      }
+      const scope = expectDefined(
+        container.querySelector(
+          path === "edit" ? ".workboard-bulk-dialog" : ".workboard-selection",
+        ),
+        "bulk controls",
+      );
+      const picker = expectDefined(
+        [
+          ...scope.querySelectorAll<HTMLElement & ControlUiSelectPickerProps>(
+            "[data-test-select-picker]",
+          ),
+        ].find((item) => item.accessibleLabel === (path === "edit" ? "Agent" : "Assign agent…")),
+        "bulk agent picker",
+      );
+      expect(picker.options.find((option) => option.value === "")?.description).toBe("Default");
+      expect(picker.options.some((option) => option.value === "main")).toBe(true);
+      if (path === "edit") {
+        const keep = expectDefined(
+          picker.options.find((option) => option.label === "Keep unchanged"),
+          "keep assignment",
+        );
+        picker.onSelect("");
+        renderView();
+        expect(
+          expectDefined(buttonByLabel(container, "Apply changes"), "apply changes").disabled,
+        ).toBe(false);
+        picker.onSelect(keep.value);
+        renderView();
+        expect(
+          expectDefined(buttonByLabel(container, "Apply changes"), "apply changes").disabled,
+        ).toBe(true);
+        expect(request).not.toHaveBeenCalled();
+      }
+      picker.onSelect(agentId);
+      if (path === "edit") {
+        renderView();
+        expectDefined(buttonByLabel(container, "Apply changes"), "apply changes").click();
+      }
+      await vi.waitFor(() => expect(state.bulkSaving).toBe(false));
+      expect(request).toHaveBeenCalledWith("workboard.cards.update", {
+        id: card.id,
+        expectedUpdatedAt: card.updatedAt,
+        patch: { agentId },
+      });
+      expect(state.cards[0]?.agentId).toBe(agentId);
+      expect(state.selectedCardIds.size).toBe(0);
+    },
+  );
+
+  it.each(["write revocation", "disconnect", "activation disposal"] as const)(
+    "stops a bulk assignment after live host %s while the first write is pending",
+    async (change) => {
+      const first = createWorkboardCard({ id: "first", agentId: "writer" });
+      const second = createWorkboardCard({ id: "second", agentId: "writer", position: 2000 });
+      const firstWrite = createDeferred<{ card: typeof first }>();
+      const request = vi
+        .fn()
+        .mockImplementationOnce(() => firstWrite.promise)
+        .mockResolvedValue({ card: { ...second, agentId: "main" } });
+      const { state, container, renderView } = createWorkboardView({
+        client: { request, addEventListener: () => () => undefined },
+        connected: true,
+        canWrite: true,
+        agentsList: { defaultId: "main", agents: [{ id: "main" }, { id: "writer" }] },
+      });
+      state.cards = [first, second];
+      state.selectedCardIds = new Set([first.id, second.id]);
+      renderView();
+      const picker = expectDefined(
+        [
+          ...container.querySelectorAll<HTMLElement & ControlUiSelectPickerProps>(
+            ".workboard-selection [data-test-select-picker]",
+          ),
+        ].find((item) => item.accessibleLabel === "Assign agent…"),
+        "bulk assignment",
+      );
+      picker.onSelect("main");
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+      expect(state.bulkSaving).toBe(true);
+      const connection = workboardTestHost().connection;
+      if (change === "disconnect") {
+        connection.connected = false;
+      } else if (change === "write revocation") {
+        connection.canWrite = false;
+      } else {
+        workboardTestHost().dispose();
+      }
+      firstWrite.resolve({ card: { ...first, agentId: "main", updatedAt: first.updatedAt + 1 } });
+      await vi.waitFor(() => expect(state.bulkSaving).toBe(false));
+
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(request).toHaveBeenCalledWith("workboard.cards.update", {
+        id: first.id,
+        expectedUpdatedAt: first.updatedAt,
+        patch: { agentId: "main" },
+      });
+      expect(state.cards.find((card) => card.id === first.id)?.agentId).toBe("main");
+      expect(state.cards.find((card) => card.id === second.id)?.agentId).toBe("writer");
+      expect(state.selectedCardIds).toEqual(new Set([second.id]));
+      expect(state.bulkResult).toEqual({ completed: 1, total: 2 });
+      expect(state.error).toContain("Applied to 1 of 2 cards.");
+    },
+  );
+
+  it("mounts a session summary only when a linked Session tab is selected", () => {
     const { state, container, renderView } = createWorkboardView();
     state.detailCardId = "card-1";
     state.cards = [
@@ -217,23 +404,33 @@ describe("renderWorkboard", () => {
       }),
     ];
     renderView();
-    expect(container.querySelector("[data-test-dashboard]")).toBeNull();
+    expect(container.querySelector("[data-test-session-summary]")).toBeNull();
 
     state.cards = [{ ...state.cards[0]!, sessionKey: "agent:main:dashboard-aware" }];
     renderView();
-    expect(container.querySelector("[data-test-dashboard]")).not.toBeNull();
+    expect(container.querySelector("[data-test-session-summary]")).toBeNull();
+    const body = expectDefined(
+      container.querySelector<HTMLElement>(".workboard-detail__body"),
+      "detail body",
+    );
+    body.scrollTop = 120;
+    buttonByText(container.querySelector('[role="tablist"]')!, "Session")!.click();
+    renderView();
+    expect(body.scrollTop).toBe(0);
+    expect(container.querySelector("[data-test-session-summary]")).not.toBeNull();
   });
 
   it.each([
     { sessionKey: "agent:main:dashboard-panel-close", expectedAgentId: "main" },
     { sessionKey: "agent:work:dashboard-panel-close", expectedAgentId: "work" },
   ])(
-    "disposes the $sessionKey dashboard mount when card details close",
+    "disposes the $sessionKey session summary when card details close",
     ({ sessionKey, expectedAgentId }) => {
       const { state, container, renderView } = createWorkboardView();
       state.detailCardId = "card-1";
+      state.detailTab = "session";
       state.cards = [createWorkboardCard({ sessionKey, agentId: "reassigned" })];
-      const mount = vi.mocked(workboardTestHost().host.components.mountDashboard);
+      const mount = vi.mocked(workboardTestHost().host.components.mountSessionSummary);
       renderView({
         sessions: [createGatewaySession({ key: sessionKey, agentId: expectedAgentId })],
       });
@@ -245,7 +442,7 @@ describe("renderWorkboard", () => {
       state.detailCardId = null;
       renderView();
       expect(handle.dispose).toHaveBeenCalledOnce();
-      expect(container.querySelector("[data-test-dashboard]")).toBeNull();
+      expect(container.querySelector("[data-test-session-summary]")).toBeNull();
     },
   );
 
@@ -284,12 +481,13 @@ describe("renderWorkboard", () => {
         }),
       ];
       state.detailCardId = "card-1";
-      const mount = vi.mocked(workboardTestHost().host.components.mountDashboard);
+      state.detailTab = "session";
+      const mount = vi.mocked(workboardTestHost().host.components.mountSessionSummary);
 
       renderView();
 
       const open = container.querySelector<HTMLButtonElement>(
-        '.workboard-detail button[aria-label="Open session"]',
+        ".workboard-detail .workboard-detail__session-link",
       );
       if (expected) {
         expect(mount).toHaveBeenCalledWith(
@@ -310,20 +508,92 @@ describe("renderWorkboard", () => {
     state.loading = true;
     renderView();
 
-    expect(buttonByText(container, "Refreshing")?.disabled).toBe(true);
+    expect(container.querySelector<HTMLButtonElement>(".workboard-refresh")?.disabled).toBe(true);
   });
 
-  it("renders lifecycle refresh errors without replacing generic errors", () => {
+  it.each(["details", "edit", "discard", "bulk"] as const)(
+    "preserves error visibility and dismissal through %s dialogs",
+    async (dialog) => {
+      const { state, container, renderView } = createWorkboardView();
+      const card = createWorkboardCard();
+      state.cards = [card];
+      if (dialog === "details") {
+        state.detailCardId = card.id;
+      } else if (dialog === "bulk") {
+        state.bulkDialog = { kind: "delete", cardIds: [card.id] };
+      } else {
+        state.draftOpen = true;
+        state.editingCardId = card.id;
+        state.draftDiscardOpen = dialog === "discard";
+      }
+      const pageError = "Metadata unavailable. Linked session unavailable.";
+      const expectError = async (message: string) => {
+        await waitForFast(() => {
+          const visible = container.querySelectorAll("openclaw-workboard-toast:not([hidden])");
+          expect(visible).toHaveLength(1);
+          expect(visible[0]?.shadowRoot?.querySelector('[role="alert"]')?.textContent).toBe(
+            message,
+          );
+        });
+      };
+      renderView({ pageError });
+      await expectError(pageError);
+      state.error = "Save denied";
+      renderView({ pageError });
+      await expectError("Save denied");
+      state.error = null;
+      renderView({ pageError });
+      await expectError(pageError);
+      const dialogToast = expectDefined(
+        container.querySelector("openclaw-workboard-toast:not([hidden])"),
+        "active dialog toast",
+      );
+      expectDefined(
+        dialogToast.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Close"]'),
+        "dismiss error",
+      ).click();
+      await waitForFast(() => {
+        expect(dialogToast.shadowRoot?.querySelector('[role="alert"]')).toBeNull();
+      });
+      state.detailCardId = null;
+      state.bulkDialog = null;
+      state.draftOpen = dialog === "discard";
+      state.draftDiscardOpen = false;
+      renderView({ pageError });
+      const active = expectDefined(
+        container.querySelector<LitElement>("openclaw-workboard-toast:not([hidden])"),
+        "restored surface toast",
+      );
+      await active.updateComplete;
+      expect(active.shadowRoot?.querySelector('[role="alert"]')).toBeNull();
+      // Recovery makes a subsequent identical failure a new visible outcome.
+      renderView({ pageError: undefined });
+      await active.updateComplete;
+      expect(active.shadowRoot?.querySelector('[role="alert"]')).toBeNull();
+      renderView({ pageError });
+      await expectError(pageError);
+    },
+  );
+
+  it("prioritizes mutation failures over existing page and lifecycle refresh errors", () => {
     const { state, container, renderView } = createWorkboardView();
     state.lifecycleTaskRefreshError = "Task refresh unavailable";
     renderView();
-    expect(container.querySelector(".callout.danger")?.textContent).toBe(
-      "Task refresh unavailable",
-    );
+    expect(toast(container).props.message).toBe("Task refresh unavailable");
+
+    const pageError = "Agent metadata unavailable";
+    renderView({ pageError });
+    expect(toast(container).props.message).toBe(pageError);
 
     state.error = "Write denied";
-    renderView();
-    expect(container.querySelector(".callout.danger")?.textContent).toBe("Write denied");
+    renderView({ pageError });
+    expect(toast(container).props.message).toBe("Write denied");
+
+    state.error = null;
+    renderView({ pageError });
+    expect(toast(container).props.message).toBe(pageError);
+    renderView({ pageError: null });
+    expect(toast(container).props.message).toBe("Task refresh unavailable");
   });
 
   it("keeps dispatch available during refresh and disables it during writes", () => {
@@ -331,28 +601,28 @@ describe("renderWorkboard", () => {
     state.loading = true;
     renderView();
 
-    const dispatchButton = buttonByText(container, "Dispatch ready work");
+    const dispatchButton = buttonByText(container, "Start agents");
     expect(dispatchButton?.disabled).toBe(false);
 
     state.draftSaving = true;
     renderView();
 
-    expect(buttonByText(container, "Dispatch ready work")?.disabled).toBe(true);
+    expect(buttonByText(container, "Start agents")?.disabled).toBe(true);
 
     state.loading = false;
     renderView();
 
-    expect(buttonByText(container, "Refresh")?.disabled).toBe(true);
+    expect(buttonByLabel(container, "Refresh")?.disabled).toBe(true);
 
     state.draftSaving = false;
     state.dispatching = true;
     renderView();
 
-    expect(buttonByText(container, "Dispatch ready work")?.disabled).toBe(true);
+    expect(buttonByText(container, "Start agents")?.disabled).toBe(true);
 
     renderView();
 
-    expect(buttonByText(container, "Refresh")?.disabled).toBe(true);
+    expect(buttonByLabel(container, "Refresh")?.disabled).toBe(true);
   });
 
   it("disables card-write controls while dispatch is running", () => {
@@ -380,14 +650,15 @@ describe("renderWorkboard", () => {
     expect(
       container.querySelector<HTMLSelectElement>(".workboard-card__move-select")?.disabled,
     ).toBe(true);
-    const detailActions = container.querySelector<HTMLElement>(".workboard-detail__actions");
+    const detailActions = container.querySelector<HTMLElement>(".workboard-detail");
     expect(detailActions).not.toBeNull();
     expect(buttonByLabel(detailActions!, "Edit card")?.disabled).toBe(true);
     expect(buttonByLabel(detailActions!, "Archive card")?.disabled).toBe(true);
     expect(buttonByLabel(detailActions!, "Stop session")?.disabled).toBe(true);
     expect(buttonByLabel(detailActions!, "Delete card")?.disabled).toBe(true);
     expect(
-      detailActions!.querySelector<HTMLSelectElement>(".workboard-card__move-select")?.disabled,
+      detailActions!.querySelector<HTMLInputElement>('[name="workboard-detail-status-card-1"]')
+        ?.disabled,
     ).toBe(true);
     expect(container.querySelector<HTMLElement>(".workboard-card")?.getAttribute("draggable")).toBe(
       "false",
@@ -404,7 +675,7 @@ describe("renderWorkboard", () => {
     ).toBe(true);
   });
 
-  it("renders stable card action slots and top updated timestamps", () => {
+  it("groups card actions behind a menu and keeps updated timestamps accessible", () => {
     const { state, container, renderView } = createWorkboardView({
       sessions: [
         {
@@ -445,30 +716,49 @@ describe("renderWorkboard", () => {
     const cards = [...container.querySelectorAll(".workboard-card")];
     expect(cards).toHaveLength(2);
     for (const card of cards) {
-      expect(card.querySelector(".workboard-card__updated")?.textContent).toMatch(/\d+:\d\d/);
-      expect(card.querySelector(".workboard-card__updated")?.textContent).not.toContain("Updated:");
-      expect(card.querySelector(".workboard-card__updated")?.getAttribute("aria-label")).toContain(
-        "Updated:",
+      expect(card.querySelector(".workboard-card__updated")?.textContent).toMatch(
+        /(?:\d+.* ago|just now)/,
       );
-      expect(card.querySelector(".workboard-card__updated-icon svg")).toBeTruthy();
-      expect(card.querySelector(".workboard-card__top > .workboard-card__updated")).toBeTruthy();
-      expect(
-        card.querySelector(".workboard-card__chips")?.previousElementSibling?.className,
-      ).toContain("workboard-card__top");
-      expect(
-        card.querySelectorAll(".workboard-card__quick-actions .workboard-card__action-slot"),
-      ).toHaveLength(3);
-      expect(
-        card.querySelectorAll(".workboard-card__actions-primary .workboard-card__action-slot"),
-      ).toHaveLength(3);
-      expect(
-        card.querySelectorAll(".workboard-card__actions > .workboard-card__action-slot"),
-      ).toHaveLength(2);
+      expect(card.querySelector(".workboard-card__updated")?.textContent).not.toContain("Updated:");
+      expect(card.querySelector(".workboard-card__updated")?.getAttribute("title")).toMatch(
+        /\d+:\d\d/,
+      );
+      expect(card.querySelector("time")?.getAttribute("datetime")).toMatch(/^2026-06-03T/);
+      const footer = expectDefined(card.querySelector(".workboard-card__footer"), "card footer");
+      expect(card.querySelector(".workboard-card__session .workboard-agent-avatar")).not.toBeNull();
+      expect(footer.querySelector(".workboard-agent-avatar")).toBeNull();
+      const heading = expectDefined(card.querySelector(".workboard-card__title"), "card heading");
+      expect(heading.querySelector("h3")).not.toBeNull();
+      expect(heading.querySelector("time")).toBeNull();
+      const time = expectDefined(
+        card.querySelector("time.workboard-card__updated"),
+        "card timestamp",
+      );
+      expect(time.parentElement).toBe(footer);
+      expect(time.querySelector("svg")).toBeNull();
+      expect(card.querySelector(".workboard-card__counts")).toBeNull();
+      expect(card.querySelector(".workboard-card__meta .workboard-card__priority")).toBeNull();
+      expect(card.querySelector(".workboard-card__menu-trigger")).not.toBeNull();
     }
-    expect(container.querySelector(".workboard-agent-chip")?.textContent).toContain(
+    expect(container.querySelector(".workboard-agent-chip")?.getAttribute("title")).toContain(
       "workboard-dispatcher",
     );
     const runningCard = cards.find((card) => card.textContent?.includes("Running card"));
+    const priority = expectDefined(
+      runningCard?.querySelector(".workboard-card__footer .workboard-card__priority"),
+      "high priority in footer",
+    );
+    expect(priority.textContent).toContain("High");
+    const time = expectDefined(
+      runningCard?.querySelector(".workboard-card__footer time"),
+      "footer timestamp",
+    );
+    expect(priority.compareDocumentPosition(time) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(
+      cards
+        .find((card) => card.textContent?.includes("Ready card"))
+        ?.querySelector(".workboard-card__priority"),
+    ).toBeNull();
     expect(runningCard?.querySelector('button[aria-label="Open session"]')).not.toBeNull();
     expect(runningCard?.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
   });
@@ -501,19 +791,19 @@ describe("renderWorkboard", () => {
     expect(detailText).toMatch(/\d+:\d\d/);
   });
 
-  it("keeps the last updated timestamp stable next to density controls while refreshing", () => {
+  it("keeps refresh context accessible while loading", () => {
     const { state, container, renderView } = createWorkboardView();
     state.loading = true;
     state.lastRefreshAt = new Date("2026-06-03T18:47:00Z").getTime();
     state.lastRefreshStartedAt = Date.now();
     renderView();
 
-    const layoutControls = container.querySelector(".workboard-layout-controls");
-    expect(layoutControls?.querySelector(".workboard-layout-toggle")).toBeTruthy();
-    expect(layoutControls?.querySelector(".workboard-refresh-status")?.textContent).toContain(
-      "Updated",
-    );
-    expect(layoutControls?.textContent).not.toContain("Refreshing");
+    expect(buttonByLabel(container, "Compact")).not.toBeNull();
+    expect(
+      container.querySelector(".workboard-refresh")?.parentElement?.getAttribute("title"),
+    ).toContain("Refreshing");
+    expect(container.querySelector(".workboard-refresh")?.getAttribute("aria-busy")).toBe("true");
+    expect(container.querySelector(".workboard-refresh")?.textContent).not.toContain("Refreshing");
   });
 
   it("renders board columns and preloaded cards", () => {
@@ -553,10 +843,9 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Dashboard session");
     expect(container.querySelectorAll(".workboard-column")).toHaveLength(9);
     expect(container.querySelector(".workboard-card__priority")?.textContent).toContain("High");
-    expect(container.querySelector(".workboard-health")?.textContent).toContain("running");
   });
 
-  it("distinguishes the dragged card from its available drop columns", () => {
+  it("highlights only the current drag destination and clears it on exit", () => {
     const { state, container, renderView } = createWorkboardView({ canWrite: true });
     state.cards = [
       createWorkboardCard({
@@ -569,39 +858,61 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-card")?.classList).toContain(
       "workboard-card--dragging",
     );
-    expect(container.querySelectorAll(".workboard-column--drop")).toHaveLength(9);
-
-    state.draggedCardId = null;
+    expect(container.querySelector(".workboard-column--drop-target")).toBeNull();
+    const running = container.querySelector(".workboard-column--running")!;
+    const todo = container.querySelector(".workboard-column--todo")!;
+    running.dispatchEvent(new Event("dragover", { bubbles: true, cancelable: true }));
     renderView();
+    expect(container.querySelectorAll(".workboard-column--drop-target")).toHaveLength(1);
+    expect(running.classList).toContain("workboard-column--drop-target");
 
+    todo.dispatchEvent(new Event("dragover", { bubbles: true, cancelable: true }));
+    renderView();
+    expect(container.querySelectorAll(".workboard-column--drop-target")).toHaveLength(1);
+    expect(todo.classList).toContain("workboard-column--drop-target");
+    todo.dispatchEvent(new MouseEvent("dragleave", { relatedTarget: todo.firstElementChild }));
+    expect(state.dragOverStatus).toBe("todo");
+    todo.dispatchEvent(new Event("dragleave"));
+    renderView();
+    expect(container.querySelector(".workboard-column--drop-target")).toBeNull();
+
+    running.dispatchEvent(new Event("dragover", { bubbles: true, cancelable: true }));
+    container.querySelector(".workboard-card")!.dispatchEvent(new Event("dragend"));
+    renderView();
+    expect(state.draggedCardId).toBeNull();
+    expect(state.dragOverStatus).toBeNull();
     expect(container.querySelector(".workboard-card--dragging")).toBeNull();
-    expect(container.querySelector(".workboard-column--drop")).toBeNull();
+    expect(container.querySelector(".workboard-column--drop-target")).toBeNull();
   });
 
-  it("moves the resolved active card when a drop has no transfer payload", async () => {
-    const card = createWorkboardCard({ title: "Fallback drag move" });
-    const moved = { ...card, status: "running" as const, position: 1000 };
-    const request = vi.fn(async () => ({ card: moved }));
-    const { state, container, renderView } = createWorkboardView({
-      client: { request } as unknown as GatewayBrowserClient,
-    });
-    state.cards = [card];
-    state.draggedCardId = card.id;
-    renderView();
+  it.each(["board", "list"] as const)(
+    "moves the resolved active %s card when a drop has no transfer payload",
+    async (viewMode) => {
+      const card = createWorkboardCard({ title: "Fallback drag move" });
+      const moved = { ...card, status: "running" as const, position: 1000 };
+      const request = vi.fn(async () => ({ card: moved }));
+      const { state, container, renderView } = createWorkboardView({
+        client: { request } as unknown as GatewayBrowserClient,
+      });
+      state.viewMode = viewMode;
+      state.cards = [card];
+      state.draggedCardId = card.id;
+      renderView();
 
-    container
-      .querySelector(".workboard-column--running")
-      ?.dispatchEvent(new Event("drop", { bubbles: true, cancelable: true }));
-    await Promise.resolve();
-    await Promise.resolve();
+      container
+        .querySelector(".workboard-column--running")
+        ?.dispatchEvent(new Event("drop", { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+      await Promise.resolve();
 
-    expect(request).toHaveBeenCalledWith("workboard.cards.move", {
-      id: card.id,
-      status: "running",
-      position: 1000,
-    });
-    expect(state.cards).toContainEqual(moved);
-  });
+      expect(request).toHaveBeenCalledWith("workboard.cards.move", {
+        id: card.id,
+        status: "running",
+        position: 1000,
+      });
+      expect(state.cards).toContainEqual(moved);
+    },
+  );
 
   it("hides cached card mutation controls until a lifecycle teardown reload succeeds", async () => {
     const { host, state, container, renderView } = createWorkboardView();
@@ -654,12 +965,13 @@ describe("renderWorkboard", () => {
     expect(state.draftOpen).toBe(false);
   });
 
-  it("renders health counts and dense card metadata", () => {
+  it("shows one severe alert and preserves other diagnostics in its accessible description", () => {
     const { state, container, renderView } = createWorkboardView();
     state.cards = [
       createWorkboardCard({
         title: "Blocked worker",
         status: "blocked",
+        runId: "active-run",
         metadata: {
           attempts: [{ id: "attempt-1", status: "failed", startedAt: 1 }],
           claim: {
@@ -690,37 +1002,13 @@ describe("renderWorkboard", () => {
               actions: [],
             },
           ],
-          notifications: [{ id: "note-1", kind: "failed", createdAt: 1, message: "Needs proof." }],
-        },
-      }),
-    ];
-    renderView();
-
-    expect(container.querySelector(".workboard-health")?.textContent).toContain("1blocked");
-    expect(container.textContent).toContain("1 attempts");
-    expect(container.textContent).toContain("heartbeat");
-    expect(container.textContent).toContain("Repeated run failures");
-    expect(container.textContent).not.toContain("Old diagnostic");
-    expect(container.textContent).toContain("Needs proof.");
-  });
-
-  it("keeps bounded diagnostic badges UTF-16 safe", () => {
-    const { state, container, renderView } = createWorkboardView();
-    state.cards = [
-      createWorkboardCard({
-        id: "card-boundary",
-        title: "Boundary badge",
-        metadata: {
-          diagnostics: [
+          notifications: [
             {
-              kind: "orphaned_session",
-              severity: "warning",
-              title: `${"x".repeat(62)}🚀tail`,
-              detail: "Boundary detail.",
-              firstSeenAt: 1,
-              lastSeenAt: 1,
-              count: 1,
-              actions: [],
+              id: "note-1",
+              kind: "failed",
+              createdAt: 1,
+              runId: "active-run",
+              message: "Needs proof.",
             },
           ],
         },
@@ -728,12 +1016,205 @@ describe("renderWorkboard", () => {
     ];
     renderView();
 
-    expect(container.querySelector(".workboard-card__badge--warning")?.textContent?.trim()).toBe(
-      `${"x".repeat(62)}…`,
+    expect(
+      container.querySelector('.workboard-card__counts [aria-label="1 attempts"]'),
+    ).not.toBeNull();
+    const counters = expectDefined(
+      container.querySelector(".workboard-card__counts"),
+      "card counters",
+    );
+    expect(counters.nextElementSibling).toBe(container.querySelector(".workboard-card__footer"));
+    expect(container.querySelector(".workboard-card")?.textContent).not.toContain("heartbeat");
+    expect(container.textContent).toContain("Repeated run failures");
+    const alert = expectDefined(
+      container.querySelector(".workboard-card__alert"),
+      "severe card alert",
+    );
+    expect(container.querySelectorAll(".workboard-card__alert")).toHaveLength(1);
+    expect(alert.textContent).not.toContain("Old diagnostic");
+    expect(alert.getAttribute("title")).toContain("Needs proof.");
+    expect(alert.getAttribute("title")).toContain("Old diagnostic");
+    const descriptionId = container
+      .querySelector(".workboard-card")
+      ?.getAttribute("aria-describedby");
+    expect(descriptionId).toBeTruthy();
+    expect(container.querySelector(`[id="${descriptionId}"]`)?.textContent).toContain(
+      "Old diagnostic",
     );
   });
 
-  it("renders sub-minute heartbeat ages with the duration count interpolation", () => {
+  it.each(["critical", "error"] as const)(
+    "preserves %s severity when a diagnostic repeats the blocker",
+    (severity) => {
+      const { state, container, renderView } = createWorkboardView();
+      state.cards = [
+        createWorkboardCard({
+          status: "blocked",
+          metadata: {
+            workerProtocol: {
+              state: "blocked",
+              detail: "Release credentials are missing.",
+              updatedAt: 2,
+            },
+            diagnostics: [
+              {
+                kind: "repeated_failures",
+                severity,
+                title: "Release blocked",
+                detail: "Release credentials are missing.",
+                firstSeenAt: 1,
+                lastSeenAt: 2,
+                count: 1,
+                actions: [],
+              },
+            ],
+          },
+        }),
+      ];
+      renderView();
+      const alerts = container.querySelectorAll(".workboard-card__alert");
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0]?.textContent).toContain("Release blocked");
+      expect(alerts[0]?.getAttribute("title")).toContain("Release credentials are missing.");
+      expect(alerts[0]?.classList.contains(`workboard-card__alert--${severity}`)).toBe(true);
+    },
+  );
+
+  it("shows a protocol violation as an error without a linked run", () => {
+    const { state, container, renderView } = createWorkboardView();
+    state.cards = [
+      createWorkboardCard({
+        status: "blocked",
+        metadata: {
+          workerProtocol: {
+            state: "violated",
+            detail: "Worker returned an invalid result.",
+            updatedAt: 2,
+          },
+        },
+      }),
+    ];
+    renderView();
+    expect(container.querySelector(".workboard-card__alert--error")?.textContent).toContain(
+      "Worker returned an invalid result.",
+    );
+  });
+
+  it.each([
+    { label: "sequence", failedId: "z", completedId: "a", failedSequence: 1, completedSequence: 2 },
+    { label: "id", failedId: "a", completedId: "z", failedSequence: 1, completedSequence: 1 },
+    {
+      label: "legacy entry",
+      failedId: "z",
+      completedId: "a",
+      failedSequence: 1,
+      completedSequence: undefined,
+    },
+  ])(
+    "does not show an obsolete same-time failure after completion ordered by $label",
+    ({ failedId, completedId, failedSequence, completedSequence }) => {
+      const { state, container, renderView } = createWorkboardView();
+      state.cards = [
+        createWorkboardCard({
+          status: "blocked",
+          runId: "current-run",
+          metadata: {
+            notifications: [
+              {
+                id: failedId,
+                kind: "failed",
+                createdAt: 2,
+                sequence: failedSequence,
+                runId: "current-run",
+                message: "Obsolete run failure.",
+              },
+              {
+                id: completedId,
+                kind: "completed",
+                createdAt: 2,
+                sequence: completedSequence,
+                runId: "current-run",
+                message: "Run completed.",
+              },
+            ],
+          },
+        }),
+      ];
+      renderView();
+      expect(container.querySelector(".workboard-card__alert")).toBeNull();
+      expect(container.textContent).not.toContain("Obsolete run failure.");
+    },
+  );
+
+  it.each(["board", "list"] as const)(
+    "preserves full diagnostic text in the %s card's accessible description",
+    (viewMode) => {
+      const sentinel = "SYNTHETIC_PRIVATE_OUTPUT";
+      vi.mocked(workboardTestHost().host.redact).mockImplementation((text) =>
+        text.replaceAll(sentinel, "[redacted]"),
+      );
+      const { state, container, renderView } = createWorkboardView();
+      state.viewMode = viewMode;
+      state.cards = [
+        createWorkboardCard({
+          id: "card-boundary",
+          title: "Boundary badge",
+          metadata: {
+            diagnostics: [
+              {
+                kind: "orphaned_session",
+                severity: "error",
+                title: `${"x".repeat(158)}🚀tail ${sentinel}`,
+                detail: `Boundary detail. ${sentinel}`,
+                firstSeenAt: 1,
+                lastSeenAt: 1,
+                count: 1,
+                actions: [],
+              },
+              {
+                kind: "missing_proof",
+                severity: "warning",
+                title: "Release verification",
+                detail: "The supporting evidence is still missing.",
+                firstSeenAt: 1,
+                lastSeenAt: 1,
+                count: 1,
+                actions: [],
+              },
+            ],
+          },
+        }),
+      ];
+      renderView();
+
+      expect(container.querySelector(".workboard-card__alert--error")?.textContent?.trim()).toBe(
+        `${"x".repeat(158)}🚀tail [redacted]`,
+      );
+      expect(container.querySelector(".workboard-card__alert")?.getAttribute("title")).toContain(
+        `${"x".repeat(158)}🚀tail`,
+      );
+      const card = expectDefined(container.querySelector(".workboard-card"), "card");
+      const descriptionId = expectDefined(
+        card.getAttribute("aria-describedby"),
+        "alert description ID",
+      );
+      const description = expectDefined(
+        document.getElementById(descriptionId),
+        "alert description",
+      );
+      expect(description.textContent).toContain(`${"x".repeat(158)}🚀tail`);
+      expect(description.textContent).toContain("Boundary detail.");
+      expect(description.textContent).toContain("Release verification");
+      expect(description.textContent).toContain("The supporting evidence is still missing.");
+      expect(description.textContent).toContain("Boundary detail. [redacted]");
+      expect(description.textContent).not.toContain(sentinel);
+      expect(
+        container.querySelector(".workboard-card__alert")?.getAttribute("title"),
+      ).not.toContain(sentinel);
+    },
+  );
+
+  it("keeps the claim owner and heartbeat available in Details", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-13T12:00:00Z"));
     const { state, container, renderView } = createWorkboardView();
@@ -754,127 +1235,64 @@ describe("renderWorkboard", () => {
     try {
       renderView();
 
-      expect(container.textContent).toContain("heartbeat 42s");
+      state.detailCardId = "card-1";
+      state.detailTab = "details";
+      renderView();
+      const details = container.querySelector("#workboard-detail-panel-details");
+      expect(details?.textContent).toContain("agent-1");
+      expect(details?.textContent).toContain("Last heartbeat");
+      expect(details?.textContent).toMatch(/\d+:\d\d/);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("highlights cards matching a clicked health badge", () => {
+  it("filters cards by multiple selected statuses", () => {
     const { state, container, renderView } = createWorkboardView();
     state.cards = [
-      createWorkboardCard({
-        title: "Blocked worker",
-        status: "blocked",
-      }),
-      {
-        id: "card-2",
-        title: "Running worker",
-        status: "running",
-        priority: "normal",
-        labels: [],
-        position: 2000,
-        createdAt: 1,
-        updatedAt: 1,
-      },
+      createWorkboardCard({ id: "ready", title: "Ready card", status: "ready" }),
+      createWorkboardCard({ id: "blocked", title: "Blocked card", status: "blocked" }),
+      createWorkboardCard({ id: "done", title: "Done card", status: "done" }),
     ];
     renderView();
-
-    container
-      .querySelector<HTMLButtonElement>(".workboard-health__item--blocked")
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    statusButton(container, "Ready").click();
     renderView();
-
-    const cards = [...container.querySelectorAll<HTMLElement>(".workboard-card")];
-    expect(state.activeHealthHighlight).toBe("blocked");
-    expect(cards.find((card) => card.textContent?.includes("Blocked worker"))?.className).toContain(
-      "workboard-card--health-highlight",
-    );
-    expect(cards.find((card) => card.textContent?.includes("Blocked worker"))?.className).toContain(
-      "workboard-card--health-highlight-blocked",
-    );
-    expect(
-      cards.find((card) => card.textContent?.includes("Running worker"))?.className,
-    ).not.toContain("workboard-card--health-highlight");
-    expect(
-      container
-        .querySelector<HTMLButtonElement>(".workboard-health__item--blocked")
-        ?.getAttribute("aria-pressed"),
-    ).toBe("true");
-
-    container
-      .querySelector<HTMLButtonElement>(".workboard-health__item--blocked")
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(container.querySelector(".workboard-board")?.textContent).toContain("Ready card");
+    expect(container.querySelector(".workboard-board")?.textContent).not.toContain("Blocked card");
+    statusButton(container, "Blocked").click();
     renderView();
-
-    expect(state.activeHealthHighlight).toBeNull();
-    expect(container.querySelector(".workboard-card--health-highlight")).toBeNull();
+    expect(state.statusFilter).toEqual(new Set(["ready", "blocked"]));
+    expect(statusButton(container, "Ready").getAttribute("aria-pressed")).toBe("true");
+    expect(statusButton(container, "Blocked").getAttribute("aria-pressed")).toBe("true");
+    expect(statusButton(container, "All").getAttribute("aria-pressed")).toBe("false");
+    expect(container.querySelector(".workboard-board")?.textContent).toContain("Blocked card");
+    expect(container.querySelector(".workboard-board")?.textContent).not.toContain("Done card");
   });
 
-  it("filters cards with the view preset selector", () => {
+  it("keeps zero-result status filters selectable and clearable", () => {
     const { state, container, renderView } = createWorkboardView();
-    state.viewPreset = "ready";
-    state.cards = [
-      createWorkboardCard({
-        id: "ready",
-        title: "Ready card",
-        status: "ready",
-      }),
-      createWorkboardCard({
-        id: "blocked",
-        title: "Blocked card",
-        status: "blocked",
-      }),
-    ];
+    state.cards = [createWorkboardCard({ id: "ready", title: "Ready card", status: "ready" })];
     renderView();
-
-    expect(container.textContent).toContain("Ready card");
-    expect(container.textContent).not.toContain("Blocked card");
-    expect(container.querySelectorAll(".workboard-column")).toHaveLength(1);
-    expect(container.querySelector(".workboard-board")?.className).toContain(
-      "workboard-board--single-column",
-    );
-    expect(container.querySelector(".workboard-board")?.className).toContain(
-      "workboard-board--page",
-    );
-    expect(container.querySelector(".workboard-column h2")?.textContent).toContain("Ready");
-    expect(
-      [...container.querySelectorAll(".workboard-column h2")].map((heading) => heading.textContent),
-    ).not.toContain("Blocked");
-    expect(
-      container.querySelector<HTMLButtonElement>(".workboard-health__item--blocked")?.textContent,
-    ).toContain("0blocked");
-  });
-
-  it("shows an empty state and disables zero-result view presets", () => {
-    const { state, container, renderView } = createWorkboardView();
-    state.viewPreset = "running";
-    state.cards = [
-      createWorkboardCard({
-        id: "card-ready",
-        title: "Ready card",
-        status: "ready",
-      }),
-    ];
+    const running = statusButton(container, "Running");
+    expect(running.disabled).toBe(false);
+    running.click();
     renderView();
-
-    expect(container.querySelector(".workboard-column")).toBeNull();
-    expect(container.querySelector(".workboard-board")).toBeNull();
     expect(container.querySelector(".workboard-empty-state")?.textContent).toContain(
       "No cards match this view",
     );
-    const viewSelect = container.querySelector(".workboard-toolbar__filters .workboard-select");
-    const runningOption = [
-      ...(viewSelect?.querySelectorAll<HTMLElement & { disabled: boolean }>("option") ?? []),
-    ].find((option) => option.textContent?.includes("Running"));
-    expect(runningOption?.disabled).toBe(true);
-    expect(runningOption?.textContent).toContain("0 cards");
+    expectDefined(
+      buttonByText(container.querySelector(".workboard-empty-state")!, "Clear filters"),
+      "clear filters",
+    ).click();
+    renderView();
+    expect(state.statusFilter.size).toBe(0);
+    expect(container.querySelector(".workboard-board")?.textContent).toContain("Ready card");
   });
 
   it("shows the empty state when non-view filters match no cards", () => {
     const { state, container, renderView } = createWorkboardView();
-    state.viewPreset = "all";
-    state.priorityFilter = "urgent";
+    state.statusFilter.clear();
+    state.priorityFilter = new Set(["urgent"]);
     state.cards = [
       createWorkboardCard({
         id: "card-ready",
@@ -890,32 +1308,76 @@ describe("renderWorkboard", () => {
     );
   });
 
-  it("keeps Workboard toolbar filters labelled and selectable", () => {
-    const { container, renderView } = createWorkboardView({
-      agentsList: {
-        defaultId: "main",
-        agents: [{ id: "main", name: "Main" }],
-      },
-    });
+  it("changes card density from the display options", () => {
+    const { state, container, renderView } = createWorkboardView();
     renderView();
+    buttonByLabel(container, "Compact")!.click();
+    renderView();
+    expect(state.layout).toBe("compact");
+    buttonByLabel(container, "Comfortable")!.click();
+    renderView();
+    expect(state.layout).toBe("comfortable");
+  });
 
-    const toolbarFilters = container.querySelector(".workboard-toolbar__filters");
-    expect(toolbarFilters?.querySelectorAll(".workboard-select--toolbar")).toHaveLength(3);
-    expect(toolbarFilters?.querySelectorAll("select")).toHaveLength(3);
-    expect(toolbarFilters?.textContent).toContain("All cards");
-    expect(toolbarFilters?.textContent).toContain("All priorities");
-    expect(
-      toolbarFilters
-        ?.querySelector<HTMLElement & { options: Array<{ label: string }> }>(
-          ".workboard-agent-select--toolbar [data-test-agent-picker]",
-        )
-        ?.options.map((option) => option.label),
-    ).toContain("All agents");
-    const priorityFilter = toolbarFilters?.querySelectorAll(".workboard-select--toolbar").item(1);
-    expect(priorityFilter?.textContent).toContain("Low");
-    expect(priorityFilter?.textContent).toContain("Normal");
-    expect(priorityFilter?.textContent).toContain("High");
-    expect(priorityFilter?.textContent).toContain("Urgent");
+  it("selects All statuses without clearing priority or view preferences", () => {
+    const { state, container, renderView } = createWorkboardView();
+    state.cards = [
+      createWorkboardCard({ id: "ready", title: "Ready high", status: "ready", priority: "high" }),
+      createWorkboardCard({ id: "done", title: "Done high", status: "done", priority: "high" }),
+      createWorkboardCard({ id: "low", title: "Ready low", status: "ready", priority: "low" }),
+    ];
+    state.statusFilter = new Set(state.statuses.filter((status) => status !== "done"));
+    state.priorityFilter = new Set(["high"]);
+    state.layout = "compact";
+    state.emptyColumnMode = "hide";
+    renderView();
+    expect(container.querySelector(".workboard-board")?.textContent).toContain("Ready high");
+    expect(container.querySelector(".workboard-board")?.textContent).not.toContain("Done high");
+    statusButton(container, "All").click();
+    renderView();
+    expect(container.querySelector(".workboard-board")?.textContent).toContain("Done high");
+    expect(container.querySelector(".workboard-board")?.textContent).not.toContain("Ready low");
+    expect(state.priorityFilter).toEqual(new Set(["high"]));
+    expect(state.layout).toBe("compact");
+    expect(state.emptyColumnMode).toBe("hide");
+    expect(buttonByLabel(container, "Filters, 1 active")).not.toBeNull();
+  });
+
+  it("keeps keyboard focus usable when search updates chips and chips are removed", async () => {
+    const { state, container, renderView } = createWorkboardView();
+    state.statusFilter = new Set(["ready", "blocked"]);
+    state.priorityFilter = new Set(["high"]);
+    state.searchOpen = true;
+    renderView();
+    const search = expectDefined(
+      container.querySelector<HTMLInputElement>("#workboard-search-input"),
+      "search",
+    );
+    search.focus();
+    search.value = "release";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    renderView();
+    expect(document.activeElement).toBe(search);
+    const removeSearch = expectDefined(
+      buttonByLabel(container, "Remove filter: Search: “release”"),
+      "search chip",
+    );
+    removeSearch.focus();
+    removeSearch.click();
+    renderView();
+    await Promise.resolve();
+    expect(state.query).toBe("");
+    const removePriority = expectDefined(
+      buttonByLabel(container, "Remove filter: Priority: High"),
+      "priority chip",
+    );
+    expect(document.activeElement).toBe(removePriority);
+    expect(state.statusFilter).toEqual(new Set(["ready", "blocked"]));
+    removePriority.click();
+    renderView();
+    await Promise.resolve();
+    expect(document.activeElement).toBe(buttonByLabel(container, "Filters"));
+    expect(container.querySelectorAll(".workboard-filter-chip")).toHaveLength(0);
   });
 
   it("filters cards to the global agent scope and hides the secondary agent filter", () => {
@@ -927,7 +1389,7 @@ describe("renderWorkboard", () => {
       scopeAgentId: "writer",
       showAgentFilter: false,
     });
-    state.viewPreset = "all";
+    state.statusFilter.clear();
     state.cards = [
       createWorkboardCard({
         id: "writer-card",
@@ -951,29 +1413,18 @@ describe("renderWorkboard", () => {
 
     expect(container.textContent).toContain("Writer card");
     expect(container.textContent).not.toContain("Ops card");
-    expect(container.querySelectorAll(".workboard-select--toolbar")).toHaveLength(3);
+    expect(container.querySelectorAll(".workboard-filter-section")).toHaveLength(2);
   });
 
-  it("uses labelled controls for Workboard filters", () => {
+  it("labels status, priority and attention filter groups", () => {
     const { container, renderView } = createWorkboardView();
     renderView();
-
-    const selects = [
-      ...container.querySelectorAll<HTMLSelectElement>(".workboard-toolbar__filters select"),
-    ];
-    expect(selects).toHaveLength(3);
-    expect(selects.map((select) => select.getAttribute("aria-label"))).toEqual([
-      "Workboard view",
-      "All priorities",
-      "Empty columns",
-    ]);
-    expect(selects.map((select) => select.value)).toEqual(["all", "all", "show"]);
-    const agentSelect = container.querySelector<
-      HTMLElement & { accessibleLabel: string; value: string }
-    >(".workboard-agent-select--toolbar [data-test-agent-picker]");
-    expect(agentSelect?.accessibleLabel).toBe("Filter by agent");
-    expect(agentSelect?.value).toBe("all");
-    expect(container.querySelector(".workboard-select__trigger")).toBeNull();
+    expect(
+      [...container.querySelectorAll('.workboard-filter-section__options[role="group"]')].map(
+        (group) => group.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Priority", "Needs attention"]);
+    expect(statusButton(container, "All").getAttribute("aria-pressed")).toBe("true");
   });
 
   it("supports showing, collapsing, and hiding empty columns", () => {
@@ -989,8 +1440,7 @@ describe("renderWorkboard", () => {
     expect(container.querySelectorAll(".workboard-column")).toHaveLength(9);
     expect(container.querySelector(".workboard-column--collapsed")).toBeNull();
 
-    const emptyColumns = container.querySelector(".workboard-select--empty-columns");
-    changeWorkboardSelect(emptyColumns, "collapse");
+    buttonByLabel(container, "Collapse empty")?.click();
     renderView();
 
     expect(state.emptyColumnMode).toBe("collapse");
@@ -1011,7 +1461,7 @@ describe("renderWorkboard", () => {
     renderView();
     expect(state.collapsedStatuses).not.toContain("todo");
 
-    changeWorkboardSelect(emptyColumns, "hide");
+    buttonByLabel(container, "Hide empty")?.click();
     renderView();
 
     expect(state.emptyColumnMode).toBe("hide");
@@ -1032,52 +1482,142 @@ describe("renderWorkboard", () => {
         createdAt: 1,
         updatedAt: 8_640_000_000_000_001,
         events: [{ id: "event-1", kind: "edited", at: 8_640_000_000_000_001 }],
+        metadata: {
+          attempts: [
+            {
+              id: "attempt-1",
+              status: "failed",
+              startedAt: 8_640_000_000_000_001,
+              endedAt: 8_640_000_000_000_001,
+              error: "Attempt evidence survives invalid dates",
+            },
+          ],
+          proof: [
+            {
+              id: "proof-1",
+              status: "passed",
+              createdAt: 8_640_000_000_000_001,
+              label: "Proof evidence survives invalid dates",
+            },
+          ],
+        },
       },
     ];
     renderView();
 
     expect(container.textContent).toContain("Bad timestamp card");
+    expect(container.querySelector(".workboard-card__updated")).toBeNull();
     expect(container.textContent).not.toContain("Invalid Date");
-  });
-
-  it("opens card details from the card surface without hijacking action buttons", () => {
-    const onOpenSession = vi.fn();
-    const { state, container, renderView } = createWorkboardView({
-      sessions: [
-        {
-          key: "agent:main:dashboard:1",
-          kind: "direct",
-          displayName: "Dashboard session",
-          updatedAt: 2,
-          hasActiveRun: true,
-          status: "running",
-        },
-      ],
-      onOpenSession,
-    });
-    state.cards = [
-      createWorkboardCard({
-        title: "Inspect a running task",
-        status: "running",
-        sessionKey: "agent:main:dashboard:1",
-      }),
-    ];
+    buttonByLabel(container, "View details")!.click();
     renderView();
-
-    const card = container.querySelector<HTMLElement>(".workboard-card");
-    card?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    buttonByText(container.querySelector('[role="tablist"]')!, "Details")!.click();
     renderView();
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain(
-      "Inspect a running task",
+    const details = expectDefined(
+      container.querySelector("#workboard-detail-panel-details"),
+      "Details panel",
     );
-    expect(onOpenSession).not.toHaveBeenCalled();
-
-    onOpenSession.mockClear();
-    container
-      .querySelector<HTMLButtonElement>('button[aria-label="Delete card"]')
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onOpenSession).not.toHaveBeenCalled();
+    expect(details.textContent).toContain("Attempt evidence survives invalid dates");
+    expect(details.textContent).toContain("Proof evidence survives invalid dates");
+    expect(details.textContent).not.toContain("Invalid Date");
   });
+
+  it.each(["board", "list"] as const)(
+    "opens %s card details without hijacking action buttons",
+    async (viewMode) => {
+      const onOpenSession = vi.fn();
+      const { state, container, renderView } = createWorkboardView({
+        sessions: [
+          {
+            key: "agent:main:dashboard:1",
+            kind: "direct",
+            displayName: "Dashboard session",
+            updatedAt: 2,
+            hasActiveRun: true,
+            status: "running",
+          },
+        ],
+        onOpenSession,
+      });
+      state.viewMode = viewMode;
+      state.cards = [
+        createWorkboardCard({
+          title: "Inspect a running task",
+          status: "running",
+          sessionKey: "agent:main:dashboard:1",
+        }),
+      ];
+      renderView();
+
+      const card = expectDefined(
+        container.querySelector<HTMLElement>(".workboard-card"),
+        "card surface",
+      );
+      expect(card.getAttribute("aria-pressed")).toBeNull();
+      expect(card.getAttribute("aria-haspopup")).toBe("dialog");
+      expectDefined(buttonByLabel(card, "Open session"), "open session action").click();
+      expect(onOpenSession).toHaveBeenCalledWith({ sessionKey: "agent:main:dashboard:1" });
+      expect(state.detailCardId).toBeNull();
+      expect(container.querySelector(".workboard-detail")).toBeNull();
+      onOpenSession.mockClear();
+      card.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      renderView();
+      await waitForFast(() =>
+        expect(container.querySelector(".workboard-detail")?.textContent).toContain(
+          "Inspect a running task",
+        ),
+      );
+      expect(onOpenSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["board", "list"] as const)(
+    "keeps %s keyboard selection intact when opening an action from the card menu",
+    (viewMode) => {
+      const { state, container, renderView } = createWorkboardView({ canWrite: true });
+      state.viewMode = viewMode;
+      state.cards = [
+        createWorkboardCard({ id: "first", title: "First row" }),
+        createWorkboardCard({ id: "second", title: "Second row" }),
+      ];
+      renderView();
+      const rows = container.querySelectorAll<HTMLElement>(".workboard-card");
+      const first = expectDefined(rows[0], "first list row");
+      const second = expectDefined(rows[1], "second list row");
+      expect(first.getAttribute("aria-pressed")).toBeNull();
+      expect(second.getAttribute("aria-pressed")).toBeNull();
+      first.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      renderView();
+      expect(first.getAttribute("aria-pressed")).toBe("true");
+      expect(second.getAttribute("aria-pressed")).toBe("false");
+      expect(first.getAttribute("aria-haspopup")).toBeNull();
+      expect(state.detailCardId).toBeNull();
+      second.dispatchEvent(
+        new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }),
+      );
+      renderView();
+      expect(state.selectedCardIds).toEqual(new Set(["first", "second"]));
+      expect(second.getAttribute("aria-pressed")).toBe("true");
+      expectDefined(
+        second.querySelector<HTMLButtonElement>(".workboard-card__menu-trigger"),
+        "row menu",
+      ).click();
+      expect(state.selectedCardIds).toEqual(new Set(["first", "second"]));
+      expect(state.detailCardId).toBeNull();
+      expectDefined(buttonByLabel(second, "Edit card"), "row edit action").click();
+      renderView();
+      expect(state.draftOpen).toBe(true);
+      expect(state.editingCardId).toBe("second");
+      expect(state.detailCardId).toBeNull();
+      expect(state.selectedCardIds).toEqual(new Set(["first", "second"]));
+    },
+  );
 
   it("mirrors compact card actions in the detail drawer", () => {
     const sessionKey = "agent:main:detail-parity";
@@ -1106,7 +1646,7 @@ describe("renderWorkboard", () => {
     ];
     renderView();
 
-    const actions = container.querySelector<HTMLElement>(".workboard-detail__actions");
+    const actions = container.querySelector<HTMLElement>(".workboard-detail");
     expect(actions).not.toBeNull();
     expect(buttonByLabel(actions!, "Edit card")).not.toBeNull();
     expect(buttonByLabel(actions!, "Archive card")).not.toBeNull();
@@ -1114,11 +1654,11 @@ describe("renderWorkboard", () => {
     expect(buttonByLabel(actions!, "Open session")).not.toBeNull();
     expect(buttonByLabel(actions!, "Delete card")).not.toBeNull();
 
-    const moveSelect = actions!.querySelector<HTMLSelectElement>(".workboard-card__move-select");
-    expect(moveSelect?.getAttribute("aria-label")).toBe("Status: Detail parity");
-    expect([...moveSelect!.options].map((option) => option.textContent?.trim())).toContain(
-      "Review",
-    );
+    const statusChoices = [
+      ...actions!.querySelectorAll<HTMLInputElement>('[name="workboard-detail-status-card-1"]'),
+    ];
+    expect(statusChoices.map((input) => input.value)).toContain("review");
+    expect(statusChoices.find((input) => input.checked)?.value).toBe("running");
 
     buttonByLabel(actions!, "Edit card")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(state.draftOpen).toBe(true);
@@ -1146,6 +1686,12 @@ describe("renderWorkboard", () => {
     state.draftSaving = false;
     renderInto(container, props);
     dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
+    expect(state.draftDiscardOpen).toBe(true);
+    expect(state.draftOpen).toBe(true);
+    expectDefined(
+      buttonByText(container.querySelector(".workboard-discard")!, "Discard"),
+      "discard draft",
+    ).click();
     expect(state.draftOpen).toBe(false);
     expect(container.querySelector(".workboard-draft")).toBeNull();
   });
@@ -1162,7 +1708,7 @@ describe("renderWorkboard", () => {
     const startButtons = [
       ...container.querySelectorAll<HTMLButtonElement>(".workboard-card__start"),
     ];
-    expect(startButtons.map((button) => button.textContent?.trim())).toEqual([""]);
+    expect(startButtons.map((button) => button.textContent?.trim())).toEqual(["Start"]);
     expect(startButtons.map((button) => button.getAttribute("aria-label"))).toEqual([
       "Run default agent",
     ]);
@@ -1176,12 +1722,12 @@ describe("renderWorkboard", () => {
     const detailStartButtons = [
       ...container.querySelectorAll<HTMLButtonElement>(".workboard-detail .workboard-card__start"),
     ];
-    expect(detailStartButtons.map((button) => button.textContent?.replace(/\s+/g, ""))).toEqual([
-      "Start",
-      "OpenAIRun",
-      "ClaudeRun",
-      "OpenAIOpen",
-      "ClaudeOpen",
+    expect(detailStartButtons.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Run default agent",
+      "Run OpenAI",
+      "Run Claude",
+      "Open OpenAI",
+      "Open Claude",
     ]);
   });
 
@@ -1255,7 +1801,7 @@ describe("renderWorkboard", () => {
     const startButtons = [
       ...container.querySelectorAll<HTMLButtonElement>(".workboard-card__start"),
     ];
-    expect(startButtons.map((button) => button.textContent?.trim())).toEqual([""]);
+    expect(startButtons.map((button) => button.textContent?.trim())).toEqual(["Start"]);
     expect(startButtons.map((button) => button.getAttribute("aria-label"))).toEqual([
       "Run default agent",
     ]);
@@ -1267,14 +1813,14 @@ describe("renderWorkboard", () => {
     const detailStartButtons = [
       ...container.querySelectorAll<HTMLButtonElement>(".workboard-detail .workboard-card__start"),
     ];
-    expect(detailStartButtons.map((button) => button.textContent?.replace(/\s+/g, ""))).toEqual([
-      "Start",
-      "OpenAIOpen",
-      "ClaudeOpen",
+    expect(detailStartButtons.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Run default agent",
+      "Open OpenAI",
+      "Open Claude",
     ]);
   });
 
-  it("renders linked Gateway task status on cards", () => {
+  it("renders linked Gateway task status on cards", async () => {
     const { state, container, renderView } = createWorkboardView();
     state.cards = [
       createWorkboardCard({
@@ -1296,9 +1842,80 @@ describe("renderWorkboard", () => {
     });
     renderView();
 
-    expect(container.textContent).toContain("task linked");
-    expect(container.textContent).toContain("Task complete");
-    expect(container.textContent).toContain("Ready for operator review.");
+    expect(container.querySelector(".workboard-card")?.textContent).not.toContain("task linked");
+    expect(
+      container.querySelector('.workboard-card__session-marker[aria-label="Done"]'),
+    ).not.toBeNull();
+    await vi.waitFor(() =>
+      expect(
+        container.querySelector(".workboard-session-status__trigger .workboard-session-badge")
+          ?.textContent,
+      ).toBe("Done"),
+    );
+    expect(container.querySelector('[role="tooltip"]')?.textContent).toContain(
+      "Ready for operator review.",
+    );
+    expect(container.querySelector(".workboard-card__session-name")?.textContent).toContain(
+      "Review task result",
+    );
+    state.detailCardId = "card-1";
+    renderView();
+    for (const tab of ["Overview", "Session"]) {
+      expectDefined(
+        buttonByText(container.querySelector('[role="tablist"]')!, tab),
+        `${tab} tab`,
+      ).click();
+      renderView();
+      const panel = expectDefined(
+        container.querySelector(".workboard-detail__tabpanel:not([hidden])"),
+        "active panel",
+      );
+      expect(panel.querySelector(".workboard-detail__session-name")?.textContent).toContain(
+        "Review task result",
+      );
+      expect(panel.querySelector(".workboard-session-badge")?.textContent).toBe("Done");
+      expect(panel.textContent).toContain("Ready for operator review.");
+      expect(buttonByLabel(panel, "Open session")).not.toBeNull();
+    }
+  });
+
+  it("shows completed session identity without repeating a synthetic completion summary", () => {
+    const onOpenSession = vi.fn();
+    const sessionKey = "agent:main:completed-review";
+    const { state, container, renderView } = createWorkboardView({
+      sessions: [
+        {
+          key: sessionKey,
+          kind: "direct",
+          displayName: "Release review",
+          updatedAt: 2,
+          status: "done",
+          hasActiveRun: false,
+        },
+      ],
+      onOpenSession,
+    });
+    state.cards = [createWorkboardCard({ status: "done", sessionKey })];
+    state.detailCardId = "card-1";
+    renderView();
+    for (const tab of ["Overview", "Session"]) {
+      expectDefined(
+        buttonByText(container.querySelector('[role="tablist"]')!, tab),
+        `${tab} tab`,
+      ).click();
+      renderView();
+      const panel = expectDefined(
+        container.querySelector(".workboard-detail__tabpanel:not([hidden])"),
+        "active panel",
+      );
+      expect(panel.querySelector(".workboard-detail__session-name")?.textContent).toContain(
+        "Release review",
+      );
+      expect(panel.querySelector(".workboard-session-badge")?.textContent).toBe("Done");
+      expect(panel.textContent).not.toContain("Run completed");
+      expectDefined(buttonByLabel(panel, "Open session"), "Open session").click();
+      expect(onOpenSession).toHaveBeenLastCalledWith({ sessionKey });
+    }
   });
 
   it("renders a queued linked session without a concurrency claim", () => {
@@ -1321,13 +1938,18 @@ describe("renderWorkboard", () => {
     ];
     renderView();
 
-    expect(container.querySelector(".workboard-lifecycle")?.textContent?.trim()).toBe("Queued");
-    expect(container.querySelector(".workboard-card__lifecycle-detail")?.textContent?.trim()).toBe(
-      "",
+    expect(
+      container.querySelector(".workboard-card__session-marker")?.getAttribute("aria-label"),
+    ).toBe("Queued");
+    expect(
+      container.querySelector(".workboard-card__session-marker .session-run-spinner"),
+    ).toBeNull();
+    expect(container.querySelector(".workboard-card__session-name")?.textContent?.trim()).toBe(
+      "Session",
     );
   });
 
-  it("uses terminal session lifecycle when cached task status is stale", () => {
+  it("uses terminal session lifecycle when cached task status is stale", async () => {
     const { state, container, renderView } = createWorkboardView({
       sessions: [
         {
@@ -1361,9 +1983,15 @@ describe("renderWorkboard", () => {
     });
     renderView();
 
-    expect(container.textContent).toContain("Done");
+    await vi.waitFor(() =>
+      expect(container.querySelector(".workboard-session-status__trigger")?.textContent).toContain(
+        "Done",
+      ),
+    );
     expect(container.textContent).toContain("Finished session");
-    expect(container.textContent).not.toContain("Task running");
+    expect(
+      container.querySelector('.workboard-card__session-marker[aria-label="Running"]'),
+    ).toBeNull();
     expect(container.textContent).not.toContain("Still running according to stale cache.");
 
     container
@@ -1372,7 +2000,7 @@ describe("renderWorkboard", () => {
     renderView();
 
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("Finished session");
-    expect(container.querySelector(".workboard-detail")?.textContent).not.toContain(
+    expect(container.querySelector("#workboard-detail-panel-overview")?.textContent).not.toContain(
       "Still running according to stale cache.",
     );
   });
@@ -1397,7 +2025,9 @@ describe("renderWorkboard", () => {
     });
     renderView();
 
-    expect(container.textContent).toContain("Task running");
+    expect(
+      container.querySelector('.workboard-card__session-marker[aria-label="Running"]'),
+    ).not.toBeNull();
     expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
     expect(container.querySelector(".workboard-card")?.getAttribute("role")).toBe("button");
@@ -1489,7 +2119,7 @@ describe("renderWorkboard", () => {
     expect(buttonByLabel(container, "Delete card")).toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
     expect(
-      container.querySelector<HTMLButtonElement>(".workboard-toolbar__actions .btn.primary"),
+      container.querySelector<HTMLButtonElement>(".workboard-heading__actions .btn.primary"),
     ).toBeNull();
     expect(container.querySelector<HTMLSelectElement>(".workboard-card__move-select")).toBeNull();
     expect(container.querySelector(".workboard-card")?.getAttribute("draggable")).toBe("false");
@@ -1625,7 +2255,7 @@ describe("renderWorkboard", () => {
     expect(state.cards[0]).toMatchObject({ status: "todo", updatedAt: 1 });
   });
 
-  it("offers Edit without replacement Start when linked session metadata is unknown", () => {
+  it("offers Edit without replacement Start when linked session metadata is unknown", async () => {
     const { state, container, renderView } = createWorkboardView();
     state.cards = [
       createWorkboardCard({
@@ -1636,7 +2266,11 @@ describe("renderWorkboard", () => {
     ];
     renderView();
 
-    expect(container.textContent).toContain("Session state unknown");
+    await vi.waitFor(() =>
+      expect(container.querySelector(".workboard-session-status__trigger")?.textContent).toContain(
+        "Unknown",
+      ),
+    );
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
     expect(container.querySelector('button[aria-label="Edit card"]')).not.toBeNull();
   });
@@ -1646,7 +2280,7 @@ describe("renderWorkboard", () => {
     renderView();
 
     container
-      .querySelector<HTMLButtonElement>(".workboard-toolbar__actions .btn.primary")
+      .querySelector<HTMLButtonElement>(".workboard-heading__actions .btn.primary")
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     renderView();
 
@@ -1716,7 +2350,7 @@ describe("renderWorkboard", () => {
     state.agentFilter = agentFilter;
     renderView();
     container
-      .querySelector<HTMLButtonElement>(".workboard-toolbar__actions .btn.primary")
+      .querySelector<HTMLButtonElement>(".workboard-heading__actions .btn.primary")
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     renderView();
 
@@ -1776,7 +2410,7 @@ describe("renderWorkboard", () => {
       }
       renderView();
       container
-        .querySelector<HTMLButtonElement>(".workboard-toolbar__actions .btn.primary")
+        .querySelector<HTMLButtonElement>(".workboard-heading__actions .btn.primary")
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       renderView();
 
@@ -1830,15 +2464,6 @@ describe("renderWorkboard", () => {
       expect(container.querySelector(".workboard-board")?.textContent).toContain(created.title);
       expect(container.querySelector(".workboard-board")?.textContent).not.toContain(
         "Other agent work",
-      );
-      changeWorkboardSelect(
-        container.querySelector('select[aria-label="Workboard view"]'),
-        "default_agent",
-      );
-      renderView();
-      expect(container.querySelector(".workboard-board")?.textContent).toContain(created.title);
-      expect(container.querySelector(".workboard-board")?.textContent).toContain(
-        "Assigned default work",
       );
     },
   );
@@ -1921,7 +2546,7 @@ describe("renderWorkboard", () => {
     ];
     renderView();
 
-    expect(container.querySelector(".workboard-events")?.textContent).toContain("Moved to Review");
+    expect(container.querySelector(".workboard-events")).toBeNull();
 
     container
       .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
@@ -1929,9 +2554,7 @@ describe("renderWorkboard", () => {
     renderView();
 
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("Moved to Done");
-    expect(container.querySelector(".workboard-detail")?.textContent).not.toContain(
-      "Moved to Backlog",
-    );
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Moved to Backlog");
   });
 
   it("renders card metadata badges and hides archived cards", () => {
@@ -1982,19 +2605,33 @@ describe("renderWorkboard", () => {
     ];
     renderView();
 
-    expect(container.textContent).toContain("Plugin");
-    expect(container.textContent).toContain("1 failed");
-    expect(container.textContent).toContain("1 comments");
-    expect(container.textContent).toContain("7 proof");
-    expect(container.textContent).toContain("stale");
+    expect(container.querySelector(".workboard-card")?.textContent).not.toContain("Plugin");
+    expect(
+      container.querySelector('.workboard-card__counts [aria-label="1 failed"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('.workboard-card__counts [aria-label="1 comments"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('.workboard-card__counts [aria-label="7 proof"]'),
+    ).not.toBeNull();
+    expect(container.querySelector(".workboard-card__alert")?.textContent).toContain("Stale");
+    expect(container.querySelector(".workboard-card__alert")?.getAttribute("title")).toContain(
+      "No recent activity.",
+    );
     expect(container.textContent).not.toContain("Archived task");
 
-    container
-      .querySelector<HTMLButtonElement>(".workboard-archive-toggle")
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const archivedToggle = expectDefined(
+      container.querySelector<HTMLInputElement>(".workboard-filter-archived input"),
+      "show archived",
+    );
+    archivedToggle.checked = true;
+    archivedToggle.dispatchEvent(new Event("change", { bubbles: true }));
     renderView();
     expect(container.textContent).toContain("Archived task");
-    expect(container.querySelector<HTMLButtonElement>(".workboard-archive-toggle")).not.toBeNull();
+    expect(
+      container.querySelector<HTMLInputElement>(".workboard-filter-archived input")?.checked,
+    ).toBe(true);
 
     container
       .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
@@ -2002,7 +2639,7 @@ describe("renderWorkboard", () => {
     renderView();
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("1 attempts");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("1 links");
-    expect(container.querySelector(".workboard-detail")?.textContent).not.toContain("pnpm test 1");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("pnpm test 1");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("pnpm test 7");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain(
       "https://example.com/proof-7",
@@ -2011,13 +2648,11 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-detail")?.textContent).toContain(
       "Worker asked for owner input.",
     );
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Automation");
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Tenant: ops");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Card automation");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("ops");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("review, test");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain(
-      "Skills: review, test",
-    );
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain(
-      "Workspace: worktree /tmp/workboard proof",
+      "worktree · /tmp/workboard · proof",
     );
   });
 
@@ -2062,12 +2697,11 @@ describe("renderWorkboard", () => {
       },
     ];
     renderView();
-    const boardFilter = container.querySelector(".workboard-select--toolbar-board");
-    expect(boardFilter?.textContent).toContain("Default board");
-    expect(boardFilter?.textContent).toContain("Operations (ops)");
-    expect(boardFilter?.textContent).toContain("Old work (archive)");
-
-    changeWorkboardSelect(boardFilter, "ops");
+    const boardFilter = filterPicker(container, "Filter by board");
+    expect(boardFilter.options.map((option) => option.label)).toEqual(
+      expect.arrayContaining(["Default board", "Operations (ops)", "Old work (archive)"]),
+    );
+    boardFilter.onSelect("ops");
     renderView();
 
     expect(onBoardFilterChange).toHaveBeenCalledWith("ops");
@@ -2075,7 +2709,7 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Ops work");
   });
 
-  it("shows the board switcher at two boards with icon, color, and fallback glyphs", () => {
+  it("shows the board switcher at two boards", () => {
     const { state, container, renderView } = createWorkboardView();
     state.boards = [
       { id: "default", total: 0, active: 0, archived: 0, byStatus: {} },
@@ -2093,19 +2727,15 @@ describe("renderWorkboard", () => {
     state.boardFilter = "default";
     renderView();
 
-    const boardFilter = container.querySelector(".workboard-select--toolbar-board");
-    expect(boardFilter).not.toBeNull();
-    expect(boardFilter?.querySelectorAll("option")).toHaveLength(3);
-    expect(
-      boardFilter?.parentElement?.querySelector(".workboard-board-glyph")?.textContent?.trim(),
-    ).toBe("D");
-    changeWorkboardSelect(boardFilter, "ops");
+    const boardFilter = filterPicker(container, "Filter by board");
+    expect(boardFilter.options.map((option) => option.value)).toEqual([
+      "__all__",
+      "default",
+      "ops",
+    ]);
+    boardFilter.onSelect("ops");
     renderView();
-    const selectedGlyph = container
-      .querySelector(".workboard-select--toolbar-board")
-      ?.parentElement?.querySelector(".workboard-board-glyph");
-    expect(selectedGlyph?.textContent?.trim()).toBe("⚙");
-    expect(selectedGlyph?.getAttribute("style")).toContain("#22c55e");
+    expect(state.boardFilter).toBe("ops");
   });
 
   it("keeps a deleted routed board filtered instead of exposing every board", () => {
@@ -2170,41 +2800,30 @@ describe("renderWorkboard", () => {
     ];
     renderView();
 
-    const agentFilter = container.querySelector<
-      HTMLElement & { options: Array<{ label: string }>; value: string }
-    >(".workboard-agent-select--toolbar [data-test-agent-picker]");
-    expect(agentFilter?.options.map((option) => option.label)).toEqual([
+    const agentFilter = filterPicker(container, "Agent");
+    for (const label of [
       "All agents",
       "Unassigned (uses Main)",
       "Main (default)",
       "Ops",
       "workboard-dispatcher (not configured)",
-    ]);
+    ]) {
+      expect(agentFilter.options.map((option) => option.label)).toContain(label);
+    }
 
-    selectWorkboardAgent(agentFilter, "ops");
+    agentFilter.onSelect("ops");
     renderView();
 
     expect(container.textContent).not.toContain("Main work");
     expect(container.textContent).toContain("Ops work");
-    expect(
-      container.querySelector<HTMLElement & { value: string }>(
-        ".workboard-agent-select--toolbar [data-test-agent-picker]",
-      )?.value,
-    ).toBe("ops");
+    expect(state.agentFilter).toBe("ops");
 
-    selectWorkboardAgent(
-      container.querySelector(".workboard-agent-select--toolbar [data-test-agent-picker]"),
-      "workboard-dispatcher",
-    );
+    filterPicker(container, "Agent").onSelect("workboard-dispatcher");
     renderView();
 
     expect(container.textContent).not.toContain("Ops work");
     expect(container.textContent).toContain("Dispatcher work");
-    expect(
-      container.querySelector<HTMLElement & { value: string }>(
-        ".workboard-agent-select--toolbar [data-test-agent-picker]",
-      )?.value,
-    ).toBe("workboard-dispatcher");
+    expect(state.agentFilter).toBe("workboard-dispatcher");
   });
 
   it("limits assignment choices to configured agents and preserves an unknown current assignee", () => {
@@ -2237,15 +2856,72 @@ describe("renderWorkboard", () => {
     renderView();
 
     const draft = container.querySelector<HTMLElement>(".workboard-draft");
-    const agentSelect = draft?.querySelector<HTMLElement & { options: Array<{ label: string }> }>(
-      ".workboard-agent-select [data-test-agent-picker]",
+    const agentSelect = expectDefined(
+      draft?.querySelector<HTMLElement & ControlUiAgentPickerProps>(
+        ".workboard-agent-select [data-test-agent-picker]",
+      ),
+      "assignment picker",
     );
     expect(agentSelect?.options.map((option) => option.label)).toEqual([
-      "Unassigned (uses Main)",
-      "Main (default)",
+      "Main",
+      "Main",
       "Ops",
       "workboard-dispatcher (not configured)",
     ]);
+    expect(agentSelect?.options.find((option) => option.label === "Main")?.badge).toBe("Default");
+    expect(agentSelect?.options.find((option) => option.label === "Ops")?.badge).toBeUndefined();
+    expect(agentSelect.options.find((option) => option.value === "main")?.badge).toBeUndefined();
+    agentSelect.onSelect("");
+    renderView();
+    expect(state.draftAgentId).toBe("");
+    expect(agentSelect.value).toBe("");
+  });
+
+  it("keeps inherited detail assignment current across default and connection changes", async () => {
+    const card = createWorkboardCard({ agentId: "ops" });
+    const client = createWorkboardTestClient({
+      "workboard.cards.update": { card: createWorkboardCard({ updatedAt: 2 }) },
+    });
+    const agents = [
+      { id: "main", name: "Main" },
+      { id: "ops", name: "Ops" },
+    ];
+    const { state, container, renderView } = createWorkboardView({
+      client,
+      agentsList: { defaultId: "main", agents },
+    });
+    state.cards = [card];
+    state.detailCardId = card.id;
+    renderView();
+    const picker = expectDefined(
+      container.querySelector<HTMLElement & ControlUiAgentPickerProps>(
+        ".workboard-detail__agent-picker [data-test-agent-picker]",
+      ),
+      "detail assignment picker",
+    );
+    expect(picker.options.find((option) => option.value === "")).toMatchObject({
+      label: "Main",
+      badge: "Default",
+    });
+    picker.onSelect("");
+    await vi.waitFor(() => expect(state.cards[0]?.agentId).toBeUndefined());
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
+      id: card.id,
+      expectedUpdatedAt: card.updatedAt,
+      patch: { agentId: "" },
+    });
+    renderView({ agentsList: { defaultId: "ops", agents } });
+    expect(picker.value).toBe("");
+    expect(picker.options.find((option) => option.value === picker.value)).toMatchObject({
+      label: "Ops",
+      badge: "Default",
+    });
+    renderView({ connected: false });
+    expect(picker.disabled).toBe(true);
+    renderView({ client: null });
+    expect(picker.disabled).toBe(true);
+    renderView();
+    expect(picker.disabled).toBe(false);
   });
 
   it("renders the card modal with a single scrollable body and stable footer actions", () => {
@@ -2262,17 +2938,6 @@ describe("renderWorkboard", () => {
     expect(body?.querySelector(".workboard-draft__meta")).toBeTruthy();
     expect(footer?.textContent).toContain("Create");
     expect(body?.contains(footer as Node)).toBe(false);
-  });
-
-  it("uses native select controls inside the card modal", () => {
-    const { state, container, renderView } = createWorkboardView();
-    state.draftOpen = true;
-    state.draftTitle = "New task";
-    renderView();
-
-    const selects = container.querySelectorAll(".workboard-draft select");
-    expect(selects.length).toBeGreaterThan(0);
-    expect(container.querySelector(".workboard-select__menu")).toBeNull();
   });
 
   it("preflights model-specific starts for ACP runtime agents", () => {
@@ -2363,7 +3028,7 @@ describe("renderWorkboard", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("shows stale lifecycle on executed linked cards", () => {
+  it("shows stale lifecycle on executed linked cards", async () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(60 * 60 * 1000);
     try {
       const { host, state } = createLoadedWorkboardState();
@@ -2401,8 +3066,14 @@ describe("renderWorkboard", () => {
       );
       renderView();
 
-      expect(container.textContent).toContain("Stale");
-      expect(container.textContent).toContain("No recent session activity");
+      await vi.waitFor(() =>
+        expect(
+          container.querySelector(".workboard-session-status__trigger")?.textContent,
+        ).toContain("Stale"),
+      );
+      expect(
+        container.querySelector(".workboard-card__session-marker")?.getAttribute("title"),
+      ).toContain("No recent session activity");
       expect(container.textContent).not.toContain("codex autonomous");
       expect(container.querySelector(".workboard-live")).toBeNull();
       expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
@@ -2432,7 +3103,11 @@ describe("renderWorkboard", () => {
     ];
     renderView();
 
-    expect(container.querySelector(".workboard-live")?.textContent).toContain("live");
+    expect(
+      container.querySelector(
+        '.workboard-card__session-marker[aria-label="Running"] .session-run-spinner',
+      ),
+    ).not.toBeNull();
     expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
   });
 
@@ -2481,12 +3156,7 @@ describe("renderWorkboard", () => {
     renderView();
 
     expect(state.draftSessionKey).toBe(testCase.sessionKey);
-    expect(
-      [...container.querySelectorAll(".workboard-draft select")].some(
-        (select) =>
-          select.querySelector("option[selected]")?.getAttribute("value") === testCase.sessionKey,
-      ),
-    ).toBe(true);
+    expect(sessionPicker(container).value).toBe(testCase.sessionKey);
 
     const title = container.querySelector<HTMLInputElement>(".workboard-draft__title");
     expect(title).not.toBeNull();
@@ -2505,7 +3175,59 @@ describe("renderWorkboard", () => {
     });
     expect(state.cards[0]?.execution?.sessionKey).toBe("agent:main:execution-linked-session");
     renderView();
-    expect(container.querySelector("[data-test-dashboard]")).not.toBeNull();
+    state.detailTab = "session";
+    renderView();
+    expect(container.querySelector("[data-test-session-summary]")).not.toBeNull();
+  });
+
+  it("keeps label pills mounted while editing and preserves failed input until Escape", async () => {
+    const card = createWorkboardCard({ title: "Label editing", labels: ["review"] });
+    const client = createWorkboardTestClient(() => {
+      throw new Error("Labels unavailable");
+    });
+    const { state, container, renderView } = createWorkboardView({
+      client,
+      onRequestUpdate: () => renderView(),
+    });
+    state.cards = [card];
+    state.detailCardId = card.id;
+    renderView();
+    await waitForFast(() =>
+      expect(container.querySelector(".workboard-detail__labels-popover")).not.toBeNull(),
+    );
+    const popup = expectDefined(
+      container.querySelector<HTMLElement>(".workboard-detail__labels-popover"),
+      "labels popover",
+    );
+    // Native top-layer geometry is covered in the browser; this suite covers editor ownership.
+    popup.showPopover = vi.fn();
+    const trigger = expectDefined(
+      container.querySelector<HTMLButtonElement>(".workboard-detail__text-trigger--labels"),
+      "labels trigger",
+    );
+    trigger.click();
+    await waitForFast(() => expect(popup.querySelector("input")).not.toBeNull());
+    expect(trigger.isConnected).toBe(true);
+    expect(trigger.textContent).toContain("review");
+    const input = expectDefined(popup.querySelector<HTMLInputElement>("input"), "labels input");
+    input.value = " review, quality, review ";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    buttonByText(popup, "Save")!.click();
+    await waitForFast(() => expect(state.error).toContain("Labels unavailable"));
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
+      id: card.id,
+      expectedUpdatedAt: card.updatedAt,
+      patch: { labels: ["review", "quality"] },
+    });
+    expect(input.value).toBe(" review, quality, review ");
+    expect(trigger.isConnected).toBe(true);
+    const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    input.dispatchEvent(escape);
+    await waitForFast(() => expect(popup.querySelector("input")).toBeNull());
+    expect(escape.defaultPrevented).toBe(true);
+    expect(state.detailCardId).toBe(card.id);
+    expect(state.cards[0]?.labels).toEqual(["review"]);
+    expect(document.activeElement).toBe(trigger);
   });
 
   it("opens an edit modal and submits card updates", async () => {
@@ -2561,11 +3283,11 @@ describe("renderWorkboard", () => {
     };
     const container = document.createElement("div");
 
-    render(renderWorkboard(props), container);
+    renderInto(container, props);
     container
       .querySelector<HTMLButtonElement>('button[aria-label="Edit card"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    render(renderWorkboard(props), container);
+    renderInto(container, props);
 
     expect(container.querySelector("[data-test-dialog]")?.textContent).toContain("Edit card");
     expect(container.querySelector("[data-test-dialog]")?.textContent).toContain(
@@ -2578,7 +3300,7 @@ describe("renderWorkboard", () => {
     const commentInput = container.querySelector<HTMLTextAreaElement>(".workboard-comments__input");
     commentInput!.value = "Ship after CI";
     commentInput!.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    render(renderWorkboard(props), container);
+    renderInto(container, props);
     [...container.querySelectorAll<HTMLButtonElement>("button")]
       .find((button) => button.textContent?.includes("Create"))
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -2590,18 +3312,19 @@ describe("renderWorkboard", () => {
       body: "Ship after CI",
     });
     expect(state.cards[0]?.metadata?.comments?.at(-1)?.body).toBe("Ship after CI");
-    render(renderWorkboard(props), container);
+    renderInto(container, props);
 
     expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
       "Renamed",
     );
     expect(state.editingCardBase?.updatedAt).toBe(2);
-    const priority = [
-      ...(container
-        .querySelector(".workboard-draft")
-        ?.querySelectorAll<HTMLElement>(".workboard-select") ?? []),
-    ].at(1);
-    changeWorkboardSelect(priority, "high");
+    const priority = expectDefined(
+      container.querySelector<HTMLInputElement>(
+        '.workboard-draft input[name="priority"][value="high"]',
+      ),
+      "high priority choice",
+    );
+    priority.click();
     container
       .querySelector<HTMLFormElement>(".workboard-draft")
       ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
@@ -2618,22 +3341,19 @@ describe("renderWorkboard", () => {
     ).toHaveLength(1);
     expect(state.cards[0]).toMatchObject({ title: "Renamed", priority: "high", updatedAt: 3 });
 
-    render(renderWorkboard(props), container);
+    renderInto(container, props);
     expect(container.querySelector("[data-test-dialog]")).toBeNull();
     container
       .querySelector<HTMLButtonElement>('button[aria-label="Edit card"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    render(renderWorkboard(props), container);
+    renderInto(container, props);
 
     expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
       "Renamed",
     );
-    expect(
-      [...(container.querySelector(".workboard-draft")?.querySelectorAll("select") ?? [])]
-        .at(1)
-        ?.querySelector("option[selected]")
-        ?.getAttribute("value"),
-    ).toBe("high");
+    expect(container.querySelector<HTMLInputElement>('input[name="priority"]:checked')?.value).toBe(
+      "high",
+    );
   });
 
   it.each(["create", "update", "comment", "conflict"] as const)(
@@ -2705,13 +3425,17 @@ describe("renderWorkboard", () => {
       renderView();
 
       expect(client.request).toHaveBeenCalledWith(method, expect.anything());
+      const errorToast = toast(container.querySelector("[data-test-dialog]")!);
+      await waitForFast(() =>
+        expect(errorToast.shadowRoot?.querySelector('[role="alert"]')).not.toBeNull(),
+      );
       const alert = expectDefined(
-        container.querySelector('.workboard-draft [role="alert"]'),
+        errorToast.shadowRoot?.querySelector('[role="alert"]'),
         "failure in the active editor",
       );
       expect(alert.textContent).toContain(message);
       expect(alert.closest('[inert], [aria-hidden="true"]')).toBeNull();
-      expect(container.querySelectorAll(".callout.danger")).toHaveLength(1);
+      expect(errorToast.closest('[inert], [aria-hidden="true"]')).toBeNull();
       expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
         "Unsaved title",
       );
@@ -2721,7 +3445,7 @@ describe("renderWorkboard", () => {
       if (operation === "conflict") {
         expect(alert.textContent).toContain("Your unsaved edits remain in the form.");
         expect(
-          container.querySelector<HTMLSelectElement>('select[aria-label="Priority"]')?.value,
+          container.querySelector<HTMLInputElement>('input[name="priority"]:checked')?.value,
         ).toBe("high");
       }
       if (operation === "comment") {
@@ -2737,7 +3461,7 @@ describe("renderWorkboard", () => {
       });
       renderView();
       expect(client.request).toHaveBeenCalledTimes(2);
-      expect(container.querySelector('[role="alert"]')).toBeNull();
+      expect(state.error).toBeNull();
       expect(state.draftOpen).toBe(operation === "comment");
     },
   );
@@ -2757,6 +3481,7 @@ describe("renderWorkboard", () => {
     state.cards = [card];
     renderView();
     expectDefined(buttonByLabel(container, "View details"), "open details").click();
+    state.detailTab = "activity";
     renderView();
     const note = container.querySelector<HTMLTextAreaElement>(".workboard-detail__note")!;
     note.value = body;
@@ -2766,20 +3491,24 @@ describe("renderWorkboard", () => {
     await waitForFast(() => expect(state.error).toBe("Note unavailable"));
     renderView();
 
+    const errorToast = toast(container.querySelector("[data-test-dialog]")!);
+    await waitForFast(() =>
+      expect(errorToast.shadowRoot?.querySelector('[role="alert"]')).not.toBeNull(),
+    );
     const alert = expectDefined(
-      container.querySelector('.workboard-detail [role="alert"]'),
+      errorToast.shadowRoot?.querySelector('[role="alert"]'),
       "failure in the active drawer",
     );
-    expect(alert.textContent).toBe("Note unavailable");
+    expect(alert.textContent).toContain("Note unavailable");
     expect(alert.closest('[inert], [aria-hidden="true"]')).toBeNull();
-    expect(container.querySelectorAll(".callout.danger")).toHaveLength(1);
+    expect(errorToast.closest('[inert], [aria-hidden="true"]')).toBeNull();
     expect(note.value).toBe(body);
     expectDefined(buttonByText(container, "Add note"), "retry note").click();
     await waitForFast(() => expect(state.busyCardIds.size).toBe(0));
     renderView();
     expect(client.request).toHaveBeenCalledTimes(2);
-    expect(container.querySelector('[role="alert"]')).toBeNull();
-    expect(container.querySelector(".workboard-detail__list")?.textContent).toContain(body);
+    expect(state.error).toBeNull();
+    expect(container.querySelector(".workboard-detail__comments")?.textContent).toContain(body);
     expect(note.value).toBe("");
   });
 
@@ -2797,55 +3526,55 @@ describe("renderWorkboard", () => {
     ];
     const container = document.createElement("div");
 
-    render(renderWorkboard(createWorkboardRenderProps(host)), container);
+    renderInto(container, createWorkboardRenderProps(host));
 
     const buttons = [...container.querySelectorAll<HTMLButtonElement>("button")];
-    expect(buttons.find((button) => button.textContent?.includes("Create"))?.disabled).toBe(true);
+    expect(
+      container.querySelector<HTMLButtonElement>(".workboard-comments__submit")?.disabled,
+    ).toBe(true);
     expect(buttons.find((button) => button.textContent?.includes("Save"))?.disabled).toBe(true);
   });
 
-  it.each(["", "Verify the browser flow next."])(
-    "saves a details note and preserves a newer draft %j",
-    async (nextDraft) => {
-      const card = createWorkboardCard({ title: "Investigate proof gap", status: "review" });
-      const comment = { id: "comment-1", body: "Need Linux proof.", createdAt: 2 };
-      const pending = createDeferred<{ card: typeof card }>();
-      const client = createWorkboardTestClient(() => pending.promise);
-      const { state, container, renderView } = createWorkboardView({ client });
-      state.cards = [card];
-      state.detailCardId = card.id;
-      renderView();
-      const note = expectDefined(
-        container.querySelector<HTMLTextAreaElement>(".workboard-detail__note"),
-        "details note editor",
-      );
-      note.value = ` ${comment.body} `;
-      note.dispatchEvent(new InputEvent("input", { bubbles: true }));
-      renderView();
-      expectDefined(buttonByText(container, "Add note"), "submit note").click();
-      renderView();
-      expect(note.disabled).toBe(false);
-      if (nextDraft) {
-        note.value = nextDraft;
-        note.dispatchEvent(new InputEvent("input", { bubbles: true }));
-        renderView();
-      }
-
-      pending.resolve({ card: { ...card, metadata: { comments: [comment] } } });
-      await waitForFast(() => expect(state.busyCardIds.size).toBe(0));
-      renderView();
-
-      expect(client.request).toHaveBeenCalledWith("workboard.cards.comment", {
-        id: card.id,
-        body: comment.body,
-      });
-      expect(container.querySelector(".workboard-detail__list")?.textContent).toContain(
-        comment.body,
-      );
-      expect(note.value).toBe(nextDraft);
-      expect(buttonByText(container, "Add note")?.disabled).toBe(!nextDraft);
-    },
-  );
+  it("preserves a pending details note across close and clears it after successful submission", async () => {
+    const card = createWorkboardCard({ title: "Investigate proof gap", status: "review" });
+    const comment = { id: "comment-1", body: "Need Linux proof.", createdAt: 2 };
+    const pending = createDeferred<{ card: typeof card }>();
+    const client = createWorkboardTestClient(() => pending.promise);
+    const { state, container, renderView } = createWorkboardView({ client });
+    state.cards = [card];
+    renderView();
+    buttonByLabel(container, "View details")!.click();
+    renderView();
+    state.detailTab = "activity";
+    renderView();
+    const note = expectDefined(
+      container.querySelector<HTMLTextAreaElement>(".workboard-detail__note"),
+      "note",
+    );
+    note.value = ` ${comment.body} `;
+    note.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    renderView();
+    buttonByText(container, "Add note")!.click();
+    renderView();
+    expect(note.disabled).toBe(true);
+    buttonByLabel(container.querySelector(".workboard-detail")!, "Close")!.click();
+    renderView();
+    buttonByLabel(container, "View details")!.click();
+    renderView();
+    expect(state.detailCommentBody).toBe(` ${comment.body} `);
+    pending.resolve({ card: { ...card, metadata: { comments: [comment] } } });
+    await waitForFast(() => expect(state.busyCardIds.size).toBe(0));
+    renderView();
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.comment", {
+      id: card.id,
+      body: comment.body,
+    });
+    expect(container.querySelector(".workboard-detail__comments")?.textContent).toContain(
+      comment.body,
+    );
+    expect(state.detailCommentBody).toBe("");
+    expect(state.detailCommentDrafts.has(card.id)).toBe(false);
+  });
 
   it("keeps another card's editor draft when an earlier note finishes", async () => {
     const first = createWorkboardCard({ title: "First card" });
@@ -2964,13 +3693,10 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.textContent).toContain("No linked session");
-    expect(container.textContent).toContain("Existing session");
-    const select = expectDefined(
-      container.querySelector<HTMLSelectElement>('.workboard-draft select[aria-label="Session"]'),
-      "new-card session choices",
-    );
-    expect([...select.options].map((option) => option.value)).toEqual([
+    const picker = sessionPicker(container);
+    expect(picker.options.map((option) => option.label)).toContain("No linked session");
+    expect(picker.options.map((option) => option.label)).toContain("Existing session");
+    expect(picker.options.map((option) => option.value)).toEqual([
       "",
       "agent:main:dashboard:1",
       "agent:writer:unknown",
@@ -2983,19 +3709,14 @@ describe("renderWorkboard", () => {
     state.draftSessionKey = "agent:main:archived-session";
     const container = document.createElement("div");
 
-    render(renderWorkboard(createWorkboardRenderProps(host)), container);
+    renderInto(container, createWorkboardRenderProps(host));
 
-    const sessionSelect = [
-      ...(container
-        .querySelector(".workboard-draft")
-        ?.querySelectorAll<HTMLElement>(".workboard-select") ?? []),
-    ].at(2);
-    expect(sessionSelect?.querySelector("option[selected]")?.getAttribute("value")).toBe(
-      "agent:main:archived-session",
-    );
-    expect(
-      sessionSelect?.querySelector('option[value="agent:main:archived-session"]'),
-    ).not.toBeNull();
+    const picker = sessionPicker(container);
+    expect(picker.value).toBe("agent:main:archived-session");
+    expect(picker.options).toContainEqual({
+      value: "agent:main:archived-session",
+      label: "agent:main:archived-session",
+    });
   });
 
   it("does not offer synthetic heartbeat sessions when creating a card", () => {
@@ -3025,14 +3746,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    const sessionOptions = [
-      ...(container
-        .querySelector(".workboard-draft")
-        ?.querySelectorAll<HTMLElement>(".workboard-select") ?? []),
-    ].at(2);
-    const labels = [...(sessionOptions?.querySelectorAll("option") ?? [])].map((option) =>
-      option.textContent?.trim(),
-    );
+    const labels = sessionPicker(container).options.map((option) => option.label);
     expect(labels).toContain("Dashboard session");
     expect(labels).not.toContain("heartbeat");
   });

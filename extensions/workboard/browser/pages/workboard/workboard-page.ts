@@ -6,6 +6,7 @@ import { icons } from "../../components/icons.ts";
 import { renderWorkboardBoardGlyph } from "../../components/workboard-board-glyph.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { workboardCardBoardId } from "../../lib/workboard/board-filter.ts";
 import { workboardBoardName } from "../../lib/workboard/board-presentation.ts";
 import type { WorkboardCapability } from "../../lib/workboard/capability.ts";
 import { workboardCardSessionKey } from "../../lib/workboard/card-state.ts";
@@ -26,7 +27,10 @@ import {
 import { createWorkboardSessionResolver } from "../../lib/workboard/session-resolution.ts";
 import { matchesAgentScope } from "./agent-filter.ts";
 import { matchesBoardFilter, WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
+import { loadBoardAutomation, renderBoardAutomationHeading } from "./view-automation.ts";
+import { createBoardDraft, renderBoardModal, type BoardDraft } from "./view-board-modal.ts";
 import { getVisibleDetailCard } from "./view-card-details.ts";
+import { workboardErrorMessage, type BoardAutomationState } from "./view-helpers.ts";
 import { renderWorkboard } from "./view.ts";
 
 export function workboardPageTarget(boardId?: string) {
@@ -54,6 +58,8 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
     const host = initialContext.host;
     let context = initialContext;
     let disposed = false;
+    let boardDraft: BoardDraft | null = null;
+    const automations = new Map<string, BoardAutomationState>();
     let queued = false;
     let connected = false;
     let refreshActive = false;
@@ -136,6 +142,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
     const update = () => {
       synchronizeConnection();
       const agents = host.agents.rows;
+      const selectableAgents = agents.filter((agent) => agent.kind !== "system");
       const defaultId = host.agents.defaultId;
       const defaultAgentId = defaultId ?? host.connection.assistantAgentId;
       const agentsList = defaultId === null ? null : { defaultId, agents: [...agents] };
@@ -187,6 +194,35 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
         boardId === WORKBOARD_ALL_BOARDS_FILTER
           ? null
           : state.boards.find((board) => board.id === boardId);
+      const detailCard = getVisibleDetailCard(state);
+      const detailJobId = detailCard
+        ? state.boards.find((board) => board.id === workboardCardBoardId(detailCard))
+            ?.automationJobId
+        : undefined;
+      const activeJobIds = new Set(
+        connected && context.presented
+          ? [selectedBoard?.automationJobId, detailJobId].filter((id) => typeof id === "string")
+          : [],
+      );
+      for (const jobId of automations.keys()) {
+        if (!activeJobIds.has(jobId)) {
+          automations.delete(jobId);
+        }
+      }
+      for (const jobId of activeJobIds) {
+        if (automations.has(jobId)) {
+          continue;
+        }
+        const pending: BoardAutomationState = { jobId, status: "loading" };
+        automations.set(jobId, pending);
+        void loadBoardAutomation(client, jobId).then((automation) => {
+          if (disposed || automations.get(jobId) !== pending) {
+            return;
+          }
+          automations.set(jobId, automation);
+          requestUpdate();
+        });
+      }
       const focusedCard = state.draftOpen
         ? state.cards.find((card) => card.id === state.editingCardId)
         : getVisibleDetailCard(state);
@@ -199,6 +235,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
         sessionResolution && sessionResolution.status !== "resolved"
           ? sessionResolution.error
           : undefined;
+      const pageError = [metadataError, sessionError].filter(Boolean).join("\n") || undefined;
       const candidates =
         sessionResolution?.status === "resolved"
           ? [sessionResolution.session]
@@ -210,59 +247,65 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
       ];
       render(
         html`
-          <section class="content-header content-header--page">
-            <div>
-              <div class="page-title workboard-page-title">
-                ${
-                  selectedBoard
-                    ? renderWorkboardBoardGlyph(selectedBoard, "workboard-board-glyph--header")
-                    : nothing
-                }
-                <span>${selectedBoard ? workboardBoardName(selectedBoard) : "Workboard"}</span>
+          ${renderWorkboard({
+            heading: html`
+              <div class="workboard-heading__identity">
+                <div class="page-title workboard-page-title">
+                  ${
+                    selectedBoard
+                      ? renderWorkboardBoardGlyph(selectedBoard, "workboard-board-glyph--header")
+                      : nothing
+                  }
+                  <span>${selectedBoard ? workboardBoardName(selectedBoard) : "Workboard"}</span>
+                  ${
+                    selectedBoard && host.connection.canWrite
+                      ? html`
+                          <button
+                            class="btn btn--icon workboard-board-edit"
+                            type="button"
+                            aria-label=${t("workboard.editBoard")}
+                            title=${t("workboard.editBoard")}
+                            @click=${() => {
+                              boardDraft = createBoardDraft(selectedBoard);
+                              requestUpdate();
+                            }}
+                          >
+                            ${icons.penLine}
+                          </button>
+                        `
+                      : nothing
+                  }
+                </div>
                 ${
                   selectedBoard?.automationJobId
-                    ? html`<a
-                        class="chip workboard-automation-chip"
-                        href=${`${host.basePath}/automations`}
-                        title=${t("workboard.automationAttachedTitle")}
-                        aria-label=${t("workboard.automationAttachedTitle")}
-                        >${icons.calendarClock}<span>${t("workboard.automationAttached")}</span></a
-                      >`
+                    ? renderBoardAutomationHeading(automations.get(selectedBoard.automationJobId))
                     : nothing
                 }
               </div>
-              ${selectedBoard ? html`<div class="page-subtitle">Workboard</div>` : nothing}
-            </div>
-            ${renderAgentPicker(
-              {
-                options: [
-                  { value: "", label: t("workboard.allAgents"), icon: "users" },
-                  ...agents
-                    .filter((agent) => agent.kind !== "system")
-                    .map((agent) => ({
-                      value: agent.id,
-                      label: agent.name ?? agent.identity?.name ?? agent.id,
-                      agent,
-                    })),
-                ],
-                value: scope ?? "",
-                accessibleLabel: t("workboard.agentFilter"),
-                onSelect: (value) => host.agents.setScope(value || null),
-              },
-              "agent-scope-control",
-            )}
-          </section>
-          ${
-            metadataError
-              ? html`<div class="callout danger" role="alert">${metadataError}</div>`
-              : nothing
-          }
-          ${
-            sessionError
-              ? html`<div class="callout danger" role="alert">${sessionError}</div>`
-              : nothing
-          }
-          ${renderWorkboard({
+            `,
+            scopeControl:
+              selectableAgents.length > 1
+                ? renderAgentPicker(
+                    {
+                      options: [
+                        { value: "", label: t("workboard.allAgents"), icon: "users" },
+                        ...selectableAgents.map((agent) => ({
+                          value: agent.id,
+                          label: agent.name ?? agent.identity?.name ?? agent.id,
+                          agent,
+                        })),
+                      ],
+                      value: scope ?? "",
+                      accessibleLabel: t("workboard.agentFilter"),
+                      onSelect: (value) => host.agents.setScope(value || null),
+                    },
+                    "workboard-scope",
+                  )
+                : undefined,
+            onClearAgentScope: () => host.agents.setScope(null),
+            pageError,
+            overlayOpen: Boolean(boardDraft),
+            detailBoardAutomation: detailJobId ? automations.get(detailJobId) : undefined,
             host: workboard,
             client: connected ? client : null,
             connected,
@@ -274,9 +317,10 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
             sessions,
             sessionResolution,
             scopeAgentId: scope,
-            showAgentFilter: scope === null,
+            showAgentFilter: false,
             onOpenSession: host.sessions.open,
             onRefresh: () => {
+              automations.clear();
               void refreshMetadata();
               sessionResolver.refresh();
               void refreshWorkboard({
@@ -294,6 +338,31 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
               }),
             onRequestUpdate: requestUpdate,
           })}
+          ${
+            boardDraft
+              ? renderBoardModal({
+                  draft: boardDraft,
+                  toastOwner: state,
+                  pageError: workboardErrorMessage(state, pageError),
+                  client: connected ? client : null,
+                  requestUpdate,
+                  onCancel: () => {
+                    boardDraft = null;
+                    requestUpdate();
+                  },
+                  onSaved: () => {
+                    boardDraft = null;
+                    void refreshWorkboard({
+                      host: workboard,
+                      client,
+                      requestUpdate,
+                      source: "manual",
+                    });
+                    requestUpdate();
+                  },
+                })
+              : nothing
+          }
         `,
         container,
       );

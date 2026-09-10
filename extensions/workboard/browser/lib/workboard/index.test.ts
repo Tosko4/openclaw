@@ -12,7 +12,7 @@ import {
   archiveWorkboardCard,
   deleteWorkboardCard,
   dispatchWorkboard,
-  filterWorkboardCardsForPreset,
+  filterWorkboardCards,
   getWorkboardLifecycle,
   getWorkboardDependencyState,
   getWorkboardState,
@@ -23,7 +23,6 @@ import {
   startWorkboardCard,
   stopWorkboardLifecycleRefresh,
   stopWorkboardCard,
-  summarizeWorkboardHealth,
   syncWorkboardLifecycle,
   type WorkboardCard,
   type WorkboardTaskSummary,
@@ -287,7 +286,10 @@ function saveDraft(client: WorkboardTestClient) {
 
 function moveCard(
   client: WorkboardTestClient,
-  options: Omit<Parameters<typeof moveWorkboardCard>[0], "host" | "client">,
+  options: Omit<
+    Extract<Parameters<typeof moveWorkboardCard>[0], { position: number }>,
+    "host" | "client"
+  >,
 ) {
   return moveWorkboardCard({ host, client, ...options });
 }
@@ -2199,6 +2201,31 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).loaded).toBe(false);
   });
 
+  it("reconciles selection after live refresh without dropping filtered-out cards", async () => {
+    const removed = makeCard({ id: "removed" });
+    const archived = makeCard({ id: "archived" });
+    const retained = makeCard({ id: "retained", status: "done" });
+    const client = createSequencedClient({
+      "workboard.cards.list": [
+        listResult([removed, archived, retained]),
+        listResult([{ ...archived, metadata: { archivedAt: 20 } }, retained]),
+        listResult([]),
+      ],
+    });
+    await loadBoard(client);
+    state.selectedCardIds = new Set([removed.id, archived.id, retained.id]);
+    state.statusFilter = new Set(["todo"]);
+    state.query = "no visible matches";
+
+    await refreshWorkboard({ host, client, source: "live" });
+    expect(state.selectedCardIds).toEqual(new Set([retained.id]));
+    expect(state.statusFilter).toEqual(new Set(["todo"]));
+    expect(state.query).toBe("no visible matches");
+
+    await refreshWorkboard({ host, client, source: "live" });
+    expect(state.selectedCardIds.size).toBe(0);
+  });
+
   it("reloads a previously loaded board after lifecycle teardown", async () => {
     const reopenedCard = makeCard({ title: "Reopened board" });
     const client = createSequencedClient({
@@ -2585,232 +2612,62 @@ describe("workboard controller", () => {
     ]);
   });
 
-  it("summarizes health from card metadata, linked tasks, and sessions", () => {
-    const running = createSessionCard({
-      id: "running",
-      status: "running",
-    });
-    const blocked = makeCard({ id: "blocked", status: "blocked" });
-    const ready = makeCard({ id: "ready", status: "ready" });
-    const missingProof = makeCard({ id: "done", status: "done" });
-    const artifactProof = makeCard({
-      id: "artifact-proof",
-      status: "done",
-      metadata: { artifacts: [{ id: "artifact-1", createdAt: 1, label: "log" }] },
-    });
-    const failed = makeCard({
-      id: "failed",
-      metadata: {
-        failureCount: 2,
-        attempts: [{ id: "attempt-1", status: "blocked", startedAt: 1 }],
-        stale: { detectedAt: 2, reason: "old" },
-      },
-    });
-    const recovered = makeCard({
-      id: "recovered",
-      metadata: {
-        failureCount: 0,
-        attempts: [{ id: "attempt-1", status: "failed", startedAt: 1 }],
-      },
-    });
-    const tasksByCardId = new Map<string, WorkboardTaskSummary>([
-      [
-        "ready",
-        makeTask({
-          taskId: "task-ready",
-          id: "task-ready",
-          status: "timed_out",
-        }),
-      ],
-    ]);
-
-    expect(
-      summarizeWorkboardHealth({
-        cards: [running, blocked, ready, missingProof, artifactProof, failed, recovered],
-        tasksByCardId,
-        sessions: [sampleSession],
-      }),
-    ).toEqual({
-      running: 1,
-      blocked: 1,
-      stale: 1,
-      readyUnassigned: 1,
-      missingProof: 1,
-      failedAttempts: 3,
-    });
-  });
-
-  it("does not count a terminal linked task already recorded as a failed attempt", () => {
-    const represented = makeCard({
-      id: "represented",
-      metadata: {
-        failureCount: 1,
-        attempts: [
-          {
-            id: "run-1",
-            runId: "run-1",
-            sessionKey: sampleTaskSessionKey,
-            status: "blocked",
-            startedAt: 1,
-          },
-        ],
-      },
-    });
-    const unrepresented = makeCard({
-      id: "unrepresented",
-      metadata: {
-        failureCount: 1,
-        attempts: [
-          {
-            id: "run-old",
-            runId: "run-old",
-            sessionKey: sampleTaskSessionKey,
-            status: "blocked",
-            startedAt: 1,
-          },
-        ],
-      },
-    });
-    const tasksByCardId = new Map<string, WorkboardTaskSummary>([
-      ["represented", makeTask({ status: "failed" })],
-      ["unrepresented", makeTask({ status: "failed" })],
-    ]);
-
-    expect(
-      summarizeWorkboardHealth({
-        cards: [represented, unrepresented],
-        tasksByCardId,
-        sessions: [],
-      }).failedAttempts,
-    ).toBe(3);
-  });
-
-  it("matches failed attempts by session when only one record has a run id", () => {
-    const taskRunOnly = makeCard({
-      id: "task-run-only",
-      metadata: {
-        failureCount: 1,
-        attempts: [
-          {
-            id: "attempt-task-run-only",
-            sessionKey: sampleTaskSessionKey,
-            status: "blocked",
-            startedAt: 1,
-          },
-        ],
-      },
-    });
-    const attemptRunOnly = makeCard({
-      id: "attempt-run-only",
-      metadata: {
-        failureCount: 1,
-        attempts: [
-          {
-            id: "attempt-run-only",
-            runId: "run-1",
-            sessionKey: sampleTaskSessionKey,
-            status: "blocked",
-            startedAt: 1,
-          },
-        ],
-      },
-    });
-    const tasksByCardId = new Map<string, WorkboardTaskSummary>([
-      ["task-run-only", makeTask({ status: "failed" })],
-      ["attempt-run-only", makeTask({ status: "failed", runId: undefined })],
-    ]);
-
-    expect(
-      summarizeWorkboardHealth({
-        cards: [taskRunOnly, attemptRunOnly],
-        tasksByCardId,
-        sessions: [],
-      }).failedAttempts,
-    ).toBe(2);
-  });
-
-  it("matches failed attempts to canonical default-agent task sessions", () => {
-    const card = makeCard({
-      metadata: {
-        failureCount: 1,
-        attempts: [
-          {
-            id: "canonical-attempt",
-            sessionKey: sampleTaskSessionKey,
-            status: "failed",
-            startedAt: 1,
-          },
-        ],
-      },
-    });
-    const tasksByCardId = new Map<string, WorkboardTaskSummary>([
-      [
-        card.id,
-        makeTask({
-          status: "failed",
-          childSessionKey: `agent:main:${sampleTaskSessionKey}`,
-        }),
-      ],
-    ]);
-
-    expect(
-      summarizeWorkboardHealth({
-        cards: [card],
-        tasksByCardId,
-        sessions: [],
-      }).failedAttempts,
-    ).toBe(1);
-  });
-
-  it("filters built-in Workboard view presets", () => {
-    vi.setSystemTime(new Date("2026-06-03T12:00:00Z"));
-    const now = Date.now();
+  it("combines choices within filters and intersects status with priority", () => {
     const cards = [
-      makeCard({ id: "default-agent" }),
-      makeCard({ id: "assigned", agentId: "agent-1" }),
-      makeCard({ id: "ready", status: "ready" }),
-      makeCard({ id: "review", status: "review" }),
-      makeCard({ id: "done", status: "done", completedAt: now - 60_000 }),
+      makeCard({ id: "ready-high", status: "ready", priority: "high" }),
+      makeCard({ id: "ready-low", status: "ready", priority: "low" }),
+      makeCard({ id: "review-high", status: "review", priority: "high" }),
+      makeCard({ id: "done-high", status: "done", priority: "high" }),
+    ];
+    state.statusFilter = new Set(["ready", "review"]);
+    state.priorityFilter = new Set(["high"]);
+    const params = {
+      cards,
+      filters: state,
+      tasksByCardId: new Map(),
+      sessions: [],
+      now: Date.now(),
+    };
+    expect(filterWorkboardCards(params).map((card) => card.id)).toEqual([
+      "ready-high",
+      "review-high",
+    ]);
+    state.priorityFilter.add("low");
+    expect(filterWorkboardCards(params).map((card) => card.id)).toEqual([
+      "ready-high",
+      "ready-low",
+      "review-high",
+    ]);
+  });
+
+  it("limits completed history without hiding unfinished work and combines attention filters", () => {
+    const now = Date.now();
+    const old = now - 10 * 24 * 60 * 60 * 1000;
+    const cards = [
+      makeCard({ id: "unfinished", status: "ready", updatedAt: old }),
+      makeCard({ id: "recent-done", status: "done", completedAt: now - 60_000 }),
+      makeCard({ id: "old-done", status: "done", completedAt: old }),
       makeCard({
-        id: "old-done",
+        id: "done-with-proof",
         status: "done",
-        completedAt: now - 10 * 24 * 60 * 60 * 1000,
+        completedAt: now,
+        metadata: { proof: [{ id: "proof", status: "passed", label: "Verified", createdAt: now }] },
       }),
     ];
-
-    expect(
-      filterWorkboardCardsForPreset({
-        cards,
-        preset: "default_agent",
-        tasksByCardId: new Map(),
-        sessions: [],
-        defaultAgentId: "agent-1",
-      }).map((card) => card.id),
-    ).toEqual(["default-agent", "assigned", "ready", "review", "done", "old-done"]);
-    expect(
-      filterWorkboardCardsForPreset({
-        cards,
-        preset: "ready",
-        tasksByCardId: new Map(),
-        sessions: [],
-      }).map((card) => card.id),
-    ).toEqual(["ready"]);
-    expect(
-      filterWorkboardCardsForPreset({
-        cards,
-        preset: "missing_proof",
-        tasksByCardId: new Map(),
-        sessions: [],
-      }).map((card) => card.id),
-    ).toEqual(["done", "old-done"]);
-    expect(
-      filterWorkboardCardsForPreset({
-        cards,
-        preset: "recently_done",
-        tasksByCardId: new Map(),
-        sessions: [],
-      }).map((card) => card.id),
-    ).toEqual(["done"]);
+    state.donePeriod = "week";
+    const params = { cards, filters: state, tasksByCardId: new Map(), sessions: [], now };
+    expect(filterWorkboardCards(params).map((card) => card.id)).toEqual([
+      "unfinished",
+      "recent-done",
+      "done-with-proof",
+    ]);
+    state.attentionFilter = new Set(["missingProof"]);
+    expect(filterWorkboardCards(params).map((card) => card.id)).toEqual(["recent-done"]);
+    state.donePeriod = "all";
+    expect(filterWorkboardCards(params).map((card) => card.id)).toEqual([
+      "recent-done",
+      "old-done",
+    ]);
   });
 
   it("links unassigned default-agent tasks with canonicalized session keys", async () => {
@@ -3712,8 +3569,10 @@ describe("workboard controller", () => {
       return { card: { ...child, status: "running", metadata: undefined } };
     });
     getWorkboardState(host).cards = [parent, child];
+    state.selectedCardIds = new Set([parent.id, child.id]);
 
     await deleteCard(client, parent.id);
+    expect(state.selectedCardIds).toEqual(new Set([child.id]));
 
     const remaining = expectDefined(getWorkboardState(host).cards[0], "remaining child card");
     expect(remaining).toMatchObject({ id: child.id });
@@ -4647,8 +4506,10 @@ describe("workboard controller", () => {
       metadata: { archivedAt: 20 },
     });
     const client = createClient({ "workboard.cards.archive": { card: archived } });
+    state.selectedCardIds.add("card-1");
 
     await archiveCard(client, "card-1");
+    expect(state.selectedCardIds.size).toBe(0);
 
     expect(client.request).toHaveBeenCalledWith("workboard.cards.archive", {
       id: "card-1",
