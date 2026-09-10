@@ -61,29 +61,77 @@ struct HealthStoreStateTests {
                 "iMessage degraded · \(Self.permissionProbeError) (status unknown)"),
         ] {
             try Self.withSnapshot([channelId: fields], order: [channelId]) { store in
-                let hosting = NSHostingView(rootView: ConnectionSettingsView(state: state, isActive: false)
-                    // Capture the view's light canvas, not transparent text over the window's excluded background.
-                        .background(.white)
-                        .environment(tailscale)
-                        .environment(\.locale, Locale(identifier: "en_US"))
-                        .environment(\.colorScheme, .light))
-                hosting.appearance = NSAppearance(named: .aqua)
-                hosting.frame = NSRect(x: 0, y: 0, width: 900, height: 1000)
-                let window = NSWindow(contentRect: hosting.frame, styleMask: [], backing: .buffered, defer: false)
-                window.isReleasedWhenClosed = false
-                window.contentView = hosting
-                defer {
-                    window.contentView = nil
-                    window.close()
-                }
-                hosting.layoutSubtreeIfNeeded()
-                let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
-                hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
-                let png = try #require(bitmap.representation(using: .png, properties: [:]))
-                try png.write(to: output.appendingPathComponent("\(name).png"))
+                try Self.render(
+                    ConnectionSettingsView(state: state, isActive: false).environment(tailscale),
+                    to: output.appendingPathComponent("\(name).png"))
                 #expect(store.summaryLine == expected)
             }
         }
+        try Self.renderDebugSettings(to: output)
+    }
+
+    @MainActor private static func renderDebugSettings(to output: URL) throws {
+        // This process owns a fresh, sandboxed profile. Never capture a generated authentication key.
+        let defaults = AppDefaults.standard
+        let previousKey = defaults.object(forKey: deepLinkKeyKey)
+        defaults.set("synthetic-render-key-not-a-credential", forKey: deepLinkKeyKey)
+        defer {
+            if let previousKey {
+                defaults.set(previousKey, forKey: deepLinkKeyKey)
+            } else {
+                defaults.removeObject(forKey: deepLinkKeyKey)
+            }
+        }
+        try #require(DeepLinkHandler.currentKey() == "synthetic-render-key-not-a-credential")
+        try #require(GatewayProcessManager.shared.status == .stopped)
+
+        for (name, mode, connection, healthError) in [
+            (
+                "debug-remote-healthy", AppState.ConnectionMode.remote,
+                ControlChannel.ConnectionState.connected, nil as String?),
+            (
+                "debug-remote-failure", .remote,
+                .degraded("Connection refused"), "Connection refused"),
+            ("debug-local-stopped", .local, .disconnected, nil),
+        ] {
+            let state = AppState(preview: true)
+            state.connectionMode = mode
+            state.isPaused = true
+            try Self.withSnapshot([:], order: [], lastError: healthError) { store in
+                // Assert the inputs, leaving the same capture usable against the original implementation.
+                // The regression tests below assert the corrected presentation independently.
+                try #require(store.snapshot?.ok == true)
+                try #require(store.snapshot?.channels.isEmpty == true)
+                try #require(store.lastError == healthError)
+                try Self.render(
+                    DebugSettings(state: state, connectionState: { connection }),
+                    to: output.appendingPathComponent("\(name).png"))
+                try store.summaryLine.write(
+                    to: output.appendingPathComponent("\(name)-health.txt"), atomically: true, encoding: .utf8)
+            }
+        }
+    }
+
+    @MainActor private static func render(_ view: some View, to output: URL) throws {
+        let hosting = NSHostingView(rootView: view
+            // Capture the view's light canvas, not transparent text over the window's excluded background.
+                .background(.white)
+                .environment(\.locale, Locale(identifier: "en_US"))
+                .environment(\.colorScheme, .light))
+        hosting.appearance = NSAppearance(named: .aqua)
+        hosting.frame = NSRect(x: 0, y: 0, width: 900, height: 1000)
+        let window = NSWindow(contentRect: hosting.frame, styleMask: [], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+        hosting.layoutSubtreeIfNeeded()
+        let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        try png.write(to: output)
     }
 
     private static func requireNetworkDenied() throws {

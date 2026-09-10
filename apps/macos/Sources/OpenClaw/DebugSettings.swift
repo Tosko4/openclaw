@@ -9,6 +9,7 @@ struct DebugSettings: View {
     @AppStorage(iconOverrideKey) private var iconOverrideRaw: String = IconOverrideSelection.system.rawValue
     private let gatewayManager = GatewayProcessManager.shared
     private let healthStore = HealthStore.shared
+    private let connectionState: () -> ControlChannel.ConnectionState
     @State private var launchAgentWriteDisabled = GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()
     @State private var launchAgentWriteError: String?
     @State private var gatewayRootInput: String = GatewayProcessManager.shared.projectRootPath()
@@ -31,8 +32,12 @@ struct DebugSettings: View {
     @State private var canvasStatus: String?
     @State private var canvasError: String?
 
-    init(state: AppState = AppStateStore.shared) {
+    init(
+        state: AppState = AppStateStore.shared,
+        connectionState: @escaping () -> ControlChannel.ConnectionState = { ControlChannel.shared.state })
+    {
         self.state = state
+        self.connectionState = connectionState
     }
 
     var body: some View {
@@ -745,7 +750,7 @@ struct DebugSettings: View {
         Self.gatewayStatus(
             mode: self.state.connectionMode,
             localStatus: self.gatewayManager.status,
-            connectionState: ControlChannel.shared.state)
+            connectionState: self.connectionState())
     }
 
     static func gatewayStatus(
