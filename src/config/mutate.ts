@@ -24,7 +24,6 @@ import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
 import { restoreEnvVarRefs, resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
-import { prepareGuardedIncludeWrite } from "./guarded-include-write.js";
 import {
   collectChangedConfigPaths,
   resolveIncludeWriteBoundary,
@@ -607,18 +606,10 @@ async function rollbackJsonFileWriteIfUnchanged(params: {
   target: RootBoundIncludeFile;
   previousRaw: string | null;
   committedHash: string;
-  guardedWrite?: (content: string, expectedHash: string) => void;
 }): Promise<boolean> {
   const currentRaw = await readRootBoundFileRawIfExists(params.target);
   if (hashConfigIncludeRaw(currentRaw) !== params.committedHash) {
     return false;
-  }
-  if (params.guardedWrite) {
-    if (params.previousRaw === null) {
-      throw new ConfigMutationConflictError("guarded include rollback requires its original file");
-    }
-    params.guardedWrite(params.previousRaw, params.committedHash);
-    return true;
   }
   if (params.previousRaw !== null) {
     await params.target.root.write(params.target.relativePath, params.previousRaw, {
@@ -687,7 +678,6 @@ async function writeRootBoundJsonFile(params: {
   assertIncludeGraphForWrite: (committedHash?: string) => Promise<void>;
   assertConfigPathForWrite: () => void;
   preCommitRuntimePreflight?: () => Promise<unknown>;
-  guardedWrite?: (content: string, expectedHash: string) => void;
   skipOutputLogs?: boolean;
 }): Promise<void> {
   params.assertConfigPathForWrite();
@@ -719,24 +709,20 @@ async function writeRootBoundJsonFile(params: {
     throw new ConfigMutationConflictError("included config changed while preparing write");
   }
   const content = formatJsonFileValue(params.value);
-  // The include fast path bypasses writeConfigFile(); keep its authority guard
-  // and comment warning on the final conflict-checked target. No later await may
-  // run before the write.
+  // The include fast path bypasses writeConfigFile(); preserve config-path
+  // ownership and the comment warning on the conflict-checked target.
+  // Caller authority is refused at include admission.
   params.assertConfigPathForWrite();
   warnIfJSON5CommentsWillBeStripped({
     raw: currentRaw,
     filePath: targetAtCommit.absolutePath,
     skipOutputLogs: params.skipOutputLogs,
   });
-  if (params.guardedWrite) {
-    params.guardedWrite(content, currentHash);
-  } else {
-    await targetAtCommit.root.write(targetAtCommit.relativePath, content, {
-      mkdir: true,
-      mode: 0o600,
-      overwrite: true,
-    });
-  }
+  await targetAtCommit.root.write(targetAtCommit.relativePath, content, {
+    mkdir: true,
+    mode: 0o600,
+    overwrite: true,
+  });
   try {
     await params.assertIncludeGraphForWrite(hashConfigIncludeRaw(content));
     params.assertConfigPathForWrite();
@@ -745,7 +731,6 @@ async function writeRootBoundJsonFile(params: {
       target: targetAtCommit,
       previousRaw: currentRaw,
       committedHash: hashConfigIncludeRaw(content),
-      guardedWrite: params.guardedWrite,
     });
     throw error;
   }
@@ -768,9 +753,13 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
     return null;
   }
   const { nextConfig, boundaryPath, includePath } = includeWrite;
-  const rootGuard = captureConfigWriteLockGuard(params.snapshot.path);
-  if (params.writeOptions?.beforeCommit && !rootGuard) {
-    // An approval callback alone does not hold the include's source owner.
+  if (
+    captureConfigWriteLockGuard(params.snapshot.path) ||
+    params.writeOptions?.assertCurrent ||
+    params.writeOptions?.beforeCommit
+  ) {
+    // Root-backed include backups/publication cannot recheck caller authority
+    // at their final effects. Refuse before preparing any include mutation.
     throw new Error(GUARDED_CONFIG_INCLUDE_WRITE_ERROR);
   }
 
@@ -802,21 +791,6 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
         allowedRoots,
         expectedAbsolutePath: expectedIncludeTarget,
       });
-      const includeGuard = captureConfigWriteLockGuard(expectedIncludeTarget);
-      const guardedWrite = rootGuard
-        ? prepareGuardedIncludeWrite({
-            rootPath: includeTarget.root.rootReal,
-            filePath: includeTarget.absolutePath,
-            assertCurrent: () => {
-              rootGuard();
-              if (!includeGuard) {
-                throw new Error("Config include has no live source ownership");
-              }
-              includeGuard();
-              assertConfigPathForWrite();
-            },
-          })
-        : undefined;
       const previousIncludeRaw = await readRootBoundFileRawIfExists(includeTarget);
       const previousIncludeHash = hashConfigIncludeRaw(previousIncludeRaw);
       const expectedIncludeHash = params.writeOptions?.includeFileHashesForWrite?.[includePath];
@@ -956,12 +930,8 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
           }
         },
         skipOutputLogs: params.writeOptions?.skipOutputLogs,
-        guardedWrite,
         preCommitRuntimePreflight: async () => {
           await callerPreCommit?.(runtimeConfigToWrite);
-          await params.writeOptions?.beforeCommit?.();
-          rootGuard?.();
-          includeGuard?.();
         },
       });
       const envBeforePostWriteRead = { ...writeEnv };
@@ -1064,7 +1034,6 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
             target: includeTarget,
             previousRaw: previousIncludeRaw,
             committedHash: committedIncludeHash,
-            guardedWrite,
           });
           if (rolledBack) {
             restoreEnvChangesIfUnchanged({
@@ -1083,7 +1052,6 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
       }
     },
     writeEnv,
-    rootGuard,
   );
 }
 
