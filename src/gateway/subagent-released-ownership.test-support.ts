@@ -145,9 +145,9 @@ describe("released subagent ownership through the real Gateway", () => {
       let providerClosed = false;
       let stateReleased = false;
       const restoreSpies: Array<() => void> = [];
-      const joinDispatch = async () => {
+      const joinDispatch = async (): Promise<{ status: string } | undefined> => {
         if (!dispatchWork) {
-          return;
+          return undefined;
         }
         const [dispatch] = await Promise.allSettled([dispatchWork]);
         if (
@@ -165,6 +165,7 @@ describe("released subagent ownership through the real Gateway", () => {
           );
           return await terminalWork;
         }
+        return undefined;
       };
 
       await runQaGatewayFixture(
@@ -203,6 +204,13 @@ describe("released subagent ownership through the real Gateway", () => {
           } satisfies OpenClawConfig;
           await state.writeConfig(cfg);
           const now = Date.now();
+          await writeSubagentSessionEntry({
+            stateDir: state.stateDir,
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            defaultSessionId: "released-requester-session",
+            updatedAt: now,
+          });
           const storePath = await writeSubagentSessionEntry({
             stateDir: state.stateDir,
             agentId: "main",
@@ -213,17 +221,20 @@ describe("released subagent ownership through the real Gateway", () => {
             updatedAt: now,
             abortedLastRun: true,
           });
+          // Returning tasks own mirrored flows. Neutral labels keep requester
+          // completion prompts separate from the child-work POST markers.
           const released = writeReleasedCoreSubagentCandidateFixture(
             createSubagentRunRecord({
               runId,
               childSessionKey,
               task,
+              label: "released ownership task",
               taskRunId: runId,
               generation: 1,
               createdAt: now - 60_000,
               startedAt: now - 55_000,
               spawnMode: "session",
-              expectsCompletionMessage: false,
+              expectsCompletionMessage: true,
             }),
           );
           expectReleasedCoreSubagentCandidatePersisted(released);
@@ -337,10 +348,11 @@ describe("released subagent ownership through the real Gateway", () => {
                 requesterSessionKey: "agent:main:main",
                 requesterDisplayKey: "main",
                 task: "Complete NEW_OWNER_WORK.",
+                label: "successor ownership task",
                 cleanup: "keep",
                 spawnMode: "session",
                 queued: mode === "retained",
-                expectsCompletionMessage: false,
+                expectsCompletionMessage: true,
                 taskRowOwnership: "required",
               }),
             ).toBeDefined();
@@ -408,11 +420,23 @@ describe("released subagent ownership through the real Gateway", () => {
               taskCancellationAccepted: true,
             });
           }
+          if (mode === "allowed") {
+            expect(terminal).toMatchObject({ status: "ok" });
+            const recoveredRunId = recoveryRunId;
+            await vi.waitFor(
+              () => {
+                const recovered = subagentRuns.get(recoveredRunId);
+                expect(recovered?.cleanupCompletedAt).toBeTypeOf("number");
+                expect(recovered?.delivery?.status).toBe("delivered");
+                expect(getTaskById(released.task.taskId)?.status).toBe("succeeded");
+              },
+              { timeout: 10_000 },
+            );
+          }
           await settleSubagentRegistryPersistenceWork();
           expect(returnedLease).toBe(heldLease);
           expect(providerErrors).toEqual([]);
           if (mode === "allowed") {
-            expect(terminal).toMatchObject({ status: "ok" });
             expect(recoveryPosts).toHaveLength(1);
             const runs = loadSubagentRegistryFromSqlite();
             expect(runs.has(runId)).toBe(false);
@@ -420,6 +444,7 @@ describe("released subagent ownership through the real Gateway", () => {
               generation: 2,
               taskRunId: runId,
               taskOwnershipPolicy: "core_required",
+              delivery: { status: "delivered" },
             });
             expect(getTaskById(released.task.taskId)).toMatchObject({
               runId,
@@ -500,9 +525,9 @@ describe("released subagent ownership through the real Gateway", () => {
           await Promise.allSettled(providerWork);
           if (provider.listening) {
             provider.closeAllConnections();
-            await new Promise<void>((resolve, reject) =>
-              provider.close((error) => (error ? reject(error) : resolve())),
-            );
+            await new Promise<void>((resolve, reject) => {
+              provider.close((error) => (error ? reject(error) : resolve()));
+            });
           }
           providerClosed = true;
         },
