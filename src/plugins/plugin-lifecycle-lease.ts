@@ -31,6 +31,8 @@ type PluginLifecycleLeaseOptions = Pick<
   signal?: AbortSignal;
   leaseMs?: number;
   waitMs?: number;
+  /** Additional live caller authority; never replaces the plugin lease. */
+  assertCurrent?: () => void;
 };
 
 const activePluginLifecycleLease = new AsyncLocalStorage<ActivePluginLifecycleLease>();
@@ -53,6 +55,31 @@ export async function withPluginLifecycleLease<T>(
   options: PluginLifecycleLeaseOptions,
   run: (lease: PluginLifecycleLeaseContext) => Promise<T>,
 ): Promise<T> {
+  const assertCurrent = options.assertCurrent;
+  assertCurrent?.();
+  const runWithLease = async (lease: PluginLifecycleLeaseContext) => {
+    const owned: PluginLifecycleLeaseContext = assertCurrent
+      ? {
+          ...lease,
+          assertOwned: () => {
+            assertCurrent();
+            lease.assertOwned();
+          },
+          assertOwnedInTransaction: (database) => {
+            assertCurrent();
+            lease.assertOwnedInTransaction(database);
+          },
+        }
+      : lease;
+    if (assertCurrent) {
+      owned.assertOwned();
+    }
+    // Nested writers inherit both authorities, including the synchronous
+    // install-index commit. Releasing the plugin lease still owns its cleanup.
+    return activePluginLifecycleLease.run({ databasePath: owned.databasePath, lease: owned }, () =>
+      run(owned),
+    );
+  };
   const active = activePluginLifecycleLease.getStore();
   if (
     active &&
@@ -62,7 +89,7 @@ export async function withPluginLifecycleLease<T>(
   ) {
     options.signal?.throwIfAborted();
     active.lease.assertOwned();
-    return await run(active.lease);
+    return await runWithLease(active.lease);
   }
 
   const env = resolveLifecycleLeaseEnv(options.env);
@@ -78,7 +105,7 @@ export async function withPluginLifecycleLease<T>(
     }
     options.signal?.throwIfAborted();
     active.lease.assertOwned();
-    return await run(active.lease);
+    return await runWithLease(active.lease);
   }
 
   return await withOpenClawStateLease(
@@ -108,9 +135,7 @@ export async function withPluginLifecycleLease<T>(
         assertOwnedInTransaction: (database) => lease.assertOwnedInTransaction(database),
       };
       // Capture fresh facts only after ownership: another process may have committed while we waited.
-      return await activePluginLifecycleLease.run({ databasePath, lease: pluginLease }, () =>
-        withPluginCache(createPluginCache(), () => run(pluginLease)),
-      );
+      return await withPluginCache(createPluginCache(), () => runWithLease(pluginLease));
     },
   );
 }

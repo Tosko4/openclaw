@@ -7,8 +7,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import {
+  withPluginLifecycleLease,
+  type PluginLifecycleLeaseContext,
+} from "./plugin-lifecycle-lease.js";
 
 type LeaseChild = ChildProcessByStdio<null, Readable, Readable>;
 
@@ -302,6 +306,128 @@ describe("plugin lifecycle lease", () => {
         },
       );
       expect(events).toEqual(["outer", "inner"]);
+    });
+  });
+
+  it.each([
+    { authority: "outer", explicitNestedEnv: false },
+    { authority: "nested", explicitNestedEnv: false },
+    { authority: "nested", explicitNestedEnv: true },
+  ])(
+    "fences a nested index commit after $authority authority is revoked (explicit env: $explicitNestedEnv)",
+    async ({ authority, explicitNestedEnv }) => {
+      await withOpenClawTestState({ label: "plugin-lifecycle-caller-fence" }, async (state) => {
+        const preparing = createDeferred();
+        const prepared = createDeferred();
+        const revoked = new Error("update authority revoked");
+        let current = true;
+        const assertCurrent = () => {
+          if (!current) {
+            throw revoked;
+          }
+        };
+        const writeRecords = (lease: PluginLifecycleLeaseContext, spec: string) =>
+          writePersistedInstalledPluginIndexInstallRecordsWithLease(
+            { demo: { source: "npm", spec } },
+            { env: state.env, candidates: [], lease },
+          );
+        const options = { env: state.env, waitMs: 0 };
+        await withPluginLifecycleLease(options, (lease) => writeRecords(lease, "demo@1.0.0"));
+        const before = await readPersistedInstalledPluginIndex({ env: state.env });
+        expect(before?.installRecords.demo?.spec).toBe("demo@1.0.0");
+
+        const operation = withPluginLifecycleLease(
+          { ...options, ...(authority === "outer" ? { assertCurrent } : {}) },
+          async () =>
+            withPluginLifecycleLease(
+              {
+                ...(explicitNestedEnv ? { env: state.env } : {}),
+                ...(authority === "nested" ? { assertCurrent } : {}),
+              },
+              async () =>
+                withPluginLifecycleLease({}, async (lease) => {
+                  preparing.resolve();
+                  await prepared.promise;
+                  // The nested writer has already entered; only commit-time authority can fence it.
+                  return writeRecords(lease, "demo@2.0.0");
+                }),
+            ),
+        );
+        await Promise.race([preparing.promise, operation]);
+        current = false;
+        prepared.resolve();
+
+        await expect(operation).rejects.toBe(revoked);
+        expect(await readPersistedInstalledPluginIndex({ env: state.env })).toEqual(before);
+        await withPluginLifecycleLease(options, (lease) => writeRecords(lease, "demo@3.0.0"));
+        expect(
+          (await readPersistedInstalledPluginIndex({ env: state.env }))?.installRecords.demo?.spec,
+        ).toBe("demo@3.0.0");
+      });
+    },
+  );
+
+  it("retains plugin lease checks when the caller authority is still current", async () => {
+    await withOpenClawTestState({ label: "plugin-lifecycle-plugin-fence" }, async (state) => {
+      const controller = new AbortController();
+      const assertCurrent = vi.fn();
+      let ownershipError: unknown;
+      let commitError: unknown;
+      await expect(
+        withPluginLifecycleLease(
+          { env: state.env, signal: controller.signal, assertCurrent },
+          async () =>
+            withPluginLifecycleLease({}, async (lease) => {
+              await fs.stat(state.stateDir);
+              controller.abort(new Error("plugin work cancelled"));
+              try {
+                lease.assertOwned();
+              } catch (error) {
+                ownershipError = error;
+              }
+              try {
+                await writePersistedInstalledPluginIndexInstallRecordsWithLease(
+                  { demo: { source: "npm", spec: "demo@2.0.0" } },
+                  { env: state.env, candidates: [], lease },
+                );
+              } catch (error) {
+                commitError = error;
+              }
+            }),
+        ),
+      ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+      // Assert outside the owner callback: its abort normalization must not mask a failed assertion.
+      expect(ownershipError).toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+      expect(commitError).toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+      expect(assertCurrent).toHaveBeenCalled();
+      expect(await readPersistedInstalledPluginIndex({ env: state.env })).toBeNull();
+    });
+  });
+
+  it("preserves an operation failure and releases the plugin lease after caller revocation", async () => {
+    await withOpenClawTestState({ label: "plugin-lifecycle-failed-cleanup" }, async (state) => {
+      const failure = new Error("plugin preparation failed");
+      let current = true;
+      await expect(
+        withPluginLifecycleLease(
+          {
+            env: state.env,
+            assertCurrent: () => {
+              if (!current) {
+                throw new Error("update authority revoked");
+              }
+            },
+          },
+          async () => {
+            await fs.stat(state.stateDir);
+            current = false;
+            throw failure;
+          },
+        ),
+      ).rejects.toBe(failure);
+      await expect(
+        withPluginLifecycleLease({ env: state.env, waitMs: 0 }, async () => "released"),
+      ).resolves.toBe("released");
     });
   });
 });

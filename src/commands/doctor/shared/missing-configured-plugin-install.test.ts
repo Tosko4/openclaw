@@ -15,7 +15,9 @@ import { computeDeclaredSurfaceHash } from "../../../plugins/capability-summary.
 import { resolveClawHubInstallSpecsForUpdateChannel } from "../../../plugins/install-channel-specs.js";
 import type { PluginInstallArtifactConsentHandler } from "../../../plugins/install-types.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../../plugins/installed-plugin-index-policy.js";
+import { readPersistedInstalledPluginIndex } from "../../../plugins/installed-plugin-index-store.js";
 import { isTrustedOfficialPluginInstallRecord } from "../../../plugins/official-external-install-records.js";
+import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
 import type { BundledProviderPolicySurface } from "../../../plugins/provider-policy-surface.js";
 import { createColdPluginFixture } from "../../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { closeOpenClawStateDatabaseByPath } from "../../../state/openclaw-state-db.js";
@@ -147,6 +149,10 @@ const mocks = vi.hoisted(() => ({
   resolveNpmSpecMetadata: vi.fn(),
   updateNpmInstalledPlugins: vi.fn(),
   writePersistedInstalledPluginIndexInstallRecords: vi.fn(),
+  writePersistedInstalledPluginIndexInstallRecordsWithLease:
+    vi.fn<
+      typeof import("../../../plugins/installed-plugin-index-records.js").writePersistedInstalledPluginIndexInstallRecordsWithLease
+    >(),
 }));
 
 const testHome = withIsolatedTestHome({ mode: "hermetic" });
@@ -205,6 +211,26 @@ async function repairConfiguredPlugins(
   return repairMissingConfiguredPluginInstalls({ cfg, env: { ...testEnv, ...env } });
 }
 
+async function useRealInstallIndexWrites() {
+  const actual = await vi.importActual<
+    typeof import("../../../plugins/installed-plugin-index-records.js")
+  >("../../../plugins/installed-plugin-index-records.js");
+  mocks.writePersistedInstalledPluginIndexInstallRecords.mockImplementation((records, options) =>
+    actual.writePersistedInstalledPluginIndexInstallRecords(records, {
+      ...options,
+      candidates: [],
+    }),
+  );
+  mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mockImplementation(
+    (records, options) =>
+      actual.writePersistedInstalledPluginIndexInstallRecordsWithLease(records, {
+        ...options,
+        candidates: [],
+      }),
+  );
+  return actual;
+}
+
 function useManifestCatalogResolvers(): void {
   mocks.resolveOfficialExternalPluginId.mockImplementation(
     (entry: { id?: string; openclaw?: { plugin?: { id?: string } } }) =>
@@ -246,10 +272,13 @@ vi.mock("../../../channels/plugins/catalog.js", () => ({
   listRawChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
 }));
 
-vi.mock("../../../plugins/installed-plugin-index-records.js", () => ({
+vi.mock("../../../plugins/installed-plugin-index-records.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/installed-plugin-index-records.js")>()),
   loadInstalledPluginIndexInstallRecords: mocks.loadInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords:
     mocks.writePersistedInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsWithLease:
+    mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease,
 }));
 
 vi.mock("../../../plugins/installed-plugin-index.js", async (importOriginal) => ({
@@ -879,6 +908,12 @@ describe("repairMissingConfiguredPluginInstalls", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.writePersistedInstalledPluginIndexInstallRecords.mockReset();
+    // Existing cases observe record/config projection; fence cases use the real SQLite writer.
+    mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mockImplementation(
+      (records, { config, env }) =>
+        mocks.writePersistedInstalledPluginIndexInstallRecords(records, { config, env }),
+    );
     mockNpmRegistryTags({ beta: VERSION, latest: VERSION });
     // Explicit empty env fixtures fall back to the OS home, outside Vitest's env copy.
     vi.spyOn(os, "homedir").mockReturnValue(tempDirs.make("openclaw-doctor-home-"));
@@ -1216,6 +1251,59 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       },
     );
     expect(result.records).toBe(baselineRecords);
+  });
+
+  it("fences baseline persistence when authority is revoked after the async callback returns", async () => {
+    const root = tempDirs.make("openclaw-doctor-index-fence-");
+    const env = { ...testEnv, OPENCLAW_STATE_DIR: path.join(root, "state") };
+    const cfg = { plugins: { enabled: false } } satisfies OpenClawConfig;
+    const storage = await useRealInstallIndexWrites();
+    const records = { retained: { source: "npm" as const, spec: "retained@1.0.0" } };
+    const baselineRecords = { replacement: { source: "npm" as const, spec: "replacement@2.0.0" } };
+    await storage.writePersistedInstalledPluginIndexInstallRecords(records, {
+      env,
+      config: cfg,
+      candidates: [],
+    });
+    const before = await readPersistedInstalledPluginIndex({ env });
+    let current = true;
+    const failure = new Error("update authority revoked after planning");
+    const beforePersistentEffect = vi.fn(async () => {
+      // Returning a fulfilled promise still yields before the owner's next statement.
+      queueMicrotask(() => {
+        current = false;
+      });
+    });
+    const { repairMissingPluginInstallsForIds } =
+      await import("./missing-configured-plugin-install.js");
+    try {
+      await expect(
+        withPluginLifecycleLease(
+          {
+            env,
+            assertCurrent: () => {
+              if (!current) {
+                throw failure;
+              }
+            },
+          },
+          () =>
+            repairMissingPluginInstallsForIds({
+              cfg,
+              pluginIds: [],
+              env,
+              baselineRecords,
+              beforePersistentEffect,
+            }),
+        ),
+      ).rejects.toBe(failure);
+      expect(beforePersistentEffect).toHaveBeenCalledOnce();
+      expect(current).toBe(false);
+      expect(await readPersistedInstalledPluginIndex({ env })).toEqual(before);
+      expect(before?.installRecords).toEqual(records);
+    } finally {
+      closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(env));
+    }
   });
 
   it("installs a missing configured OpenClaw channel plugin from npm by default", async () => {
@@ -4719,6 +4807,91 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(fs.existsSync(installDir)).toBe(true);
     expect(mocks.installPluginFromNpmSpec).toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "rechecks live authority after async replacement planning (revoked: %s)",
+    async (revoke) => {
+      const root = tempDirs.make("openclaw-doctor-payload-fence-");
+      const env = { ...testEnv, OPENCLAW_STATE_DIR: path.join(root, "state") };
+      const extensionsDir = path.join(root, "extensions");
+      const installDir = path.join(extensionsDir, "brave");
+      const replacementDir = path.join(root, "replacement");
+      const cfg = {
+        tools: { web: { search: { provider: "brave" } } },
+      } satisfies OpenClawConfig;
+      const priorRecord = {
+        source: "npm" as const,
+        spec: "@openclaw/brave-plugin@2026.5.1-beta.1",
+        installPath: installDir,
+      };
+      mocks.resolveDefaultPluginExtensionsDir.mockReturnValue(extensionsDir);
+      fs.mkdirSync(installDir, { recursive: true });
+      fs.writeFileSync(path.join(installDir, "package.json"), '{"name":"brave"}');
+      const payloadPath = path.join(installDir, "index.ts");
+      fs.writeFileSync(payloadPath, "export const retained = true;\n");
+      fs.mkdirSync(replacementDir, { recursive: true });
+      createColdPluginFixture({
+        rootDir: replacementDir,
+        pluginId: "brave",
+        packageName: "@openclaw/brave-plugin",
+        packageVersion: "2026.5.12",
+      });
+      mockBrokenBraveInstall(installDir, priorRecord);
+      mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
+        successfulInstall({
+          pluginId: "brave",
+          npmSpec: "@openclaw/brave-plugin",
+          version: "2026.5.12",
+          targetDir: replacementDir,
+        }),
+      );
+      const storage = await useRealInstallIndexWrites();
+      await storage.writePersistedInstalledPluginIndexInstallRecords(
+        { brave: priorRecord },
+        { env, config: cfg, candidates: [] },
+      );
+      const before = await readPersistedInstalledPluginIndex({ env });
+      const failure = new Error("update authority revoked after replacement planning");
+      let current = true;
+      const beforePersistentEffect = vi.fn(async () => {
+        if (revoke) {
+          queueMicrotask(() => {
+            current = false;
+          });
+        }
+      });
+      const { repairMissingConfiguredPluginInstalls } =
+        await import("./missing-configured-plugin-install.js");
+      try {
+        const operation = withPluginLifecycleLease(
+          {
+            env,
+            assertCurrent: () => {
+              if (!current) {
+                throw failure;
+              }
+            },
+          },
+          () => repairMissingConfiguredPluginInstalls({ cfg, env, beforePersistentEffect }),
+        );
+        if (revoke) {
+          await expect(operation).rejects.toBe(failure);
+          expect(fs.readFileSync(payloadPath, "utf8")).toBe("export const retained = true;\n");
+          expect(await readPersistedInstalledPluginIndex({ env })).toEqual(before);
+        } else {
+          await expect(operation).resolves.toMatchObject({ repairedPluginIds: ["brave"] });
+          expect(fs.existsSync(installDir)).toBe(false);
+          expect(
+            (await readPersistedInstalledPluginIndex({ env }))?.installRecords.brave?.installPath,
+          ).toBe(replacementDir);
+        }
+        expect(beforePersistentEffect).toHaveBeenCalled();
+        expect(fs.existsSync(path.join(replacementDir, "package.json"))).toBe(true);
+      } finally {
+        closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(env));
+      }
+    },
+  );
 
   it("keeps a broken official install record when replacement install fails", async () => {
     const extensionsDir = path.join(tempDirs.make("openclaw-plugin-stub-repair-"), "extensions");

@@ -76,6 +76,7 @@ export async function syncPluginsForUpdateChannel(params: {
   logger?: PluginUpdateLogger;
   externalizedBundledPluginBridges?: readonly ExternalizedBundledPluginBridge[];
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void;
 }): Promise<PluginChannelSyncResult> {
   const env = params.env ?? process.env;
   const logger = params.logger ?? {};
@@ -223,6 +224,7 @@ export async function syncPluginsForUpdateChannel(params: {
           previousRecords: installs,
           expectedIntegrity,
           onCapabilityConsent: consent.onCapabilityConsent,
+          beforePersistentEffect: params.beforePersistentEffect,
         });
         const options = {
           spec,
@@ -245,6 +247,7 @@ export async function syncPluginsForUpdateChannel(params: {
                   trustedSourceLinkedOfficialInstall,
                 });
         } catch (error) {
+          params.beforePersistentEffect?.();
           consent.rethrowCallbackError();
           if (!(error instanceof ManagedPluginLifecycleError)) {
             throw error;
@@ -260,6 +263,7 @@ export async function syncPluginsForUpdateChannel(params: {
           };
         }
         consent.rethrowCallbackError();
+        params.beforePersistentEffect?.();
         return { result, capabilityConsent, installSpec: spec };
       };
       const {
