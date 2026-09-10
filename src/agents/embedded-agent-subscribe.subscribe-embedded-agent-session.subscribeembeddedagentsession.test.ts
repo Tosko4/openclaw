@@ -412,7 +412,7 @@ describe("subscribeEmbeddedAgentSession", () => {
   it("delivers generated image media once in markdown verbose output", async () => {
     const onToolResult = vi.fn();
     const onBlockReply = vi.fn();
-    const { emit } = createSubscribedHarness({
+    const { emit, subscription } = createSubscribedHarness({
       runId: "run",
       onToolResult,
       onBlockReply,
@@ -466,6 +466,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       text: "Here is the image.",
       mediaUrls: ["/tmp/generated.png"],
     });
+    expect(subscription.getHostOwnedToolMediaUrls()).toEqual(["/tmp/generated.png"]);
   });
 
   it("does not duplicate generated image media when the assistant reply has MEDIA lines", async () => {
@@ -768,6 +769,31 @@ describe("subscribeEmbeddedAgentSession", () => {
       mediaUrls: ["/tmp/reply.opus"],
       audioAsVoice: true,
     });
+    expect(subscription.getHostOwnedToolMediaUrls()).toEqual([]);
+  });
+
+  it("tracks built-in generated image media as host-owned", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      builtinToolNames: new Set(["image_generate"]),
+    });
+
+    emit({
+      type: "tool_execution_end",
+      toolName: "image_generate",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        details: {
+          media: {
+            mediaUrl: "/tmp/generated.png",
+          },
+        },
+      },
+    });
+    emit({ type: "agent_end" });
+
+    expect(subscription.getHostOwnedToolMediaUrls()).toEqual(["/tmp/generated.png"]);
   });
 
   it("counts orphaned tool media emitted through block replies", async () => {

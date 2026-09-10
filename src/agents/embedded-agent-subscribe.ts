@@ -235,6 +235,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     successfulCronAdds: 0,
     pendingMessagingMediaUrls: new Map(),
     pendingToolMediaUrls: initialPendingToolMediaUrls,
+    hostOwnedToolMediaUrls: [],
     pendingToolAudioAsVoice: false,
     pendingToolTrustedLocalMedia: false,
     hasToolMediaBlockReply: false,
@@ -1243,6 +1244,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.heartbeatToolResponse = undefined;
     state.pendingMessagingMediaUrls.clear();
     state.pendingToolMediaUrls = [];
+    state.hostOwnedToolMediaUrls = [];
     state.pendingToolAudioAsVoice = false;
     state.pendingToolTrustedLocalMedia = false;
     state.visibleBlockReplyCount = 0;
@@ -1433,6 +1435,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getHeartbeatToolResponse: () =>
       state.heartbeatToolResponse ? { ...state.heartbeatToolResponse } : undefined,
     getPendingToolMediaReply: () => readPendingToolMediaReply(state),
+    getHostOwnedToolMediaUrls: () => state.hostOwnedToolMediaUrls.slice(),
     hasToolMediaBlockReply: () => state.hasToolMediaBlockReply,
     getVisibleBlockReplyCount: () => state.visibleBlockReplyCount,
     getSuccessfulCronAdds: () => state.successfulCronAdds,

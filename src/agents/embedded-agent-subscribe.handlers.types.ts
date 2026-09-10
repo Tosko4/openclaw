@@ -170,6 +170,7 @@ export type EmbeddedAgentSubscribeState = {
   successfulCronAdds: number;
   pendingMessagingMediaUrls: Map<string, string[]>;
   pendingToolMediaUrls: string[];
+  hostOwnedToolMediaUrls: string[];
   pendingToolAudioAsVoice: boolean;
   pendingToolTrustedLocalMedia: boolean;
   hasToolMediaBlockReply: boolean;
@@ -314,6 +315,7 @@ type ToolHandlerState = Pick<
   | "pendingMessagingTexts"
   | "pendingMessagingMediaUrls"
   | "pendingToolMediaUrls"
+  | "hostOwnedToolMediaUrls"
   | "pendingToolAudioAsVoice"
   | "pendingToolTrustedLocalMedia"
   | "deterministicApprovalPromptPending"

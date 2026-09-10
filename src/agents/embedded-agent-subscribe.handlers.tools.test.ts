@@ -81,6 +81,7 @@ function createTestContext(): {
       pendingMessagingTexts: new Map<string, string>(),
       pendingMessagingMediaUrls: new Map<string, string[]>(),
       pendingToolMediaUrls: [],
+      hostOwnedToolMediaUrls: [],
       pendingToolAudioAsVoice: false,
       pendingToolTrustedLocalMedia: false,
       deterministicApprovalPromptPending: false,

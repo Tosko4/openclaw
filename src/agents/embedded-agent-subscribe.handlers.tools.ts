@@ -694,7 +694,12 @@ function hasMessagingRichContent(record: Record<string, unknown>): boolean {
 
 function queuePendingToolMedia(
   ctx: ToolHandlerContext,
-  mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean; trustedLocalMedia?: boolean },
+  mediaReply: {
+    mediaUrls: string[];
+    audioAsVoice?: boolean;
+    hostOwned?: boolean;
+    trustedLocalMedia?: boolean;
+  },
 ) {
   const seen = new Set(ctx.state.pendingToolMediaUrls);
   for (const mediaUrl of mediaReply.mediaUrls) {
@@ -703,6 +708,15 @@ function queuePendingToolMedia(
     }
     seen.add(mediaUrl);
     ctx.state.pendingToolMediaUrls.push(mediaUrl);
+  }
+  if (mediaReply.hostOwned) {
+    const hostOwnedMedia = new Set(ctx.state.hostOwnedToolMediaUrls);
+    for (const mediaUrl of mediaReply.mediaUrls) {
+      if (!hostOwnedMedia.has(mediaUrl)) {
+        hostOwnedMedia.add(mediaUrl);
+        ctx.state.hostOwnedToolMediaUrls.push(mediaUrl);
+      }
+    }
   }
   if (mediaReply.audioAsVoice) {
     ctx.state.pendingToolAudioAsVoice = true;
@@ -913,6 +927,9 @@ async function emitToolResultOutput(params: {
   }
   queuePendingToolMedia(ctx, {
     mediaUrls,
+    ...(rawToolName === "image_generate" && ctx.builtinToolNames?.has(rawToolName)
+      ? { hostOwned: true }
+      : {}),
     ...(mediaReply.audioAsVoice ? { audioAsVoice: true } : {}),
     ...(mediaReply.trustedLocalMedia ? { trustedLocalMedia: true } : {}),
   });

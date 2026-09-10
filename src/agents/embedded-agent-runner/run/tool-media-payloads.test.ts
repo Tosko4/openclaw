@@ -5,7 +5,30 @@ import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
 } from "../../../auto-reply/reply-payload.js";
-import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
+import {
+  mergeAttemptToolMediaPayloads,
+  resolveEmbeddedHostOwnedToolMediaUrls,
+} from "./tool-media-payloads.js";
+
+describe("resolveEmbeddedHostOwnedToolMediaUrls", () => {
+  it("keeps validated tool media that the message tool did not already deliver", () => {
+    expect(
+      resolveEmbeddedHostOwnedToolMediaUrls({
+        hostOwnedToolMediaUrls: ["/tmp/already-sent.png", "/tmp/generated.png"],
+        messagingToolSentMediaUrls: ["/tmp/already-sent.png"],
+      }),
+    ).toEqual(["/tmp/generated.png"]);
+  });
+
+  it("does not classify message-tool media as host-owned", () => {
+    expect(
+      resolveEmbeddedHostOwnedToolMediaUrls({
+        hostOwnedToolMediaUrls: ["/tmp/already-sent.png"],
+        messagingToolSentMediaUrls: ["/tmp/already-sent.png"],
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe("mergeAttemptToolMediaPayloads", () => {
   it("attaches tool media to the first visible reply", () => {

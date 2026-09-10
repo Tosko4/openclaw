@@ -21,6 +21,7 @@ export function createBaseToolHandlerState() {
     pendingMessagingTargets: new Map<string, unknown>(),
     pendingMessagingMediaUrls: new Map<string, string[]>(),
     pendingToolMediaUrls: [] as string[],
+    hostOwnedToolMediaUrls: [] as string[],
     pendingToolAudioAsVoice: false,
     pendingToolTrustedLocalMedia: false,
     deterministicApprovalPromptPending: false,

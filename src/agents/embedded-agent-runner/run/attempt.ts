@@ -524,6 +524,7 @@ import {
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
+import { resolveEmbeddedHostOwnedToolMediaUrls } from "./tool-media-payloads.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PreflightRecoveryBudgetSnapshot = Pick<
@@ -3801,6 +3802,7 @@ export async function runEmbeddedAttempt(
         getMessagingToolSourceReplyPayloads,
         getHeartbeatToolResponse,
         getPendingToolMediaReply,
+        getHostOwnedToolMediaUrls,
         hasToolMediaBlockReply,
         getVisibleBlockReplyCount,
         getSuccessfulCronAdds,
@@ -5747,6 +5749,11 @@ export async function runEmbeddedAttempt(
         successfulCronAdds: getSuccessfulCronAdds(),
       });
       const pendingToolMediaReply = getPendingToolMediaReply();
+      const messagingToolSentMediaUrlsNow = getMessagingToolSentMediaUrls();
+      const hostOwnedToolMediaUrls = resolveEmbeddedHostOwnedToolMediaUrls({
+        hostOwnedToolMediaUrls: getHostOwnedToolMediaUrls(),
+        messagingToolSentMediaUrls: messagingToolSentMediaUrlsNow,
+      });
       const replayMetadata = replayMetadataFromState(
         observeReplayMetadata(getReplayState(), observedReplayMetadata),
       );
@@ -5963,6 +5970,7 @@ export async function runEmbeddedAttempt(
         messagingToolSourceReplyPayloads,
         heartbeatToolResponse,
         toolMediaUrls: pendingToolMediaReply?.mediaUrls,
+        hostOwnedToolMediaUrls,
         toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
         toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
         hasToolMediaBlockReply: hasToolMediaBlockReplyNow,

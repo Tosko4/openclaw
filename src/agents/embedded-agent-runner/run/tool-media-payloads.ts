@@ -12,6 +12,23 @@ import type { EmbeddedAgentRunResult } from "../types.js";
 /** Channel payload shape produced by embedded runs after auto-reply normalization. */
 type EmbeddedRunPayload = NonNullable<EmbeddedAgentRunResult["payloads"]>[number];
 
+export function resolveEmbeddedHostOwnedToolMediaUrls(params: {
+  hostOwnedToolMediaUrls?: string[];
+  messagingToolSentMediaUrls?: string[];
+}): string[] | undefined {
+  const messagingMedia = new Set(
+    params.messagingToolSentMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? [],
+  );
+  const hostOwnedMedia = Array.from(
+    new Set(
+      params.hostOwnedToolMediaUrls
+        ?.map((url) => url.trim())
+        .filter((url) => url.length > 0 && !messagingMedia.has(url)) ?? [],
+    ),
+  );
+  return hostOwnedMedia.length > 0 ? hostOwnedMedia : undefined;
+}
+
 /**
  * Merges media emitted by tools into the channel payloads produced by the
  * assistant turn. The first successful, non-reasoning reply owns the media so
