@@ -756,7 +756,7 @@ final class NodeAppModel {
         self.gatewayAgentSelectionRequired = identity.selectionRequired
         self.gatewaySessionRoutingContract = identity.contract
         synchronizeTalkSessionKey()
-        enforceVoiceOwnerSelectionIfNeeded()
+        reconcileTalkRouting()
     }
 
     func loadCachedChatSessions(
@@ -1376,14 +1376,12 @@ final class NodeAppModel {
             self.talkMode.statusText = "Finish the active audio capture first"
             return
         }
-        if enabled, requiresExplicitAgentSelectionForVoice {
-            UserDefaults.standard.set(false, forKey: "talk.enabled")
-            self.talkMode.setEnabled(false)
-            self.talkMode.statusText = "Select an agent before enabling Talk"
-            return
-        }
-        UserDefaults.standard.set(enabled, forKey: "talk.enabled")
-        if enabled {
+        // The saved preference owns intent; unresolved routing only suspends activation.
+        // A known unowned route revokes that intent instead of silently resuming later.
+        let waitingForRouting = enabled && self.chatSessionRoutingContract == nil
+        let activate = enabled && !self.requiresExplicitAgentSelectionForVoice
+        UserDefaults.standard.set(waitingForRouting || activate, forKey: "talk.enabled")
+        if activate {
             if self.voiceNoteRecorder.isRecording || self.voiceNoteRecorder.isRequestingPermission {
                 self.voiceNoteRecorder.cancel()
             }
@@ -1395,8 +1393,14 @@ final class NodeAppModel {
             self.cancelTalkPermissionUpgrade(
                 resumeOperatorGateway: self.forceOperatorTalkPermissionUpgradeRequest)
         }
-        self.talkMode.setEnabled(enabled)
-        if enabled {
+        self.talkMode.setEnabled(activate)
+        if enabled, !activate {
+            self.talkMode.statusText = waitingForRouting
+                ? "Waiting for gateway routing"
+                : "Select an agent before enabling Talk"
+            return
+        }
+        if activate {
             // Preserve a known missing scope before an offline config reload can
             // overwrite it; the operator reconnect owns the approval handshake.
             self.requestTalkPermissionUpgradeIfNeeded()
@@ -1667,7 +1671,7 @@ final class NodeAppModel {
                 self.gatewaySessionScope = scope
                 self.gatewayAccentColorHex = profileAccentHex ?? accentHex
                 self.synchronizeTalkSessionKey()
-                self.enforceVoiceOwnerSelectionIfNeeded()
+                self.reconcileTalkRouting()
             }
         } catch {
             if let gatewayError = error as? GatewayResponseError {
@@ -1734,7 +1738,7 @@ final class NodeAppModel {
                     self.focusedChatSessionKey = nil
                 }
                 self.synchronizeTalkSessionKey()
-                self.enforceVoiceOwnerSelectionIfNeeded()
+                self.reconcileTalkRouting()
             }
             if let routingIdentity {
                 await sourceStore.storeSessionRoutingIdentity(routingIdentity)
@@ -1776,6 +1780,7 @@ final class NodeAppModel {
             self.shareDeliveryTo = nil
         }
         synchronizeTalkSessionKey()
+        reconcileTalkRouting()
         if let relay = ShareGatewayRelaySettings.loadConfig() {
             ShareGatewayRelaySettings.saveConfig(
                 ShareGatewayRelayConfig(
@@ -2204,7 +2209,9 @@ final class NodeAppModel {
 
     private func applyTalkModeSync(enabled: Bool, phase: String?) {
         _ = phase
-        guard self.talkMode.isEnabled != enabled else { return }
+        // A remote stop must also clear intent while routing has suspended activation.
+        guard self.talkMode.isEnabled != enabled || UserDefaults.standard.bool(forKey: "talk.enabled") != enabled
+        else { return }
         self.setTalkEnabled(enabled)
     }
 
@@ -3461,11 +3468,11 @@ extension NodeAppModel {
 }
 
 extension NodeAppModel {
-    private func enforceVoiceOwnerSelectionIfNeeded() {
-        guard self.talkMode.isEnabled, self.requiresExplicitAgentSelectionForVoice else { return }
-        self.setTalkEnabled(false)
-        self.talkMode.statusText = "Select an agent before enabling Talk"
-        GatewayDiagnostics.log("node app model: talk disabled reason=agent_selection_required")
+    private func reconcileTalkRouting() {
+        let enabled = UserDefaults.standard.bool(forKey: "talk.enabled")
+        guard self.talkMode.isEnabled != enabled || (enabled && self.requiresExplicitAgentSelectionForVoice)
+        else { return }
+        self.setTalkEnabled(enabled)
     }
 
     var requiresExplicitAgentSelectionForVoice: Bool {
@@ -4045,6 +4052,7 @@ extension NodeAppModel {
             self.focusedChatSessionKey = nil
         }
         self.synchronizeTalkSessionKey()
+        self.reconcileTalkRouting()
         self.apnsLastRegisteredTokenHex = nil
         self.apnsLastRegisteredGatewayStableID = nil
         self.chatSessionRoutingRestoreTask = Task { [weak self] in

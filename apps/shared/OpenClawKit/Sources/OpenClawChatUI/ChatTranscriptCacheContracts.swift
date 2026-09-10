@@ -206,8 +206,7 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
         } else {
             self.deliverySessionKey = sessionKey
         }
-        let normalizedRoutingContract = routingContract?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.routingContract = normalizedRoutingContract?.isEmpty == false ? normalizedRoutingContract : nil
+        self.routingContract = routingContract?.isEmpty == false ? routingContract : nil
         let normalizedAgentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         self.agentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
         self.branchEpoch = branchEpoch
@@ -477,8 +476,7 @@ public struct OpenClawChatSessionRoutingIdentity: Codable, Equatable, Sendable {
             defaultAgentID: defaultAgentID),
             let display = OpenClawChatSessionRoutingContract.parse(displayContract)
         else { return nil }
-        let authoritativeContract = sessionRoutingContract?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let authoritativeContract = sessionRoutingContract
         self.scope = display.scope
         self.mainSessionKey = display.mainKey
         self.defaultAgentID = display.defaultAgentID

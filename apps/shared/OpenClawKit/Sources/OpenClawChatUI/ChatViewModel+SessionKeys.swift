@@ -224,8 +224,7 @@ extension OpenClawChatViewModel {
             targetKey = candidate
             targetAgentID = nil
         }
-        let normalizedContract = sessionRoutingContract?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedContract = sessionRoutingContract
         let routeContract: String? = if self.usesMutableContractRouting(
             sessionKey: candidate,
             contract: normalizedContract)

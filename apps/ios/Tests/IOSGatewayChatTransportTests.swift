@@ -367,8 +367,8 @@ struct IOSGatewayChatTransportTests {
             nil,
             serverSupportsGuard: true) == nil)
         #expect(OpenClawChatSessionRoutingContract.expectedValue(
-            " per-sender|main|reviewer ",
-            serverSupportsGuard: true) == "per-sender|main|reviewer")
+            " Server-fingerprint:v2/Case+opaque== ",
+            serverSupportsGuard: true) == " Server-fingerprint:v2/Case+opaque== ")
         #expect(OpenClawChatSessionRoutingContract.expectedValue(
             "per-sender|main|reviewer",
             serverSupportsGuard: false) == nil)

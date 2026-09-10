@@ -35,6 +35,37 @@ struct QuickChatControllerTests {
         controller.stop()
     }
 
+    @Test func `recents is eligible before agent selection but send remains gated`() async throws {
+        let model = Self.makeModel(selectionRequired: true)
+        let controller = QuickChatController(enableUI: false, model: model, monitoringEnabled: false)
+        defer { controller.stop() }
+        #expect(!controller.canShowRecentSessions)
+        controller.present()
+        let presentationID = try #require(model.activePresentationID)
+        await model.refreshForPresentation(id: presentationID)
+        model.text = "choose a conversation first"
+
+        #expect(model.selectedAgentID == nil)
+        #expect(model.sessionKey.isEmpty)
+        #expect(model.canSelectRecentSession)
+        #expect(controller.canShowRecentSessions)
+        #expect(!model.canSend)
+
+        let pipelineID = try #require(model.beginCapturePipeline())
+        #expect(!controller.canShowRecentSessions)
+        model.cancelCapturePipeline(pipelineID)
+        #expect(controller.canShowRecentSessions)
+
+        model.selectSessionOverride(QuickChatSessionTargetOverride(
+            key: "agent:work:thread",
+            displayName: "Work thread"))
+        #expect(model.selectedAgentID == nil)
+        #expect(model.canSend)
+        #expect(controller.canShowRecentSessions)
+        controller.dismiss()
+        #expect(!controller.canShowRecentSessions)
+    }
+
     @Test func `reply binding retains same target and rebuilds for a changed target`() throws {
         var createdRoutes: [QuickChatRoutingTarget] = []
         let binding = QuickChatReplyBinding { identity in
@@ -295,15 +326,19 @@ struct QuickChatControllerTests {
         }
     }
 
-    private static func makeModel() -> QuickChatModel {
+    private static func makeModel(selectionRequired: Bool = false) -> QuickChatModel {
         QuickChatModel(
             sessionKeyProvider: { "main" },
             agentsProvider: {
                 AgentsListResult(
                     defaultid: "main",
+                    selectionrequired: selectionRequired,
                     mainkey: "main",
                     scope: AnyCodable("per-agent"),
-                    agents: [AgentSummary(id: "main", name: "Main")])
+                    agents: [
+                        AgentSummary(id: "main", name: "Main"),
+                        AgentSummary(id: "work", name: "Work"),
+                    ])
             },
             agentIdentityProvider: { _ in .placeholder },
             sendProvider: { _, _, _, _, _ in "ok" },

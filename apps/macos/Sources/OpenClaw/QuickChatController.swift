@@ -780,11 +780,9 @@ final class QuickChatController: NSObject {
         }
     }
 
-    private var canShowRecentSessions: Bool {
+    var canShowRecentSessions: Bool {
         self.isVisible &&
             self.model.canSelectRecentSession &&
-            !self.model.isGrantingPermissions &&
-            !self.model.isCapturingTextContext &&
             self.windowPicker?.isInteractionActive != true &&
             !self.isMenuActive
     }

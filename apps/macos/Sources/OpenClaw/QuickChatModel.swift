@@ -371,8 +371,8 @@ final class QuickChatModel {
     }
 
     var canSelectRecentSession: Bool {
-        !self.sessionKey.isEmpty &&
-            self.connectionGate == .available &&
+        // Choosing a canonical recent establishes ownership; sending still needs an owned target.
+        self.connectionGate == .available &&
             !self.isGrantingPermissions &&
             !self.isCapturingTextContext &&
             !self.isStartingDictation &&
@@ -399,19 +399,6 @@ final class QuickChatModel {
             return String(localized: "Select an agent")
         }
         return String(format: String(localized: "Message %@"), self.agentDisplay.name)
-    }
-
-    var routingTarget: QuickChatRoutingTarget? {
-        self.routingIdentity?.target
-    }
-
-    var routingIdentity: QuickChatRoutingIdentity? {
-        guard !self.sessionKey.isEmpty else { return nil }
-        return QuickChatRoutingIdentity(
-            target: QuickChatRoutingTarget(
-                sessionKey: self.sessionKey,
-                agentID: self.sendAgentID),
-            sessionRoutingContract: self.agentsRoutingIdentity?.contract)
     }
 
     var lastAcceptedRoute: QuickChatRoutingTarget? {
@@ -476,34 +463,6 @@ final class QuickChatModel {
         case .failure:
             await self.refreshFallbackIdentity(id: id)
         }
-    }
-
-    func selectAgent(_ id: String) {
-        // A held or in-flight send is already routed; switching now would reroute a
-        // screenshot captured for the previously selected agent.
-        guard self.sendState != .sending,
-              !self.isUpdatingModel,
-              let display = agents.first(where: { $0.id == id }),
-              let routingIdentity = agentsRoutingIdentity
-        else { return }
-        // Agent and recent-session targeting are mutually exclusive: keeping both would
-        // make the avatar advertise one destination while sends go somewhere else.
-        self.targetSessionOverride = nil
-        self.selectedAgentID = id
-        self.selectedAgentIsExplicit = true
-        self.agentDisplay = display
-        let target = Self.routingTarget(
-            scope: routingIdentity.scope,
-            selectedAgentID: id,
-            mainKey: routingIdentity.mainSessionKey)
-        self.baseRoutingTarget = target
-        self.applyRoutingTarget()
-    }
-
-    func selectSessionOverride(_ target: QuickChatSessionTargetOverride?) {
-        guard self.sendState != .sending, !self.isUpdatingModel else { return }
-        self.targetSessionOverride = target
-        self.applyRoutingTarget()
     }
 
     func dismissPermissionsForSession() {
@@ -733,20 +692,6 @@ final class QuickChatModel {
         return accepted
     }
 
-    nonisolated static func routingTarget(
-        scope: String?,
-        selectedAgentID: String,
-        mainKey: String) -> QuickChatRoutingTarget
-    {
-        if scope?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global" {
-            return QuickChatRoutingTarget(sessionKey: "global", agentID: selectedAgentID)
-        }
-        // Canonical agent keys already encode ownership; a redundant agentId is rejected.
-        return QuickChatRoutingTarget(
-            sessionKey: "agent:\(selectedAgentID):\(mainKey)",
-            agentID: nil)
-    }
-
     nonisolated static func assembleMessage(draft: String, context: QuickChatTextContext?) -> String {
         let trimmedDraft = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let context else { return trimmedDraft }
@@ -754,17 +699,6 @@ final class QuickChatModel {
             format: String(localized: "Context from %@ — %@"), context.appName, context.windowTitle)
         let contextBlock = "[\(contextLabel)]\n\(context.text)"
         return trimmedDraft.isEmpty ? contextBlock : "\(trimmedDraft)\n\n\(contextBlock)"
-    }
-
-    nonisolated static func routingTarget(
-        override: QuickChatSessionTargetOverride?,
-        base: QuickChatRoutingTarget) -> QuickChatRoutingTarget
-    {
-        guard let override else { return base }
-        // sessions.list preserves the bare global sentinel. It needs the same explicit
-        // agent owner as the selected base route when session scope is global.
-        let agentID = override.key.lowercased() == "global" ? base.agentID : nil
-        return QuickChatRoutingTarget(sessionKey: override.key, agentID: agentID)
     }
 
     nonisolated static func screenshotFileName(appName: String) -> String {
@@ -817,75 +751,6 @@ final class QuickChatModel {
         if self.sendState == .sending {
             self.sendState = .idle
         }
-    }
-
-    private func refreshFallbackIdentity(id: UUID) async {
-        let resolvedSessionKey = await sessionKeyProvider()
-        guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
-        let fallbackAgentID = OpenClawChatSessionKey.agentID(from: resolvedSessionKey)
-        let mustPreserveSelectionGate = self.agentSelectionRequired && fallbackAgentID == nil
-        let mustResolveFallbackOwner = fallbackAgentID == nil
-        let target = QuickChatRoutingTarget(sessionKey: resolvedSessionKey, agentID: nil)
-        await awaitModelPatchSettlement(for: target)
-        guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
-        self.baseRoutingTarget = target
-        self.applyRoutingTarget()
-        let modelControlsTask = self.modelControlsTask
-        self.agents = []
-        self.defaultAgentID = nil
-        self.selectedAgentID = nil
-        self.selectedAgentIsExplicit = false
-        self.agentsRoutingIdentity = nil
-        self.agentSelectionRequired = mustPreserveSelectionGate || mustResolveFallbackOwner
-        self.agentDisplay = .placeholder
-
-        do {
-            let display = try await agentIdentityProvider(resolvedSessionKey)
-            guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
-            self.agentDisplay = display
-            self.agents = [display]
-            self.defaultAgentID = display.id
-            if let fallbackAgentID {
-                self.selectedAgentID = fallbackAgentID
-                self.agentSelectionRequired = false
-            }
-        } catch {
-            // Agent-scoped fallbacks remain sendable; bare fallbacks stay
-            // gated until ownership metadata recovers.
-        }
-        await modelControlsTask?.value
-    }
-
-    private func applyRoutingTarget() {
-        let target: QuickChatRoutingTarget? = if let baseRoutingTarget {
-            Self.routingTarget(override: self.targetSessionOverride, base: baseRoutingTarget)
-        } else if let targetSessionOverride {
-            QuickChatRoutingTarget(sessionKey: targetSessionOverride.key, agentID: nil)
-        } else {
-            nil
-        }
-        guard let target else {
-            self.setRoutingTarget(nil)
-            cancelModelControlRefresh()
-            return
-        }
-        let previousTarget = self.routingTarget
-        self.setRoutingTarget(target)
-        if previousTarget != target {
-            // Explicit overrides survive target changes, but the target's underlying
-            // session state must be read again before the compact control claims a value.
-            self.currentSessionModelSelectionID = nil
-            self.currentSessionThinkingLevel = nil
-            self.modelDefaultProvider = nil
-            self.thinkingOptions = []
-        }
-        refreshModelControls(for: target)
-    }
-
-    private func setRoutingTarget(_ target: QuickChatRoutingTarget?) {
-        self.sessionKey = target?.sessionKey ?? ""
-        self.sendAgentID = target?.agentID
-        self.isUpdatingModel = target.map { self.modelPatchSettlementsByTarget[$0] != nil } ?? false
     }
 
     private func performSend(
@@ -996,11 +861,6 @@ final class QuickChatModel {
             self.sendState = self.text == draft ? .failed(error.localizedDescription) : .idle
             return false
         }
-    }
-
-    private var hasOwnedRoutingTarget: Bool {
-        guard let routingTarget else { return false }
-        return routingTarget.agentID != nil || OpenClawChatSessionKey.agentID(from: routingTarget.sessionKey) != nil
     }
 
     private func startPermissionPolling(id: UUID) {
@@ -1294,7 +1154,149 @@ extension QuickChatModel {
     }
 }
 
+// MARK: - Routing ownership
+
 extension QuickChatModel {
+    func selectAgent(_ id: String) {
+        // A held or in-flight send is already routed; switching now would reroute a
+        // screenshot captured for the previously selected agent.
+        guard self.sendState != .sending,
+              !self.isUpdatingModel,
+              let display = agents.first(where: { $0.id == id }),
+              let routingIdentity = agentsRoutingIdentity
+        else { return }
+        // Agent and recent-session targeting are mutually exclusive: keeping both would
+        // make the avatar advertise one destination while sends go somewhere else.
+        self.targetSessionOverride = nil
+        self.selectedAgentID = id
+        self.selectedAgentIsExplicit = true
+        self.agentDisplay = display
+        let target = Self.routingTarget(
+            scope: routingIdentity.scope,
+            selectedAgentID: id,
+            mainKey: routingIdentity.mainSessionKey)
+        self.baseRoutingTarget = target
+        self.applyRoutingTarget()
+    }
+
+    func selectSessionOverride(_ target: QuickChatSessionTargetOverride?) {
+        guard self.sendState != .sending, !self.isUpdatingModel else { return }
+        self.targetSessionOverride = target
+        self.applyRoutingTarget()
+    }
+
+    nonisolated static func routingTarget(
+        scope: String?,
+        selectedAgentID: String,
+        mainKey: String) -> QuickChatRoutingTarget
+    {
+        if scope?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global" {
+            return QuickChatRoutingTarget(sessionKey: "global", agentID: selectedAgentID)
+        }
+        // Canonical agent keys already encode ownership; a redundant agentId is rejected.
+        return QuickChatRoutingTarget(
+            sessionKey: "agent:\(selectedAgentID):\(mainKey)",
+            agentID: nil)
+    }
+
+    nonisolated static func routingTarget(
+        override: QuickChatSessionTargetOverride?,
+        base: QuickChatRoutingTarget) -> QuickChatRoutingTarget
+    {
+        guard let override else { return base }
+        // sessions.list preserves the bare global sentinel. It needs the same explicit
+        // agent owner as the selected base route when session scope is global.
+        let agentID = override.key.lowercased() == "global" ? base.agentID : nil
+        return QuickChatRoutingTarget(sessionKey: override.key, agentID: agentID)
+    }
+
+    private func refreshFallbackIdentity(id: UUID) async {
+        let resolvedSessionKey = await sessionKeyProvider()
+        guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
+        let fallbackAgentID = OpenClawChatSessionKey.agentID(from: resolvedSessionKey)
+        let mustPreserveSelectionGate = self.agentSelectionRequired && fallbackAgentID == nil
+        let mustResolveFallbackOwner = fallbackAgentID == nil
+        let target = QuickChatRoutingTarget(sessionKey: resolvedSessionKey, agentID: nil)
+        await awaitModelPatchSettlement(for: target)
+        guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
+        self.baseRoutingTarget = target
+        self.applyRoutingTarget()
+        let modelControlsTask = self.modelControlsTask
+        self.agents = []
+        self.defaultAgentID = nil
+        self.selectedAgentID = nil
+        self.selectedAgentIsExplicit = false
+        self.agentsRoutingIdentity = nil
+        self.agentSelectionRequired = mustPreserveSelectionGate || mustResolveFallbackOwner
+        self.agentDisplay = .placeholder
+
+        do {
+            let display = try await agentIdentityProvider(resolvedSessionKey)
+            guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
+            self.agentDisplay = display
+            self.agents = [display]
+            self.defaultAgentID = display.id
+            if let fallbackAgentID {
+                self.selectedAgentID = fallbackAgentID
+                self.agentSelectionRequired = false
+            }
+        } catch {
+            // Agent-scoped fallbacks remain sendable; bare fallbacks stay
+            // gated until ownership metadata recovers.
+        }
+        await modelControlsTask?.value
+    }
+
+    private func applyRoutingTarget() {
+        let target: QuickChatRoutingTarget? = if let baseRoutingTarget {
+            Self.routingTarget(override: self.targetSessionOverride, base: baseRoutingTarget)
+        } else if let targetSessionOverride {
+            QuickChatRoutingTarget(sessionKey: targetSessionOverride.key, agentID: nil)
+        } else {
+            nil
+        }
+        guard let target else {
+            self.setRoutingTarget(nil)
+            cancelModelControlRefresh()
+            return
+        }
+        let previousTarget = self.routingTarget
+        self.setRoutingTarget(target)
+        if previousTarget != target {
+            // Explicit overrides survive target changes, but the target's underlying
+            // session state must be read again before the compact control claims a value.
+            self.currentSessionModelSelectionID = nil
+            self.currentSessionThinkingLevel = nil
+            self.modelDefaultProvider = nil
+            self.thinkingOptions = []
+        }
+        refreshModelControls(for: target)
+    }
+
+    private func setRoutingTarget(_ target: QuickChatRoutingTarget?) {
+        self.sessionKey = target?.sessionKey ?? ""
+        self.sendAgentID = target?.agentID
+        self.isUpdatingModel = target.map { self.modelPatchSettlementsByTarget[$0] != nil } ?? false
+    }
+
+    private var hasOwnedRoutingTarget: Bool {
+        guard let routingTarget else { return false }
+        return routingTarget.agentID != nil || OpenClawChatSessionKey.agentID(from: routingTarget.sessionKey) != nil
+    }
+
+    var routingTarget: QuickChatRoutingTarget? {
+        self.routingIdentity?.target
+    }
+
+    var routingIdentity: QuickChatRoutingIdentity? {
+        guard !self.sessionKey.isEmpty else { return nil }
+        return QuickChatRoutingIdentity(
+            target: QuickChatRoutingTarget(
+                sessionKey: self.sessionKey,
+                agentID: self.sendAgentID),
+            sessionRoutingContract: self.agentsRoutingIdentity?.contract)
+    }
+
     private func resolveAgents(_ result: AgentsListResult) -> AgentsResolution {
         let displays = result.agents.filter(\.isSelectableAgent).map(QuickChatAgentDisplay.init(summary:))
         let routingIdentity = OpenClawChatSessionRoutingIdentity(

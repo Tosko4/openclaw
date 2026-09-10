@@ -834,13 +834,13 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
             mainSessionKey: " Work ",
             defaultAgentID: " Main ",
             selectionRequired: true,
-            sessionRoutingContract: "per-sender|work|unowned"))
+            sessionRoutingContract: " Server-fingerprint:v2/Case+opaque== "))
         await databases.store(gatewayID: "gw-a").storeSessionRoutingIdentity(identity)
         try databases.close()
 
         let reopened = try OpenClawClientDatabases(directoryURL: directory)
         #expect(reopened.loadSessionRoutingIdentity(gatewayID: "gw-a") == identity)
-        #expect(identity.contract == "per-sender|work|unowned")
+        #expect(identity.contract == " Server-fingerprint:v2/Case+opaque== ")
         #expect(identity.selectionRequired)
         #expect(try await reopened.stateQueue.read { db in
             try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations")
@@ -944,7 +944,18 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
             sessionRoutingContract: "per-sender|main|unowned"))
         await databases.store(gatewayID: "gw-a").storeSessionRoutingIdentity(identity)
 
-        try await databases.stateQueue.write { db in
+        try databases.close()
+        // Exercise the previous named-column reader/writer contract through a fresh connection.
+        // A full older-app migration/open remains a separate native downgrade proof.
+        let legacy = try DatabaseQueue(path: directory.appendingPathComponent("client-state.sqlite").path)
+        let owner = try legacy.read { db in
+            try Row.fetchOne(db, sql: """
+                SELECT scope, main_session_key, default_agent_id
+                FROM gateway_routing_identity WHERE gateway_id = 'gw-a'
+                """)
+        }
+        #expect((owner?["default_agent_id"] as String?) == "main")
+        try legacy.write { db in
             try db.execute(
                 sql: """
                 UPDATE gateway_routing_identity SET
@@ -956,7 +967,12 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
                 """)
         }
 
-        #expect(databases.loadSessionRoutingIdentity(gatewayID: "gw-a") == nil)
+        try legacy.close()
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        #expect(reopened.loadSessionRoutingIdentity(gatewayID: "gw-a") == nil)
+        await reopened.store(gatewayID: "gw-a").storeSessionRoutingIdentity(identity)
+        #expect(reopened.loadSessionRoutingIdentity(gatewayID: "gw-a") == identity)
+        try reopened.close()
     }
 }
 

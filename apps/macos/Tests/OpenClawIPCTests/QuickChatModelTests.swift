@@ -567,14 +567,25 @@ struct QuickChatModelTests {
                 return "started"
             })
         await self.prepare(model)
+        #expect(model.sessionKey.isEmpty)
+        #expect(model.canSelectRecentSession)
+        model.text = "hello"
+        #expect(!model.canSend)
+        #expect(!(await model.send()))
+        #expect(sentRoute == nil)
         let key = "agent:ops:discord:channel:release"
         model.selectSessionOverride(QuickChatSessionTargetOverride(key: key, displayName: "Release"))
-        model.text = "hello"
 
         #expect(model.selectedAgentID == nil)
         #expect(model.canSend)
         #expect(await model.send())
         #expect(sentRoute == QuickChatRoutingTarget(sessionKey: key, agentID: nil))
+
+        model.selectSessionOverride(nil)
+        model.text = "unowned again"
+        #expect(model.sessionKey.isEmpty)
+        #expect(model.canSelectRecentSession)
+        #expect(!model.canSend)
     }
 
     @Test func `ownerless recent session override does not satisfy the ownership gate`() async {

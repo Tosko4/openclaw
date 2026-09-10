@@ -778,7 +778,7 @@ extension OpenClawChatSQLiteTranscriptCache {
         guard !self.isRetired else { return .unavailable }
         let normalizedAgentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         let normalizedDeliverySessionKey = deliverySessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedRoutingContract = routingContract.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedRoutingContract = routingContract
         let allowsUntargetedAgent = normalizedRoutingContract == OpenClawChatOutboxCommand
             .legacyUnboundRoutingContract || normalizedDeliverySessionKey.lowercased() == "unknown"
         guard !normalizedAgentID.isEmpty || allowsUntargetedAgent,

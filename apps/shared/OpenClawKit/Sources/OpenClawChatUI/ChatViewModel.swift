@@ -224,7 +224,7 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     var pendingCacheWriteTask: Task<Void, Never>?
     private(set) var activeAgentId: String?
-    private(set) var sessionRoutingContract: String?
+    public private(set) var sessionRoutingContract: String?
     private(set) var agentSelectionRequired: Bool
     var sessionDefaults: OpenClawChatSessionsDefaults? {
         didSet { syncContextUsageFraction() }
@@ -514,8 +514,7 @@ public final class OpenClawChatViewModel {
         self.modelPickerRecents = modelPickerStore.recents
         self.outbox = outbox
         self.activeAgentId = Self.normalizedAgentId(activeAgentId)
-        let normalizedRoutingContract = sessionRoutingContract?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let initialRoutingContract = normalizedRoutingContract?.isEmpty == false ? normalizedRoutingContract : nil
+        let initialRoutingContract = sessionRoutingContract?.isEmpty == false ? sessionRoutingContract : nil
         self.sessionRoutingContract = initialRoutingContract
         self.agentSelectionRequired = Self.resolvedAgentSelectionRequired(
             explicit: agentSelectionRequired,
@@ -677,8 +676,7 @@ public final class OpenClawChatViewModel {
         agentSelectionRequired: Bool? = nil)
     {
         let nextAgentId = Self.normalizedAgentId(agentId)
-        let normalizedContract = contract?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextContract = normalizedContract?.isEmpty == false ? normalizedContract : nil
+        let nextContract = contract?.isEmpty == false ? contract : nil
         let nextSelectionRequired = Self.resolvedAgentSelectionRequired(
             explicit: agentSelectionRequired,
             sessionRoutingContract: nextContract,

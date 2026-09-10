@@ -4354,7 +4354,7 @@ struct ChatViewModelTests {
     }
 
     @Test func `live send binds the captured agent and routing contract`() async throws {
-        let contract = "per-sender|main|reviewer"
+        let contract = " Server-fingerprint:v2/Case+opaque== "
         let (transport, vm) = await makeViewModel(
             activeAgentId: "reviewer",
             historyResponses: [historyPayload(), historyPayload()],
