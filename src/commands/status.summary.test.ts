@@ -173,8 +173,6 @@ vi.mock("../gateway/agent-list.js", () => ({
   listGatewayAgentsBasic: vi.fn(() => ({
     defaultId: "main",
     sessionRoutingContract: "per-sender|main|main",
-    mainKey: "main",
-    scope: "per-sender" as const,
     agents: [{ id: "main" }],
   })),
 }));
@@ -315,6 +313,7 @@ describe("getStatusSummary", () => {
       const agents = [{ id: "research" }, { id: "ops" }];
       vi.mocked(listGatewayAgentsBasic).mockReturnValue({
         defaultId: "research",
+        sessionRoutingContract: `${scope}|inbox|unowned`,
         mainKey: "inbox",
         scope,
         agents,

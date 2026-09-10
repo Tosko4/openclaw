@@ -71,7 +71,10 @@ export function resolveGatewayAgentSelectionState(cfg: OpenClawConfig): GatewayA
   };
 }
 
-/** Matches the released Apple projection only for an explicit canonical main target. */
+/**
+ * Matches the released Apple scope/mainKey/defaultId projection, not an opaque
+ * server token. Remove this adapter when those released clients are unsupported.
+ */
 export function matchesLegacyGatewaySessionRoutingContract(params: {
   cfg: OpenClawConfig;
   expectedContract: string;
@@ -93,13 +96,12 @@ export function matchesLegacyGatewaySessionRoutingContract(params: {
   if (!listAgentEntries(params.cfg).some((entry) => normalizeAgentId(entry.id) === agentId)) {
     return false;
   }
-  if (
-    params.sessionKey.trim().toLowerCase() !==
-    resolveAgentMainSessionKey({ cfg: params.cfg, agentId })
-  ) {
+  if (params.sessionKey !== resolveAgentMainSessionKey({ cfg: params.cfg, agentId })) {
     return false;
   }
   const legacyDefaultId = resolveGatewayAgentSelectionState(params.cfg).defaultId;
+  // Only the released projection uses trim/lowercase; authoritative tokens must
+  // retain their bytes even if a future server changes their format.
   return (
     params.expectedContract.trim().toLowerCase() === [scope, mainKey, legacyDefaultId].join("|")
   );

@@ -65,6 +65,30 @@ describe("listGatewayAgentsBasic", () => {
     expect(
       matchesLegacyGatewaySessionRoutingContract({
         cfg,
+        expectedContract: " PER-SENDER|MAIN|MAIN ",
+        agentId: "research",
+        sessionKey: "agent:research:main",
+      }),
+    ).toBe(true);
+    for (const sessionKey of [
+      "global",
+      "agent:research:thread:one",
+      "agent:main:main",
+      " AGENT:RESEARCH:MAIN ",
+      "agent:research:MAIN",
+    ]) {
+      expect(
+        matchesLegacyGatewaySessionRoutingContract({
+          cfg,
+          expectedContract: "per-sender|main|main",
+          agentId: "research",
+          sessionKey,
+        }),
+      ).toBe(false);
+    }
+    expect(
+      matchesLegacyGatewaySessionRoutingContract({
+        cfg,
         expectedContract: "per-sender|main|research",
         agentId: "research",
         sessionKey: "agent:research:main",
