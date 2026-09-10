@@ -1,55 +1,65 @@
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
+import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { assert, expect, vi } from "vitest";
-import type * as SlackApi from "../../extensions/slack/api.js";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/config.js";
-import {
-  loadSessionEntryReadOnly,
-  replaceSessionEntrySync,
-} from "../config/sessions/session-accessor.js";
-import {
-  mintMessageActionTurnCapability,
-  revokeMessageActionTurnCapability,
-} from "../gateway/message-action-turn-capability.js";
-import * as guardedFetch from "../infra/net/fetch-guard.js";
-import type { Model } from "../llm/types.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
 import {
   closeAdmittedRunDelegatedAuthority,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
-} from "./admitted-run-context.js";
-import * as toolExecutionState from "./agent-tools.before-tool-call.state.js";
-import { createAssistantErrorTranscript } from "./assistant-error-transcript.js";
+} from "../../../src/agents/admitted-run-context.js";
+import * as toolExecutionState from "../../../src/agents/agent-tools.before-tool-call.state.js";
+import { createAssistantErrorTranscript } from "../../../src/agents/assistant-error-transcript.js";
 import {
   closeCurrentTurnReplyCompletionOwner,
   copyCurrentTurnReplyCompletion,
   createCurrentTurnReplyCompletionOwner,
   readCurrentTurnReplyCompletion,
-} from "./current-turn-reply-completion.js";
-import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
-import { createAdmittedHostCapabilityTestFixture } from "./harness/host-capability.test-support.js";
-import { resolveAgentHarnessCurrentTurnDeliveryTool } from "./harness/host-private-capabilities.js";
-import { AuthStorage, ModelRegistry } from "./sessions/index.js";
+} from "../../../src/agents/current-turn-reply-completion.js";
+import type { EmbeddedRunAttemptParams } from "../../../src/agents/embedded-agent-runner/run/types.js";
+import { createAdmittedHostCapabilityTestFixture } from "../../../src/agents/harness/host-capability.test-support.js";
+import { resolveAgentHarnessCurrentTurnDeliveryTool } from "../../../src/agents/harness/host-private-capabilities.js";
+import { AuthStorage, ModelRegistry } from "../../../src/agents/sessions/index.js";
+import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import {
+  loadSessionEntryReadOnly,
+  replaceSessionEntrySync,
+} from "../../../src/config/sessions/session-accessor.js";
+import {
+  mintMessageActionTurnCapability,
+  revokeMessageActionTurnCapability,
+} from "../../../src/gateway/message-action-turn-capability.js";
+import * as guardedFetch from "../../../src/infra/net/fetch-guard.js";
+import type { Model } from "../../../src/llm/types.js";
+import {
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../../../src/plugins/runtime.js";
+import type { Deferred } from "../../../src/shared/deferred.js";
+import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../../src/test-utils/openclaw-test-state.js";
+import { createDeferred, withTestTimeout } from "../promise.js";
 
-type SlackClient = ReturnType<typeof SlackApi.getSlackWriteClient>;
+type SlackClient = { apiCall(method: string): Promise<unknown> };
+type SlackPublicModule = {
+  slackPlugin: ChannelPlugin;
+  getSlackWriteClient(token: string): SlackClient;
+};
 type Stage = "blocker" | "route" | "post" | "upload-url" | "dns" | "upload" | "complete";
 type Lookup = NonNullable<Parameters<typeof guardedFetch.fetchWithSsrFGuard>[0]["lookupFn"]>;
-type Gate = ReturnType<typeof createDeferred<void>>;
+type Gate = Deferred;
 type Hold = { entered: Gate; release: Gate };
 type SdkQueue = { add<T>(operation: () => Promise<T>): Promise<T> };
 type SdkClient = { requestQueue: SdkQueue };
 type SdkPrototype = {
   makeRequest(
     this: SlackClient,
-    url: URL,
+    url: string,
     body: Record<string, unknown>,
     headers?: Record<string, string>,
   ): Promise<unknown>;
@@ -74,7 +84,7 @@ function response(value: unknown): Response {
   });
 }
 
-function createSlackHttpEdge() {
+async function createSlackHttpEdge(transport: "http-edge" | "socket") {
   const counts: Record<Stage, number> = {
     blocker: 0,
     route: 0,
@@ -86,10 +96,20 @@ function createSlackHttpEdge() {
   };
   const holds = new Map<Stage, Hold>();
   const requests: Promise<unknown>[] = [];
-  let loseFirstPostResponse = false;
+  const received: Array<{
+    stage: Stage;
+    method: string;
+    pathname: string;
+    authorization?: string;
+    body: Buffer;
+  }> = [];
+  const handlerErrors: unknown[] = [];
+  let server: Server | undefined;
+  let origin = "https://slack.com";
+  let lostResponseStage: "post" | "complete" | undefined;
   let maxPosts = 1;
   const hold = (stage: Stage) => {
-    const gate = { entered: createDeferred<void>(), release: createDeferred<void>() };
+    const gate = { entered: createDeferred(), release: createDeferred() };
     holds.set(stage, gate);
     return {
       ...gate,
@@ -118,59 +138,107 @@ function createSlackHttpEdge() {
     requests.push(operation);
     return operation;
   };
+  const resolveStage = (url: URL): Stage =>
+    url.pathname.endsWith("/api.test")
+      ? "blocker"
+      : url.pathname.endsWith("/conversations.info")
+        ? "route"
+        : url.pathname.endsWith("/chat.postMessage")
+          ? "post"
+          : url.pathname.endsWith("/files.getUploadURLExternal")
+            ? "upload-url"
+            : url.pathname.endsWith("/files.completeUploadExternal")
+              ? "complete"
+              : url.pathname === "/upload/current-reply"
+                ? "upload"
+                : (() => {
+                    throw new Error(`Unexpected synthetic Slack HTTP stage: ${url.pathname}`);
+                  })();
+  const respond = async (stage: Stage) => {
+    await enterStage(stage);
+    if (stage === lostResponseStage && counts[stage] === 1) {
+      return undefined;
+    }
+    if (stage === "route") {
+      return response({
+        ok: true,
+        channel: { id: "D12345678", is_im: true, user: "U12345678" },
+      });
+    }
+    if (stage === "upload-url") {
+      return response({
+        ok: true,
+        upload_url: `${transport === "socket" ? origin : "https://files.slack.com"}/upload/current-reply`,
+        file_id: "F12345678",
+      });
+    }
+    if (stage === "upload") {
+      return new Response("ok");
+    }
+    return response({
+      ok: true,
+      ts: `171234.${counts.post}`,
+      channel: "C12345678",
+      files: [{ id: "F12345678" }],
+    });
+  };
   const fetch: typeof globalThis.fetch = (input, init) => {
     const operation = (async () => {
-      const url = new URL(String(input));
-      const stage: Stage = url.pathname.endsWith("/api.test")
-        ? "blocker"
-        : url.pathname.endsWith("/conversations.info")
-          ? "route"
-          : url.pathname.endsWith("/chat.postMessage")
-            ? "post"
-            : url.pathname.endsWith("/files.getUploadURLExternal")
-              ? "upload-url"
-              : url.pathname.endsWith("/files.completeUploadExternal")
-                ? "complete"
-                : url.hostname === "files.slack.com"
-                  ? "upload"
-                  : (() => {
-                      throw new Error(`Unexpected synthetic Slack HTTP stage: ${url.pathname}`);
-                    })();
+      const url = new URL(input instanceof Request ? input.url : input);
+      const stage = resolveStage(url);
       if (stage === "upload") {
         assert(init && Reflect.get(init, "dispatcher"), "expected real pinned upload dispatcher");
       }
-      await enterStage(stage);
-      if (stage === "post" && loseFirstPostResponse && counts.post === 1) {
+      const result = await respond(stage);
+      if (!result) {
         throw new TypeError("Synthetic accepted write with lost response");
       }
-      if (stage === "route") {
-        return response({
-          ok: true,
-          channel: { id: "D12345678", is_im: true, user: "U12345678" },
-        });
-      }
-      if (stage === "upload-url") {
-        return response({
-          ok: true,
-          upload_url: "https://files.slack.com/upload/current-reply",
-          file_id: "F12345678",
-        });
-      }
-      if (stage === "upload") {
-        return new Response("ok");
-      }
-      return response({
-        ok: true,
-        ts: `171234.${counts.post}`,
-        channel: "C12345678",
-        files: [{ id: "F12345678" }],
-      });
+      return result;
     })();
     requests.push(operation);
     return operation;
   };
+  if (transport === "socket") {
+    server = createServer((request, reply) => {
+      const handled = (async () => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) {
+          chunks.push(Buffer.from(chunk));
+        }
+        const url = new URL(request.url ?? "/", origin);
+        const stage = resolveStage(url);
+        received.push({
+          stage,
+          method: request.method ?? "",
+          pathname: url.pathname,
+          authorization: request.headers.authorization,
+          body: Buffer.concat(chunks),
+        });
+        const result = await respond(stage);
+        if (!result) {
+          // The full request reached this server before the response was lost.
+          request.socket.destroy();
+          return;
+        }
+        reply.writeHead(result.status, Object.fromEntries(result.headers));
+        reply.end(Buffer.from(await result.arrayBuffer()));
+      })().catch((error: unknown) => {
+        handlerErrors.push(error);
+        reply.destroy();
+      });
+      requests.push(handled);
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    assert(address && typeof address !== "string", "expected an isolated loopback listener");
+    origin = `http://127.0.0.1:${address.port}`;
+  }
   return {
     counts,
+    received,
+    origin,
+    transport,
     fetch,
     lookup,
     hold,
@@ -178,15 +246,30 @@ function createSlackHttpEdge() {
       maxPosts += 1;
     },
     loseFirstPostResponse: () => {
-      loseFirstPostResponse = true;
+      lostResponseStage = "post";
+    },
+    loseFirstCompletionResponse: () => {
+      lostResponseStage = "complete";
     },
     releaseAll: () => {
       for (const gate of holds.values()) {
         gate.release.resolve();
       }
     },
-    join: async () => {
+    waitForSettled: async () => {
       await Promise.allSettled(requests);
+      if (handlerErrors.length > 0) {
+        throw new AggregateError(handlerErrors, "Slack HTTP fixture handlers failed");
+      }
+    },
+    close: async () => {
+      if (server) {
+        const closed = new Promise<void>((resolve, reject) =>
+          server!.close((error) => (error ? reject(error) : resolve())),
+        );
+        server.closeAllConnections();
+        await closed;
+      }
     },
   };
 }
@@ -196,24 +279,36 @@ export type CurrentReplyIntegration = Awaited<ReturnType<typeof createIntegratio
 async function createIntegration(
   state: OpenClawTestState,
   target: string,
+  network: Awaited<ReturnType<typeof createSlackHttpEdge>>,
   restoreObservers: Array<() => void>,
 ) {
-  const network = createSlackHttpEdge();
-  vi.stubGlobal("fetch", network.fetch);
-  const fetchWithSsrFGuard = guardedFetch.fetchWithSsrFGuard;
-  const dnsSubstitution = vi
-    .spyOn(guardedFetch, "fetchWithSsrFGuard")
-    .mockImplementation((params) =>
-      fetchWithSsrFGuard({
-        ...params,
-        lookupFn: network.lookup,
-        // A distinct, explicit plain function honors the real guard's dispatcher.
-        // A global vi.fn would instead select its hermetic no-DNS test shortcut.
-        fetchImpl: (input, init) => network.fetch(input, init),
-      }),
-    );
-  restoreObservers.push(() => dnsSubstitution.mockRestore());
-  const slack = await vi.importActual<typeof SlackApi>(
+  if (network.transport === "http-edge") {
+    vi.stubGlobal("fetch", network.fetch);
+    restoreObservers.push(() => vi.unstubAllGlobals());
+    const fetchWithSsrFGuard = guardedFetch.fetchWithSsrFGuard;
+    const dnsSubstitution = vi
+      .spyOn(guardedFetch, "fetchWithSsrFGuard")
+      .mockImplementation((params) =>
+        fetchWithSsrFGuard({
+          ...params,
+          lookupFn: network.lookup,
+          // A global vi.fn would select the guard's hermetic no-DNS shortcut.
+          fetchImpl: (input, init) => network.fetch(input, init),
+        }),
+      );
+    restoreObservers.push(() => dnsSubstitution.mockRestore());
+  } else {
+    const previousApiUrl = process.env.SLACK_API_URL;
+    process.env.SLACK_API_URL = `${network.origin}/api/`;
+    restoreObservers.push(() => {
+      if (previousApiUrl === undefined) {
+        delete process.env.SLACK_API_URL;
+      } else {
+        process.env.SLACK_API_URL = previousApiUrl;
+      }
+    });
+  }
+  const slack = await vi.importActual<SlackPublicModule>(
     resolveRelativeBundledPluginPublicModuleId({
       fromModuleUrl: import.meta.url,
       pluginId: "slack",
@@ -293,7 +388,7 @@ async function createIntegration(
       if (pending) {
         pending.active += 1;
       } else {
-        producers.set(key, { active: 1, settled: createDeferred<void>() });
+        producers.set(key, { active: 1, settled: createDeferred() });
       }
     });
   restoreObservers.push(() => producerStartObservation.mockRestore());
@@ -314,13 +409,13 @@ async function createIntegration(
       }
     });
   restoreObservers.push(() => producerSettlementObservation.mockRestore());
-  const join = async () => {
+  const waitForSettled = async () => {
     await Promise.allSettled(executions);
     while (producers.size > 0) {
       await Promise.all([...producers.values()].map((producer) => producer.settled.promise));
     }
     await Promise.allSettled(sdkRequests);
-    await network.join();
+    await network.waitForSettled();
     expect(producerSettlements).toBe(producerStarts);
   };
   let currentRun = 0;
@@ -382,7 +477,7 @@ async function createIntegration(
       token: turnToken,
     });
     const authStorage = AuthStorage.inMemory();
-    const attempt: EmbeddedRunAttemptParams = {
+    const attempt: EmbeddedRunAttemptParams & { sessionTarget: typeof sessionTarget } = {
       ...common,
       admittedRunContext: host.admittedRunContext,
       authStorage,
@@ -394,32 +489,48 @@ async function createIntegration(
       timeoutMs: 30_000,
       prompt: "Reply once.",
     };
-    const createHostTool = () => {
-      const tools = host.hostCapabilities.createToolSurface?.(
-        {
-          config,
-          workspaceDir: state.workspaceDir,
-          sessionKey,
-          runSessionKey: sessionKey,
-          sessionId,
-          runId,
-          messageProvider: "slack",
-          messageTo: `channel:${target}`,
-          currentChannelId: target,
-          messageActionTurnCapability: turnToken,
-          runtimeToolAllowlist: common.toolsAllow,
-        },
-        undefined,
-        { terminalCompletion: "per-result" },
-      );
-      assert(tools, "expected a real admitted host tool surface");
-      const tool = resolveAgentHarnessCurrentTurnDeliveryTool(tools);
-      assert(tool, "expected the exact registered host current-reply tool");
-      return tool;
+    const createHostTool = (capabilitySessionId = sessionId) => {
+      const capability =
+        capabilitySessionId === sessionId
+          ? turnToken
+          : mintMessageActionTurnCapability({
+              agentId: "main",
+              runId,
+              sessionId: capabilitySessionId,
+              sessionKey,
+            });
+      try {
+        const tools = host.hostCapabilities.createToolSurface?.(
+          {
+            config,
+            workspaceDir: state.workspaceDir,
+            sessionKey,
+            runSessionKey: sessionKey,
+            sessionId,
+            runId,
+            messageProvider: "slack",
+            messageTo: `channel:${target}`,
+            currentChannelId: target,
+            messageActionTurnCapability: capability,
+            runtimeToolAllowlist: common.toolsAllow,
+          },
+          undefined,
+          { terminalCompletion: "per-result" },
+        );
+        assert(tools, "expected a real admitted host tool surface");
+        const tool = resolveAgentHarnessCurrentTurnDeliveryTool(tools);
+        assert(tool, "expected the exact registered host current-reply tool");
+        return tool;
+      } finally {
+        if (capability !== turnToken) {
+          revokeMessageActionTurnCapability(capability);
+        }
+      }
     };
     return {
       ...host,
       attempt,
+      sessionTarget,
       owner,
       abortController,
       createHostTool,
@@ -475,7 +586,7 @@ async function createIntegration(
       return operation;
     },
     observeSdkAdmission: (text: string) => {
-      const gate = createDeferred<void>();
+      const gate = createDeferred();
       admissions.set(text, gate);
       return () => withTestTimeout(gate.promise, 5000, "Slack SDK admission was not reached");
     },
@@ -488,20 +599,42 @@ async function createIntegration(
       await expect.poll(() => network.counts.blocker).toBe(100);
       return held.release;
     },
-    join,
+    waitForSettled,
     dispose: async () => {
+      const errors: unknown[] = [];
       for (const run of runs) {
-        run.close();
+        try {
+          run.close();
+        } catch (error) {
+          errors.push(error);
+        }
       }
       network.releaseAll();
-      await join();
-      for (const run of runs) {
-        run.closeAdmission();
-        closeCurrentTurnReplyCompletionOwner(run.owner);
-        revokeMessageActionTurnCapability(run.token);
+      try {
+        await waitForSettled();
+      } catch (error) {
+        errors.push(error);
+      } finally {
+        for (const run of runs) {
+          try {
+            run.closeAdmission();
+          } catch (error) {
+            errors.push(error);
+          } finally {
+            closeCurrentTurnReplyCompletionOwner(run.owner);
+            revokeMessageActionTurnCapability(run.token);
+          }
+        }
+        for (const admission of extraAdmissions) {
+          try {
+            admission.close();
+          } catch (error) {
+            errors.push(error);
+          }
+        }
       }
-      for (const admission of extraAdmissions) {
-        admission.close();
+      if (errors.length > 0) {
+        throw new AggregateError(errors, "Current reply producers failed to clean up");
       }
     },
   };
@@ -509,7 +642,7 @@ async function createIntegration(
 
 export async function withCurrentReplyIntegration(
   run: (fixture: CurrentReplyIntegration) => Promise<void>,
-  target = "C12345678",
+  options: { target?: string; transport?: "http-edge" | "socket" } = {},
 ) {
   await withOpenClawTestState(
     {
@@ -525,17 +658,47 @@ export async function withCurrentReplyIntegration(
     },
     async (state) => {
       let fixture: CurrentReplyIntegration | undefined;
+      let network: Awaited<ReturnType<typeof createSlackHttpEdge>> | undefined;
       const restoreObservers: Array<() => void> = [];
+      const errors: unknown[] = [];
       try {
-        fixture = await createIntegration(state, target, restoreObservers);
+        network = await createSlackHttpEdge(options.transport ?? "http-edge");
+        fixture = await createIntegration(
+          state,
+          options.target ?? "C12345678",
+          network,
+          restoreObservers,
+        );
         await run(fixture);
+      } catch (error) {
+        errors.push(error);
       } finally {
-        await fixture?.dispose();
-        for (const restore of restoreObservers.reverse()) {
-          restore();
+        network?.releaseAll();
+        try {
+          await fixture?.dispose();
+        } catch (error) {
+          errors.push(error);
         }
-        resetPluginRuntimeStateForTest();
-        vi.unstubAllGlobals();
+        try {
+          await network?.close();
+        } catch (error) {
+          errors.push(error);
+        }
+        for (const restore of restoreObservers.toReversed()) {
+          try {
+            restore();
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+        try {
+          resetPluginRuntimeStateForTest();
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (errors.length > 0) {
+        throw new AggregateError(errors, "Current reply integration failed");
       }
     },
   );

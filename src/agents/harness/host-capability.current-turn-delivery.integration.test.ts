@@ -1,7 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { withCurrentReplyIntegration } from "../current-turn-delivery.integration.test-support.js";
+import { withCurrentReplyIntegration } from "../../../test/helpers/agents/current-turn-delivery-integration.js";
 
 describe("admitted host current reply through Slack transport", () => {
+  it("rejects a foreign-session capability at the real host tool surface without effects", async () => {
+    await withCurrentReplyIntegration(async (fixture) => {
+      const turn = await fixture.createTurn();
+      const original = fixture.readRow();
+      expect(() => turn.createHostTool("foreign-session")).toThrow(
+        "plugin delivery capability is no longer active",
+      );
+      await fixture.waitForSettled();
+      expect(fixture.pendingToolExecutions()).toBe(0);
+      expect(fixture.network.counts).toEqual({
+        blocker: 0,
+        route: 0,
+        post: 0,
+        "upload-url": 0,
+        dns: 0,
+        upload: 0,
+        complete: 0,
+      });
+      expect(turn.completion()).toBeUndefined();
+      expect(fixture.readRow()).toEqual(original);
+    });
+  });
+
   it("delivers after the same transport's held SDK admission opens", async () => {
     await withCurrentReplyIntegration(async (fixture) => {
       const turn = await fixture.createTurn();
@@ -144,7 +167,7 @@ describe("admitted host current reply through Slack transport", () => {
         turn.closeHost();
         await expect(pending).rejects.toThrow();
         expect(fixture.pendingToolExecutions()).toBe(1);
-        const joined = fixture.join();
+        const joined = fixture.waitForSettled();
         held.release.resolve();
         await joined;
         expect(fixture.pendingToolExecutions()).toBe(0);
@@ -164,6 +187,111 @@ describe("admitted host current reply through Slack transport", () => {
         expect(turn.completion()).toBe("ambiguous");
         expect(fixture.network.counts.post).toBe(2);
       });
+    },
+  );
+
+  it.each(["allowed", "revoked during preparation", "lost completion response"] as const)(
+    "uses native HTTP and the real upload guard for %s",
+    async (outcome) => {
+      const nativeFetch = globalThis.fetch;
+      await withCurrentReplyIntegration(
+        async (fixture) => {
+          expect(globalThis.fetch).toBe(nativeFetch);
+          const turn = await fixture.createTurn();
+          const attachment = "exact native upload bytes\n".repeat(32);
+          const mediaUrl = await fixture.state.writeText("media/socket-proof.txt", attachment);
+          const held =
+            outcome === "revoked during preparation"
+              ? fixture.network.hold("upload-url")
+              : undefined;
+          if (outcome === "lost completion response") {
+            fixture.network.loseFirstCompletionResponse();
+          }
+          const tool = turn.createHostTool();
+          const pending = fixture.track(
+            turn.runWithHostScope(() =>
+              tool.execute("socket-upload", { text: "socket attachment", mediaUrl }),
+            ),
+          );
+          let successor = fixture.readRow();
+          if (held) {
+            await held.wait();
+            expect(fixture.network.counts).toMatchObject({
+              "upload-url": 1,
+              upload: 0,
+              complete: 0,
+            });
+            expect(turn.completion()).toBe("pending");
+            successor = turn.replaceWriter();
+            held.release.resolve();
+          }
+          const result = await pending;
+          await fixture.waitForSettled();
+          expect(fixture.pendingToolExecutions()).toBe(0);
+          const requests = fixture.network.received;
+          expect(requests.map((request) => request.stage)).toEqual(
+            held ? ["upload-url"] : ["upload-url", "upload", "complete"],
+          );
+          const allocation = requests[0]!;
+          expect(allocation.method).toBe("POST");
+          expect(allocation.pathname).toBe("/api/files.getUploadURLExternal");
+          expect(allocation.authorization).toMatch(/^Bearer xoxb-test-/);
+          const allocationBody = new URLSearchParams(allocation.body.toString("utf8"));
+          expect(allocationBody.get("filename")).toBe("socket-proof.txt");
+          expect(allocationBody.get("length")).toBe(String(Buffer.byteLength(attachment)));
+          if (held) {
+            expect(result).toMatchObject({ details: { status: "failed" } });
+            expect(turn.completion()).toBe("ambiguous");
+            expect(fixture.readRow()).toEqual(successor);
+            expect(fixture.network.counts).toMatchObject({
+              "upload-url": 1,
+              upload: 0,
+              complete: 0,
+              post: 0,
+            });
+            return;
+          }
+          const upload = requests[1]!;
+          expect(upload.method).toBe("POST");
+          expect(upload.pathname).toBe("/upload/current-reply");
+          expect(upload.authorization).toBeUndefined();
+          expect(upload.body).toEqual(Buffer.from(attachment));
+          const completion = requests[2]!;
+          expect(completion.method).toBe("POST");
+          expect(completion.authorization).toBe(allocation.authorization);
+          const completionBody = new URLSearchParams(completion.body.toString("utf8"));
+          expect(completionBody.get("channel_id")).toBe("C12345678");
+          expect(completionBody.get("initial_comment")).toBe("socket attachment");
+          expect(JSON.parse(completionBody.get("files") ?? "null")).toEqual([
+            { id: "F12345678", title: "socket-proof.txt" },
+          ]);
+          expect(fixture.network.counts).toMatchObject({
+            "upload-url": 1,
+            upload: 1,
+            complete: 1,
+            post: 0,
+          });
+          if (outcome === "allowed") {
+            expect(result).toMatchObject({ details: { status: "sent" }, terminate: true });
+            expect(turn.completion()).toBe("confirmed");
+          } else {
+            expect(result).toMatchObject({ details: { status: "failed" } });
+            expect(turn.completion()).toBe("ambiguous");
+            const reconstructed = turn.createHostTool();
+            await expect(
+              fixture.track(
+                turn.runWithHostScope(() =>
+                  reconstructed.execute("socket-retry", { text: "must not replay", mediaUrl }),
+                ),
+              ),
+            ).rejects.toThrow("already been consumed");
+            await fixture.waitForSettled();
+            expect(fixture.network.received).toHaveLength(3);
+            expect(fixture.network.counts.complete).toBe(1);
+          }
+        },
+        { transport: "socket" },
+      );
     },
   );
 });
