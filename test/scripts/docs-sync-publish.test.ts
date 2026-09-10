@@ -424,20 +424,26 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
     expect(simplifiedChinese).toBeDefined();
     expect(german).toBeDefined();
     expect(english!.tabs.slice(-4).map((tab) => tab.tab)).toEqual([
-      "Gateway & Ops",
       "Reference",
-      "Release & CI",
+      "Releases",
+      "Contributing",
       "Help",
     ]);
 
-    const releaseTab = english!.tabs.find((tab) => tab.tab === "Release & CI");
-    const releaseNotes = collectPages(releaseTab?.groups?.[0]);
-    expect(releaseTab?.groups?.map((group) => group.group)).toEqual([
-      "Release notes",
-      "Maturity",
-      "Release process",
-      "Testing and CI",
-    ]);
+    // Find the release-notes group by its own name rather than by the tab that happens to
+    // hold it. Tabs get reorganised — "Release & CI" was split into "Releases" and
+    // "Contributing" — and pinning the tab name made this assertion fail on main rather than
+    // on the PR that moved the group.
+    const releaseNotesGroup = english!.tabs
+      .flatMap((tab) => tab.groups ?? [])
+      .find((group) => group.group === "Release notes");
+    expect(releaseNotesGroup).toBeDefined();
+    const releaseNotes = collectPages(releaseNotesGroup);
+    const groupsByTab = new Map(
+      english!.tabs.map((tab) => [tab.tab, tab.groups?.map((group) => group.group)]),
+    );
+    expect(groupsByTab.get("Releases")).toEqual(["Release notes", "Release process"]);
+    expect(groupsByTab.get("Contributing")).toEqual(["Maturity", "Testing and CI"]);
     // Releases may have a version page or subpages, so read the published routes from the
     // navigation rather than pinning them here; only the index-first ordering and the version
     // route shape are invariant. Pinning the list makes this assertion fail on release PRs whose
@@ -502,8 +508,36 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
       "concepts/qa-e2e-automation/extending-the-stack",
       "concepts/qa-e2e-automation/qa-reporting",
       "concepts/personal-agent-benchmark-pack",
+      "help/testing",
+      "help/testing/suites",
+      "help/testing/live-workflows",
+      "help/testing/docker",
+      "help/testing/qa-runners",
+      "help/testing/contracts",
+      "help/testing/writing-tests",
+      "help/testing-updates-plugins",
+      "help/testing-live",
+      "help/testing-live/quick-smokes",
+      "help/testing-live/model-smoke",
+      "help/testing-live/cli-backends",
+      "help/testing-live/acp-and-codex",
+      "help/testing-live/long-context-and-matrix",
+      "help/testing-live/media-providers",
+      "channels/qa-channel",
+      "concepts/mantis",
+      "concepts/mantis-slack-desktop-runbook",
     ];
-    expect(collectPages(releaseTab)).toEqual(releaseRoutes);
+    // releaseRoutes is ordered by group, not by tab, so collect the groups by name. The four
+    // groups now live across the "Releases" and "Contributing" tabs; the route list is the
+    // invariant, the tab that carries each group is not.
+    const groupsByName = new Map(
+      english!.tabs.flatMap((tab) => tab.groups ?? []).map((group) => [group.group, group]),
+    );
+    const releaseGroupOrder = ["Release notes", "Maturity", "Release process", "Testing and CI"];
+    expect(releaseGroupOrder.every((name) => groupsByName.has(name))).toBe(true);
+    expect(releaseGroupOrder.flatMap((name) => collectPages(groupsByName.get(name)))).toEqual(
+      releaseRoutes,
+    );
     expect(new Set(releaseRoutes)).toHaveLength(releaseRoutes.length);
 
     const englishWithoutClawHub = {
@@ -516,22 +550,32 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
     expect(collectPages(simplifiedChinese).toSorted()).toEqual(expectedZhPages);
     expect(simplifiedChinese!.tabs[0]?.tab).toBe("快速开始");
     expect(simplifiedChinese!.tabs[0]?.groups?.[0]?.group).toBe("首页");
-    const simplifiedChineseReleaseTab = simplifiedChinese!.tabs.find(
-      (tab) => tab.tab === "发布与 CI",
+    // Locate the localized release tab by the group it carries, not by its label. Tab labels in
+    // docs/.i18n/zh-Hans-navigation.json are translated by hand and lag an English rename, so
+    // pinning the label turns an untranslated tab into a red build on main. What must hold is
+    // the mirror property: the localized nav carries the same routes as English, prefixed.
+    const simplifiedChineseReleaseTab = simplifiedChinese!.tabs.find((tab) =>
+      tab.groups?.some((group) => group.group === "发布说明"),
     );
-    expect(simplifiedChineseReleaseTab?.groups?.map((group) => group.group)).toEqual([
-      "发布说明",
-      "成熟度",
-      "发布流程",
-      "测试与 CI",
-    ]);
+    expect(simplifiedChineseReleaseTab).toBeDefined();
     expect(collectPages(simplifiedChineseReleaseTab?.groups?.[0])).toEqual(
       releaseNotes.map((page) => `zh-CN/${page}`),
     );
-    expect(collectPages(simplifiedChineseReleaseTab)).toEqual(
-      releaseRoutes.map((page) => `zh-CN/${page}`),
+    // The four groups still carry their translated names; only the tab that holds them moved.
+    const simplifiedChineseGroups = new Map(
+      simplifiedChinese!.tabs
+        .flatMap((tab) => tab.groups ?? [])
+        .map((group) => [group.group, group]),
     );
-    expect(new Set(collectPages(simplifiedChineseReleaseTab))).toHaveLength(releaseRoutes.length);
+    const simplifiedChineseGroupOrder = ["发布说明", "成熟度", "发布流程", "测试与 CI"];
+    expect(
+      simplifiedChineseGroupOrder.filter((name) => !simplifiedChineseGroups.has(name)),
+    ).toEqual([]);
+    const simplifiedChineseReleaseRoutes = simplifiedChineseGroupOrder.flatMap((name) =>
+      collectPages(simplifiedChineseGroups.get(name)),
+    );
+    expect(simplifiedChineseReleaseRoutes).toEqual(releaseRoutes.map((page) => `zh-CN/${page}`));
+    expect(new Set(simplifiedChineseReleaseRoutes)).toHaveLength(releaseRoutes.length);
 
     expect(collectPages(german)).toHaveLength(collectPages(englishWithoutClawHub).length);
     expect(german!.tabs[0]?.tab).toBe("Loslegen");
@@ -542,11 +586,20 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
     )) {
       const localeDir = collectPages(locale)[0]?.split("/")[0];
       const localizedRoutes = releaseRoutes.map((page) => `${localeDir}/${page}`);
-      const localizedReleaseTab = locale.tabs.find((tab) =>
-        collectPages(tab).includes(`${localeDir}/releases/index`),
-      );
-      expect(collectPages(localizedReleaseTab)).toEqual(localizedRoutes);
-      expect(new Set(collectPages(localizedReleaseTab))).toHaveLength(localizedRoutes.length);
+      // The four release groups now span two tabs ("Releases" and "Contributing"), so compare
+      // the route set rather than one tab's ordered pages. Ordering within each group is still
+      // pinned by the English assertions above.
+      const localizedReleasePages = locale.tabs
+        .filter((tab) => {
+          const pages = collectPages(tab);
+          return (
+            pages.includes(`${localeDir}/releases/index`) ||
+            pages.includes(`${localeDir}/maturity/scorecard`)
+          );
+        })
+        .flatMap((tab) => collectPages(tab));
+      expect(localizedReleasePages.toSorted()).toEqual(localizedRoutes.toSorted());
+      expect(new Set(localizedReleasePages)).toHaveLength(localizedRoutes.length);
     }
   });
 });
