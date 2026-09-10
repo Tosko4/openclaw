@@ -231,20 +231,24 @@ export default function createApplicationPlacementStartupRuntime(
             ownsRecovery(current) &&
             current.retainsConnection()
           ) {
-            const retained = retainSessionPlacementSendError(current.work.recovery, result.error);
+            let retained: SessionPlacementRecovery = retainSessionPlacementSendError(
+              current.work.recovery,
+              result.error,
+            );
             if (current.persistRecovery && !writeSessionPlacementRecoveryIfAvailable(retained)) {
-              pauseEntry(
-                current,
+              retained = pauseSessionPlacementRecovery(
                 retained,
                 retained.phase === "paused" ? retained.error : result.error,
-              );
-            } else {
-              current.work =
-                retained.phase === "paused"
-                  ? { kind: "paused", recovery: retained }
-                  : { kind: "checking", recovery: retained };
-              publish();
+                current.persistRecovery,
+              ).recovery;
             }
+            // A paused recovery may still have a history check in flight. Retaining
+            // diagnostics must not reopen admission to another check, even if saving fails.
+            current.work =
+              current.work.kind !== "checking" && retained.phase === "paused"
+                ? { kind: "paused", recovery: retained }
+                : { kind: "checking", recovery: retained };
+            publish();
           }
         }
         if (!ownsRecovery(entry) || !entry.retainsConnection()) {
