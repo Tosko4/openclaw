@@ -32,33 +32,32 @@ struct ConnectCommandTests {
         let whitespace: Credentials = (" \t ", "\n ")
         let cases: [(
             name: String,
-            args: [String],
+            opts: ConnectOptions,
             configMode: String?,
             local: Credentials,
             remote: Credentials,
             expected: Credentials)] = [
-            ("default local", [], nil, local, remote, local),
-            ("config remote", [], "remote", local, remote, remote),
+            ("default local", .init(), nil, local, remote, local),
+            ("config remote", .init(), "remote", local, remote, remote),
             (
                 "option local and empty explicit values",
-                ["--mode", "local", "--token", "", "--password", ""],
+                .init(token: "", password: "", mode: "local"),
                 "remote", local, remote, local),
-            ("uppercase option remote", ["--mode", "REMOTE"], "local", local, remote, remote),
-            ("padded option is local", ["--mode", " remote "], "remote", local, remote, local),
+            ("uppercase option remote", .init(mode: "REMOTE"), "local", local, remote, remote),
+            ("padded option is local", .init(mode: " remote "), "remote", local, remote, local),
             (
-                "explicit token only", ["--token", " explicit-token "],
+                "explicit token only", .init(token: " explicit-token "),
                 nil, local, remote, (" explicit-token ", local.password)),
             (
-                "explicit whitespace password only", ["--password", " \t "],
+                "explicit whitespace password only", .init(password: " \t "),
                 "remote", local, remote, (remote.token, " \t ")),
-            ("local nil and empty", [], nil, (nil, ""), remote, (nil, "")),
-            ("remote empty and nil", [], "remote", local, ("", nil), ("", nil)),
-            ("local whitespace", [], nil, whitespace, remote, whitespace),
-            ("remote whitespace", [], "remote", local, whitespace, whitespace),
+            ("local nil and empty", .init(), nil, (nil, ""), remote, (nil, "")),
+            ("remote empty and nil", .init(), "remote", local, ("", nil), ("", nil)),
+            ("local whitespace", .init(), nil, whitespace, remote, whitespace),
+            ("remote whitespace", .init(), "remote", local, whitespace, whitespace),
             (
-                "explicit URL isolates empty token", [
-                    "--url", "wss://gateway.example.test", "--token", "", "--password", " \t ",
-                ],
+                "explicit URL isolates empty token",
+                .init(url: "wss://gateway.example.test", token: "", password: " \t "),
                 "remote", local, remote, (nil, " \t ")),
         ]
 
@@ -72,7 +71,7 @@ struct ConnectCommandTests {
             config.remotePassword = testCase.remote.password
 
             let endpoint = try resolveGatewayEndpoint(
-                opts: ConnectOptions.parse(testCase.args),
+                opts: testCase.opts,
                 config: config)
 
             #expect(endpoint.token == testCase.expected.token, "\(testCase.name)")
