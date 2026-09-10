@@ -3227,7 +3227,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         },
       ]);
       type Group = (typeof groups)[number];
-      const compilerFixture = "test/scripts/write-unified-entry-dts.test.ts";
       const isRepartitionableTooling = (group: Group) =>
         runnerBackend === "github" &&
         /^core-tooling-\d+-hosted-\d+$/u.test(group.shard_name) &&
@@ -3235,47 +3234,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         group.includePatterns !== undefined &&
         group.includePatterns.length > 0 &&
         !group.requiresDist &&
-        group.pretestBuildMode === undefined;
+        group.pretestBuildMode === undefined &&
+        [BUNDLED_NODE_TEST_RUNNER, DEFAULT_NODE_TEST_RUNNER, EXTRA_LARGE_NODE_TEST_RUNNER].includes(
+          group.runner,
+        );
       const toolingParent = (group: Group) => group.shard_name.replace(/-hosted-\d+$/u, "");
-      const expectToolingCapacity = (plan: typeof before) => {
-        const compilerGroups = plan
-          .flatMap((job) => job.groups)
-          .filter((group) => group.includePatterns?.includes(compilerFixture));
-        expect(compilerGroups).toHaveLength(1);
-        expect(
-          isRepartitionableTooling(expectDefined(compilerGroups[0], "compiler fixture group")),
-        ).toBe(true);
-        const capacities = new Map([
-          [BUNDLED_NODE_TEST_RUNNER, 4],
-          [DEFAULT_NODE_TEST_RUNNER, 8],
-          [EXTRA_LARGE_NODE_TEST_RUNNER, 32],
-        ]);
-        for (const job of plan) {
-          const tooling = job.groups.filter(isRepartitionableTooling);
-          if (tooling.length === 0) {
-            continue;
-          }
-          for (const group of tooling) {
-            const files = expectDefined(group.includePatterns, "tooling capacity membership");
-            expect(group.runner, "tooling group runner must match compiler membership").toBe(
-              files.includes(compilerFixture) ? DEFAULT_NODE_TEST_RUNNER : BUNDLED_NODE_TEST_RUNNER,
-            );
-          }
-          expect(job.planConcurrency, "hosted tooling jobs remain serial").toBe(1);
-          const jobCapacity = expectDefined(
-            capacities.get(job.runner),
-            "known emitted job runner capacity",
-          );
-          for (const group of job.groups) {
-            expect(
-              jobCapacity,
-              "job runner must cover admitted group capacity",
-            ).toBeGreaterThanOrEqual(
-              expectDefined(capacities.get(group.runner), "known admitted group runner capacity"),
-            );
-          }
-        }
-      };
       const timingFamilies = (plan: typeof before) => {
         const families = new Map<string, Array<{ group: Group; part: number }>>();
         for (const group of plan.flatMap((shard) => shard.groups)) {
@@ -3346,31 +3309,35 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             .filter((group) => !isRepartitionableTooling(group))
             .map(({ runner: _runner, ...group }) => group)
             .toSorted((a, b) => a.shard_name.localeCompare(b.shard_name)),
-          // Runner capacity is checked separately from each file's stable execution policy.
+          // Allocation may change, but every file must retain its complete execution policy.
           tooling: nonPlugin
             .filter(isRepartitionableTooling)
-            .flatMap((group) =>
-              expectDefined(group.includePatterns, "repartitionable tooling membership").map(
-                (file) => ({
-                  parent: toolingParent(group),
-                  file,
-                  configs: group.configs,
-                  env: group.env,
-                  pretestBuildMode: group.pretestBuildMode,
-                  requiresDist: group.requiresDist,
-                  exclusive: isExclusiveCompactShardName(group.shard_name),
-                }),
-              ),
-            )
+            .flatMap((group) => {
+              const files = expectDefined(
+                group.includePatterns,
+                "repartitionable tooling membership",
+              );
+              // A split can move tests out of the compiler's larger runner group.
+              expect(group.runner).toBe(
+                files.includes("test/scripts/write-unified-entry-dts.test.ts")
+                  ? DEFAULT_NODE_TEST_RUNNER
+                  : BUNDLED_NODE_TEST_RUNNER,
+              );
+              return files.map((file) => ({
+                parent: toolingParent(group),
+                file,
+                configs: group.configs,
+                env: group.env,
+                pretestBuildMode: group.pretestBuildMode,
+                requiresDist: group.requiresDist,
+                exclusive: isExclusiveCompactShardName(group.shard_name),
+              }));
+            })
             .toSorted((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
         };
       };
       expectTimingFamilies(before);
       expectTimingFamilies(after);
-      if (runnerBackend === "github") {
-        expectToolingCapacity(before);
-        expectToolingCapacity(after);
-      }
       expect(policies(after)).toEqual(policies(before));
       if (runnerBackend === "github") {
         const regenerateTimingKeys = (plan: typeof before) => {
@@ -3381,7 +3348,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             });
           }
         };
-        for (const mutation of ["missing", "duplicated", "env"] as const) {
+        for (const mutation of ["missing", "duplicated", "env", "runner"] as const) {
           const mutated = structuredClone(after);
           const tooling = mutated.flatMap((shard) => shard.groups).filter(isRepartitionableTooling);
           const target = expectDefined(
@@ -3412,6 +3379,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             )) {
               group.env = { ...group.env, OPENCLAW_VITEST_MAX_WORKERS: "3" };
             }
+          } else {
+            target.runner =
+              target.runner === BUNDLED_NODE_TEST_RUNNER
+                ? DEFAULT_NODE_TEST_RUNNER
+                : BUNDLED_NODE_TEST_RUNNER;
           }
           regenerateTimingKeys(mutated);
           expectTimingFamilies(mutated);
@@ -3419,41 +3391,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             () => expect(policies(mutated)).toEqual(policies(before)),
             `${mutation} must fail policy validation even with valid timing keys`,
           ).toThrow();
-        }
-        for (const mutation of ["ordinary-group", "compiler-group", "compiler-job"] as const) {
-          const mutated = structuredClone(after);
-          const placements = mutated.flatMap((job) => job.groups.map((group) => ({ job, group })));
-          const { job: targetJob, group: targetGroup } = expectDefined(
-            placements.find(
-              ({ group }) =>
-                isRepartitionableTooling(group) &&
-                group.includePatterns?.includes(compilerFixture) ===
-                  (mutation !== "ordinary-group"),
-            ),
-            "runner capacity mutation placement",
-          );
-          expect(targetGroup.runner).toBe(
-            mutation === "ordinary-group" ? BUNDLED_NODE_TEST_RUNNER : DEFAULT_NODE_TEST_RUNNER,
-          );
-          if (mutation === "ordinary-group") {
-            targetGroup.runner = DEFAULT_NODE_TEST_RUNNER;
-          } else {
-            expect([DEFAULT_NODE_TEST_RUNNER, EXTRA_LARGE_NODE_TEST_RUNNER]).toContain(
-              targetJob.runner,
-            );
-            if (mutation === "compiler-group") {
-              targetGroup.runner = BUNDLED_NODE_TEST_RUNNER;
-            } else {
-              targetJob.runner = BUNDLED_NODE_TEST_RUNNER;
-            }
-          }
-          expectTimingFamilies(mutated);
-          expect(policies(mutated)).toEqual(policies(after));
-          expect(() => expectToolingCapacity(mutated), mutation).toThrow(
-            mutation === "compiler-job"
-              ? "job runner must cover admitted group capacity"
-              : "tooling group runner must match compiler membership",
-          );
         }
         for (const identity of ["parent", "part"] as const) {
           const forged = structuredClone(after);

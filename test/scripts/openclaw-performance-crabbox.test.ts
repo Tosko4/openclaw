@@ -2,7 +2,6 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
-  copyFileSync,
   existsSync,
   linkSync,
   mkdirSync,
@@ -15,30 +14,17 @@ import { join, resolve } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { buildSync } from "esbuild";
 import { Compile } from "typebox/schema";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = resolve("scripts/openclaw-performance-crabbox.sh");
 const CONFIG = ".github/crabbox/openclaw-performance-untrusted.yaml";
 const SCHEMA = ".github/crabbox/openclaw-performance-evidence.schema.json";
-const WORKFLOW = ".github/workflows/openclaw-performance.yml";
-const PROFILE_FILTER = '.aws.instanceProfile == ""';
-const INSPECT_FILTER =
-  '.id == $id and .provider == "aws" and .network == "public" and .tailscale == null and .providerMetadata.instanceProfileAttached == false';
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function sha256(value: Buffer): string {
   return createHash("sha256").update(value).digest("hex");
-}
-
-function jqAccepts(filter: string, value: unknown): boolean {
-  return (
-    spawnSync("jq", ["-e", "--arg", "id", "cbx_0123456789ab", filter], {
-      encoding: "utf8",
-      input: JSON.stringify(value),
-    }).status === 0
-  );
 }
 
 function fixture() {
@@ -133,158 +119,6 @@ function verify(
     ],
     { cwd: files.root, encoding: "utf8" },
   );
-}
-
-function externalRun(options: { status?: number; lane?: string; fault?: string }) {
-  const files = fixture();
-  const { root } = files;
-  const workflow = parse(readFileSync(WORKFLOW, "utf8"));
-  const step = workflow.jobs.external_performance.steps.find(
-    (entry: { name: string }) => entry.name === "Attest and run candidate in disposable Crabbox",
-  );
-  const lane = options.lane ?? "mock-provider";
-  const status = options.status ?? 17;
-  const output = join(root, "output");
-  const evidence = JSON.parse(readFileSync(files.evidence, "utf8"));
-  evidence.command.exitCode = status;
-  evidence.command.argv[4] = "failOnRegression=true";
-  writeFileSync(files.evidence, JSON.stringify(evidence));
-  mkdirSync(join(root, "scripts"));
-  copyFileSync(SCRIPT, join(root, "scripts/openclaw-performance-crabbox.sh"));
-  chmodSync(join(root, "scripts/openclaw-performance-crabbox.sh"), 0o755);
-  const client = join(root, "crabbox.mjs");
-  buildSync({
-    stdin: {
-      resolveDir: process.cwd(),
-      contents: `
-import fs from "node:fs";
-import assert from "node:assert/strict";
-import { Compile } from "typebox/schema";
-const args = process.argv.slice(2), root = process.env.FIXTURE_ROOT;
-const fault = process.env.FAULT, status = Number(process.env.SUT_EXIT);
-const lane = process.env.LANE, id = args[args.indexOf("--id") + 1];
-fs.appendFileSync(root + "/calls", JSON.stringify(args) + "\\n");
-if (args[0] === "config") console.log(JSON.stringify({aws:{instanceProfile:""}}));
-else if (args[0] === "warmup") {}
-else if (args[0] === "inspect") console.log(JSON.stringify({
-  id, provider:"aws", network:"public", tailscale:null,
-  providerMetadata:{instanceProfileAttached:false}
-}));
-else if (args[0] === "stop") process.exit(fault === "stop" ? 5 : 0);
-else if (args[0] === "run") {
-  const collection = !args.includes("--script");
-  if (collection) {
-    assert.deepEqual(args.slice(args.indexOf("--") + 1), ["/usr/bin/true"]);
-    for (const flag of ["--no-sync", "--no-hydrate", "--timing-json"]) assert(args.includes(flag));
-    assert.equal(args[args.indexOf("--stop-after") + 1], "never");
-    assert.equal(args[args.indexOf("--allow-env") + 1], "CI");
-    assert.equal(fs.existsSync(root + "/collected"), false);
-    fs.writeFileSync(root + "/collected", "once");
-  }
-  const evidence = JSON.parse(fs.readFileSync(root + "/remote-evidence.json", "utf8"));
-  let code = collection ? (fault === "collection" ? 9 : 0) : status;
-  if (!collection && fault !== "missing-receipt") {
-    // The real collector's final record supersedes candidate stdout.
-    console.log("performance-result " + JSON.stringify(
-      fault === "incomplete" || lane === "cleanup-probe" ? null : {
-        exitCode:status, exportExitCode:0, startedAt:evidence.command.startedAt,
-        finishedAt:evidence.command.finishedAt, noHydration:fault !== "hydration", runId:"run_workload",
-        workspace: "/work/crabbox/" + id + "/openclaw"
-      }));
-  }
-  if (code === 0 && lane !== "cleanup-probe") {
-    if (fault === "missing") code = 7;
-    else {
-      if (fault === "schema") delete evidence.isolation.noSudo;
-      if (fault === "identity") evidence.openclawSha = "d".repeat(40);
-      if (fault === "timing") evidence.command.finishedAt = "2026-08-21T00:02:00Z";
-      if (fault === "hash") evidence.artifacts[0].sha256 = "0".repeat(64);
-      const schema = JSON.parse(fs.readFileSync(process.env.SCHEMA, "utf8"));
-      if (!Compile(schema).Check(evidence)) code = 7;
-      else {
-        for (let i = 0; i < args.length; i++) if (args[i] === "--download") {
-          const [remote, destination] = args[++i].split("=");
-          if (remote.endsWith("/remote-evidence.json")) fs.writeFileSync(destination, JSON.stringify(evidence));
-          else fs.copyFileSync(root + "/payload.tar.gz", destination);
-        }
-      }
-    }
-  }
-  console.log("workspace owner released");
-  for (const value of [null,true,[],1,"message",{}]) console.log(JSON.stringify(value));
-  if (fault === "missing-timing") process.exit(code);
-  console.log(JSON.stringify({
-    provider:"aws", leaseId: fault === "lease" ? "cbx_ffffffffffff" : id,
-    runId: collection && fault !== "run-id" ? "run_collection" : "run_workload",
-    workdir: "/work/crabbox/" + id + (collection && fault === "workspace" ? "/other" : "/openclaw"),
-    repoPath: root, syncSkipped:collection, commandMs:collection ? 1 : 60000,
-    exitCode:code, errorKind: fault === "termination" ? "provider-error" : code ? "command-exit" : "",
-    runStatus:code ? "failed" : "succeeded"
-  }));
-  process.exit(code);
-} else process.exit(64);
-`,
-    },
-    bundle: true,
-    platform: "node",
-    format: "esm",
-    outfile: client,
-  });
-  writeFileSync(join(root, "crabbox"), `#!/bin/sh\nexec "${process.execPath}" "${client}" "$@"\n`, {
-    mode: 0o755,
-  });
-  const body = (step.run as string)
-    .replaceAll("${{ matrix.lane }}", lane)
-    .replaceAll("${{ matrix.repeat }}", "1")
-    .replaceAll("${{ matrix.include_filters }}", "scenario:fresh-install")
-    .replaceAll("${{ matrix.expected_release_entries }}", "-")
-    .replaceAll("${{ inputs.fail_on_regression || 'false' }}", "true");
-  expect(body).not.toContain("${{");
-  const result = spawnSync("/bin/bash", ["-c", body], {
-    cwd: root,
-    env: {
-      PATH: process.env.PATH,
-      HOME: root,
-      CI: "1",
-      RUNNER_TEMP: root,
-      FIXTURE_ROOT: root,
-      FAULT: options.fault ?? "",
-      SUT_EXIT: String(status),
-      LANE: lane,
-      SCHEMA: resolve(SCHEMA),
-      GITHUB_OUTPUT: output,
-      GITHUB_RUN_ID: "123",
-      GITHUB_RUN_ATTEMPT: "1",
-      OPENCLAW_SHA: "a".repeat(40),
-      KOVA_SHA: "b".repeat(40),
-      WORKFLOW_SHA: "c".repeat(40),
-      TESTED_REF: "refs/pull/1/head",
-      PROFILE: "diagnostic",
-      REQUESTED_REPEAT: "1",
-      KOVA_CONFIG_CONTRACT: "canonical",
-      CRABBOX_VERSION: "0.46.0+8ba71f913bbe",
-      CRABBOX_COMMIT: "8ba71f913bbe57285ae29af45ef0d8ec6712477d",
-      KOVA_CANONICAL_CONFIG_REF: "b".repeat(40),
-      KOVA_LEGACY_LIST_CONFIG_REF: "b".repeat(40),
-      KOVA_ISOLATED_REF: "b".repeat(40),
-      PERFORMANCE_MODEL_ID: "fixture-model",
-    },
-    encoding: "utf8",
-    timeout: 20000,
-  });
-  return {
-    ...files,
-    result,
-    calls: readFileSync(join(root, "calls"), "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as string[]),
-    available:
-      existsSync(output) && readFileSync(output, "utf8").includes("artifacts_available=true"),
-    diagnostics: JSON.parse(
-      readFileSync(join(root, `.artifacts/performance-crabbox/diagnostics/${lane}.json`), "utf8"),
-    ),
-  };
 }
 
 function prepareSut(
@@ -504,72 +338,6 @@ describe("OpenClaw performance Crabbox boundary", () => {
     }
   });
 
-  it.each([
-    { name: "success", status: 0, available: true, runs: 1, exit: 0 },
-    { name: "gated failure", status: 17, available: true, runs: 2, exit: 17 },
-    { name: "missing reports", fault: "missing", available: false, runs: 2, exit: 7 },
-    { name: "malformed schema", fault: "schema", available: false, runs: 2, exit: 7 },
-    { name: "wrong hash", fault: "hash", available: false, runs: 2, exit: 1 },
-    { name: "wrong identity", fault: "identity", available: false, runs: 2, exit: 1 },
-    { name: "wrong original timing", fault: "timing", available: false, runs: 2, exit: 1 },
-    { name: "wrong lease", fault: "lease", available: false, runs: 1, exit: 1 },
-    { name: "missing timing", fault: "missing-timing", available: false, runs: 1, exit: 1 },
-    { name: "wrong workspace", fault: "workspace", available: false, runs: 2, exit: 1 },
-    { name: "reused run id", fault: "run-id", available: false, runs: 2, exit: 1 },
-    { name: "collection failure", fault: "collection", available: false, runs: 2, exit: 9 },
-    { name: "stop failure", fault: "stop", available: false, runs: 2, exit: 1 },
-    { name: "unsealed producer", fault: "incomplete", available: false, runs: 1, exit: 17 },
-    {
-      name: "missing collector receipt",
-      fault: "missing-receipt",
-      available: false,
-      runs: 1,
-      exit: 17,
-    },
-    { name: "hydrated workspace", fault: "hydration", available: false, runs: 1, exit: 17 },
-    { name: "uncertain termination", fault: "termination", available: false, runs: 1, exit: 1 },
-    {
-      name: "cleanup probe",
-      status: 42,
-      lane: "cleanup-probe",
-      available: false,
-      runs: 1,
-      exit: 0,
-    },
-    {
-      name: "wrong cleanup status",
-      status: 7,
-      lane: "cleanup-probe",
-      available: false,
-      runs: 1,
-      exit: 1,
-    },
-  ])("runs the real workflow with isolated collection: $name", (entry) => {
-    const run = externalRun(entry);
-    expect(run.result.status, run.result.stderr + run.result.stdout).toBe(entry.exit);
-    expect(run.available).toBe(entry.available);
-    expect(run.calls.filter((args) => args[0] === "run")).toHaveLength(entry.runs);
-    expect(run.calls.at(-1)?.[0]).toBe("stop");
-    expect(run.diagnostics.exitCode).toBe(entry.status ?? 17);
-    expect(run.diagnostics.explicitStopConfirmed).toBe(entry.fault !== "stop");
-    if (entry.fault !== "missing-timing") {
-      expect(run.diagnostics.workloadTiming).toMatchObject({
-        runId: "run_workload",
-        exitCode: entry.status ?? 17,
-        commandMs: 60000,
-      });
-    }
-    if (entry.runs === 2) {
-      expect(run.diagnostics.collection.timing.commandMs).toBe(1);
-      expect(run.diagnostics.workloadTiming.commandMs).toBe(60000);
-    }
-    if (entry.available) {
-      const exported = JSON.parse(readFileSync(run.output, "utf8"));
-      expect(exported.command.exitCode).toBe(entry.status);
-      expect(exported.command.finishedAt).toBe("2026-08-21T00:01:00Z");
-    }
-  });
-
   it("uses the locally installed pnpm instead of an ambient executable", () => {
     const root = tempDirs.make("performance-pnpm-path-");
     mkdirSync(join(root, "openclaw"));
@@ -685,12 +453,15 @@ collect_diagnostics "$SOURCE" "$DESTINATION" "$SUBTREE"
     { name: "build failure", buildExit: 29, expected: 29 },
     { name: "bundle failure after matrix 17", matrixExit: 17, bundleExit: 31, expected: 31 },
     { name: "candidate index cannot waive runner CLI", lane: "source", expected: 0 },
+    { name: "source setup failure", lane: "source", setupExit: 23, expected: 23 },
+    { name: "source build failure", lane: "source", buildExit: 29, expected: 29 },
+    { name: "source summary failure", lane: "source", summaryExit: 37, expected: 37 },
     { name: "custom diagnostic summary", admitted: false, expected: 0 },
     { name: "custom failed evidence summary", admitted: false, validationExit: 1, expected: 1 },
   ])("finalizes quiesced workloads with trusted phase policy: $name", (entry) => {
     const root = tempDirs.make("performance-failed-export-");
     const source = readFileSync(SCRIPT, "utf8");
-    const start = source.indexOf('  set +e\n  (\n    set -e\n    [[ "$lane" != cleanup-probe ]]');
+    const start = source.indexOf('  set +e\n  (\n    set -e\n    as_sut "$0" __prepare');
     const end = source.indexOf("\n}\n\nverify_payload()", start);
     expect(start).toBeGreaterThan(0);
     const result = spawnSync(
@@ -703,7 +474,12 @@ collect_diagnostics "$SOURCE" "$DESTINATION" "$SUBTREE"
 ${source.slice(0, source.lastIndexOf('\ncase "${1:-}" in'))}
 as_sut() {
   case "\${2:-}" in
-    __sut) return 0 ;;
+    __sut)
+      if [[ "$LANE" == source ]]; then
+        mkdir -p "$ROOT/openclaw/.artifacts/openclaw-performance/source/mock-provider"
+        printf 'candidate skip claim' > "$ROOT/openclaw/.artifacts/openclaw-performance/source/mock-provider/index.md"
+      fi
+      return 0 ;;
     __prepare) return "$SETUP_EXIT" ;;
     __build) return "$BUILD_EXIT" ;;
   esac
@@ -744,11 +520,16 @@ node() {
     esac
   elif [[ "$1" == "$ROOT/helpers/lib/kova-report-selector.mjs" ]]; then
     printf '%s\\n' "$ROOT/report.json"
-  elif [[ "$1" != "$ROOT/helpers/openclaw-performance-source-summary.mjs" ]]; then
+  elif [[ "$1" == "$ROOT/helpers/openclaw-performance-source-summary.mjs" ]]; then
+    return "$SUMMARY_EXIT"
+  else
     command node "$@"
   fi
 }
-collect_diagnostics() { :; }
+collect_diagnostics() {
+  [[ "$3" != .artifacts/openclaw-performance/source || -d "$1/$3" ]] ||
+    die "diagnostic subtree is missing"
+}
 quiesce_sut() { printf quiesced > "$ROOT/quiesced"; }
 write_payload() { printf '%s\\n' "\${19:-missing}" > "$ROOT/exported"; }
 finish() {
@@ -761,8 +542,7 @@ finish() {
   local control_workspace="$ROOT" tested_ref=fixture workflow_sha="$SHA"
   local run_id=123 run_attempt=1 crabbox_version=fixture
   local started_at=2026-09-07T00:00:00Z finished_at
-  mkdir -p "$ROOT/.artifacts/performance-crabbox/$lane" "$ROOT/openclaw/.artifacts/openclaw-performance/source/mock-provider"
-  printf 'candidate skip claim' > "$ROOT/openclaw/.artifacts/openclaw-performance/source/mock-provider/index.md"
+  mkdir -p "$ROOT/.artifacts/performance-crabbox/$lane"
 ${source.slice(start, end)}
 }
 finish
@@ -780,6 +560,7 @@ finish
           BUILD_EXIT: String(entry.buildExit ?? 0),
           MATRIX_EXIT: String(entry.matrixExit ?? 0),
           BUNDLE_EXIT: String(entry.bundleExit ?? 0),
+          SUMMARY_EXIT: String(entry.summaryExit ?? 0),
           GATED: String(entry.gated ?? false),
           ADAPTED: String(entry.adapted ?? false),
           ADMITTED: String(entry.admitted ?? true),
@@ -792,8 +573,22 @@ finish
     expect(existsSync(join(root, "quiesced"))).toBe(true);
     expect(existsSync(join(root, "exported"))).toBe(true);
     expect(readFileSync(join(root, "exported"), "utf8")).toBe(`${entry.expected}\n`);
+    expect(
+      JSON.parse(
+        readFileSync(
+          join(
+            root,
+            `.artifacts/performance-crabbox/${entry.lane ?? "mock-provider"}/workload-result.json`,
+          ),
+          "utf8",
+        ),
+      ),
+    ).toMatchObject({ exitCode: entry.expected, exportExitCode: 0 });
     if (entry.lane === "source") {
-      expect(readFileSync(join(root, "runner-cli"), "utf8")).toBe("runner-measurement");
+      expect(existsSync(join(root, "runner-cli"))).toBe(!entry.setupExit && !entry.buildExit);
+      if (!entry.setupExit && !entry.buildExit) {
+        expect(readFileSync(join(root, "runner-cli"), "utf8")).toBe("runner-measurement");
+      }
     } else if (entry.admitted === false) {
       const summary = readFileSync(
         join(root, ".artifacts/kova/summaries/mock-provider.md"),
@@ -806,86 +601,6 @@ finish
         `${entry.matrixExit ?? 0}\n`,
       );
     }
-  });
-
-  it("retains bounded metadata and separate command/cleanup failures without raw paths", () => {
-    const root = tempDirs.make("openclaw-performance-diagnostics-");
-    const log = join(root, "run.log");
-    const metadata = [
-      `performance-export phase=producer uid=0 gid=0 workspace=${"a".repeat(64)}`,
-      "performance-export path=.artifacts uid=0 gid=0 mode=700 size=4096 readable=false searchable=false",
-    ];
-    const kova = {
-      commandExit: 17,
-      evidenceExit: 0,
-      bundleExit: 0,
-      summaryExit: 0,
-      records: [
-        {
-          scenario: "probe",
-          state: "fresh",
-          status: "BLOCKED",
-          reason: "missing /home/fixture-user/private.json from 192.0.2.12",
-        },
-      ],
-    };
-    writeFileSync(
-      log,
-      [
-        "x".repeat(300000),
-        ...metadata,
-        `performance-kova ${JSON.stringify(kova)}`,
-        "performance-export path=/private/fixture/credential unavailable readable=false searchable=false",
-        "unstructured private fixture output",
-      ].join("\n"),
-    );
-    const workflow = parse(readFileSync(WORKFLOW, "utf8"));
-    const run = workflow.jobs.external_performance.steps.find(
-      (step: { name?: string }) => step.name === "Attest and run candidate in disposable Crabbox",
-    ).run as string;
-    const start = run.indexOf("write_diagnostics() {");
-    const end = run.indexOf("confirm_cleanup() {", start);
-    expect(start).toBeGreaterThan(0);
-    expect(end).toBeGreaterThan(start);
-    const result = spawnSync(
-      "bash",
-      ["-euo", "pipefail", "-c", `${run.slice(start, end)}\nwrite_diagnostics`],
-      {
-        cwd: root,
-        env: {
-          ...process.env,
-          timing_log: log,
-          lane: "source",
-          lease_id: "cbx_0123456789ab",
-          command_status: "7",
-          cleanup_confirmed: "false",
-          collection_status: "not-run",
-          downloads: root,
-        },
-        encoding: "utf8",
-      },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    expect(
-      JSON.parse(
-        readFileSync(join(root, ".artifacts/performance-crabbox/diagnostics/source.json"), "utf8"),
-      ),
-    ).toEqual({
-      provider: "aws",
-      leaseId: "cbx_0123456789ab",
-      lane: "source",
-      exitCode: 7,
-      explicitStopConfirmed: false,
-      workloadTiming: null,
-      collection: { exitCode: null, timing: null },
-      metadata,
-      kova: [
-        {
-          ...kova,
-          records: [{ ...kova.records[0], reason: "missing <path> from <address>" }],
-        },
-      ],
-    });
   });
 
   it.skipIf(process.getuid?.() === 0)(
@@ -1059,76 +774,11 @@ fi
     },
   );
 
-  it.each([
-    {
-      name: "advisory BLOCKED",
-      gated: false,
-      sutExit: 17,
-      records: true,
-      planFilter: "scenario:probe",
-      expected: 0,
-    },
-    {
-      name: "unadaptable gated BLOCKED",
-      gated: true,
-      sutExit: 17,
-      records: true,
-      planFilter: "scenario:probe",
-      expected: 17,
-    },
-    {
-      name: "missing requested records",
-      gated: false,
-      sutExit: 0,
-      records: false,
-      planFilter: "scenario:probe",
-      expected: 1,
-    },
-    {
-      name: "wrong plan filters",
-      gated: false,
-      sutExit: 0,
-      records: true,
-      planFilter: "scenario:wrong",
-      expected: 1,
-    },
-    {
-      name: "custom Kova diagnostics",
-      gated: false,
-      sutExit: 0,
-      records: true,
-      planFilter: "scenario:probe",
-      admitted: false,
-      expected: 0,
-    },
-    {
-      name: "custom Kova cannot approve a gate",
-      gated: true,
-      sutExit: 0,
-      records: true,
-      planFilter: "scenario:probe",
-      admitted: false,
-      expected: 1,
-    },
-    {
-      name: "custom Kova invalid evidence",
-      gated: false,
-      sutExit: 0,
-      records: false,
-      planFilter: "scenario:probe",
-      admitted: false,
-      expected: 1,
-    },
-  ])(
-    "enforces native Kova evidence and gate semantics: $name",
-    ({ gated, sutExit, records, planFilter, expected, admitted = true }) => {
-      const root = tempDirs.make("openclaw-performance-kova-contract-");
-      const helpers = join(root, "helpers");
-      const openclaw = join(root, "openclaw");
-      mkdirSync(join(openclaw, ".artifacts/kova/reports/mock-provider"), { recursive: true });
-      mkdirSync(join(openclaw, ".artifacts/kova/plans"), { recursive: true });
-      mkdirSync(join(openclaw, ".artifacts/kova/bundles/mock-provider"), { recursive: true });
-      mkdirSync(join(openclaw, ".artifacts/kova/summaries"), { recursive: true });
+  describe("native Kova evidence", () => {
+    const helperDirs = useAutoCleanupTempDirTracker(afterAll);
+    let helpers: string;
+    beforeAll(() => {
+      helpers = helperDirs.make("openclaw-performance-kova-helpers-");
       buildSync({
         entryPoints: [
           "scripts/lib/kova-report-selector.mjs",
@@ -1143,102 +793,178 @@ fi
         outdir: helpers,
         outExtension: { ".js": ".mjs" },
       });
-      const common = { profile: { id: "diagnostic" }, target: `local-build:${openclaw}` };
-      writeFileSync(
-        join(openclaw, ".artifacts/kova/plans/mock-provider.json"),
-        JSON.stringify({
-          ...common,
-          schemaVersion: "kova.matrix.plan.v1",
-          controls: { include: [planFilter], repeat: 1 },
-          entries: [{ scenario: { id: "probe" }, state: { id: "fresh" }, status: "SELECTED" }],
-        }),
-      );
-      writeFileSync(
-        join(openclaw, ".artifacts/kova/reports/mock-provider/report.json"),
-        JSON.stringify({
-          ...common,
-          schemaVersion: "kova.report.v1",
-          mode: "execution",
-          controls: { include: ["scenario:probe"], repeat: 1 },
-          auth: { requestedMode: "mock" },
-          summary: { statuses: { BLOCKED: 1 } },
-          records: records
-            ? [
-                {
-                  scenario: "probe",
-                  state: { id: "fresh" },
-                  status: "BLOCKED",
-                  repeat: { total: 1, index: 1 },
-                  auth: { mode: "mock" },
-                  failureReason: "fixture blocked prerequisite",
-                },
-              ]
-            : [],
-        }),
-      );
-      writeFileSync(
-        join(openclaw, ".artifacts/kova/bundles/mock-provider/bundle.json"),
-        '{"files":[]}',
-      );
-      const script = readFileSync(SCRIPT, "utf8");
-      const definitions = script.slice(0, script.lastIndexOf('\ncase "${1:-}" in'));
-      const result = spawnSync(
-        "bash",
-        [
-          "-c",
-          `${definitions}
-node() { printf '%s\\n' "$*" >> "$ROOT/helper-calls"; command node "$@"; }
-validate_kova mock-provider "$ROOT" diagnostic 1 scenario:probe - "$GATED" "$ROOT/helpers" mock-model true "$ROOT/openclaw" "$SUT_EXIT" "$ADMITTED"
-`,
-        ],
-        {
-          env: {
-            ...process.env,
-            ROOT: root,
-            HOME: root,
-            SUT_EXIT: String(sutExit),
-            GATED: String(gated),
-            ADMITTED: String(admitted),
-          },
-          encoding: "utf8",
-        },
-      );
-      expect(result.status, result.stderr).toBe(expected);
-      if (planFilter !== "scenario:probe") {
-        expect(result.stderr).toContain("did not preserve the requested include filters");
-      } else {
-        const calls = readFileSync(join(root, "helper-calls"), "utf8");
-        expect(calls).toContain("kova-workflow-evidence.mjs");
-        expect(calls.includes("kova-report-gate.mjs")).toBe(gated && records && sutExit !== 0);
-        if (gated && sutExit !== 0) {
-          expect(calls).toContain("--require-instrumented-performance-contract");
-        }
-        if (records) {
-          expect(result.stdout).toContain("performance-kova ");
-          expect(result.stdout).toContain("fixture blocked prerequisite");
-          expect(
-            readFileSync(join(openclaw, ".artifacts/kova/summaries/mock-provider.md"), "utf8"),
-          ).toContain("fixture blocked prerequisite");
-        } else {
-          expect(result.stderr).toContain("coverage");
-        }
-      }
-    },
-  );
-
-  it("rejects ambiguous external Kova reports with the native selector", () => {
-    const root = tempDirs.make("openclaw-performance-kova-selection-");
-    writeFileSync(join(root, "first.json"), "{}");
-    writeFileSync(join(root, "second.json"), "{}");
-    const script = readFileSync(SCRIPT, "utf8");
-    const selection = script.match(/^\s*report="\$\([^\n]+\)"$/m)?.[0];
-    expect(selection).toBeDefined();
-    const result = spawnSync("bash", ["-e", "-c", selection!], {
-      env: { ...process.env, report_dir: root, helpers: resolve("scripts") },
-      encoding: "utf8",
     });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("expected exactly one full Kova JSON report");
+
+    it.each([
+      {
+        name: "advisory BLOCKED",
+        gated: false,
+        sutExit: 17,
+        records: true,
+        planFilter: "scenario:probe",
+        expected: 0,
+      },
+      {
+        name: "unadaptable gated BLOCKED",
+        gated: true,
+        sutExit: 17,
+        records: true,
+        planFilter: "scenario:probe",
+        expected: 17,
+      },
+      {
+        name: "missing requested records",
+        gated: false,
+        sutExit: 0,
+        records: false,
+        planFilter: "scenario:probe",
+        expected: 1,
+      },
+      {
+        name: "wrong plan filters",
+        gated: false,
+        sutExit: 0,
+        records: true,
+        planFilter: "scenario:wrong",
+        expected: 1,
+      },
+      {
+        name: "ambiguous full reports",
+        gated: false,
+        sutExit: 0,
+        records: true,
+        planFilter: "scenario:probe",
+        ambiguous: true,
+        expected: 1,
+      },
+      {
+        name: "custom Kova diagnostics",
+        gated: false,
+        sutExit: 0,
+        records: true,
+        planFilter: "scenario:probe",
+        admitted: false,
+        expected: 0,
+      },
+      {
+        name: "custom Kova cannot approve a gate",
+        gated: true,
+        sutExit: 0,
+        records: true,
+        planFilter: "scenario:probe",
+        admitted: false,
+        expected: 1,
+      },
+      {
+        name: "custom Kova invalid evidence",
+        gated: false,
+        sutExit: 0,
+        records: false,
+        planFilter: "scenario:probe",
+        admitted: false,
+        expected: 1,
+      },
+    ])(
+      "enforces native Kova evidence and gate semantics: $name",
+      ({ gated, sutExit, records, planFilter, expected, admitted = true, ambiguous = false }) => {
+        const root = tempDirs.make("openclaw-performance-kova-contract-");
+        const openclaw = join(root, "openclaw");
+        mkdirSync(join(openclaw, ".artifacts/kova/reports/mock-provider"), { recursive: true });
+        mkdirSync(join(openclaw, ".artifacts/kova/plans"), { recursive: true });
+        mkdirSync(join(openclaw, ".artifacts/kova/bundles/mock-provider"), { recursive: true });
+        mkdirSync(join(openclaw, ".artifacts/kova/summaries"), { recursive: true });
+        const common = { profile: { id: "diagnostic" }, target: `local-build:${openclaw}` };
+        writeFileSync(
+          join(openclaw, ".artifacts/kova/plans/mock-provider.json"),
+          JSON.stringify({
+            ...common,
+            schemaVersion: "kova.matrix.plan.v1",
+            controls: { include: [planFilter], repeat: 1 },
+            entries: [{ scenario: { id: "probe" }, state: { id: "fresh" }, status: "SELECTED" }],
+          }),
+        );
+        writeFileSync(
+          join(openclaw, ".artifacts/kova/reports/mock-provider/report.json"),
+          JSON.stringify({
+            ...common,
+            schemaVersion: "kova.report.v1",
+            mode: "execution",
+            controls: { include: ["scenario:probe"], repeat: 1 },
+            auth: { requestedMode: "mock" },
+            summary: { statuses: { BLOCKED: 1 } },
+            records: records
+              ? [
+                  {
+                    scenario: "probe",
+                    state: { id: "fresh" },
+                    status: "BLOCKED",
+                    repeat: { total: 1, index: 1 },
+                    auth: { mode: "mock" },
+                    failureReason: "fixture blocked prerequisite",
+                  },
+                ]
+              : [],
+          }),
+        );
+        writeFileSync(
+          join(openclaw, ".artifacts/kova/bundles/mock-provider/bundle.json"),
+          '{"files":[]}',
+        );
+        if (ambiguous) {
+          writeFileSync(join(openclaw, ".artifacts/kova/reports/mock-provider/second.json"), "{}");
+        }
+        const script = readFileSync(SCRIPT, "utf8");
+        const definitions = script.slice(0, script.lastIndexOf('\ncase "${1:-}" in'));
+        const result = spawnSync(
+          "bash",
+          [
+            "-c",
+            `${definitions}
+node() { printf '%s\\n' "$*" >> "$ROOT/helper-calls"; command node "$@"; }
+validate_kova mock-provider "$ROOT" diagnostic 1 scenario:probe - "$GATED" "$HELPERS" mock-model true "$ROOT/openclaw" "$SUT_EXIT" "$ADMITTED"
+`,
+          ],
+          {
+            env: {
+              ...process.env,
+              ROOT: root,
+              HELPERS: helpers,
+              HOME: root,
+              SUT_EXIT: String(sutExit),
+              GATED: String(gated),
+              ADMITTED: String(admitted),
+            },
+            encoding: "utf8",
+          },
+        );
+        expect(result.status, result.stderr).toBe(expected);
+        if (ambiguous) {
+          expect(result.stderr).toContain("expected exactly one full Kova JSON report");
+          expect(readFileSync(join(root, "helper-calls"), "utf8")).not.toContain(
+            "kova-workflow-evidence.mjs",
+          );
+          expect(existsSync(join(openclaw, ".artifacts/kova/summaries/mock-provider.md"))).toBe(
+            false,
+          );
+        } else if (planFilter !== "scenario:probe") {
+          expect(result.stderr).toContain("did not preserve the requested include filters");
+        } else {
+          const calls = readFileSync(join(root, "helper-calls"), "utf8");
+          expect(calls).toContain("kova-workflow-evidence.mjs");
+          expect(calls.includes("kova-report-gate.mjs")).toBe(gated && records && sutExit !== 0);
+          if (gated && sutExit !== 0) {
+            expect(calls).toContain("--require-instrumented-performance-contract");
+          }
+          if (records) {
+            expect(
+              readFileSync(join(openclaw, ".artifacts/kova/summaries/mock-provider.md"), "utf8"),
+            ).toContain("fixture blocked prerequisite");
+          } else {
+            expect(result.stderr).toContain("coverage");
+          }
+        }
+      },
+    );
   });
 
   it("uses dedicated AWS on-demand leases with no caches or forwarded environment", () => {
@@ -1279,199 +1005,9 @@ validate_kova mock-provider "$ROOT" diagnostic 1 scenario:probe - "$GATED" "$ROO
     ]);
   });
 
-  it.each([
-    {
-      name: "exact-main cleanup with deep profiling requested",
-      external: false,
-      cleanup: true,
-      deep: true,
-      event: "workflow_dispatch",
-      enabled: ["cleanup-probe"],
-    },
-    {
-      name: "exact-main without cleanup",
-      external: false,
-      cleanup: false,
-      deep: true,
-      event: "workflow_dispatch",
-      enabled: [],
-    },
-    {
-      name: "external defaults",
-      external: true,
-      cleanup: false,
-      deep: false,
-      event: "workflow_dispatch",
-      enabled: ["mock-provider", "source"],
-    },
-    {
-      name: "external deep profiling and cleanup",
-      external: true,
-      cleanup: true,
-      deep: true,
-      event: "workflow_dispatch",
-      enabled: ["mock-provider", "mock-deep-profile", "source", "cleanup-probe"],
-    },
-    {
-      name: "external scheduled deep profiling",
-      external: true,
-      cleanup: false,
-      deep: false,
-      event: "schedule",
-      enabled: ["mock-provider", "mock-deep-profile", "source"],
-    },
-    {
-      name: "exact-main schedule without cleanup",
-      external: false,
-      cleanup: false,
-      deep: false,
-      event: "schedule",
-      enabled: [],
-    },
-  ])("enables only requested external lanes: $name", (entry) => {
-    const workflow = parse(readFileSync(WORKFLOW, "utf8"));
-    const step = workflow.jobs.external_performance.steps.find(
-      (candidate: { name: string }) => candidate.name === "Decide external lane",
-    );
-    const run: unknown = step?.run;
-    if (typeof run !== "string") {
-      throw new Error("External lane decision must be a shell step");
-    }
-    const root = tempDirs.make("openclaw-performance-lane-");
-    for (const lane of ["mock-provider", "mock-deep-profile", "source", "cleanup-probe"]) {
-      const output = join(root, lane);
-      const result = spawnSync(
-        "/bin/bash",
-        [
-          "-c",
-          run
-            .replaceAll("${{ matrix.lane }}", lane)
-            .replaceAll(
-              "${{ needs.resolve_target.outputs.external_required }}",
-              String(entry.external),
-            )
-            .replaceAll("${{ inputs.deep_profile || 'false' }}", String(entry.deep))
-            .replaceAll("${{ inputs.cleanup_probe || 'false' }}", String(entry.cleanup)),
-        ],
-        {
-          env: {
-            PATH: process.env.PATH,
-            GITHUB_EVENT_NAME: entry.event,
-            GITHUB_OUTPUT: output,
-          },
-          encoding: "utf8",
-        },
-      );
-      expect(result.status, `${lane}: ${result.stderr}`).toBe(0);
-      expect(readFileSync(output, "utf8"), lane).toBe(`run=${entry.enabled.includes(lane)}\n`);
-    }
-  });
-
-  it("keeps candidate bytes off Actions runners and stops every lease", () => {
-    const workflow = readFileSync(WORKFLOW, "utf8");
+  it("pins UID handoff and post-quiescence Git commands to trusted executables", () => {
     const script = readFileSync(SCRIPT, "utf8");
-    const parsed = parse(workflow) as {
-      jobs: Record<
-        string,
-        {
-          if?: string;
-          steps?: Array<{
-            name?: string;
-            env?: Record<string, string>;
-            run?: string;
-            uses?: string;
-            with?: Record<string, string>;
-          }>;
-        }
-      >;
-    };
-    const kova = expectDefined(parsed.jobs.kova, "kova job");
-    const sourcePerformance = expectDefined(
-      parsed.jobs.source_performance,
-      "source performance job",
-    );
-    const external = expectDefined(parsed.jobs.external_performance, "external performance job");
-    const checkout = external.steps?.find(
-      (step) => step.name === "Checkout trusted performance harness",
-    );
-    const checkouts = external.steps?.filter((step) => step.uses?.startsWith("actions/checkout@"));
-    const secretSteps = external.steps?.filter((step) =>
-      JSON.stringify(step.env ?? {}).includes("CRABBOX_COORDINATOR"),
-    );
-    const run = expectDefined(
-      external.steps?.find((step) => step.name === "Attest and run candidate in disposable Crabbox")
-        ?.run,
-      "external candidate run step",
-    );
-
-    expect(workflow).toContain("CRABBOX_COMMIT: 8ba71f913bbe57285ae29af45ef0d8ec6712477d");
-    expect(workflow).toContain("external_required:");
-    expect(workflow).toContain(
-      "--provider aws --target linux --arch amd64 --class beast --type c7a.24xlarge",
-    );
-    expect(workflow).toContain("--network public --tailscale=false");
-    expect(workflow).toContain("--tailscale-exit-node=");
-    expect(workflow).toContain("--tailscale-exit-node-allow-lan-access=false");
-    expect(workflow).not.toContain("--stop-after always");
-    expect(run).toContain("--stop-after never --timing-json --no-hydrate --allow-env CI");
-    expect(run).toContain("tailscale_requested=false tailscale_metadata=none");
-    expect(run).toContain("unset CRABBOX_AWS_INSTANCE_PROFILE");
-    expect(workflow).toContain("CRABBOX_ENV_ALLOW=CI");
-    expect(run).toContain(PROFILE_FILTER);
-    expect(run).toContain(INSPECT_FILTER);
-    expect(run.indexOf("config show --json")).toBeLessThan(run.indexOf('"$crabbox" warmup'));
-    expect(run.indexOf('"$crabbox" warmup')).toBeLessThan(run.indexOf('"$crabbox" inspect'));
-    expect(run.indexOf('"$crabbox" inspect')).toBeLessThan(
-      run.indexOf('run --provider aws --id "$lease_id"'),
-    );
-    expect(run.indexOf("args=(")).toBeLessThan(run.indexOf('"$crabbox" "${args[@]}"'));
-    expect(run.indexOf('"$crabbox" "${args[@]}"')).toBeLessThan(
-      run.lastIndexOf("\nconfirm_cleanup"),
-    );
-    expect(run.lastIndexOf("\nconfirm_cleanup")).toBeLessThan(
-      run.indexOf("scripts/openclaw-performance-crabbox.sh verify"),
-    );
-    expect(run).not.toContain('stop --provider aws "$lease_id" >/dev/null 2>&1 || true');
-    expect(run).toContain('[[ "$cleanup_attempted" == true ]] || confirm_cleanup || status=1');
-    expect(run).toContain('[[ "$cleanup_confirmed" == true ]] || status=1');
-    expect(run).toContain('[[ "$command_status" == 42 ]]');
-    expect(run).toContain('2>&1 | tee "$timing_log"');
-    expect(run).toContain("status=${PIPESTATUS[0]}");
-    expect(run).not.toContain('select(has("leaseStopped"))');
-    expect(run).toContain("--require-artifact-schema");
-    expect(workflow).toContain(
-      "CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}",
-    );
-    expect(workflow).toContain(
-      "CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}",
-    );
-    expect(workflow).toContain(
-      "if: ${{ always() && steps.execution.outputs.artifacts_available == 'true' && matrix.lane != 'cleanup-probe' }}",
-    );
-    expect(workflow).not.toContain("Checkout target metadata");
-    expect(workflow).not.toContain("TARGET_CHECKOUT_DIR");
-    expect(kova.if).toContain("needs.resolve_target.outputs.external_required != 'true'");
-    expect(sourcePerformance.if).toContain(
-      "needs.resolve_target.outputs.external_required != 'true'",
-    );
-    expect(external.if).toBe(
-      "${{ (github.event_name == 'schedule' || inputs.mode != 'vitest-pair') && (needs.resolve_target.outputs.external_required == 'true' || inputs.cleanup_probe) }}",
-    );
-    expect(checkout?.with?.ref).toBe("${{ github.workflow_sha }}");
-    expect(checkouts?.map((step) => step.with?.ref)).toEqual(["${{ github.workflow_sha }}"]);
-    expect(secretSteps?.map((step) => step.name)).toEqual([
-      "Attest and run candidate in disposable Crabbox",
-    ]);
     expect(script).toContain('runuser -u "$SUT_USER" -- /usr/bin/env -C "/home/${SUT_USER}" -i');
-    expect(script).toContain(
-      'control_workspace="$(dirname "$(dirname "$(dirname "$(realpath "$0")")")")"',
-    );
-    expect(script).toContain('"$root_script" "$0" "$root_script" "$control_workspace" remote "$@"');
-    expect(script).toContain('local control_workspace="$PWD"');
-    expect(script).toContain(
-      'local output="$control_workspace/.artifacts/performance-crabbox/$lane"',
-    );
-    expect(script).toContain('kova-report-selector.mjs" --report-dir "$report_dir"');
     expect(script).toContain("GIT_CONFIG_GLOBAL=/dev/null");
     expect(script).toContain('"$executor" /usr/bin/git -C "$destination" rev-parse HEAD');
     expect(script).toContain('as_sut /usr/bin/git -C "$root/openclaw" rev-parse HEAD');
@@ -1479,69 +1015,23 @@ validate_kova mock-provider "$ROOT" diagnostic 1 scenario:probe - "$GATED" "$ROO
     expect(script).toContain('pkill -KILL -u "$uid"');
   });
 
-  it("rejects resolved roles, Tailscale, and unattested instance-profile state", () => {
-    expect(jqAccepts(PROFILE_FILTER, { aws: { instanceProfile: "" } })).toBe(true);
-    expect(jqAccepts(PROFILE_FILTER, { aws: { instanceProfile: "unsafe-role" } })).toBe(false);
+  it.each([0, 5])(
+    "preserves explicit stop status %i, including an already-released lease",
+    (status) => {
+      const root = tempDirs.make("openclaw-performance-stop-");
+      const crabbox = join(root, "crabbox");
+      writeFileSync(
+        crabbox,
+        `#!/bin/sh\n[ "$1:$2:$3:$4:$5" = "stop:--provider:aws:--id:cbx_0123456789ab" ] || exit 64\nexit ${status}\n`,
+      );
+      chmodSync(crabbox, 0o755);
 
-    const safe = {
-      id: "cbx_0123456789ab",
-      provider: "aws",
-      network: "public",
-      tailscale: null,
-      providerMetadata: { instanceProfileAttached: false },
-    };
-    expect(jqAccepts(INSPECT_FILTER, safe)).toBe(true);
-    expect(jqAccepts(INSPECT_FILTER, { ...safe, tailscale: { state: "ok" } })).toBe(false);
-    expect(
-      jqAccepts(INSPECT_FILTER, {
-        ...safe,
-        providerMetadata: { instanceProfileAttached: true },
-      }),
-    ).toBe(false);
-    expect(jqAccepts(INSPECT_FILTER, { ...safe, providerMetadata: {} })).toBe(false);
-  });
-
-  it("derives artifact export from the Crabbox workspace, not the login cwd", () => {
-    const root = tempDirs.make("openclaw-performance-workspace-");
-    const uploaded = join(root, ".crabbox/scripts/harness.sh");
-    mkdirSync(join(root, ".crabbox/scripts"), { recursive: true });
-    writeFileSync(uploaded, "#!/bin/sh\n");
-
-    const derived = execFileSync(
-      "bash",
-      ["-c", 'dirname "$(dirname "$(dirname "$(realpath "$1")")")"', "bash", uploaded],
-      { encoding: "utf8" },
-    ).trim();
-    expect(derived).toBe(root);
-  });
-
-  it("accepts an already-released lease only when explicit stop confirms it", () => {
-    const root = tempDirs.make("openclaw-performance-stop-");
-    const crabbox = join(root, "crabbox");
-    writeFileSync(
-      crabbox,
-      '#!/bin/sh\n[ "$1:$2:$3:$4:$5" = "stop:--provider:aws:--id:cbx_0123456789ab" ] || exit 64\n',
-    );
-    chmodSync(crabbox, 0o755);
-
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const result = spawnSync("bash", [SCRIPT, "confirm-stop", crabbox, "cbx_0123456789ab"]);
-      expect(result.status).toBe(0);
-    }
-  });
-
-  it("rejects coordinator cleanup that remains pending", () => {
-    const root = tempDirs.make("openclaw-performance-stop-");
-    const crabbox = join(root, "crabbox");
-    writeFileSync(
-      crabbox,
-      '#!/bin/sh\n[ "$1:$2:$3:$4:$5" = "stop:--provider:aws:--id:cbx_0123456789ab" ] || exit 64\nexit 5\n',
-    );
-    chmodSync(crabbox, 0o755);
-
-    const result = spawnSync("bash", [SCRIPT, "confirm-stop", crabbox, "cbx_0123456789ab"]);
-    expect(result.status).toBe(5);
-  });
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const result = spawnSync("bash", [SCRIPT, "confirm-stop", crabbox, "cbx_0123456789ab"]);
+        expect(result.status).toBe(status);
+      }
+    },
+  );
 
   it("verifies tar paths, sizes, hashes, and lease cleanup before export", () => {
     const files = fixture();

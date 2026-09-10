@@ -253,10 +253,6 @@ run_sut() {
   local bundle_dir="$results/.artifacts/kova/bundles/$lane"
   local summary_dir="$results/.artifacts/kova/summaries"
 
-  if [[ "$lane" == "cleanup-probe" ]]; then
-    return 42
-  fi
-
   if [[ "$lane" == "source" ]]; then
     cd "$openclaw"
     local source_dir="$openclaw/.artifacts/openclaw-performance/source/mock-provider"
@@ -386,7 +382,7 @@ validate_kova() {
   validate_plan "$plan_json" "$profile" "$include_filters" "$expected_entries"
   local report
   report="$(node "$helpers/lib/kova-report-selector.mjs" --report-dir "$report_dir")"
-  local evidence_status=0 bundle_status=0 summary_status=0 effective_status="$status"
+  local evidence_status=0 summary_status=0 effective_status="$status"
   node "$helpers/lib/kova-workflow-evidence.mjs" \
     --plan "$plan_json" --report "$report" --profile "$profile" \
     --target "local-build:$openclaw" --repeat "$repeat" --include "$include_filters" \
@@ -400,25 +396,12 @@ validate_kova() {
   fi
   node "$helpers/kova-ci-summary.mjs" --report "$report" \
     --output "$summary_dir/$lane.md" --lane "$lane" || summary_status=$?
-  node --input-type=module - "$report" "$status" "$evidence_status" "$bundle_status" "$summary_status" <<'NODE'
+  node --input-type=module - "$report" <<'NODE'
 import fs from "node:fs";
-const [file, command, evidence, bundle, summary] = process.argv.slice(2);
-const metadata = fs.lstatSync(file);
+const metadata = fs.lstatSync(process.argv[2]);
 if (!metadata.isFile() || metadata.size > 50000000) throw new Error("invalid diagnostic report file");
-const report = JSON.parse(fs.readFileSync(file, "utf8"));
-const text = (value) => typeof value === "string" ? value.slice(0, 512)
-  .replace(/\/(?:Users|home|private|srv|work|tmp)\/[^\s"'<>]+/g, "<path>")
-  .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, "<address>") : "";
-const records = Array.isArray(report.records) ? report.records.slice(0, 32).map((record) => ({
-  scenario: text(record?.scenario), state: text(record?.state?.id), status: text(record?.status),
-  reason: text(record?.failureReason || record?.error?.message),
-})) : [];
-console.log("performance-kova " + JSON.stringify({
-  commandExit: Number(command), evidenceExit: Number(evidence),
-  bundleExit: Number(bundle), summaryExit: Number(summary), records,
-}));
 NODE
-  ((evidence_status == 0 && bundle_status == 0 && summary_status == 0)) ||
+  ((evidence_status == 0 && summary_status == 0)) ||
     die "Kova evidence, bundle, or summary validation failed"
   [[ -s "$bundle_dir/bundle.json" && -s "$summary_dir/$lane.md" ]] ||
     die "Kova bundle or summary evidence is missing"
@@ -567,20 +550,6 @@ quiesce_sut() {
   done
 }
 
-artifact_metadata() {
-  local phase="$1" workspace="$2" lane="$3" path metadata
-  printf 'performance-export phase=%s uid=%s gid=%s workspace=%s\n' \
-    "$phase" "$(id -u)" "$(id -g)" "$(printf '%s' "$workspace" | sha256sum | cut -d' ' -f1)"
-  for path in .artifacts .artifacts/performance-crabbox ".artifacts/performance-crabbox/$lane" \
-    ".artifacts/performance-crabbox/$lane/payload.tar.gz" \
-    ".artifacts/performance-crabbox/$lane/remote-evidence.json"; do
-    metadata="$(stat -c 'uid=%u gid=%g mode=%a size=%s' "$workspace/$path" 2>/dev/null || printf unavailable)"
-    printf 'performance-export path=%s %s readable=%s searchable=%s\n' "$path" "$metadata" \
-      "$([[ -r "$workspace/$path" ]] && echo true || echo false)" \
-      "$([[ -x "$workspace/$path" ]] && echo true || echo false)"
-  done
-}
-
 write_payload() {
   local lane="$1" root="$2" control_workspace="$3" tested_ref="$4"
   local openclaw_sha="$5" kova_sha="$6" workflow_sha="$7"
@@ -663,7 +632,6 @@ write_payload() {
     }' > "$output/remote-evidence.json"
   rm -f "$manifest" "$output/artifacts.json"
   chmod 0644 "$payload" "$output/remote-evidence.json"
-  artifact_metadata producer "$control_workspace" "$lane"
 }
 
 remote_main() {
@@ -675,7 +643,7 @@ remote_main() {
   local model="${15}" require_instrumented="${16}"
   local admitted_kova_sha="${17}"
   case "$lane" in
-    source | mock-provider | mock-deep-profile | cleanup-probe) ;;
+    source | mock-provider | mock-deep-profile) ;;
     *) die "unsupported lane $lane" ;;
   esac
   require_sha openclaw_sha "$openclaw_sha"
@@ -708,11 +676,9 @@ remote_main() {
     done
     [[ ! -e "$control_workspace/.artifacts/performance-crabbox/$lane/workload-result.json" ]] ||
       die "workload receipt already exists"
-    artifact_metadata collector-before "$control_workspace" "$lane"
     sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c \
       'install -D -o root -g root -m 0755 "$1" "$2"; workspace=$3; shift 3; cd "$workspace"; exec "$0" "$@"' \
       "$root_script" "$0" "$root_script" "$control_workspace" remote "$@" || status=$?
-    artifact_metadata collector-after "$control_workspace" "$lane"
     # Always terminate candidate output with the collector's own result, including null on failure.
     local receipt="$control_workspace/.artifacts/performance-crabbox/$lane/workload-result.json" result=null
     if [[ -f "$receipt" && ! -L "$receipt" &&
@@ -767,7 +733,6 @@ remote_main() {
   set +e
   (
     set -e
-    [[ "$lane" != cleanup-probe ]] || exit 42
     as_sut "$0" __prepare "$root"
     if [[ "$lane" == source ]]; then
       [[ "$source_cli_supported" != true ]] || as_sut "$0" __build "$root/openclaw"
@@ -791,15 +756,22 @@ remote_main() {
     die "OpenClaw HEAD changed during SUT execution"
   [[ "$("$executor" /usr/bin/git -C "$kova" rev-parse HEAD)" == "$kova_sha" ]] ||
     die "Kova HEAD changed during SUT execution"
-  [[ "$lane" != cleanup-probe ]] || return "$status"
 
   if [[ "$lane" == source ]]; then
-    collect_diagnostics "$root/openclaw" "$results" ".artifacts/openclaw-performance/source"
-    if [[ "$source_cli_supported" == true ]]; then
-      as_runner node "$helpers/openclaw-performance-source-summary.mjs" \
-        --source-dir "$results/.artifacts/openclaw-performance/source/mock-provider" \
-        --output "$results/.artifacts/openclaw-performance/source/mock-provider/index.md"
-    fi
+    local source_status
+    set +e
+    (
+      set -e
+      collect_diagnostics "$root/openclaw" "$results" ".artifacts/openclaw-performance/source"
+      if [[ "$source_cli_supported" == true ]]; then
+        as_runner node "$helpers/openclaw-performance-source-summary.mjs" \
+          --source-dir "$results/.artifacts/openclaw-performance/source/mock-provider" \
+          --output "$results/.artifacts/openclaw-performance/source/mock-provider/index.md"
+      fi
+    )
+    source_status=$?
+    set -e
+    if ((status == 0)); then status="$source_status"; fi
   else
     [[ "$admitted" == true ]] || collect_diagnostics "$root/openclaw" "$results" ".artifacts/kova"
     local validation_status=0 matrix_status="$status"

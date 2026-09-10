@@ -1,7 +1,9 @@
 // Openclaw Performance Workflow tests cover openclaw performance workflow script behavior.
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -12,9 +14,10 @@ import {
 } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { buildSync } from "esbuild";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { runCiGitStep } from "./ci-git-owner.test-support.js";
@@ -2264,5 +2267,444 @@ printf '%s\\n' \
       "steps.upload_source_performance_artifacts.outcome == 'failure'",
     );
     expect(retrySourceUpload.with?.overwrite).toBe(true);
+  });
+});
+
+describe("external performance workflow", () => {
+  const clientDirs = useAutoCleanupTempDirTracker(afterAll);
+  let client: string;
+  beforeAll(() => {
+    const root = clientDirs.make("openclaw-performance-broker-client-");
+    client = join(root, "crabbox.mjs");
+    buildSync({
+      stdin: {
+        resolveDir: process.cwd(),
+        contents: `
+import fs from "node:fs";
+import assert from "node:assert/strict";
+import { Compile } from "typebox/schema";
+const args = process.argv.slice(2), root = process.env.FIXTURE_ROOT;
+const fault = process.env.FAULT, status = Number(process.env.SUT_EXIT);
+const id = args[args.indexOf("--id") + 1];
+fs.appendFileSync(root + "/calls", JSON.stringify(args) + "\\n");
+if (args[0] === "config") console.log(JSON.stringify({aws:{instanceProfile:fault === "configured-role" ? "unsafe-role" : ""}}));
+else if (args[0] === "warmup") {}
+else if (args[0] === "inspect") console.log(JSON.stringify({
+  id, provider:"aws", network:"public", tailscale:fault === "tailscale" ? {state:"ok"} : null,
+  providerMetadata:fault === "unknown-role" ? {} : {instanceProfileAttached:fault === "attached-role"}
+}));
+else if (args[0] === "stop") process.exit(fault === "stop" ? 5 : 0);
+else if (args[0] === "run") {
+  for (const flag of ["--no-hydrate", "--timing-json"]) assert(args.includes(flag));
+  assert.equal(args[args.indexOf("--stop-after") + 1], "never");
+  assert.equal(args[args.indexOf("--allow-env") + 1], "CI");
+  assert(args.includes("--require-artifact-schema"));
+  const collection = !args.includes("--script");
+  if (collection) {
+    assert.deepEqual(args.slice(args.indexOf("--") + 1), ["/usr/bin/true"]);
+    assert(args.includes("--no-sync"));
+    assert.equal(fs.existsSync(root + "/collected"), false);
+    fs.writeFileSync(root + "/collected", "once");
+  }
+  const evidence = JSON.parse(fs.readFileSync(root + "/remote-evidence.json", "utf8"));
+  let code = collection ? (fault === "collection" ? 9 : 0) : status;
+  if (!collection && fault !== "missing-receipt") {
+    // The real collector's final record supersedes candidate stdout.
+    console.log("performance-result " + JSON.stringify(
+      fault === "incomplete" ? null : {
+        exitCode:status, exportExitCode:0, startedAt:evidence.command.startedAt,
+        finishedAt:evidence.command.finishedAt, noHydration:fault !== "hydration", runId:"run_workload",
+        workspace: "/work/crabbox/" + id + "/openclaw"
+      }));
+  }
+  if (code === 0) {
+    if (fault === "missing") code = 7;
+    else {
+      if (fault === "schema") delete evidence.isolation.noSudo;
+      if (fault === "identity") evidence.openclawSha = "d".repeat(40);
+      if (fault === "timing") evidence.command.finishedAt = "2026-08-21T00:02:00Z";
+      if (fault === "hash") evidence.artifacts[0].sha256 = "0".repeat(64);
+      const schema = JSON.parse(fs.readFileSync(process.env.SCHEMA, "utf8"));
+      if (!Compile(schema).Check(evidence)) code = 7;
+      else {
+        for (let i = 0; i < args.length; i++) if (args[i] === "--download") {
+          const [remote, destination] = args[++i].split("=");
+          if (remote.endsWith("/remote-evidence.json")) fs.writeFileSync(destination, JSON.stringify(evidence));
+          else fs.copyFileSync(root + "/payload.tar.gz", destination);
+        }
+      }
+    }
+  }
+  console.log("workspace owner released");
+  for (const value of [null,true,[],1,"message",{}]) console.log(JSON.stringify(value));
+  if (fault === "missing-timing") process.exit(code);
+  console.log(JSON.stringify({
+    provider:"aws", leaseId: fault === "lease" ? "cbx_ffffffffffff" : id,
+    runId: collection && fault !== "run-id" ? "run_collection" : "run_workload",
+    workdir: "/work/crabbox/" + id + (collection && fault === "workspace" ? "/other" : "/openclaw"),
+    repoPath: root, syncSkipped:collection, commandMs:collection ? 1 : 60000,
+    exitCode:code, errorKind: fault === "termination" ? "provider-error" : code ? "command-exit" : "",
+    runStatus:code ? "failed" : "succeeded"
+  }));
+  process.exit(code);
+} else process.exit(64);
+`,
+      },
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      outfile: client,
+    });
+  });
+
+  const SCRIPT = resolvePath("scripts/openclaw-performance-crabbox.sh");
+  const SCHEMA = ".github/crabbox/openclaw-performance-evidence.schema.json";
+
+  function sha256(value: Buffer): string {
+    return createHash("sha256").update(value).digest("hex");
+  }
+
+  function fixture() {
+    const root = tempDirs.make("openclaw-performance-crabbox-");
+    const artifact = ".artifacts/kova/reports/mock-provider/report.json";
+    const artifactPath = join(root, artifact);
+    const payload = join(root, "payload.tar.gz");
+    const evidence = join(root, "remote-evidence.json");
+    const timing = join(root, "timing.json");
+    const output = join(root, ".artifacts/performance-crabbox/evidence/mock-provider.json");
+    const contents = Buffer.from('{"status":"ok"}\n');
+    mkdirSync(join(root, ".artifacts/kova/reports/mock-provider"), { recursive: true });
+    writeFileSync(artifactPath, contents);
+    execFileSync("tar", ["-czf", payload, "-C", root, artifact]);
+    writeFileSync(
+      evidence,
+      JSON.stringify({
+        schemaVersion: 1,
+        lane: "mock-provider",
+        testedRef: "refs/pull/1/head",
+        openclawSha: "a".repeat(40),
+        kovaSha: "b".repeat(40),
+        workflow: { sha: "c".repeat(40), runId: "123", runAttempt: "1" },
+        crabbox: {
+          commit: "8ba71f913bbe57285ae29af45ef0d8ec6712477d",
+          version: "0.46.0+8ba71f913bbe",
+        },
+        command: {
+          name: "mock-provider",
+          argv: [
+            "profile=diagnostic",
+            "repeat=1",
+            "contract=canonical",
+            "include=scenario:fresh-install",
+            "failOnRegression=false",
+          ],
+          exitCode: 0,
+          startedAt: "2026-08-21T00:00:00Z",
+          finishedAt: "2026-08-21T00:01:00Z",
+        },
+        isolation: {
+          sutUser: "openclaw-sut",
+          trustedHarnessRootOwned: true,
+          noSudo: true,
+          imdsBlocked: true,
+          environmentClean: true,
+          cachesEmptyBefore: true,
+          tailscaleRequested: false,
+          tailscaleMetadataAbsent: true,
+        },
+        artifacts: [{ path: artifact, size: contents.length, sha256: sha256(contents) }],
+        lease: { provider: "aws", market: "on-demand", cleanupPolicy: "always" },
+      }),
+    );
+    writeFileSync(
+      timing,
+      JSON.stringify({
+        provider: "aws",
+        leaseId: "cbx_0123456789ab",
+        runId: "run_0123456789ab",
+        exitCode: 0,
+      }),
+    );
+    const expected = join(root, "expected.json");
+    writeFileSync(
+      expected,
+      JSON.stringify({
+        ...JSON.parse(readFileSync(evidence, "utf8")),
+        timing: JSON.parse(readFileSync(timing, "utf8")),
+        stopped: true,
+      }),
+    );
+    return { artifact, evidence, output, payload, root, timing, expected };
+  }
+
+  function externalRun(options: { status?: number; fault?: string }) {
+    const files = fixture();
+    const { root } = files;
+    const workflow = parse(readFileSync(WORKFLOW, "utf8"));
+    const step = workflow.jobs.external_performance.steps.find(
+      (entry: { name: string }) => entry.name === "Attest and run candidate in disposable Crabbox",
+    );
+    const lane = "mock-provider";
+    const status = options.status ?? 17;
+    const output = join(root, "output");
+    const evidence = JSON.parse(readFileSync(files.evidence, "utf8"));
+    evidence.command.exitCode = status;
+    evidence.command.argv[4] = "failOnRegression=true";
+    writeFileSync(files.evidence, JSON.stringify(evidence));
+    mkdirSync(join(root, "scripts"));
+    copyFileSync(SCRIPT, join(root, "scripts/openclaw-performance-crabbox.sh"));
+    chmodSync(join(root, "scripts/openclaw-performance-crabbox.sh"), 0o755);
+    writeFileSync(
+      join(root, "crabbox"),
+      `#!/bin/sh\nexec "${process.execPath}" "${client}" "$@"\n`,
+      {
+        mode: 0o755,
+      },
+    );
+    const body = (step.run as string)
+      .replaceAll("${{ matrix.lane }}", lane)
+      .replaceAll("${{ matrix.repeat }}", "1")
+      .replaceAll("${{ matrix.include_filters }}", "scenario:fresh-install")
+      .replaceAll("${{ matrix.expected_release_entries }}", "-")
+      .replaceAll("${{ inputs.fail_on_regression || 'false' }}", "true");
+    expect(body).not.toContain("${{");
+    const result = spawnSync("/bin/bash", ["-c", body], {
+      cwd: root,
+      env: {
+        PATH: process.env.PATH,
+        HOME: root,
+        CI: "1",
+        RUNNER_TEMP: root,
+        FIXTURE_ROOT: root,
+        FAULT: options.fault ?? "",
+        SUT_EXIT: String(status),
+        LANE: lane,
+        SCHEMA: resolvePath(SCHEMA),
+        GITHUB_OUTPUT: output,
+        GITHUB_RUN_ID: "123",
+        GITHUB_RUN_ATTEMPT: "1",
+        OPENCLAW_SHA: "a".repeat(40),
+        KOVA_SHA: "b".repeat(40),
+        WORKFLOW_SHA: "c".repeat(40),
+        TESTED_REF: "refs/pull/1/head",
+        PROFILE: "diagnostic",
+        REQUESTED_REPEAT: "1",
+        KOVA_CONFIG_CONTRACT: "canonical",
+        CRABBOX_VERSION: "0.46.0+8ba71f913bbe",
+        CRABBOX_COMMIT: "8ba71f913bbe57285ae29af45ef0d8ec6712477d",
+        KOVA_CANONICAL_CONFIG_REF: "b".repeat(40),
+        KOVA_LEGACY_LIST_CONFIG_REF: "b".repeat(40),
+        KOVA_ISOLATED_REF: "b".repeat(40),
+        PERFORMANCE_MODEL_ID: "fixture-model",
+      },
+      encoding: "utf8",
+      timeout: 20000,
+    });
+    return {
+      ...files,
+      result,
+      calls: readFileSync(join(root, "calls"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as string[]),
+      available:
+        existsSync(output) && readFileSync(output, "utf8").includes("artifacts_available=true"),
+    };
+  }
+
+  it.each([
+    { name: "success", status: 0, available: true, runs: 1, exit: 0 },
+    { name: "configured role", fault: "configured-role", available: false, runs: 0, exit: 1 },
+    { name: "attached role", fault: "attached-role", available: false, runs: 0, exit: 1 },
+    { name: "unknown role attachment", fault: "unknown-role", available: false, runs: 0, exit: 1 },
+    { name: "Tailscale attachment", fault: "tailscale", available: false, runs: 0, exit: 1 },
+    { name: "gated failure", status: 17, available: true, runs: 2, exit: 17 },
+    { name: "missing reports", fault: "missing", available: false, runs: 2, exit: 7 },
+    { name: "malformed schema", fault: "schema", available: false, runs: 2, exit: 7 },
+    { name: "wrong hash", fault: "hash", available: false, runs: 2, exit: 1 },
+    { name: "wrong identity", fault: "identity", available: false, runs: 2, exit: 1 },
+    { name: "wrong original timing", fault: "timing", available: false, runs: 2, exit: 1 },
+    { name: "wrong lease", fault: "lease", available: false, runs: 1, exit: 1 },
+    { name: "missing timing", fault: "missing-timing", available: false, runs: 1, exit: 1 },
+    { name: "wrong workspace", fault: "workspace", available: false, runs: 2, exit: 1 },
+    { name: "reused run id", fault: "run-id", available: false, runs: 2, exit: 1 },
+    { name: "collection failure", fault: "collection", available: false, runs: 2, exit: 9 },
+    { name: "stop failure", fault: "stop", available: false, runs: 2, exit: 1 },
+    { name: "unsealed producer", fault: "incomplete", available: false, runs: 1, exit: 17 },
+    {
+      name: "missing collector receipt",
+      fault: "missing-receipt",
+      available: false,
+      runs: 1,
+      exit: 17,
+    },
+    { name: "hydrated workspace", fault: "hydration", available: false, runs: 1, exit: 17 },
+    { name: "uncertain termination", fault: "termination", available: false, runs: 1, exit: 1 },
+  ])("runs the real workflow with isolated collection: $name", (entry) => {
+    const run = externalRun(entry);
+    expect(run.result.status, run.result.stderr + run.result.stdout).toBe(entry.exit);
+    expect(run.available).toBe(entry.available);
+    expect(run.calls.filter((args) => args[0] === "run")).toHaveLength(entry.runs);
+    expect(run.calls.map((args) => args[0])).toEqual(
+      entry.fault === "configured-role"
+        ? ["config", "stop"]
+        : ["config", "warmup", "inspect", ...Array(entry.runs).fill("run"), "stop"],
+    );
+    if (entry.available) {
+      const exported = JSON.parse(readFileSync(run.output, "utf8"));
+      expect(exported.command.exitCode).toBe(entry.status);
+      expect(exported.command.finishedAt).toBe("2026-08-21T00:01:00Z");
+    }
+  });
+
+  it.each([
+    {
+      name: "exact-main with deep profiling requested",
+      external: false,
+      deep: true,
+      event: "workflow_dispatch",
+      enabled: [],
+    },
+    {
+      name: "external defaults",
+      external: true,
+      deep: false,
+      event: "workflow_dispatch",
+      enabled: ["mock-provider", "source"],
+    },
+    {
+      name: "external deep profiling",
+      external: true,
+      deep: true,
+      event: "workflow_dispatch",
+      enabled: ["mock-provider", "mock-deep-profile", "source"],
+    },
+    {
+      name: "external scheduled deep profiling",
+      external: true,
+      deep: false,
+      event: "schedule",
+      enabled: ["mock-provider", "mock-deep-profile", "source"],
+    },
+    {
+      name: "exact-main schedule",
+      external: false,
+      deep: false,
+      event: "schedule",
+      enabled: [],
+    },
+  ])("enables only requested external lanes: $name", (entry) => {
+    const workflow = parse(readFileSync(WORKFLOW, "utf8"));
+    const step = workflow.jobs.external_performance.steps.find(
+      (candidate: { name: string }) => candidate.name === "Decide external lane",
+    );
+    const run: unknown = step?.run;
+    if (typeof run !== "string") {
+      throw new Error("External lane decision must be a shell step");
+    }
+    const root = tempDirs.make("openclaw-performance-lane-");
+    for (const lane of ["mock-provider", "mock-deep-profile", "source"]) {
+      const output = join(root, lane);
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          run
+            .replaceAll("${{ matrix.lane }}", lane)
+            .replaceAll(
+              "${{ needs.resolve_target.outputs.external_required }}",
+              String(entry.external),
+            )
+            .replaceAll("${{ inputs.deep_profile || 'false' }}", String(entry.deep)),
+        ],
+        {
+          env: {
+            PATH: process.env.PATH,
+            GITHUB_EVENT_NAME: entry.event,
+            GITHUB_OUTPUT: output,
+          },
+          encoding: "utf8",
+        },
+      );
+      expect(result.status, `${lane}: ${result.stderr}`).toBe(0);
+      expect(readFileSync(output, "utf8"), lane).toBe(`run=${entry.enabled.includes(lane)}\n`);
+    }
+  });
+
+  it("keeps candidate bytes off Actions runners and stops every lease", () => {
+    const workflow = readFileSync(WORKFLOW, "utf8");
+    const parsed = parse(workflow) as {
+      jobs: Record<
+        string,
+        {
+          if?: string;
+          steps?: Array<{
+            name?: string;
+            env?: Record<string, string>;
+            run?: string;
+            uses?: string;
+            with?: Record<string, string>;
+          }>;
+        }
+      >;
+    };
+    const kova = expectDefined(parsed.jobs.kova, "kova job");
+    const sourcePerformance = expectDefined(
+      parsed.jobs.source_performance,
+      "source performance job",
+    );
+    const external = expectDefined(parsed.jobs.external_performance, "external performance job");
+    const checkout = external.steps?.find(
+      (step) => step.name === "Checkout trusted performance harness",
+    );
+    const checkouts = external.steps?.filter((step) => step.uses?.startsWith("actions/checkout@"));
+    const secretSteps = external.steps?.filter((step) =>
+      JSON.stringify(step.env ?? {}).includes("CRABBOX_COORDINATOR"),
+    );
+    const run = expectDefined(
+      external.steps?.find((step) => step.name === "Attest and run candidate in disposable Crabbox")
+        ?.run,
+      "external candidate run step",
+    );
+
+    expect(workflow).toContain("CRABBOX_COMMIT: 8ba71f913bbe57285ae29af45ef0d8ec6712477d");
+    expect(workflow).toContain("external_required:");
+    expect(workflow).toContain(
+      "--provider aws --target linux --arch amd64 --class beast --type c7a.24xlarge",
+    );
+    expect(workflow).toContain("--network public --tailscale=false");
+    expect(workflow).toContain("--tailscale-exit-node=");
+    expect(workflow).toContain("--tailscale-exit-node-allow-lan-access=false");
+    expect(workflow).not.toContain("--stop-after always");
+    expect(run).toContain("tailscale_requested=false tailscale_metadata=none");
+    expect(run).toContain("unset CRABBOX_AWS_INSTANCE_PROFILE");
+    expect(workflow).toContain("CRABBOX_ENV_ALLOW=CI");
+    expect(run.lastIndexOf("\nconfirm_cleanup")).toBeLessThan(
+      run.indexOf("scripts/openclaw-performance-crabbox.sh verify"),
+    );
+    expect(run).not.toContain('select(has("leaseStopped"))');
+    expect(workflow).toContain(
+      "CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}",
+    );
+    expect(workflow).toContain(
+      "CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}",
+    );
+    expect(workflow).toContain(
+      "if: ${{ always() && steps.execution.outputs.artifacts_available == 'true' }}",
+    );
+    expect(workflow).not.toContain("Checkout target metadata");
+    expect(workflow).not.toContain("TARGET_CHECKOUT_DIR");
+    expect(kova.if).toContain("needs.resolve_target.outputs.external_required != 'true'");
+    expect(sourcePerformance.if).toContain(
+      "needs.resolve_target.outputs.external_required != 'true'",
+    );
+    expect(external.if).toBe(
+      "${{ (github.event_name == 'schedule' || inputs.mode != 'vitest-pair') && needs.resolve_target.outputs.external_required == 'true' }}",
+    );
+    expect(checkout?.with?.ref).toBe("${{ github.workflow_sha }}");
+    expect(checkouts?.map((step) => step.with?.ref)).toEqual(["${{ github.workflow_sha }}"]);
+    expect(secretSteps?.map((step) => step.name)).toEqual([
+      "Attest and run candidate in disposable Crabbox",
+    ]);
   });
 });

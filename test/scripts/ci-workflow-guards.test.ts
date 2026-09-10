@@ -19420,7 +19420,7 @@ it("pins every Performance Git owner before checkout and preserves Git deadlines
     workflow.jobs.external_performance.strategy.matrix.include.map(
       ({ lane }: { lane: string }) => lane,
     ),
-  ).toEqual(["mock-provider", "mock-deep-profile", "source", "cleanup-probe"]);
+  ).toEqual(["mock-provider", "mock-deep-profile", "source"]);
   expect(workflow.on.schedule).toEqual([{ cron: "11 5 * * *" }]);
   expect(Object.keys(workflow.on.workflow_dispatch.inputs)).toEqual([
     "mode",
@@ -19435,7 +19435,6 @@ it("pins every Performance Git owner before checkout and preserves Git deadlines
     "kova_ref",
     "kova_config_contract",
     "dispatch_id",
-    "cleanup_probe",
   ]);
   expect(workflow.permissions).toEqual({ contents: "read" });
   expect(workflow.jobs.publish.permissions).toEqual({ actions: "read", contents: "read" });
