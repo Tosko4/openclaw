@@ -19,6 +19,16 @@ jobs:
         with:
           ref: 3baf393d5bb9acfe62e01e023ec5ef0543de1f8d
           persist-credentials: false
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          node-version: "24.x"
+          install-bun: "false"
+          dependency-cache: "false"
+          vitest-fs-cache: "true"
+          node-compile-cache: "true"
+          node-compile-cache-scope: test
       - name: Checkout diagnostic inputs
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -26,20 +36,11 @@ jobs:
           path: .diagnostic
           sparse-checkout: scripts/diagnostics
           persist-credentials: false
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          node-version: "24.19.0"
-          install-bun: "false"
-          dependency-cache: "true"
-          vitest-fs-cache: "true"
-          node-compile-cache: "true"
-          node-compile-cache-scope: test
       - name: Record resource and source inputs
         run: |
           set -euo pipefail
           git rev-parse HEAD
+          test "$(node --version)" = v24.19.0
           node --version
           nproc
           cat /proc/meminfo
@@ -60,7 +61,7 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_VITEST_MAX_WORKERS: "2"
           OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
-          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: "[]"
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--sequence.sequencer=./.diagnostic/scripts/diagnostics/reclamation-sequencer.mjs"]'
           OPENCLAW_VITEST_SHARD_NAME: compact-small-8
           OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
           OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0"
