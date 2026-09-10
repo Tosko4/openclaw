@@ -53,7 +53,7 @@ private final class ActivityRelayURLProtocol: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         let handler = Self.lock.withLock { Self.handlers[self.request.url?.host ?? ""] }
         self.taskLock.withLock {
-            self.loadingTask = Task {
+            self.loadingTask = Task { @Sendable [self, handler] in
                 do {
                     let handler = try #require(handler)
                     let (status, data) = try await handler(self.request)
