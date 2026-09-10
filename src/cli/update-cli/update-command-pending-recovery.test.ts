@@ -531,6 +531,7 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
           runId,
           async (executor) =>
             operation({
+              requestPackageSettlement: executor.requestPackageSettlement,
               async enter(root, enterOptions) {
                 const fence = await executor.enter(root, enterOptions);
                 if (!anchor) {

@@ -4,11 +4,13 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
-import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import type { PackageActivationRecord } from "../../infra/package-update-activation-record.js";
 import {
-  captureManagedUpdateLeaseDatabaseIdentity,
-  type ManagedUpdateLeaseDatabaseIdentity,
-} from "../../infra/update-managed-service-handoff-database.js";
+  snapshotPackageActivationTerminalRequest,
+  type PackageActivationTerminalRequest,
+} from "../../infra/package-update-activation-terminal.js";
+import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
 import {
   createManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
@@ -16,16 +18,21 @@ import {
 } from "../../infra/update-managed-service-handoff-lease.js";
 import { isCurrentManagedServiceUpdateHandoffProcess } from "../../infra/update-managed-service-handoff.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
+import type {
+  UpdateCommandChildGrant,
+  ChildOperation,
+  UpdateCommandChildOwnerOptions,
+  UpdateCommandExecutor,
+  ManagedUpdateLeaseAuthority,
+} from "./update-command-executor-contract.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+export type {
+  UpdateCommandChildGrant,
+  UpdateCommandChildBinding,
+  UpdateCommandExecutor,
+  ManagedUpdateLeaseAuthority,
+} from "./update-command-executor-contract.js";
 
-/** A live invocation, never a serialized claim, PID or recovered history row. */
-export type UpdateCommandExecutor = {
-  /** Acquire only after read-only service admission, before the first mutable phase. */
-  enter(root: string, options?: { preflight?: true }): Promise<UpdateRecoveryFence>;
-};
-
-export type ManagedUpdateLeaseAuthority = ManagedUpdateLeaseDatabaseIdentity &
-  Readonly<{ installKey: string; owner: string }>;
 const admittedAuthorities = new WeakMap<UpdateRecoveryFence, ManagedUpdateLeaseAuthority>();
 
 export function captureUpdateCommandExecutorAuthority(
@@ -60,28 +67,6 @@ export function reserveUpdateCommandExecutorSlot(fence: UpdateRecoveryFence, roo
   reserve(root);
 }
 
-/** Private correlation sent only to the spawned candidate's inherited pipe. The receiver
- * independently reads both live owners and checks its own PID/start identity. */
-export type UpdateCommandChildGrant = {
-  runId: string;
-  root: string;
-  databasePath: string;
-  parent: ManagedHandoffLease;
-  /** Exact immediate spawner; parent always remains the original realpath lease. */
-  spawner?: ManagedHandoffLease;
-  /** Same-store prospective slot coverage, retained alongside the original domain. */
-  slot?: { parent: ManagedHandoffLease; spawner: ManagedHandoffLease; childKey: string };
-  childKey: string;
-  databaseIdentity?: ManagedUpdateLeaseDatabaseIdentity;
-};
-export type UpdateCommandChildBinding = (
-  pid: number,
-  onBound?: (identity: Readonly<ManagedHandoffLease["executor"]>) => undefined,
-) => void;
-type ChildOperation<T> = (
-  grant: UpdateCommandChildGrant,
-  bindChild: UpdateCommandChildBinding,
-) => Promise<T>;
 const childOwners = new WeakMap<
   UpdateRecoveryFence,
   <T>(operation: ChildOperation<T>) => Promise<T>
@@ -99,19 +84,7 @@ export async function withUpdateCommandExecutorChild<T>(
 }
 
 /** One child interval, shared by direct and delegated executors. */
-function createChildOwner(params: {
-  runId: string;
-  binding: () => {
-    store: ReturnType<typeof createManagedHandoffLeaseStore>;
-    parent: ManagedHandoffLease;
-    spawner: ManagedHandoffLease;
-    databasePath: string;
-    databaseIdentity?: ManagedUpdateLeaseDatabaseIdentity;
-    slot?: { parent: ManagedHandoffLease; spawner: ManagedHandoffLease };
-  };
-  assertBase: () => void;
-  onStart?: () => void;
-}) {
+function createChildOwner(params: UpdateCommandChildOwnerOptions) {
   let admissionOpen = true;
   let delegating = false;
   let pending: Promise<unknown> | undefined;
@@ -471,6 +444,7 @@ export async function withUpdateCommandExecutor<T>(
   let lease: ManagedHandoffLease | undefined;
   let borrowed = false;
   let slotLease: ManagedHandoffLease | undefined;
+  let terminal: PackageActivationTerminalRequest | undefined;
   const assertBase = () => {
     if (
       !active ||
@@ -492,6 +466,29 @@ export async function withUpdateCommandExecutor<T>(
     children.assertIdle();
   };
   const fence = { assertCurrent };
+  const requestPackageSettlement = (
+    originalFence: UpdateRecoveryFence,
+    record: PackageActivationRecord,
+  ) => {
+    assertCurrent();
+    if (
+      originalFence !== fence ||
+      borrowed ||
+      !lease ||
+      lease.version === 3 ||
+      entering ||
+      terminal
+    ) {
+      throw new UpdateCommandRecoveryPendingError(
+        "Package settlement requires one original direct owner.",
+      );
+    }
+    const authority = captureUpdateCommandExecutorAuthority(fence);
+    const request = snapshotPackageActivationTerminalRequest(record, authority);
+    assertCurrent();
+    terminal = request;
+    preflightReleases.delete(fence);
+  };
   const children = createChildOwner({
     runId,
     assertBase,
@@ -551,6 +548,7 @@ export async function withUpdateCommandExecutor<T>(
     assertCurrent();
   });
   const executor: UpdateCommandExecutor = {
+    requestPackageSettlement,
     async enter(root, enterOptions) {
       if (!active || entering) {
         throw new UpdateCommandRecoveryPendingError("Update executor admission is closed or busy.");
@@ -697,7 +695,10 @@ export async function withUpdateCommandExecutor<T>(
       (lease.version === 3 ||
         children.unsettled ||
         ((!borrowed || slotLease) &&
-          !store.releaseAll([...(!borrowed ? [lease] : []), ...(slotLease ? [slotLease] : [])])))
+          !store.releaseAll(
+            [...(!borrowed ? [lease] : []), ...(slotLease ? [slotLease] : [])],
+            "result" in outcome ? terminal : undefined,
+          )))
     ) {
       throw new UpdateCommandRecoveryPendingError(
         "Update executor release could not be confirmed.",

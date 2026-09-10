@@ -9,6 +9,7 @@ import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
 import { isPidDefinitelyDead, getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { hasErrnoCode } from "./errno.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
+import type { PackageActivationTerminalRequest } from "./package-update-activation-terminal.js";
 import type { SqliteTransactionOptions } from "./sqlite-transaction.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import { canCleanupLegacyManagedHandoff } from "./update-managed-service-handoff-cleanup.js";
@@ -22,6 +23,7 @@ import {
   type LeaseRow,
   type ManagedUpdateLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
+import { deleteManagedHandoffLeaseRows } from "./update-managed-service-handoff-release.js";
 import { assertNoRetainedSourceBorrower } from "./update-managed-service-handoff-retained-custody.js";
 import {
   managedHandoffBootSchema,
@@ -592,7 +594,7 @@ export function createManagedHandoffLeaseStore(
       : reclaimable(lease);
     return closed;
   }
-  function releaseAll(leases: ManagedHandoffLease[]) {
+  function releaseAll(leases: ManagedHandoffLease[], terminal?: PackageActivationTerminalRequest) {
     if (
       !leases.length ||
       new Set(leases.map((lease) => lease.key)).size !== leases.length ||
@@ -615,21 +617,7 @@ export function createManagedHandoffLeaseStore(
         ) {
           return false;
         }
-        for (const lease of leases) {
-          if (
-            !deleteRow(db, lease.key, {
-              owner: lease.owner,
-              payload_json: lease.payload,
-              updated_at: lease.updatedAt,
-            })
-          ) {
-            if (leases.length === 1) {
-              return false;
-            }
-            throw new Error("Update executor release changed.");
-          }
-        }
-        return true;
+        return deleteManagedHandoffLeaseRows(db, leases, terminal);
       }),
     );
   }
