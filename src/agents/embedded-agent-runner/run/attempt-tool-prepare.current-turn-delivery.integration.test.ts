@@ -15,6 +15,7 @@ import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-co
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
+import type { ToolOutcomeObservation } from "../../agent-tools.before-tool-call.js";
 import { readCurrentTurnReplyCompletion } from "../../current-turn-reply-completion.js";
 import type { AgentEvent } from "../../runtime/index.js";
 import type { AgentSession } from "../../sessions/index.js";
@@ -48,8 +49,8 @@ function readPersistedMessages(fixture: CurrentReplyIntegration) {
 async function prepareTurn(fixture: CurrentReplyIntegration) {
   const turn = await fixture.createTurn();
   const attempt = turn.attempt;
-  const outcomes: string[] = [];
-  attempt.onToolOutcome = (outcome) => outcomes.push(outcome.toolName);
+  const outcomes: ToolOutcomeObservation[] = [];
+  attempt.onToolOutcome = (outcome) => outcomes.push({ ...outcome });
   const trace = createDiagnosticTraceContext();
   const setup = await prepareEmbeddedAttemptSetup(attempt);
   const runAbortController = new AbortController();
@@ -61,12 +62,17 @@ async function prepareTurn(fixture: CurrentReplyIntegration) {
   });
   const { transcriptLifecycle, withOwnedTranscriptWrite } = sessionLock;
   let catalogExecutor: ToolSearchCatalogToolExecutor | undefined;
-  const nestedCalls: Array<{ toolCallId: string; parentToolCallId?: string }> = [];
+  const nestedCalls: Array<{
+    toolName: string;
+    toolCallId: string;
+    parentToolCallId?: string;
+  }> = [];
   // Match the attempt's late binding: controls are built before the real session
   // subscription owns nested execution and durable transcript acceptance.
   const executeTool: ToolSearchCatalogToolExecutor = (params) => {
     assert(catalogExecutor, "session subscription must own catalog execution");
     nestedCalls.push({
+      toolName: params.toolName,
       toolCallId: params.toolCallId,
       parentToolCallId: params.parentToolCallId,
     });
@@ -327,6 +333,7 @@ async function prepareTurn(fixture: CurrentReplyIntegration) {
               return steps[index + 1]?.ready.promise;
             }
           }
+          return undefined;
         });
         const originalStream = agent.streamFn;
         let responseCount = 0;
@@ -397,7 +404,9 @@ async function prepareTurn(fixture: CurrentReplyIntegration) {
     try {
       await dispose();
     } catch (cleanupError) {
-      throw new AggregateError([error, cleanupError], "Embedded current reply preparation failed");
+      throw new AggregateError([error, cleanupError], "Embedded current reply preparation failed", {
+        cause: cleanupError,
+      });
     }
     throw error;
   }
@@ -511,6 +520,7 @@ describe("embedded current reply across real permission preparation", () => {
           { id: "second-turn", code: 'return await send_current_reply({text:"second turn"});' },
         ]);
         await running.done;
+        await fixture.waitForSettled();
         const { result, isError } = await running.outcome("second-turn");
         expect(result).toMatchObject({ terminate: true });
         expect(isError).toBe(false);
@@ -525,19 +535,47 @@ describe("embedded current reply across real permission preparation", () => {
     await withCurrentReplyIntegration(async (fixture) => {
       await withPreparedTurn(fixture, async (prepared) => {
         const held = fixture.network.hold("post");
+        const code = 'return await send_current_reply({text:"already delivered"});';
         const running = prepared.start([
           {
             id: "superseded-call",
-            code: 'return await send_current_reply({text:"already delivered"});',
+            code,
           },
         ]);
         await held.wait();
         expect(prepared.turn.completion()).toBe("pending");
         const manager = prepared.sessionManager;
+        const beforeNewUser = readPersistedMessages(fixture);
+        const outerCall = beforeNewUser.find(({ message }) => message.role === "assistant");
+        assert(outerCall, "expected the original assistant call while its reply is held");
+        expect(outerCall.message.content).toEqual([
+          { type: "toolCall", id: "superseded-call", name: "exec", arguments: { code } },
+        ]);
         const newUserId = await prepared.appendUser("A new user turn owns this manager.");
         const beforeSettlement = readPersistedMessages(fixture);
         const newUser = beforeSettlement.find(({ entry }) => entry.id === newUserId);
         assert(newUser, "expected the new user to be persisted by the same prepared manager");
+        // The guard closes the old call before the new user, not when its late
+        // delivery settles. Preserve this repair without admitting a stale result.
+        const repairedResults = beforeSettlement.filter(
+          ({ message }) => message.role === "toolResult",
+        );
+        expect(repairedResults).toHaveLength(1);
+        expect(repairedResults[0]?.message).toMatchObject({
+          role: "toolResult",
+          toolCallId: "superseded-call",
+          toolName: "exec",
+          content: [{ type: "text", text: "aborted" }],
+          details: {
+            openclawSyntheticMissingToolResult: true,
+            reason: "missing_tool_result",
+          },
+          isError: true,
+        });
+        expect(repairedResults[0]?.entry.parentId).toBe(outerCall.entry.id);
+        expect(newUser.entry.parentId).toBe(repairedResults[0]?.entry.id);
+        expect(beforeSettlement.slice(0, beforeNewUser.length)).toEqual(beforeNewUser);
+        expect(beforeSettlement.slice(beforeNewUser.length)).toEqual([repairedResults[0], newUser]);
         const selection = {
           leafId: manager.getLeafId(),
           appendParentId: manager.getAppendParentId(),
@@ -572,7 +610,9 @@ describe("embedded current reply across real permission preparation", () => {
         expect(prepared.base.nestedToolActivities).toHaveLength(0);
         const persisted = readPersistedMessages(fixture);
         expect(persisted.filter(({ message }) => readNestedToolActivity(message))).toEqual([]);
-        expect(persisted.filter(({ message }) => message.role === "toolResult")).toEqual([]);
+        expect(persisted.filter(({ message }) => message.role === "toolResult")).toEqual(
+          repairedResults,
+        );
         expect(persisted.slice(0, beforeSettlement.length)).toEqual(beforeSettlement);
         const appended = persisted.slice(beforeSettlement.length);
         expect(appended).toHaveLength(1);
@@ -617,6 +657,13 @@ describe("embedded current reply across real permission preparation", () => {
           await held.wait();
           expect(await fs.readFile(file, "utf8")).toBe("once");
           expect(prepared.turn.completion()).toBe("pending");
+          const writeOutcomes = structuredClone(
+            prepared.outcomes.filter((outcome) => outcome.toolName === "write"),
+          );
+          expect(writeOutcomes.map((outcome) => outcome.presentationOnly === true)).toEqual([
+            false,
+            true,
+          ]);
           const previousSignal = prepared.base.toolAbortSignal;
           await prepared.refresh("workspace");
           expect(previousSignal.aborted).toBe(true);
@@ -633,11 +680,25 @@ describe("embedded current reply across real permission preparation", () => {
 
           running.respond("ordinary-continuation");
           await running.done;
+          await fixture.waitForSettled();
           const continuation = await running.outcome("ordinary-continuation");
           expect(readToolResultDetails(continuation.result)).toMatchObject({ status: "completed" });
           expect(continuation.isError).toBe(false);
           expect(await fs.readFile(file, "utf8")).toBe("continued");
-          expect(prepared.outcomes.filter((name) => name === "write")).toHaveLength(1);
+          expect(prepared.outcomes.filter((outcome) => outcome.toolName === "write")).toEqual(
+            writeOutcomes,
+          );
+          expect(
+            prepared.nestedCalls.map(({ toolName, parentToolCallId }) => ({
+              toolName,
+              parentToolCallId,
+            })),
+          ).toEqual([
+            { toolName: "write", parentToolCallId: "before-refresh" },
+            { toolName: "send_current_reply", parentToolCallId: "before-refresh" },
+            { toolName: "send_current_reply", parentToolCallId: "after-refresh" },
+            { toolName: "edit", parentToolCallId: "ordinary-continuation" },
+          ]);
           expect(fixture.network.counts.post).toBe(1);
           await expect(before.execute("retained", { code: "return 1;" })).rejects.toThrow();
         });
@@ -677,16 +738,23 @@ describe("embedded current reply across real permission preparation", () => {
           // The existing inner tool-outcome observer runs after producer settlement,
           // unlike the outer abort race, which already returned during refresh.
           const settledBefore = prepared.outcomes.filter(
-            (name) => name === "send_current_reply",
+            (outcome) => outcome.toolName === "send_current_reply" && !outcome.presentationOnly,
           ).length;
           held.release.resolve();
           await expect
-            .poll(() => prepared.outcomes.filter((name) => name === "send_current_reply").length)
+            .poll(
+              () =>
+                prepared.outcomes.filter(
+                  (outcome) =>
+                    outcome.toolName === "send_current_reply" && !outcome.presentationOnly,
+                ).length,
+            )
             .toBeGreaterThan(settledBefore);
           expect(prepared.turn.completion()).toBeUndefined();
           await prepared.refresh("full");
           running.respond("authoritative-retry");
           await running.done;
+          await fixture.waitForSettled();
           const retried = await running.outcome("authoritative-retry");
           expect(retried.result).toMatchObject({ terminate: true });
           expect(retried.isError).toBe(false);

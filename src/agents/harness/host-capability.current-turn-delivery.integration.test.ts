@@ -275,7 +275,11 @@ describe("admitted host current reply through Slack transport", () => {
             expect(result).toMatchObject({ details: { status: "sent" }, terminate: true });
             expect(turn.completion()).toBe("confirmed");
           } else {
-            expect(result).toMatchObject({ details: { status: "failed" } });
+            expect(result).toMatchObject({
+              details: { status: "partial_failed", sentBeforeError: true },
+              terminate: true,
+            });
+            expect(result.details).not.toHaveProperty("messageId");
             expect(turn.completion()).toBe("ambiguous");
             const reconstructed = turn.createHostTool();
             await expect(
