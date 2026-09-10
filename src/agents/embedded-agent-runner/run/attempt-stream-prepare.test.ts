@@ -587,6 +587,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       expect.objectContaining({
         sessionKey: "agent:main:internal-session-effects:companion-run",
       }),
+      undefined,
     );
   });
 
