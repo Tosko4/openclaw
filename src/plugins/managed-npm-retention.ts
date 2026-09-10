@@ -74,8 +74,8 @@ export async function clearRetainedManagedNpmInstallMarker(
   if (!info) {
     return false;
   }
+  assertCurrent?.();
   try {
-    assertCurrent?.();
     await fs.promises.rm(info.markerPath, { force: true });
   } catch (error) {
     assertCurrent?.();
@@ -84,8 +84,8 @@ export async function clearRetainedManagedNpmInstallMarker(
     }
     throw error;
   }
+  assertCurrent?.();
   try {
-    assertCurrent?.();
     await fs.promises.rmdir(path.dirname(info.markerPath));
   } catch {
     assertCurrent?.();

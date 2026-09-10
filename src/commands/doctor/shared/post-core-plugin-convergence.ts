@@ -82,13 +82,18 @@ async function repairInstalledNpmOpenClawHostLinks(params: {
 }> {
   const packageReadFailures: Array<{ error: unknown; packageDir: string }> = [];
   let effectFailure: { error: unknown } | undefined;
+  const assertNoEffectFailure = () => {
+    if (effectFailure) {
+      throw effectFailure.error;
+    }
+  };
   const beforePersistentEffect = params.beforePersistentEffect
     ? async () => {
-        if (effectFailure) {
-          throw effectFailure.error;
-        }
+        assertNoEffectFailure();
         try {
           await params.beforePersistentEffect?.();
+          // Another root can refuse while this admission hook is awaiting.
+          assertNoEffectFailure();
         } catch (error) {
           effectFailure ??= { error };
           throw effectFailure.error;

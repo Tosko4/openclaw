@@ -144,9 +144,8 @@ async function repairMissingPluginInstalls(params: {
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<RepairMissingPluginInstallsResult> {
-  // Install attempts can normalize exceptions into ordinary repair outcomes.
-  // Preserve the initiating owner's first refusal, including transient read
-  // failures, across that conversion and every later persistent effect.
+  // Installer outcomes can normalize exceptions. Preserve the first owner
+  // refusal through that conversion and every later persistent effect.
   let effectFailure: { error: unknown } | undefined;
   const beforePersistentEffect = params.beforePersistentEffect
     ? async () => {
@@ -438,12 +437,11 @@ async function repairMissingPluginInstallsWithLease(
         (!installedRecord?.installPath ||
           !installPathsEqual(resolveUserPath(installedRecord.installPath, env), removalPath))
       ) {
-        // Authority refusal is not a recoverable package-cleanup warning.
+        await params.beforePersistentEffect?.();
+        // Authority refusal is not a package-cleanup warning. Planning may
+        // yield, so both owners must still hold at dispatch without another await.
+        lease.assertOwned();
         try {
-          await params.beforePersistentEffect?.();
-          // Planning may yield; inherited executor and plugin authority must
-          // still hold at dispatch, with no intervening await.
-          lease.assertOwned();
           await rm(removalPath, { recursive: true, force: true });
         } catch (error) {
           await params.beforePersistentEffect?.();

@@ -14,6 +14,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
 import { preparePostCorePluginConfig } from "./update-command-config.js";
+import { createUpdateCommandFinalizationFence } from "./update-command-finalization-fence.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
@@ -49,7 +50,11 @@ export async function convergeUpdatePlugins(params: {
   detail?: string;
   cancelled?: boolean;
 }> {
-  const assertCurrent = params.opts.run?.executorFence?.assertCurrent;
+  // Cohort effects require a synchronous original run/fence identity check,
+  // not just a still-live lease captured before an awaited caller substitution.
+  const assertCurrent = params.opts.run?.executorFence
+    ? createUpdateCommandFinalizationFence(params)
+    : undefined;
   assertCurrent?.();
   const postUpdateRoot = params.result.root ?? params.root;
   const preUpdateConfig = params.configSnapshot.valid

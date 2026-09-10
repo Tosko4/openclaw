@@ -2,10 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
+import { resolvePluginNpmProjectsDir } from "../../../plugins/install-paths.js";
 import {
   readPersistedInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "../../../plugins/installed-plugin-index-records.js";
+import * as npmProjects from "../../../plugins/npm-project-roots.js";
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
 import { runPluginUpdateAttempt } from "../../../plugins/update-attempt.js";
 import * as pluginUpdates from "../../../plugins/update.js";
@@ -102,6 +104,66 @@ describe("post-core plugin persistence cancellation", () => {
     });
   });
 
+  it("blocks a pending sibling after another async admission refused", async () => {
+    await withOpenClawTestState({ label: "plugin-peer-concurrent-refusal" }, async (state) => {
+      const npmRoot = state.statePath("npm");
+      const roots = [npmRoot, path.join(resolvePluginNpmProjectsDir(npmRoot), "second")];
+      const packageDirs = roots.map((root) => path.join(root, "node_modules", "peer-plugin"));
+      for (const packageDir of packageDirs) {
+        fs.mkdirSync(packageDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(packageDir, "package.json"),
+          JSON.stringify({
+            name: "peer-plugin",
+            version: "1.0.0",
+            peerDependencies: { openclaw: "*" },
+          }),
+        );
+      }
+      let armed = false;
+      const list = npmProjects.listManagedPluginNpmRoots;
+      vi.spyOn(npmProjects, "listManagedPluginNpmRoots").mockImplementationOnce(async (root) => {
+        const found = await list(root);
+        expect(found).toEqual(roots);
+        armed = true;
+        return found;
+      });
+      const refusal = new Error("first root lost original authority");
+      let releaseFirst!: () => void;
+      const bothEntered = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      let entered = 0;
+      await expect(
+        runPostCorePluginConvergence({
+          cfg: { plugins: { enabled: false } },
+          env: state.env,
+          baselineInstallRecords: {},
+          beforePersistentEffect: async () => {
+            if (!armed) {
+              return;
+            }
+            entered += 1;
+            if (entered === 1) {
+              await bothEntered;
+              throw refusal;
+            }
+            releaseFirst();
+            // Both real root owners entered their hook before the first refused.
+            // The next turn guarantees that refusal reached the shared wrapper.
+            await new Promise<void>((resolve) => {
+              setImmediate(resolve);
+            });
+          },
+        }),
+      ).rejects.toBe(refusal);
+      expect(entered).toBe(2);
+      for (const packageDir of packageDirs) {
+        expect(fs.existsSync(path.join(packageDir, "node_modules"))).toBe(false);
+      }
+    });
+  });
+
   it.each([
     ["managed", "mkdir"],
     ["managed", "unlink"],
@@ -169,11 +231,17 @@ describe("post-core plugin persistence cancellation", () => {
                   installPath: packageDir,
                 },
               };
+        let refused = false;
         const params = {
           cfg,
           env: state.env,
           baselineInstallRecords,
-          beforePersistentEffect: () => controller.signal.throwIfAborted(),
+          beforePersistentEffect: () => {
+            if (controller.signal.aborted && !refused) {
+              refused = true;
+              throw controller.signal.reason;
+            }
+          },
         };
         await expect(runPostCorePluginConvergence(params)).rejects.toBe(refusal);
         if (effect === "mkdir") {

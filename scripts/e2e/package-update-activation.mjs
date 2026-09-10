@@ -456,7 +456,7 @@ setInterval(() => {}, 1000);
     const exited = once(child, "exit");
     const closed = once(child, "close");
     const group = (pid) => ({ pid, exitCode: alive(pid) ? null : 1, signalCode: null });
-    async function joinOwned() {
+    async function joinProcess() {
       try {
         await until(
           () =>
@@ -543,7 +543,7 @@ setInterval(() => {}, 1000);
           await kill(pid, child.signalCode === null);
         }
       }
-      await joinOwned();
+      await joinProcess();
     }
     async function cleanup() {
       const errors = [];
@@ -568,7 +568,7 @@ setInterval(() => {}, 1000);
         }
       }
       try {
-        await joinOwned();
+        await joinProcess();
       } catch (error) {
         errors.push(error);
       }
@@ -584,7 +584,7 @@ setInterval(() => {}, 1000);
       kill,
       killAll,
       cleanup,
-      joinOwned,
+      joinProcess,
       observations: () => {
         if (outputFailure) {
           throw outputFailure;
@@ -622,8 +622,7 @@ setInterval(() => {}, 1000);
     const live = path.join(prefix, "lib", "node_modules", "openclaw");
     const bin = path.join(prefix, "bin", "openclaw");
     const processes = [];
-    let finished = false;
-    const caseErrors = [];
+    let failure;
     try {
       await command(
         "npm",
@@ -750,7 +749,7 @@ setInterval(() => {}, 1000);
           () => pending.child.exitCode !== null || pending.child.signalCode !== null,
           "pending update refusal",
         );
-        await pending.joinOwned();
+        await pending.joinProcess();
         assert.notEqual(pending.child.exitCode, 0);
         assert.equal(pending.child.signalCode, null);
         const output = `${pending.output().stdout}\n${pending.output().stderr}`;
@@ -768,7 +767,7 @@ setInterval(() => {}, 1000);
           "healthy update",
         );
         assert.deepEqual(await updater.exited, [0, null], JSON.stringify(updater.output()));
-        await updater.joinOwned();
+        await updater.joinProcess();
         assert.equal(await exists(anchor), false);
         if (publishedUpgrade) {
           assert.equal(unsettledCommand, false, "published observation/custody limit exceeded");
@@ -866,7 +865,7 @@ setInterval(() => {}, 1000);
           await runRecovery("repair", false);
           assert.equal(alive(checkpoint.pid), true);
           await updater.kill(checkpoint.pid, false);
-          await updater.joinOwned();
+          await updater.joinProcess();
         } else {
           await updater.killAll();
         }
@@ -952,36 +951,33 @@ setInterval(() => {}, 1000);
         new RegExp(after.version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
       );
       assert.equal(await fs.readFile(unknown, "utf8"), "unrelated executable\n");
-      finished = true;
       emit({ event: "case", name, status: "passed", version: selected.version });
     } catch (error) {
-      caseErrors.push(error);
+      failure = { error };
     }
-    const cleanupErrors = [];
+    // Join every owner before deleting evidence; cleanup must not mask the case failure.
+    const errors = [];
     for (const process of [...processes].toReversed()) {
       try {
         await process.cleanup();
         processes.splice(processes.indexOf(process), 1);
       } catch (error) {
-        cleanupErrors.push(error);
+        errors.push(error);
       }
     }
-    if (cleanupErrors.length || unsettledCommand) {
+    if (errors.length || unsettledCommand) {
       emit({ event: "retained", name, path: root });
       throw new AggregateError(
-        [...caseErrors, ...cleanupErrors],
+        failure ? [failure.error, ...errors] : errors,
         "Task custody remains unsettled; evidence retained",
-        { cause: caseErrors.length ? caseErrors[0] : cleanupErrors[0] },
+        failure ? { cause: failure.error } : undefined,
       );
     }
-    if (finished && caseErrors.length === 0) {
-      await fs.rm(root, { recursive: true });
-    } else {
+    if (failure) {
       emit({ event: "retained", name, path: root });
+      throw failure.error;
     }
-    if (caseErrors.length) {
-      throw caseErrors[0];
-    }
+    await fs.rm(root, { recursive: true });
   }
   let complete = false;
   try {

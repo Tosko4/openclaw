@@ -7,6 +7,7 @@ import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-contr
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndexRowSync } from "../../plugins/installed-plugin-index-row.js";
+import * as cohorts from "../../plugins/update-cohort.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../version.js";
@@ -38,6 +39,8 @@ describe("connected in-process plugin finalization authority", () => {
     "config-revoked",
     "run-replaced",
     "fence-replaced",
+    "cohort-run-replaced",
+    "cohort-fence-replaced",
   ] as const)("protects persistence and terminal behavior with %s", async (scenario) => {
     await withOpenClawTestState(
       {
@@ -110,6 +113,8 @@ describe("connected in-process plugin finalization authority", () => {
         let indexAtRevocation: ReturnType<typeof readIndex>;
         let runAtConvergence: ReturnType<typeof getUpdateRun>;
         let configBoundaryReached = false;
+        let cohortCompleted = false;
+        let cohortGuard: (() => void) | undefined;
         let refused: unknown;
         let completed: Awaited<ReturnType<typeof finishUpdate>> | undefined;
 
@@ -151,6 +156,27 @@ describe("connected in-process plugin finalization authority", () => {
                 startedAt: Date.now(),
                 updateStepTimeoutMs: 1_000,
               };
+              if (scenario.startsWith("cohort-")) {
+                const convergeCohort = cohorts.convergePluginReleaseCohort;
+                vi.spyOn(cohorts, "convergePluginReleaseCohort").mockImplementationOnce(
+                  async (input) => {
+                    fence.assertCurrent();
+                    otherFence.assertCurrent();
+                    cohortGuard = input.beforePersistentEffect;
+                    expect(cohortGuard).toBeDefined();
+                    indexAtConvergence = readIndex();
+                    runAtConvergence = getUpdateRun(created.runId, { env: state.env });
+                    if (scenario === "cohort-run-replaced") {
+                      params.opts.run = { ...run };
+                    } else {
+                      run.executorFence = otherFence;
+                    }
+                    const result = await convergeCohort(input);
+                    cohortCompleted = true;
+                    return result;
+                  },
+                );
+              }
               const converge = convergence.runPostCorePluginConvergence;
               vi.spyOn(convergence, "runPostCorePluginConvergence").mockImplementationOnce(
                 async (input) => {
@@ -247,7 +273,7 @@ describe("connected in-process plugin finalization authority", () => {
                 name: "update executor settlement",
                 exitCode: 1,
                 stderrTail: expect.stringContaining(
-                  scenario === "run-replaced" || scenario === "fence-replaced"
+                  scenario.endsWith("run-replaced") || scenario.endsWith("fence-replaced")
                     ? "Package finalization lost its original executor."
                     : "Update executor ownership is no longer current.",
                 ),
@@ -260,6 +286,10 @@ describe("connected in-process plugin finalization authority", () => {
           });
           expect(transport.exec).not.toHaveBeenCalled();
           expect(error).not.toHaveBeenCalled();
+        }
+        if (scenario.startsWith("cohort-")) {
+          expect(cohortGuard).toBeDefined();
+          expect(cohortCompleted).toBe(false);
         }
         expect(indexAtConvergence).toBeDefined();
         expect(runAtPublication).toBeDefined();

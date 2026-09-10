@@ -342,7 +342,7 @@ describe("direct config writer exclusion", () => {
 
 describe("included config writer exclusion", () => {
   it.each([false, true])(
-    "inherits root authority through include-lock admission (revoke=%s)",
+    "refuses inherited include authority before preparation (revoke=%s)",
     async (revoke) => {
       const stateDir = tempDirs.make("openclaw-include-source-guard-");
       const configPath = path.join(stateDir, "openclaw.json");
@@ -351,20 +351,27 @@ describe("included config writer exclusion", () => {
       const includeRaw = '{"mode":"local","port":18789}\n';
       await fs.writeFile(configPath, rootRaw);
       await fs.writeFile(includePath, includeRaw);
+      const backupRaw = "retained include backup\n";
+      await fs.writeFile(`${includePath}.bak`, backupRaw);
       await withEnvAsync(
         { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
         async () => {
           const env = { ...process.env };
           const io = createConfigIO({ env, observe: false, pluginValidation: "skip" });
           const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
+          const sourceConfig = structuredClone(snapshot.sourceConfig);
+          sourceConfig.gateway = { ...sourceConfig.gateway, port: 19001 };
           let preflightReached = false;
           await withConfigExecutor(stateDir, async (assertCurrent, revokeExecutor) => {
             const mutation = withConfigWriteLock(
               configPath,
-              () =>
-                replaceConfigFile({
+              () => {
+                if (revoke) {
+                  revokeExecutor();
+                }
+                return replaceConfigFile({
                   snapshot,
-                  nextConfig: { gateway: { mode: "local", port: 19001 } },
+                  sourceConfig,
                   writeOptions: {
                     ...writeOptions,
                     observe: false,
@@ -372,12 +379,10 @@ describe("included config writer exclusion", () => {
                     skipRuntimeSnapshotRefresh: true,
                     preCommitRuntimePreflight: async () => {
                       preflightReached = true;
-                      if (revoke) {
-                        revokeExecutor();
-                      }
                     },
                   },
-                }),
+                });
+              },
               env,
               assertCurrent,
             );
@@ -385,13 +390,16 @@ describe("included config writer exclusion", () => {
               await expect(mutation).rejects.toThrow(
                 /executor ownership is no longer current|source ownership changed/,
               );
-              expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
             } else {
-              await mutation;
-              expect(JSON.parse(await fs.readFile(includePath, "utf8")).port).toBe(19001);
+              await expect(mutation).rejects.toThrow(
+                "cannot update include-owned configuration. Use a trusted shell",
+              );
             }
-            expect(preflightReached).toBe(true);
+            expect(preflightReached).toBe(false);
             expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
+            expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
+            expect(await fs.readFile(`${includePath}.bak`, "utf8")).toBe(backupRaw);
+            await expect(fs.stat(`${includePath}.bak.1`)).rejects.toMatchObject({ code: "ENOENT" });
           });
         },
       );

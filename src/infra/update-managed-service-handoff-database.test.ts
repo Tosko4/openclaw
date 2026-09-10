@@ -78,7 +78,7 @@ async function authority() {
   });
 }
 
-function probeWriterAdmission() {
+function probeWriterAdmission(mode: "IMMEDIATE" | "EXCLUSIVE" = "IMMEDIATE") {
   const child = spawnSync(
     process.execPath,
     [
@@ -91,7 +91,7 @@ function probeWriterAdmission() {
         db.exec("PRAGMA busy_timeout=0");
         let outcome;
         try {
-          db.exec("BEGIN IMMEDIATE");
+          db.exec("BEGIN " + process.argv[2]);
           outcome = { acquired: true };
           db.exec("ROLLBACK");
         } catch (error) {
@@ -102,6 +102,7 @@ function probeWriterAdmission() {
         process.stdout.write(JSON.stringify(outcome));
       `,
       databasePath,
+      mode,
     ],
     { encoding: "utf8", env: {}, timeout: 5_000 },
   );
@@ -341,8 +342,10 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
         throw new Error("Writer exclusion fixture was not admitted");
       }
       const withDatabase = createManagedHandoffLeaseDatabase(databasePath, existingAuthority);
-      withDatabase(true, (db) =>
-        withDatabase.transact(
+      withDatabase(true, (db) => {
+        expect(db.isTransaction).toBe(false);
+        expect(probeWriterAdmission("EXCLUSIVE")).toEqual({ acquired: false, errcode: 5 });
+        return withDatabase.transact(
           db,
           () => {
             expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
@@ -386,9 +389,9 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
             expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
           },
           {},
-        ),
-      );
-      expect(probeWriterAdmission()).toEqual({ acquired: true });
+        );
+      });
+      expect(probeWriterAdmission("EXCLUSIVE")).toEqual({ acquired: true });
       const after = store.read(root);
       if (mutation === "delete") {
         expect(after).toEqual({ kind: "absent" });
