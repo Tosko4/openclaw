@@ -51,7 +51,9 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js"
 let unjoinedProcess = false;
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
-    if (!unjoinedProcess) cleanup();
+    if (!unjoinedProcess) {
+      cleanup();
+    }
   }),
 );
 let root: string;
@@ -452,7 +454,9 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         let overlays: ReturnType<typeof createApplicationOverlays> | undefined;
         let stopInterlock: (() => void) | undefined;
         const stopCandidate = async () => {
-          if (!childPid) return;
+          if (!childPid) {
+            return;
+          }
           if (isChildProcessTreeAlive({ pid: childPid })) {
             if (!isPidDefinitelyDead(childPid)) {
               expect(String(getFileLockProcessStartTime(childPid))).toBe(childStart);
@@ -460,7 +464,9 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
             try {
               process.kill(-childPid, "SIGKILL");
             } catch (error) {
-              if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+              if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+                throw error;
+              }
             }
           }
           await vi.waitFor(() => expect(isChildProcessTreeAlive({ pid: childPid })).toBe(false), {
@@ -468,7 +474,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
             interval: 25,
           });
         };
-        try {
+        const verifyCustody = async () => {
           await vi.waitFor(
             () => {
               const ready =
@@ -565,23 +571,45 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           expect(() => assertNoPendingPackageActivation(packages.packageRoot)).toThrow(
             "recovery is pending",
           );
-        } finally {
-          stopInterlock?.();
-          overlays?.dispose();
-          if (fs.existsSync(spawned)) {
-            const identity = JSON.parse(fs.readFileSync(spawned, "utf8"));
-            childPid ??= identity.pid;
-            childStart ??= String(identity.startIdentity);
-          }
-          try {
+        };
+        const failures: unknown[] = [];
+        // A body failure must not skip either process join, and a cleanup
+        // failure must retain the fixture without hiding the original error.
+        for (const phase of [
+          verifyCustody,
+          async () => {
+            stopInterlock?.();
+            overlays?.dispose();
+          },
+          async () => {
+            if (fs.existsSync(spawned)) {
+              const identity = JSON.parse(fs.readFileSync(spawned, "utf8"));
+              childPid ??= identity.pid;
+              childStart ??= String(identity.startIdentity);
+            }
             await stopCandidate();
-          } catch (error) {
-            unjoinedProcess = true;
-            throw error;
-          } finally {
-            if (parent.exitCode === null && parent.signalCode === null) parent.kill("SIGKILL");
+          },
+          async () => {
+            if (parent.exitCode === null && parent.signalCode === null) {
+              parent.kill("SIGKILL");
+            }
             await closed;
+          },
+        ]) {
+          try {
+            await phase();
+          } catch (error) {
+            if (phase !== verifyCustody) {
+              unjoinedProcess = true;
+            }
+            failures.push(error);
           }
+        }
+        if (failures.length === 1) {
+          throw failures[0];
+        }
+        if (failures.length > 1) {
+          throw new AggregateError(failures, "Driver custody proof and cleanup failed");
         }
       },
       40_000,

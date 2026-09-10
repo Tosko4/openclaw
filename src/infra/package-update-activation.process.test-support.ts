@@ -393,8 +393,10 @@ export function startActivationHelper(
 async function runOriginalActivation(value: ActivationFixture, mode: string) {
   if (mode === "admission") {
     const { runCliWithExitFinalization } = await import("../cli/one-shot-exit.js");
-    const { assertUpdatePackageActivationAdmission, withUpdateAdmissionReporting } =
+    const { withUpdateAdmissionReporting } =
       await import("../cli/update-cli/update-command-result.js");
+    const { assertUpdatePackageActivationAdmission } =
+      await import("../cli/update-cli/update-command-run.js");
     // Exercise the operator diagnostic, not Node's uncaught-error source excerpt.
     await runCliWithExitFinalization({
       run: () =>

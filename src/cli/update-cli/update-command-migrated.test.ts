@@ -516,6 +516,8 @@ if (process.argv[2] === "doctor" && process.argv[3] === "--lint") {
       const commands: Array<{
         argv: string[];
         pid?: number;
+        code: Awaited<ReturnType<typeof runCommand>>["code"];
+        stderr: string;
         cleanup: Awaited<ReturnType<typeof runCommand>>["cleanup"];
       }> = [];
       vi.spyOn(commandExecution, "runUtf8CommandWithTimeout").mockImplementation(
@@ -531,7 +533,13 @@ if (process.argv[2] === "doctor" && process.argv[3] === "--lint") {
                 : cancellation,
             });
             retainTemporaryFixtures ||= result.cleanup !== "normal";
-            commands.push({ argv, pid: result.pid, cleanup: result.cleanup });
+            commands.push({
+              argv,
+              pid: result.pid,
+              code: result.code,
+              stderr: result.stderr,
+              cleanup: result.cleanup,
+            });
             return result;
           } catch (error) {
             retainTemporaryFixtures = true;
@@ -625,7 +633,7 @@ if (process.argv[2] === "doctor" && process.argv[3] === "--lint") {
       const readFile = fs.readFile.bind(fs);
       vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
         const value = await readFile(...args);
-        if (path.basename(String(args[0])) === "result.json") {
+        if (typeof args[0] === "string" && path.basename(args[0]) === "result.json") {
           terminalAtCompletion = terminalRow();
           expect(terminalAtCompletion?.status).toBe(
             kind === "failed-child" ? "failed" : "succeeded",
@@ -722,7 +730,6 @@ if (process.argv[2] === "doctor" && process.argv[3] === "--lint") {
       ).catch((error: unknown) => {
         failure = error;
       });
-      expect(terminalAtCompletion).toBeDefined();
       const finalizerCommands = commands.filter(
         ({ argv }) =>
           argv[1] ===
@@ -735,6 +742,10 @@ if (process.argv[2] === "doctor" && process.argv[3] === "--lint") {
       expect(finalizerCommands).toHaveLength(1);
       expect(finalizerCommands[0]).toMatchObject({ pid: expect.any(Number), cleanup: "normal" });
       expect(finalizerCommands[0]?.pid).not.toBe(process.pid);
+      if (kind === "link-refusal") {
+        expect(finalizerCommands[0]?.code, finalizerCommands[0]?.stderr).toBe(0);
+      }
+      expect(terminalAtCompletion).toBeDefined();
       expect(terminalRow()).toEqual(terminalAtCompletion);
       for (const access of parentStateAccess) {
         expect(access).not.toHaveBeenCalled();

@@ -12,6 +12,8 @@ import {
   parseKnipCompactUnusedExports,
   parseKnipCompactUnusedExportsResult,
 } from "../../scripts/check-deadcode-exports.mts";
+import { vitestWorkerBuildEntries } from "../../scripts/lib/vitest-worker-build-entries.mts";
+import { vitestWorkerDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
 
 const fullRootWorkspace = allExportsKnipConfig.workspaces["."];
 const fullExtensionWorkspace = allExportsKnipConfig.workspaces["extensions/*"];
@@ -86,6 +88,35 @@ describe("check-deadcode-exports", () => {
     );
     expect(fullExtensionWorkspace.entry).toContain("**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!");
     expect(fullUiWorkspace.entry).toContain("**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!");
+  });
+
+  it("models both compiled subprocess registries as workspace-relative full-tree roots", () => {
+    const buildSources = Object.values(vitestWorkerBuildEntries).map((source) =>
+      path.relative(".", source).replaceAll("\\", "/"),
+    );
+    const declarationSources = Object.values(vitestWorkerDeclarationEntries);
+    for (const [workspace, settings] of Object.entries(allExportsKnipConfig.workspaces)) {
+      expect(
+        settings.entry.filter((entry) => entry.replaceAll("\\", "/").startsWith("../")),
+        workspace,
+      ).toEqual([]);
+      const prefix = workspace === "." ? "" : `${workspace}/`;
+      for (const source of [...buildSources, ...declarationSources]) {
+        if (source.startsWith(prefix)) {
+          expect(settings.entry, `${workspace}: ${source}`).toContain(
+            `${source.slice(prefix.length)}!`,
+          );
+        }
+      }
+    }
+
+    const declarationOnlyRoot =
+      vitestWorkerDeclarationEntries["infra/package-update-activation.process.test-support"];
+    expect(buildSources).not.toContain(declarationOnlyRoot);
+    expect(fullRootWorkspace.entry).toContain(`${declarationOnlyRoot}!`);
+    expect(allExportsKnipConfig.workspaces["extensions/qa-lab"]?.entry).toContain(
+      "src/gateway-child-artifacts-runtime.test-support.ts!",
+    );
   });
 
   it("models every QA scenario execution path as a full-tree root", () => {

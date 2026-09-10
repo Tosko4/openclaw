@@ -14,10 +14,12 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { readConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
+import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import { createConfigIO } from "./io.factory.js";
 import { readConfigFileSnapshotForWrite, writeConfigFile } from "./io.runtime.js";
 import type { ConfigWriteOptions } from "./io.types.js";
 import { replaceConfigFile } from "./mutate.js";
+import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -223,6 +225,10 @@ describe("writeConfigFile canonical reread", () => {
         const env = { ...process.env, OPENCLAW_CONFIG_PATH: configPath };
         const io = createConfigIO({ env, observe: false, pluginValidation: "skip" });
         const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
+        const priorAudit =
+          writer === "direct"
+            ? listConfigAuditRecordsForTests({ env: io.env, homedir: () => home })
+            : undefined;
         let committed = false;
         let compensationDenied = false;
         const rename = fsNode.promises.rename.bind(fsNode.promises);
@@ -265,6 +271,16 @@ describe("writeConfigFile canonical reread", () => {
           await expect(pending).rejects.toThrow(
             writer === "direct" ? /config path changed/ : /runtime snapshot refresh failed/,
           );
+          if (writer === "direct") {
+            await expect(pending).rejects.toBeInstanceOf(ConfigMutationConflictError);
+            await expect(pending).rejects.toMatchObject({
+              message: "config path changed since last load",
+              retryable: false,
+            });
+            expect(listConfigAuditRecordsForTests({ env: io.env, homedir: () => home })).toEqual(
+              priorAudit,
+            );
+          }
         };
         if (authority === "ordinary") {
           await write();

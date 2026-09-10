@@ -161,12 +161,12 @@ it.each(
             [],
           );
           vi.spyOn(updateCohort, "convergePluginReleaseCohort").mockImplementation(
-            async ({ config }) => ({
-              config,
+            async ({ config: pluginConfig }) => ({
+              config: pluginConfig,
               changed: false,
               npmChanged: false,
               sync: {
-                config,
+                config: pluginConfig,
                 changed: false,
                 summary: {
                   errors: [],
