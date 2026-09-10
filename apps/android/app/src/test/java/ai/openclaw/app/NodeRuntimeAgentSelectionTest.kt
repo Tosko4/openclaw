@@ -71,7 +71,10 @@ class NodeRuntimeAgentSelectionTest {
   fun talkCatalogReadinessUsesTheSelectedChatOwner() =
     runBlocking {
       for (availableAgent in listOf("work", "main")) {
-        val runtime = createConnectedRuntime()
+        val runtime =
+          createConnectedRuntime { runtime ->
+            runtime.switchChatSession("agent:work:readiness", "work")
+          }
         val requested = Channel<Pair<JsonObject, Job>>(Channel.UNLIMITED)
         try {
           runtime.gatewayDataRequestOverrideForTests = { _, method, raw ->
@@ -81,13 +84,16 @@ class NodeRuntimeAgentSelectionTest {
             requested.send(params to currentCoroutineContext().job)
             talkCatalog(ready)
           }
-          runtime.switchChatSession("agent:work:readiness", "work")
           runtime.refreshTalkSetupReadiness()
           val (params, job) = withTimeout(2_000) { requested.receive() }
-          withTimeout(2_000) { job.join() }
+          val readiness =
+            withTimeout(2_000) {
+              job.join()
+              runtime.talkSetupReadiness.first { it.realtimeTalk !is GatewayTalkSetupState.Unverified }
+            }
           assertEquals(JsonPrimitive("work"), params["agentId"])
           assertEquals(JsonPrimitive("agent:work:readiness"), params["sessionKey"])
-          assertEquals(availableAgent == "work", runtime.talkSetupReadiness.value.realtimeTalk.isReady)
+          assertEquals(availableAgent == "work", readiness.realtimeTalk.isReady)
         } finally {
           closeNodeRuntimeTestFixture(runtime)
           requested.close()
@@ -1327,7 +1333,10 @@ class NodeRuntimeAgentSelectionTest {
     ReflectionHelpers.setField(chat, "requestGatewayForGateway", request)
   }
 
-  private fun createConnectedRuntime(talkTargetSupported: Boolean = true): NodeRuntime {
+  private fun createConnectedRuntime(
+    talkTargetSupported: Boolean = true,
+    beforeConnect: (NodeRuntime) -> Unit = {},
+  ): NodeRuntime {
     val app = RuntimeEnvironment.getApplication()
     val securePrefs =
       app.getSharedPreferences(
@@ -1335,6 +1344,7 @@ class NodeRuntimeAgentSelectionTest {
         Context.MODE_PRIVATE,
       )
     return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs)).also { runtime ->
+      beforeConnect(runtime)
       val endpoint = GatewayEndpoint.manual("127.0.0.1", 18789)
       ReflectionHelpers.setField(runtime, "connectedEndpoint", endpoint)
       ReflectionHelpers.setField(runtime, "operatorConnected", true)
