@@ -35,8 +35,10 @@ import {
   persistValidatedDowngradeConfig,
   preparePostCorePluginConfig,
 } from "./update-command-config.js";
+import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import * as updatePlugins from "./update-command-plugins.js";
+import { shouldResumePostCoreUpdateInFreshProcess } from "./update-command-post-core.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -46,12 +48,26 @@ afterEach(() => {
 });
 
 it.each(
-  (["prepare", "channel", "downgrade", "plugins"] as const).flatMap((flow) =>
-    [false, true].map((suspicious) => ({ flow, suspicious })),
-  ),
+  (
+    [
+      "prepare",
+      "channel",
+      "downgrade",
+      "plugins",
+      "candidate-prepare",
+      "candidate-commit",
+      "ordinary-prepare",
+      "ordinary-commit",
+    ] as const
+  ).flatMap((flow) => [false, true].map((suspicious) => ({ flow, suspicious }))),
 )(
-  "preserves config observation state when $flow loses its executor during a read (suspicious=$suspicious)",
+  "preserves config observation state after $flow executor revocation (suspicious=$suspicious)",
   async ({ flow, suspicious }) => {
+    const preparationFlow =
+      flow === "prepare" || flow === "candidate-prepare" || flow === "ordinary-prepare";
+    const candidateFlow = flow === "candidate-prepare" || flow === "candidate-commit";
+    const ordinaryFlow = flow === "ordinary-prepare" || flow === "ordinary-commit";
+    const commitFlow = flow === "candidate-commit" || flow === "ordinary-commit";
     const home = await fs.realpath(dirs.make("update-config-observation-fence-"));
     const stateDir = path.join(home, "state");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -132,7 +148,7 @@ it.each(
         expect(before?.health).toHaveLength(1);
         expect(before?.audit).toEqual([]);
         const plugins =
-          flow === "prepare"
+          preparationFlow || candidateFlow || ordinaryFlow
             ? vi
                 .spyOn(updatePlugins, "updatePluginsAfterCoreUpdate")
                 .mockRejectedValue(new Error("Unexpected plugin convergence after ownership loss"))
@@ -181,6 +197,24 @@ it.each(
         let preparedBeforeRevocation = false;
         let mutationLockRejected = false;
         let mutationActive = false;
+        const revoke = () => {
+          preparedBeforeRevocation = true;
+          const lockGuard = captureConfigWriteLockGuard(configPath);
+          const db = openNodeSqliteDatabase(path.join(control, "managed-update-handoffs.sqlite"));
+          try {
+            db.prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?").run(
+              "replacement",
+              root,
+            );
+          } finally {
+            db.close();
+          }
+          if (!preparationFlow) {
+            expect(lockGuard).toBeTypeOf("function");
+            expect(lockGuard).toThrow(/executor|ownership/i);
+            mutationLockRejected = true;
+          }
+        };
         const duringMutation = async <T>(operation: () => Promise<T>): Promise<T> => {
           mutationActive = true;
           try {
@@ -196,12 +230,27 @@ it.each(
             ? vi
                 .spyOn(config, "replaceConfigFile")
                 .mockImplementation((params) => duringMutation(() => replace(params)))
-            : flow === "prepare"
+            : preparationFlow
               ? undefined
-              : vi
-                  .spyOn(config, "mutateConfigFileWithRetry")
-                  .mockImplementation((params) => duringMutation(() => mutate(params)));
-        const factoryModule = flow === "prepare" ? config : configFactory;
+              : vi.spyOn(config, "mutateConfigFileWithRetry").mockImplementation((params) =>
+                  duringMutation(() =>
+                    mutate(
+                      commitFlow
+                        ? {
+                            ...params,
+                            writeOptions: {
+                              ...params.writeOptions,
+                              beforeCommit: async () => {
+                                await params.writeOptions?.beforeCommit?.();
+                                revoke();
+                              },
+                            },
+                          }
+                        : params,
+                    ),
+                  ),
+                );
+        const factoryModule = preparationFlow ? config : configFactory;
         const realCreateConfigIO = factoryModule.createConfigIO;
         const factory = vi.spyOn(factoryModule, "createConfigIO").mockImplementation((options) =>
           realCreateConfigIO({
@@ -213,26 +262,10 @@ it.each(
               if (
                 name === "config.snapshot.read.materialize" &&
                 !preparedBeforeRevocation &&
-                (flow === "prepare" || mutationActive)
+                !commitFlow &&
+                (preparationFlow || mutationActive)
               ) {
-                preparedBeforeRevocation = true;
-                const lockGuard = captureConfigWriteLockGuard(configPath);
-                const db = openNodeSqliteDatabase(
-                  path.join(control, "managed-update-handoffs.sqlite"),
-                );
-                try {
-                  db.prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?").run(
-                    "replacement",
-                    root,
-                  );
-                } finally {
-                  db.close();
-                }
-                if (flow !== "prepare") {
-                  expect(lockGuard).toBeTypeOf("function");
-                  expect(lockGuard).toThrow(/executor|ownership/i);
-                  mutationLockRejected = true;
-                }
+                revoke();
               }
               return result;
             },
@@ -241,7 +274,38 @@ it.each(
         await expect(
           withUpdateCommandExecutor(run.runId, async (executor) => {
             const executorFence = await executor.enter(root);
-            if (flow === "prepare") {
+            if (candidateFlow || ordinaryFlow) {
+              const result = {
+                status: "ok" as const,
+                mode: "npm" as const,
+                root,
+                before: { version: "2.0.0" },
+                after: { version: "1.0.0" },
+                steps: [],
+                durationMs: 0,
+              };
+              if (ordinaryFlow) {
+                // Old targets below the post-core writer floor retain the original runtime.
+                expect(
+                  shouldResumePostCoreUpdateInFreshProcess({ result, downgradeRisk: true }),
+                ).toBe(false);
+              }
+              await convergeUpdatePlugins({
+                candidateRuntime: candidateFlow,
+                root,
+                result,
+                configSnapshot: prepared.snapshot,
+                requestedChannel: commitFlow ? (suspicious ? "stable" : "beta") : null,
+                storedChannel: suspicious ? "beta" : null,
+                channel: "stable",
+                installKindChanged: false,
+                downgradeRisk: ordinaryFlow,
+                opts: { json: true, run: { runId: run.runId, env, executorFence } },
+                preUpdatePluginInstallRecords: {},
+                startedAt: Date.now(),
+                updateStepTimeoutMs: 1_000,
+              });
+            } else if (flow === "prepare") {
               await resumePostCoreUpdate({
                 root,
                 channel: "stable",
@@ -274,7 +338,7 @@ it.each(
           }),
         ).rejects.toThrow(/executor|ownership|release/i);
         expect(preparedBeforeRevocation).toBe(true);
-        if (flow !== "prepare") {
+        if (!preparationFlow) {
           expect(mutationLockRejected).toBe(true);
         }
         if (plugins) {
@@ -287,7 +351,7 @@ it.each(
         // The update-only fence policy must not disable ordinary config observation.
         factory.mockRestore();
         mutationBoundary?.mockRestore();
-        if (flow === "prepare") {
+        if (preparationFlow) {
           const ordinary = await preparePostCorePluginConfig({ requestedChannel: null });
           expect(ordinary.configSnapshot.valid).toBe(true);
         } else {

@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import childProcess, { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
+import { Socket } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -15,8 +18,10 @@ import { writePackageDistInventory } from "../../scripts/lib/package-dist-invent
 import { assertReliabilityForcedExit } from "../../scripts/lib/sqlite-reliability-process.js";
 import { findVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { waitForDead } from "../../test/helpers/process-wait.js";
+import type { ManagedUpdateLeaseAuthority } from "../cli/update-cli/update-command-executor.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { writePackageRoot } from "./package-update-steps.test-support.js";
+import type { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
@@ -502,6 +507,190 @@ export function activationSourceArgs(fixture: ActivationFixture, mode = "update"
   return [entry, mode, JSON.stringify(fixture)];
 }
 
+export type ActivationDriverCustodyFixture = {
+  base: string;
+  mode: "before-grant" | "after-grant" | "refused";
+  runId: string;
+  packages: Awaited<ReturnType<typeof createPackageSwapFixture>>;
+  authority: Omit<ManagedUpdateLeaseAuthority, "owner">;
+};
+
+export function activationDriverCustodyArgs(fixture: ActivationDriverCustodyFixture): string[] {
+  // Parent and receiver share the invocation graph; source-loading swap would
+  // reject the unbuilt sealed helper before reaching the fd3 owner boundary.
+  const entry = fileURLToPath(import.meta.url);
+  assert.equal(path.extname(entry), ".js", "activation children require the invocation compiler");
+  return [entry, "driver-custody", JSON.stringify(fixture)];
+}
+
+export async function runActivationDriverCustodyReceiver(
+  fixture: Pick<ActivationDriverCustodyFixture, "base" | "mode">,
+) {
+  const { withPostCoreUpdateExecutor } =
+    await import("../cli/update-cli/update-command-post-core-executor.js");
+  const { getUpdateRun } = await import("./update-run-ledger.js");
+  if (fixture.mode === "before-grant") {
+    await new Promise<never>(() => setInterval(() => {}, 1000));
+  }
+  await withPostCoreUpdateExecutor({}, async (opts) => {
+    assert.ok(opts.run?.executorFence);
+    opts.run.executorFence.assertCurrent();
+    fsSync.writeFileSync(
+      path.join(fixture.base, "receiver.json"),
+      JSON.stringify({
+        pid: process.pid,
+        run: getUpdateRun(opts.run.runId, { env: process.env }),
+      }),
+    );
+    if (fixture.mode === "after-grant") {
+      await new Promise<never>(() => setInterval(() => {}, 1000));
+    }
+    fsSync.writeFileSync(
+      process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH!,
+      JSON.stringify({
+        status: "ok",
+        changed: false,
+        sync: {
+          changed: false,
+          switchedToBundled: [],
+          switchedToNpm: [],
+          warnings: [],
+          errors: [],
+        },
+        npm: { changed: false, outcomes: [] },
+        integrityDrifts: [],
+      }),
+    );
+  });
+}
+
+async function runActivationDriverCustody(fixture: ActivationDriverCustodyFixture) {
+  const { withUpdateCommandExecutor } =
+    await import("../cli/update-cli/update-command-executor.js");
+  const { continuePostCoreUpdateInFreshProcess } =
+    await import("../cli/update-cli/update-command-post-core.js");
+  const { swapStagedPackageInstall } = await import("./package-update-swap.js");
+  const { createManagedHandoffLeaseStore } =
+    await import("./update-managed-service-handoff-lease.js");
+  const { createUpdateRun, adoptUpdateRun, getUpdateRun, finishUpdateRun, heartbeatUpdateRun } =
+    await import("./update-run-ledger.js");
+  const { base, mode, runId, packages, authority } = fixture;
+  const stage = packages.params.stage.packageRoot;
+  await fs.writeFile(
+    path.join(stage, "package.json"),
+    JSON.stringify({ name: "openclaw", version: "2.0.0", type: "module" }),
+  );
+  const worker = runtimeProcessEntrypoints.updateMigratedFinalize;
+  const check = path.join(stage, "dist", worker.distWorkerPath);
+  await fs.mkdir(path.dirname(check), { recursive: true });
+  await fs.writeFile(
+    check,
+    `await import(${JSON.stringify(resolveRuntimeWorkerUrl(worker).href)});\n`,
+  );
+  await fs.writeFile(
+    path.join(stage, "dist", "index.js"),
+    `import { runActivationDriverCustodyReceiver } from ${JSON.stringify(import.meta.url)};
+await runActivationDriverCustodyReceiver(${JSON.stringify({ base, mode })});
+`,
+  );
+  await writePackageDistInventory(stage);
+  const env = { ...process.env };
+  const parent = adoptUpdateRun(createUpdateRun({ runId, trigger: "cli" }, { env }).runId, { env })
+    .origin.driver;
+  assert.ok(parent, "fixture parent identity unavailable");
+  const store = createManagedHandoffLeaseStore({
+    databasePath: authority.databasePath,
+    serviceManagerEnv: env,
+  });
+  const nativeSpawn = childProcess.spawn;
+  let candidate: ChildProcess | undefined;
+  let candidatePipe: Socket | undefined;
+  childProcess.spawn = ((...args: Parameters<typeof spawn>) => {
+    const child = Reflect.apply(nativeSpawn, childProcess, args) as ChildProcess;
+    if (Array.isArray(args[1]) && args[1][1] === "update") {
+      candidate = child;
+      assert.ok(child.pid);
+      fsSync.writeFileSync(
+        path.join(base, "spawned.json"),
+        JSON.stringify({ pid: child.pid, startIdentity: getFileLockProcessStartTime(child.pid) }),
+      );
+      const pipe = child.stdio[3];
+      assert.ok(pipe instanceof Socket);
+      candidatePipe = pipe;
+      const nativeEnd = pipe.end;
+      pipe.end = function (this: Socket, ...input: Parameters<Socket["end"]>) {
+        const grant = JSON.parse(String(input[0])) as { childKey: string };
+        const recorded = getUpdateRun(runId, { env });
+        const bound = store.read(grant.childKey);
+        assert.ok(bound.kind === "current", "bound child missing");
+        heartbeatUpdateRun(runId, parent, { env });
+        fsSync.writeFileSync(
+          path.join(base, "delivery.json"),
+          JSON.stringify({
+            run: recorded,
+            parent,
+            bound: bound.lease.executor,
+            childKey: grant.childKey,
+            renewed: getUpdateRun(runId, { env }),
+            bytesWritten: pipe.bytesWritten,
+          }),
+        );
+        if (mode === "before-grant") process.exit(0);
+        return Reflect.apply(nativeEnd, this, input);
+      } as Socket["end"];
+    }
+    return child;
+  }) as typeof spawn;
+  syncBuiltinESMExports();
+  await withUpdateCommandExecutor(
+    runId,
+    async (executor) => {
+      const fence = await executor.enter(packages.packageRoot);
+      const result = await swapStagedPackageInstall({
+        ...packages.params,
+        activation: { fence, nodeRunner: process.execPath, onPrepared() {} },
+        onTransaction() {},
+      });
+      assert.equal(result.status, "committed", JSON.stringify(result));
+      if (mode === "refused") {
+        finishUpdateRun(runId, { status: "failed", reason: "fixture-terminal" }, { env });
+      }
+      const run = { runId, env: { ...env }, executorFence: fence };
+      const work = continuePostCoreUpdateInFreshProcess({
+        root: packages.packageRoot,
+        channel: "stable",
+        requestedChannel: null,
+        opts: { json: true, yes: true, restart: false, run },
+        pluginInstallRecords: {},
+        updateStartedAtMs: Date.now(),
+        timeoutMs: 20_000,
+        nodeRunner: process.execPath,
+      });
+      // Preparation awaits must not retarget the captured diagnostic owner.
+      run.runId = "00000000-0000-4000-8000-000000000000";
+      run.env.OPENCLAW_STATE_DIR = path.join(base, "wrong-state");
+      let error: string | undefined;
+      try {
+        await work;
+      } catch (cause) {
+        error = String(cause);
+      }
+      fence.assertCurrent();
+      fsSync.writeFileSync(
+        path.join(base, "completed.json"),
+        JSON.stringify({
+          error,
+          pid: candidate?.pid,
+          bytesWritten: candidatePipe?.bytesWritten,
+          code: candidate?.exitCode,
+          signal: candidate?.signalCode,
+        }),
+      );
+    },
+    { existingAuthority: authority },
+  );
+}
+
 export function startActivationHelper(
   fixture: ActivationFixture,
   anchor: string,
@@ -541,6 +730,7 @@ async function runOriginalActivation(value: ActivationFixture, mode: string) {
     await import("./update-managed-service-handoff-database.js");
   const { runGlobalPackageUpdateSteps } = await import("./package-update-steps.js");
   const { resolveGlobalInstallTarget } = await import("./update-global.js");
+  const { createUpdateRun, adoptUpdateRun } = await import("./update-run-ledger.js");
   const store = createManagedHandoffLeaseStore({
     databasePath: value.databasePath,
     serviceManagerEnv: process.env,
@@ -568,7 +758,11 @@ async function runOriginalActivation(value: ActivationFixture, mode: string) {
       return { stdout: result.stdout ?? "", stderr: result.stderr ?? "", code: result.code };
     }
   };
-  const runId = randomUUID();
+  // The original CLI admits its ledger run before activation. Child binding
+  // must adopt that real record before the executor grant can cross the pipe.
+  const created = createUpdateRun({ trigger: "cli" }, { env: process.env });
+  const { runId, origin } = adoptUpdateRun(created.runId, { env: process.env });
+  assert.equal(origin.driver?.pid, process.pid);
   await withUpdateCommandExecutor(
     runId,
     async (executor) => {
@@ -731,5 +925,9 @@ export async function runActivationReceiver(params: {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [mode, encoded] = process.argv.slice(2);
   assert.ok(mode && encoded, "activation child requires its fixture");
-  await runOriginalActivation(JSON.parse(encoded) as ActivationFixture, mode);
+  if (mode === "driver-custody") {
+    await runActivationDriverCustody(JSON.parse(encoded) as ActivationDriverCustodyFixture);
+  } else {
+    await runOriginalActivation(JSON.parse(encoded) as ActivationFixture, mode);
+  }
 }

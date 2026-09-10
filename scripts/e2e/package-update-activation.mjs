@@ -11,6 +11,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { createGunzip } from "node:zlib";
+import { createBoundedChildOutput } from "../../test/helpers/bounded-child-output.ts";
 import {
   hasUnjoinedWork,
   inspectManagedProcessGroup,
@@ -18,6 +19,17 @@ import {
   terminateManagedChild,
   waitForManagedProcessGroupExit,
 } from "../lib/managed-child-process.mts";
+
+// v2026.9.3 published-core verification binds these registry bytes to qualified
+// code separately from the release workflow's provenance publisher commit.
+const PUBLISHED_BASELINE = {
+  version: "2026.9.3",
+  codeSha: "1391f7cd2d40ab5bbcf2f5f831d3a64f520e72d7",
+  publisherSha: "01403169248346f2a6d6dd02955fc956fa9e1fe9",
+  sha256: "d1c63366833f8ae4a6ab4f3b60b1aa84ca82d03dba13d3d3eba989aa159e2449",
+  integrity:
+    "sha512-CzDHMeHdnjlIZ76ZyBb1lvLO4H/yBIMYXupFGGBN87x0853y3hg5nLAnKfxSKqLzqhbUKqy9ebDRAWWV4t8aew==",
+};
 
 async function main() {
   let unsettledCommand = false;
@@ -66,6 +78,7 @@ async function main() {
       "source-sha": { type: "string" },
       "package-sha256": { type: "string" },
       "candidate-sha256": { type: "string" },
+      "published-package": { type: "string" },
       cases: { type: "string", default: "smoke" },
     },
   });
@@ -116,18 +129,29 @@ async function main() {
         : values.cases.split(",");
   assert.ok(cases.length && new Set(cases).size === cases.length);
   assert.ok(
-    cases.every((name) => allCases.includes(name)),
+    cases.every((name) => allCases.includes(name) || name === "published-upgrade"),
     "unknown activation scenario",
   );
+  const usesPublished = cases.includes("published-upgrade");
+  if (usesPublished) assert.ok(values["published-package"], "--published-package is required");
   const source = path.resolve(values.package);
   const candidate = path.resolve(values.candidate);
-  async function hash(file) {
-    const digest = createHash("sha256");
+  const published = usesPublished ? path.resolve(values["published-package"]) : undefined;
+  async function hash(file, algorithm = "sha256", encoding = "hex") {
+    const digest = createHash(algorithm);
     for await (const chunk of createReadStream(file)) digest.update(chunk);
-    return digest.digest("hex");
+    return digest.digest(encoding);
   }
   assert.equal(await hash(source), values["package-sha256"]);
   assert.equal(await hash(candidate), values["candidate-sha256"]);
+  if (published) {
+    assert.equal(await hash(published), PUBLISHED_BASELINE.sha256, "published TGZ SHA-256");
+    assert.equal(
+      `sha512-${await hash(published, "sha512", "base64")}`,
+      PUBLISHED_BASELINE.integrity,
+      "published registry integrity",
+    );
+  }
   async function tarJson(file, member) {
     const { stdout } = await exec("tar", ["-xOf", file, `package/${member}`], {
       encoding: "utf8",
@@ -144,10 +168,23 @@ async function main() {
   for (const file of [source, candidate]) {
     assert.equal((await tarJson(file, "dist/build-info.json")).commit, values["source-sha"]);
   }
+  if (published) {
+    const manifest = await tarJson(published, "package.json");
+    assert.equal(manifest.name, "openclaw");
+    assert.equal(manifest.version, PUBLISHED_BASELINE.version);
+    assert.equal(
+      (await tarJson(published, "dist/build-info.json")).commit,
+      PUBLISHED_BASELINE.codeSha,
+    );
+    assert.notEqual(manifest.version, after.version, "published incumbent must really upgrade");
+  }
   const emit = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
   const temporaryRoot = await fs.realpath(os.tmpdir());
   const disk = await fs.statfs(temporaryRoot);
-  const compressedBytes = (await fs.stat(source)).size + (await fs.stat(candidate)).size;
+  const compressedBytes =
+    (await fs.stat(source)).size +
+    (await fs.stat(candidate)).size +
+    (published ? (await fs.stat(published)).size : 0);
   async function unpackedTarBytes(file) {
     let bytes = 0;
     const input = createReadStream(file);
@@ -156,7 +193,10 @@ async function main() {
     for await (const chunk of unpacked) bytes += chunk.length;
     return bytes;
   }
-  const unpackedBytes = (await unpackedTarBytes(source)) + (await unpackedTarBytes(candidate));
+  const unpackedBytes =
+    (await unpackedTarBytes(source)) +
+    (await unpackedTarBytes(candidate)) +
+    (published ? await unpackedTarBytes(published) : 0);
   // npm dependencies are not all in the core tarball. Reserve a conservative floor
   // and keep just one installed case at a time, reusing the task's npm cache.
   const requiredBytes = Math.max(4 * 1024 ** 3, unpackedBytes * 3);
@@ -170,6 +210,7 @@ async function main() {
     sourceSha: values["source-sha"],
     packageSha256: values["package-sha256"],
     candidateSha256: values["candidate-sha256"],
+    ...(published ? { published: PUBLISHED_BASELINE } : {}),
     harnessSha256: await hash(fileURLToPath(import.meta.url)),
     preloadSha256: await hash(preload),
     ownerSourceSha256: await Promise.all(
@@ -178,6 +219,7 @@ async function main() {
         "../lib/vitest-resource-ownership.mts",
         "../lib/windows-taskkill.mjs",
         "../windows-cmd-helpers.mjs",
+        "../../test/helpers/bounded-child-output.ts",
       ].map(async (relative) => ({
         relative,
         sha256: await hash(fileURLToPath(new URL(relative, import.meta.url))),
@@ -285,7 +327,7 @@ setInterval(() => {}, 1000);
       maxBuffer: 4 * 1024 * 1024,
     });
   }
-  function launch(root, args, faults = [], ancestors = false) {
+  function launch(root, args, faults = [], ancestors = false, liveRoot) {
     const nodeArgs = ["--import", preload, ...args];
     const child = spawn(
       process.execPath,
@@ -301,6 +343,7 @@ setInterval(() => {}, 1000);
           OPENCLAW_ACTIVATION_TEST_FAULTS: JSON.stringify(faults),
           OPENCLAW_ACTIVATION_TEST_ISOLATE_TMP: "1",
           OPENCLAW_ACTIVATION_TEST_OBSERVE_CHILDREN: "1",
+          ...(liveRoot ? { OPENCLAW_ACTIVATION_TEST_LIVE_ROOT: liveRoot } : {}),
           NODE_OPTIONS: `--import ${JSON.stringify(preload)}`,
         },
       },
@@ -309,28 +352,78 @@ setInterval(() => {}, 1000);
     const owned = new Map([[child.pid, identity(child.pid)]]);
     const groups = new Set([child.pid]);
     const events = [];
-    let stdout = "",
-      stderr = "",
-      buffered = { stdout: "", stderr: "" };
-    const consume = (stream, bytes) => {
-      const chunk = bytes.toString();
-      if (stream === "stdout") stdout += chunk;
-      else stderr += chunk;
-      buffered[stream] += chunk;
-      let end;
-      while ((end = buffered[stream].indexOf("\n")) >= 0) {
-        const line = buffered[stream].slice(0, end);
-        buffered[stream] = buffered[stream].slice(end + 1);
-        if (!line.startsWith(prefixMarker)) continue;
-        const event = JSON.parse(line.slice(prefixMarker.length));
-        if (event.event === "spawned") {
-          owned.set(
-            event.pid,
-            event.startIdentity === undefined ? identity(event.pid) : String(event.startIdentity),
-          );
-          if (event.detached) groups.add(event.pid);
+    const maxOutputBytes = 4 * 1024 * 1024;
+    const outputBuffers = {
+      stdout: createBoundedChildOutput(maxOutputBytes),
+      stderr: createBoundedChildOutput(maxOutputBytes),
+    };
+    const { StringDecoder } = process.getBuiltinModule("node:string_decoder");
+    const decoders = { stdout: new StringDecoder("utf8"), stderr: new StringDecoder("utf8") };
+    const buffered = { stdout: "", stderr: "" };
+    let outputBytes = 0;
+    let outputFailure;
+    const failOutput = (error) => {
+      outputFailure = Object.assign(error, {
+        stdout: outputBuffers.stdout.text(),
+        stderr: outputBuffers.stderr.text(),
+      });
+      // Discarded observation bytes cannot establish complete descendant custody.
+      unsettledCommand = true;
+      buffered.stdout = "";
+      buffered.stderr = "";
+      try {
+        try {
+          process.kill(child.pid, 0);
+          assert.equal(identity(child.pid), owned.get(child.pid), "output-limit owner changed");
+        } catch (cause) {
+          if (cause.code !== "ESRCH") throw cause;
         }
-        events.push(event);
+        terminateManagedChild(child, "SIGKILL", {
+          processGroupFallback: "never",
+          onProcessGroupSignalError(cause) {
+            throw cause;
+          },
+        });
+      } catch (cause) {
+        outputFailure = new AggregateError(
+          [outputFailure, cause],
+          "Output capture and owned root termination failed",
+        );
+      }
+    };
+    const consume = (stream, bytes) => {
+      if (outputFailure) return;
+      try {
+        const remainingBytes = maxOutputBytes - outputBytes;
+        outputBuffers[stream].append(bytes.subarray(0, remainingBytes));
+        outputBytes += bytes.byteLength;
+        if (outputBytes > maxOutputBytes) {
+          failOutput(
+            Object.assign(new Error("Combined child output exceeded 4 MiB"), {
+              code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+            }),
+          );
+          return;
+        }
+        buffered[stream] += decoders[stream].write(bytes);
+        let end;
+        while ((end = buffered[stream].indexOf("\n")) >= 0) {
+          const line = buffered[stream].slice(0, end);
+          buffered[stream] = buffered[stream].slice(end + 1);
+          if (!line.startsWith(prefixMarker)) continue;
+          const event = JSON.parse(line.slice(prefixMarker.length));
+          if (event.event === "observation-overflow") unsettledCommand = true;
+          if (event.event === "spawned") {
+            owned.set(
+              event.pid,
+              event.startIdentity === undefined ? identity(event.pid) : String(event.startIdentity),
+            );
+            if (event.detached) groups.add(event.pid);
+          }
+          events.push(event);
+        }
+      } catch (error) {
+        failOutput(error);
       }
     };
     child.stdout.on("data", (bytes) => consume("stdout", bytes));
@@ -339,26 +432,38 @@ setInterval(() => {}, 1000);
     const closed = once(child, "close");
     const group = (pid) => ({ pid, exitCode: alive(pid) ? null : 1, signalCode: null });
     async function join() {
-      await until(
-        () =>
-          [...groups].every(
-            (pid) =>
-              inspectManagedProcessGroup(group(pid), { errorPolicy: "indeterminate" }) === "dead",
-          ) &&
-          child.stdout.closed &&
-          child.stderr.closed &&
-          (child.exitCode !== null || child.signalCode !== null),
-        "owned process, groups, and output closure",
-        6_000,
-      );
-      await closed;
+      try {
+        await until(
+          () =>
+            [...groups].every(
+              (pid) =>
+                inspectManagedProcessGroup(group(pid), { errorPolicy: "indeterminate" }) === "dead",
+            ) &&
+            child.stdout.closed &&
+            child.stderr.closed &&
+            (child.exitCode !== null || child.signalCode !== null),
+          "owned process, groups, and output closure",
+          6_000,
+        );
+        await closed;
+      } catch (error) {
+        if (outputFailure) {
+          throw new AggregateError(
+            [outputFailure, error],
+            "Output capture and process join failed",
+          );
+        }
+        throw error;
+      }
+      if (outputFailure) throw outputFailure;
     }
     async function waitEvent(predicate, label) {
       await until(() => {
+        if (outputFailure) throw outputFailure;
         if (events.some(predicate)) return true;
         assert.ok(
           child.exitCode === null && child.signalCode === null,
-          `process exited before ${label}\n${stdout}\n${stderr}`,
+          `process exited before ${label}\n${outputBuffers.stdout.text()}\n${outputBuffers.stderr.text()}`,
         );
         assert.ok(
           !events.some(
@@ -372,10 +477,11 @@ setInterval(() => {}, 1000);
                   spawned.fd3 !== undefined,
               ),
           ),
-          `updater exited before ${label}\n${stdout}\n${stderr}`,
+          `updater exited before ${label}\n${outputBuffers.stdout.text()}\n${outputBuffers.stderr.text()}`,
         );
         return false;
       }, label);
+      if (outputFailure) throw outputFailure;
       return events.find(predicate);
     }
     async function kill(pid, reap = true) {
@@ -437,9 +543,16 @@ setInterval(() => {}, 1000);
       killAll,
       cleanup,
       join,
+      observations: () => {
+        if (outputFailure) throw outputFailure;
+        return events.filter((event) => event.role);
+      },
       checkpoint: (label) =>
         waitEvent((event) => event.event === "checkpoint" && event.label === label, label),
-      output: () => ({ stdout, stderr }),
+      output: () => {
+        if (outputFailure) throw outputFailure;
+        return { stdout: outputBuffers.stdout.text(), stderr: outputBuffers.stderr.text() };
+      },
     };
   }
   async function exists(file) {
@@ -452,6 +565,7 @@ setInterval(() => {}, 1000);
     }
   }
   async function runCase(name, index) {
+    const publishedUpgrade = name === "published-upgrade";
     const root = path.join(runRoot, `${index}-${name}`);
     for (const part of ["home", "tmp", "state"])
       await fs.mkdir(path.join(root, part), { recursive: true });
@@ -463,9 +577,31 @@ setInterval(() => {}, 1000);
     try {
       await command(
         "npm",
-        ["install", "--global", "--prefix", prefix, source, "--no-fund", "--no-audit"],
+        [
+          "install",
+          "--global",
+          "--prefix",
+          prefix,
+          publishedUpgrade ? published : source,
+          "--no-fund",
+          "--no-audit",
+        ],
         root,
       );
+      if (publishedUpgrade) {
+        assert.equal(
+          JSON.parse(await fs.readFile(path.join(live, "package.json"), "utf8")).version,
+          PUBLISHED_BASELINE.version,
+        );
+        assert.equal(
+          JSON.parse(await fs.readFile(path.join(live, "dist", "build-info.json"), "utf8")).commit,
+          PUBLISHED_BASELINE.codeSha,
+        );
+        assert.match(
+          (await command(process.execPath, [bin, "--version"], root)).stdout,
+          /OpenClaw 2026\.9\.3 \(1391f7c\)/u,
+        );
+      }
       const footprint = await command("du", ["-sk", prefix], root);
       const installedBytes = Number(footprint.stdout.trim().split(/\s+/u)[0]) * 1024;
       assert.ok(Number.isSafeInteger(installedBytes) && installedBytes > 0);
@@ -480,9 +616,9 @@ setInterval(() => {}, 1000);
         installedBytes,
         availableBytes: space.bavail * space.bsize,
       });
-      const sealedDigest = await hash(
-        path.join(live, "dist", "package-update-activation-recovery.mjs"),
-      );
+      const sealedDigest = publishedUpgrade
+        ? undefined
+        : await hash(path.join(live, "dist", "package-update-activation-recovery.mjs"));
       const unknown = path.join(prefix, "bin", "unrelated-tool");
       await fs.writeFile(unknown, "unrelated executable\n", { mode: 0o755 });
       const anchorName = `.openclaw.package-activation-${createHash("sha256").update(live).digest("hex").slice(0, 24)}`;
@@ -500,7 +636,7 @@ setInterval(() => {}, 1000);
         "120",
       ];
       const faults =
-        name === "healthy"
+        name === "healthy" || publishedUpgrade
           ? []
           : name === "delegated-child"
             ? [
@@ -526,7 +662,13 @@ setInterval(() => {}, 1000);
                   when: "after",
                 },
               ];
-      const updater = launch(root, updateArgs, faults, name !== "healthy");
+      const updater = launch(
+        root,
+        updateArgs,
+        faults,
+        name !== "healthy" && !publishedUpgrade,
+        publishedUpgrade ? live : undefined,
+      );
       processes.push(updater);
       const runRecovery = async (action, succeeds = true) => {
         // No loader, repository dependency, authority environment, or canonical CLI.
@@ -568,7 +710,7 @@ setInterval(() => {}, 1000);
         );
         if (inspection) assert.ok(!output.includes(recovery), "must not print a missing helper");
       };
-      if (name === "healthy") {
+      if (name === "healthy" || publishedUpgrade) {
         await until(
           () => updater.child.exitCode !== null || updater.child.signalCode !== null,
           "healthy update",
@@ -576,6 +718,82 @@ setInterval(() => {}, 1000);
         assert.deepEqual(await updater.exited, [0, null], JSON.stringify(updater.output()));
         await updater.join();
         assert.equal(await exists(anchor), false);
+        if (publishedUpgrade) {
+          assert.equal(unsettledCommand, false, "published observation/custody limit exceeded");
+          // Remove only our observer records; product stdout must still be valid JSON.
+          const result = JSON.parse(
+            updater
+              .output()
+              .stdout.split("\n")
+              .filter((line) => !line.startsWith(prefixMarker))
+              .join("\n"),
+          );
+          assert.equal(result.status, "ok");
+          assert.equal(typeof result.postUpdate?.plugins?.changed, "boolean");
+          const observed = updater.observations();
+          const one = (event, role) => {
+            const matches = observed.filter(
+              (entry) => entry.event === event && entry.role === role,
+            );
+            assert.equal(matches.length, 1, `expected one ${role} ${event}`);
+            return matches[0];
+          };
+          const original = one("started", "published-updater");
+          assert.equal(original.pid, updater.child.pid);
+          assert.equal(String(original.startIdentity), updater.owned.get(original.pid));
+          assert.equal(original.packageVersion, PUBLISHED_BASELINE.version);
+          assert.equal(original.codeSha, PUBLISHED_BASELINE.codeSha);
+          const candidateChild = (role, parent, requireStarted) => {
+            const spawned = one("spawned", role);
+            assert.equal(spawned.parentPid, parent.pid, `${role} parent`);
+            assert.equal(spawned.parentStartIdentity, parent.startIdentity, `${role} parent start`);
+            assert.equal(String(spawned.startIdentity), updater.owned.get(spawned.pid));
+            assert.equal(spawned.packageVersion, after.version);
+            assert.equal(spawned.codeSha, values["source-sha"]);
+            assert.equal(spawned.fd3, false, "published upgrade has no retained activation grant");
+            if (requireStarted) {
+              const started = one("started", role);
+              for (const field of [
+                "pid",
+                "parentPid",
+                "startIdentity",
+                "packageVersion",
+                "codeSha",
+              ]) {
+                assert.equal(started[field], spawned[field], `${role} started ${field}`);
+              }
+            }
+            return spawned;
+          };
+          const doctor = candidateChild("active-doctor", original, false);
+          const migrated = candidateChild("candidate-migrated-finalizer", original, true);
+          assert.deepEqual(
+            observed.filter((entry) => entry.role === "candidate-post-core"),
+            [],
+            "the fresh migrated candidate must converge plugins without a post-core grandchild",
+          );
+          const postPluginDoctorRequired = result.postUpdate.plugins.changed;
+          const postPluginDoctor = postPluginDoctorRequired
+            ? candidateChild("post-plugin-doctor", migrated, true)
+            : null;
+          if (!postPluginDoctorRequired) {
+            assert.deepEqual(
+              observed.filter((entry) => entry.role === "post-plugin-doctor"),
+              [],
+              "unchanged plugins do not require a post-plugin Doctor",
+            );
+          }
+          emit({
+            event: "handoff",
+            name,
+            kind: "published-updater-to-candidate-migrated-finalizer",
+            original,
+            doctor,
+            migrated,
+            postPluginDoctorRequired,
+            postPluginDoctor,
+          });
+        }
       } else {
         const checkpoint = await updater.checkpoint("publication");
         assert.equal(
@@ -669,6 +887,12 @@ setInterval(() => {}, 1000);
       }
       const selected = JSON.parse(await fs.readFile(path.join(live, "package.json"), "utf8"));
       assert.equal(selected.version, after.version);
+      if (publishedUpgrade) {
+        assert.equal(
+          JSON.parse(await fs.readFile(path.join(live, "dist", "build-info.json"), "utf8")).commit,
+          values["source-sha"],
+        );
+      }
       assert.match(
         (await command(process.execPath, [bin, "--version"], root)).stdout,
         new RegExp(after.version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),

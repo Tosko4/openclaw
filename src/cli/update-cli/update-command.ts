@@ -77,6 +77,7 @@ import {
   type ManagedServiceRootRedirect,
 } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
+import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 
@@ -118,15 +119,17 @@ async function executeUpdateCommand(
       withUpdateFailureTriage({ ...opts, invocationCwd }, recoveryState.triageTarget, async () => {
         await withUpdateInProgressEnv(invocationCwd, async () => {
           executionStarted = true;
-          await withUpdateCommandExecutor(run.runId, (executor) =>
-            withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
-              updateCommandInternal(
-                opts,
-                recoveryState,
-                invocationCwd,
-                prepared,
-                presentation,
-                executor,
+          await withUpdateCommandTerminalResult(run, () =>
+            withUpdateCommandExecutor(run.runId, (executor) =>
+              withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
+                updateCommandInternal(
+                  opts,
+                  recoveryState,
+                  invocationCwd,
+                  prepared,
+                  presentation,
+                  executor,
+                ),
               ),
             ),
           );

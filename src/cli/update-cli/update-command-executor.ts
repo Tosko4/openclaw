@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
@@ -57,9 +58,13 @@ export type UpdateCommandChildGrant = {
   childKey: string;
   databaseIdentity?: ManagedUpdateLeaseDatabaseIdentity;
 };
+export type UpdateCommandChildBinding = (
+  pid: number,
+  onBound?: (identity: Readonly<ManagedHandoffLease["executor"]>) => undefined,
+) => void;
 type ChildOperation<T> = (
   grant: UpdateCommandChildGrant,
-  bindChild: (pid: number) => void,
+  bindChild: UpdateCommandChildBinding,
 ) => Promise<T>;
 const childOwners = new WeakMap<
   UpdateRecoveryFence,
@@ -220,7 +225,7 @@ export async function withUpdateCommandExecutor<T>(
       const running = async () => {
         let outcome: { result: ChildResult } | { error: Error };
         try {
-          const result = await childOperation(grant, (pid) => {
+          const result = await childOperation(grant, (pid, onBound) => {
             assertBase();
             if (bound || pid === process.pid) {
               throw new UpdateCommandRecoveryPendingError(
@@ -233,6 +238,15 @@ export async function withUpdateCommandExecutor<T>(
             }
             childLease = assigned;
             bound = true;
+            // Custody survives a failed observer. Record the committed identity
+            // outside the lease transaction, before the caller may send input.
+            if (isPromiseLike(onBound?.(Object.freeze({ ...assigned.executor })))) {
+              throw new TypeError("Candidate binding observation must be synchronous.");
+            }
+            assertBase();
+            if (!control.current(childLease)) {
+              throw new UpdateCommandRecoveryPendingError("Candidate process binding changed.");
+            }
           });
           if (!bound) {
             throw new UpdateCommandRecoveryPendingError(

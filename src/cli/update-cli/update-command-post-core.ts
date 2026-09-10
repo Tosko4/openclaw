@@ -37,6 +37,7 @@ import {
   POST_CORE_UPDATE_STARTED_AT_ENV,
   type PreUpdateConfigRestoreInput,
 } from "../../infra/update-post-core-context.js";
+import { adoptUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "../../plugins/installed-plugin-index-records.js";
@@ -52,6 +53,7 @@ import {
 } from "./update-command-config.js";
 import {
   withUpdateCommandExecutorChild,
+  type UpdateCommandChildBinding,
   type UpdateCommandChildGrant,
 } from "./update-command-executor.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
@@ -296,6 +298,10 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   exitCode?: number;
   error?: string;
 }> {
+  const run = params.opts.run
+    ? { runId: params.opts.run.runId, env: { ...params.opts.run.env } }
+    : undefined;
+  const fence = params.opts.run?.executorFence;
   const continuation = readPackageActivationContinuation(resolveUpdateInstallRoot(params.root));
   const entryPath = await resolveGatewayInstallEntrypoint(params.root);
   if (!entryPath) {
@@ -305,7 +311,6 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     return { resumed: false };
   }
   const nodeRunner = params.nodeRunner ?? resolveNodeRunner();
-  const fence = params.opts.run?.executorFence;
   if (continuation) {
     assertUpdatePackageActivationAdmission(params.root, { continuation: fence });
     if (!["index.js", "index.mjs"].includes(path.basename(entryPath))) {
@@ -409,7 +414,10 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       await fs.writeFile(sentinelPath, JSON.stringify(sentinel), { mode: 0o600 });
       handoffEnv[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV] = sentinelPath;
     }
-    const runChild = async (grant?: UpdateCommandChildGrant, bindChild?: (pid: number) => void) => {
+    const runChild = async (
+      grant?: UpdateCommandChildGrant,
+      bindChild?: UpdateCommandChildBinding,
+    ) => {
       const input = grant ? Buffer.from(JSON.stringify(grant)) : undefined;
       if (input && input.byteLength > POST_CORE_EXECUTOR_MAX_BYTES) {
         throw new Error("Post-core executor grant exceeds its bound.");
@@ -420,7 +428,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
         env: {
           ...handoffEnv,
           OPENCLAW_UPDATE_IN_PROGRESS: "1",
-          ...(params.opts.run ? { [UPDATE_RUN_ID_ENV]: params.opts.run.runId } : {}),
+          ...(run ? { [UPDATE_RUN_ID_ENV]: run.runId } : {}),
           [POST_CORE_UPDATE_ENV]: "1",
           [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
           [POST_CORE_UPDATE_RESULT_PATH_ENV]: resultPath,
@@ -579,10 +587,15 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
             });
           }
           try {
-            if (!child.pid || !(inputPipe instanceof Writable) || !bindChild) {
+            if (!child.pid || !(inputPipe instanceof Writable) || !bindChild || !run) {
               throw new Error("Post-core executor has no live child pipe.");
             }
-            bindChild(child.pid);
+            bindChild(child.pid, (identity) => {
+              adoptUpdateRun(run.runId, {
+                env: run.env,
+                driver: { host: os.hostname(), ...identity },
+              });
+            });
             inputPipe.end(input);
           } catch (cause) {
             failInput(cause);
