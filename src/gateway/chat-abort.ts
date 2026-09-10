@@ -23,9 +23,9 @@ import {
 } from "../infra/agent-run-registry.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { removeChatAbortControllerEntry } from "./chat-abort-lifecycle-internal.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import { appendChatCanvasBlocksToMessage } from "./chat-display-projection.canvas.js";
 import { resolveChatRunOwnerAgentId } from "./chat-run-owner.js";
-import type { LiveActivityRunFact } from "./live-activity-source.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import {
@@ -33,7 +33,6 @@ import {
   type ChatRunPlanSnapshot,
   type ChatRunState,
 } from "./server-chat-state.js";
-import type { SessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   resolveSessionSubscriptionKey,
@@ -43,68 +42,7 @@ import {
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
 
 export { removeChatAbortControllerEntry } from "./chat-abort-lifecycle-internal.js";
-
-export type ChatAbortControllerEntry = {
-  controller: AbortController;
-  sessionId: string;
-  sessionKey: string;
-  lifecycleGeneration?: string;
-  preparedSession?: Readonly<{ sessionId: string; lifecycleRevision: string | null }>;
-  /** Checks the retained admission itself, not its execution-start projection. */
-  isAdmissionCurrent?: () => boolean;
-  liveActivityFact?: LiveActivityRunFact;
-  liveActivityRun?: Readonly<{ publicRunId: string; internalRunId: string }>;
-  /** Exact operational instance created by this controller registration. */
-  operationalRunInstance?: OperationalRunInstanceRef;
-  /** Exact approval lease captured when this controller's execution was admitted. */
-  agentRunDelegatedAuthority?: AgentRunDelegatedAuthority;
-  agentId?: string;
-  startedAtMs: number;
-  /** False until lane admission reaches the execution boundary. */
-  executionStarted?: boolean;
-  expiresAtMs: number;
-  ownerConnId?: string;
-  ownerDeviceId?: string;
-  providerId?: string;
-  authProviderId?: string;
-  abortStopReason?: string;
-  /** Latest argument-free validation diagnostic for operator-initiated aborts. */
-  toolErrorSummary?: string;
-  /**
-   * False for backend/internal agent runs that may share a session key but must
-   * not be projected into operator chat surfaces.
-   */
-  controlUiVisible?: boolean;
-  /**
-   * Controls only the sessions.list active-run projection. Terminal lifecycle
-   * clears this before chat.send settles, while the entry stays as the retry
-   * idempotency guard until normal cleanup removes it.
-   */
-  projectSessionActive?: boolean;
-  /** True after the terminal session-store update has completed. */
-  projectSessionTerminalPersisted?: boolean;
-  /** A terminal lifecycle event was observed and is awaiting persistence. */
-  projectSessionTerminalPending?: boolean;
-  /** Store timestamp expected from the observed terminal lifecycle event. */
-  projectSessionTerminalObservedAt?: number;
-  /** In-flight terminal session-store update used by restart shutdown. */
-  projectSessionTerminalPersistence?: Promise<void>;
-  /** Caller completion requested cleanup before terminal lifecycle persistence settled. */
-  registrationCleanupRequested?: boolean;
-  /** False after the owning reply run commits a terminal outcome. */
-  isAbortable?: (entry: ChatAbortControllerEntry) => boolean;
-  /** Runs once when this registration is actually removed. */
-  onRemoved?: () => void;
-  /**
-   * Which RPC owns this registration. Absent (undefined) is treated as
-   * `"chat-send"` so pre-existing callers that constructed entries without
-   * a kind keep their behavior. Consumers that need "chat.send specifically
-   * is active" must check `kind !== "agent"`, not just `.has(runId)`.
-   */
-  kind?: "chat-send" | "agent";
-  /** Side questions stay independent from main-turn TUI session stops. */
-  turnKind?: "main" | "btw";
-};
+export type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 
 export type RestartRecoveryCandidate = {
   runId: string;
@@ -541,7 +479,16 @@ export type ChatAbortOps = {
   broadcast: GatewayBroadcastFn;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   onRunAborted?: (runId: string) => void;
-  sessionLifecyclePersistence?: SessionLifecyclePersistenceOwner;
+  sessionLifecyclePersistence?: {
+    withLocalAbort<T>(
+      params: {
+        entry: ChatAbortControllerEntry;
+        entries: Map<string, ChatAbortControllerEntry>;
+        event: Omit<AgentEventPayload, "seq" | "ts">;
+      },
+      abort: () => T,
+    ): T;
+  };
 };
 
 function resolveChatAbortDeliverySessionKeys(

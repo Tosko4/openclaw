@@ -24,7 +24,7 @@ export function createChatSendRunBinding(params: {
   sessionKey: string;
   lifecycleGeneration: string;
   isAdmissionActive: () => boolean;
-  readSessionEntry: () => SessionEntry | undefined;
+  loadCurrentSessionEntry: () => SessionEntry | undefined;
 }) {
   const { activeRunAbort, clientRunId, sessionKey, lifecycleGeneration } = params;
   const entry = activeRunAbort.entry;
@@ -67,7 +67,7 @@ export function createChatSendRunBinding(params: {
     onAdmittedRunContext: (admitted: AdmittedRunContext): undefined => {
       const prepared = entry.preparedSession;
       const root = getAdmittedRunDelegatedAuthority(admitted);
-      const session = params.readSessionEntry();
+      const session = params.loadCurrentSessionEntry();
       assertAdmissionCurrent();
       const owner = getAgentRunContext(admitted.operationalRunInstance.runId);
       if (

@@ -590,7 +590,7 @@ export async function admitChatSend(params: {
     sessionKey,
     lifecycleGeneration,
     isAdmissionActive: () => acquiredGatewayWorkAdmission.isActive(),
-    readSessionEntry: () =>
+    loadCurrentSessionEntry: () =>
       loadSessionEntry(sessionLoadKey, { ...sessionLoadOptions, clone: false }).entry,
   });
   let gatewayWorkAdmissionRetains = 1;

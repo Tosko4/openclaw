@@ -78,8 +78,6 @@ describe("APNs cancellation", () => {
               auth: params.auth,
               payload: createApnsLiveActivityPayload({
                 snapshot: {
-                  sourceIncarnation: "source-owner",
-                  sequence: 1,
                   status: "running",
                   observedAtMs: 1_000,
                 },
@@ -257,8 +255,6 @@ describe("APNs cancellation", () => {
             auth: params.auth,
             payload: createApnsLiveActivityPayload({
               snapshot: {
-                sourceIncarnation: "source-owner",
-                sequence: 1,
                 status: "running",
                 observedAtMs: 1_000,
               },

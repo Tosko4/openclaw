@@ -1,29 +1,10 @@
 import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
-import type {
-  LiveActivityObservation,
-  LiveActivitySnapshot,
-} from "../infra/push-live-activity-store.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import type { LiveActivityObservation } from "../infra/push-live-activity-store.js";
+import type { ChatAbortControllerEntry, LiveActivitySource } from "./chat-abort.types.js";
 
 const liveActivitySource = Symbol("liveActivitySource");
 
-export type LiveActivitySource = Readonly<{
-  publicRunId: string;
-  internalRunId: string;
-  contextClaimId: string;
-  lifecycleGeneration: string;
-  sourceIncarnation: string;
-  entry: ChatAbortControllerEntry;
-  agentId: string;
-  sessionKey: string;
-  preparedSession: Readonly<{ sessionId: string; lifecycleRevision: string | null }>;
-}>;
-
-/** One slot on the exact admitted chat owner, never an independent run registry. */
-export type LiveActivityRunFact = Readonly<{
-  source: LiveActivitySource;
-  snapshot: Readonly<LiveActivitySnapshot> | null;
-}>;
+export type { LiveActivitySource } from "./chat-abort.types.js";
 
 export type CommittedLiveActivityFact = Readonly<{
   source: LiveActivitySource;

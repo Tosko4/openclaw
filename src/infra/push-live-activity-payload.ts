@@ -1,5 +1,3 @@
-import type { LiveActivitySnapshot } from "./push-live-activity-store.js";
-
 const APPLE_REFERENCE_DATE_SECONDS = 978_307_200;
 // Remote freshness belongs to the original fact, not a retry or token rotation.
 const REMOTE_ACTIVITY_STALE_SECONDS = 240;
@@ -46,7 +44,12 @@ function requireUnixMilliseconds(value: number): void {
 
 /** Projects recorded run facts into OpenClawRunActivityAttributes.ContentState. */
 export function createApnsLiveActivityPayload(params: {
-  snapshot: Readonly<LiveActivitySnapshot>;
+  snapshot: Readonly<{
+    status: keyof typeof statuses;
+    observedAtMs: number;
+    startedAtMs?: number;
+    endedAtMs?: number;
+  }>;
   timestamp: number;
 }): ApnsLiveActivityPayload {
   const { timestamp, snapshot } = params;

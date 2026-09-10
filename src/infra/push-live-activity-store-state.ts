@@ -152,7 +152,7 @@ export type LiveActivityRetirementReason =
   | "terminal-expired"
   | "terminal-delivered"
   | "delivery-rejected";
-export type LiveActivityStoreError =
+type LiveActivityStoreError =
   | "invalid-input"
   | "snapshot-too-large"
   | "not-found"

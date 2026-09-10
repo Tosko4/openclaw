@@ -63,8 +63,6 @@ export type {
   LiveActivitySnapshot,
   LiveActivityObservation,
   LiveActivityRegistrationInput,
-  LiveActivityRetirementReason,
-  LiveActivityStoreError,
   LiveActivityRegistration,
   LiveActivityOwnerIsCurrent,
   LiveActivityDeliveryState,

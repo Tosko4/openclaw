@@ -1,4 +1,4 @@
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 
 const terminalPersistenceErrorByEntry = new WeakMap<object, unknown>();
 const removalWaitersByEntry = new WeakMap<object, Set<() => void>>();

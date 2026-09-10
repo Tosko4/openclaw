@@ -322,8 +322,6 @@ describe("push-apns.relay", () => {
             relayGatewayIdentity,
             payload: createApnsLiveActivityPayload({
               snapshot: {
-                sourceIncarnation: "source-owner",
-                sequence: 1,
                 status: "running",
                 observedAtMs: 1_000,
               },

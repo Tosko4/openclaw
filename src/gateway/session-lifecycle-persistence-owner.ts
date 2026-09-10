@@ -14,12 +14,8 @@ import {
   markChatAbortTerminalPersistenceError,
   removeChatAbortControllerEntry,
 } from "./chat-abort-lifecycle-internal.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
-import {
-  attachLiveActivitySource,
-  readLiveActivitySource,
-  type LiveActivitySource,
-} from "./live-activity-source.js";
+import type { ChatAbortControllerEntry, LiveActivitySource } from "./chat-abort.types.js";
+import { attachLiveActivitySource, readLiveActivitySource } from "./live-activity-source.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 
 type LifecyclePersistenceParams = Parameters<typeof persistGatewaySessionLifecycleEvent>[0];
