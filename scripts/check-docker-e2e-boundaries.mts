@@ -8,6 +8,7 @@ import packageJson from "../package.json" with { type: "json" };
 import { laneResources, lanesNeedOpenClawPackage, laneWeight } from "./lib/docker-e2e-plan.mts";
 import {
   allReleasePathLanes,
+  liveUpgradeSurvivorLane,
   mainLanes,
   publicInstallerLanes,
   tailLanes,
@@ -25,6 +26,7 @@ const livePackageBackedLanes = new Set([
   "live-codex-npm-plugin",
   "live-mcp-code-mode-gateway",
   "live-plugin-tool",
+  "live-upgrade-survivor-openai",
   "npm-telegram-live",
   "openai-chat-tools",
   "openwebui",
@@ -165,6 +167,7 @@ const releasePathLanes = allReleasePathLanes({ includeOpenWebUI: true });
 for (const [label, lanes] of [
   ["release-path", releasePathLanes],
   ["public-installer", publicInstallerLanes],
+  ["live-upgrade", [liveUpgradeSurvivorLane]],
   ["main", mainLanes],
   ["tail", tailLanes],
 ] as const) {

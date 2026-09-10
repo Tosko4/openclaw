@@ -1,5 +1,6 @@
 // Plans grouped targeted Docker lane matrix entries without installed dependencies.
 import { fileURLToPath } from "node:url";
+import { liveUpgradeSurvivorLane, mainLanes } from "./lib/docker-e2e-scenarios.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import {
   normalizeUpgradeSurvivorBaselineSpec,
@@ -8,7 +9,11 @@ import {
   supportsUpgradeSurvivorScenarioAtBaseline,
 } from "./lib/upgrade-survivor-policy.mjs";
 
-const BASELINE_SHARDED_LANES = new Set(["published-upgrade-survivor", "update-migration"]);
+const BASELINE_SHARDED_LANES = new Map(
+  [...mainLanes, liveUpgradeSurvivorLane]
+    .filter((lane) => lane.upgradeSurvivorMatrix)
+    .map((lane) => [lane.name, lane.upgradeSurvivorMatrix]),
+);
 const SURVIVOR_SCENARIOS_PER_GROUP = 3;
 
 function splitTokens(raw) {
@@ -69,13 +74,15 @@ export function planTargetedDockerLaneGroups({
   }
   const baselineSpecs = parseUpgradeSurvivorBaselineSpecs(upgradeSurvivorBaselines);
   const hasExpandedSurvivorScenarios = splitTokens(upgradeSurvivorScenarios).length > 0;
-  const survivorScenarios = selectedLanes.some((lane) => BASELINE_SHARDED_LANES.has(lane))
+  const survivorScenarios = selectedLanes.some(
+    (lane) => BASELINE_SHARDED_LANES.get(lane) === "scenarios",
+  )
     ? parseUpgradeSurvivorScenarios(upgradeSurvivorScenarios)
     : [];
   let pairedScenarios;
   if (
     upgradeSurvivorBaselineScope === "legacy-operator-state" &&
-    selectedLanes.some((lane) => BASELINE_SHARDED_LANES.has(lane))
+    selectedLanes.some((lane) => BASELINE_SHARDED_LANES.get(lane) === "scenarios")
   ) {
     const predecessor = normalizeUpgradeSurvivorBaselineSpec(upgradeSurvivorBaseline);
     if (!predecessor || !/^openclaw@\d{4}\.\d+\.\d+(?:-\d+)?$/u.test(predecessor)) {
@@ -107,7 +114,7 @@ export function planTargetedDockerLaneGroups({
     const groupLanes = splitTokens(group.docker_lanes);
     if (
       hasExpandedSurvivorScenarios &&
-      groupLanes.some((lane) => BASELINE_SHARDED_LANES.has(lane))
+      groupLanes.some((lane) => BASELINE_SHARDED_LANES.get(lane) === "scenarios")
     ) {
       group.timeout_minutes = 90;
     }
@@ -126,6 +133,18 @@ export function planTargetedDockerLaneGroups({
   };
 
   for (const lane of selectedLanes) {
+    if (BASELINE_SHARDED_LANES.get(lane) === "base") {
+      flushPending();
+      for (const baseline of baselineSpecs.length > 0 ? baselineSpecs : [undefined]) {
+        addGroup({
+          docker_lanes: lane,
+          label: [lane, baseline].filter(Boolean).map(sanitizeLabel).join("-"),
+          ...(baseline ? { published_upgrade_survivor_baselines: baseline } : {}),
+          published_upgrade_survivor_scenarios: "base",
+        });
+      }
+      continue;
+    }
     if (BASELINE_SHARDED_LANES.has(lane) && pairedScenarios) {
       flushPending();
       for (const [baseline, scenarios] of pairedScenarios) {

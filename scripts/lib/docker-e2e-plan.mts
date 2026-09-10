@@ -12,6 +12,7 @@ import {
   allReleasePathLanes,
   fleetCacheLane,
   mainLanes,
+  liveUpgradeSurvivorLane,
   normalizeReleaseProfile,
   publicInstallerLanes,
   releasePathChunkLanes,
@@ -412,90 +413,76 @@ function expandUpgradeSurvivorBaselineLanes(
   allowExecutableContract = false,
   frozenTarget?: InertTargetContract,
 ): UpgradeSurvivorExpansion {
-  const hasUpgradeSurvivorLane = poolLanes.some(
-    (poolLane) =>
-      poolLane.name === "published-upgrade-survivor" || poolLane.name === "update-migration",
-  );
-  if (!hasUpgradeSurvivorLane) {
+  if (!poolLanes.some((poolLane) => poolLane.upgradeSurvivorMatrix)) {
     return { lanes: poolLanes, omittedLaneNames: [] };
   }
   const baselineSpecs = parseUpgradeSurvivorBaselineSpecs(rawBaselineSpecs);
-  // Trusted-current planners may know scenarios that a frozen target's Docker
-  // harness cannot seed or assert. Filter by the selected tree's concrete
-  // harness contract so validation never schedules an impossible target lane.
-  const configuredScenarios = parseUpgradeSurvivorScenarios(rawScenarios);
-  const requestedScenarios = configuredScenarios.length > 0 ? configuredScenarios : ["base"];
-  const supportedScenarios = filterUpgradeSurvivorScenariosForTarget(
-    requestedScenarios,
-    targetRoot,
-    allowExecutableContract,
-    frozenTarget,
-  );
-  const supportedScenarioSet = new Set(supportedScenarios);
-  const unsupportedScenarios =
-    targetRoot || frozenTarget
-      ? requestedScenarios.filter((scenario) => !supportedScenarioSet.has(scenario))
-      : [];
-  const scenarios = configuredScenarios.length > 0 ? supportedScenarios : [];
   const matrixBaselines = baselineSpecs.length > 0 ? baselineSpecs : [undefined];
-  const survivorLanes = poolLanes.filter(
-    (poolLane) =>
-      poolLane.name === "published-upgrade-survivor" || poolLane.name === "update-migration",
-  );
-  const omittedLaneNames = survivorLanes.flatMap((poolLane) =>
-    matrixBaselines.flatMap((baselineSpec) =>
-      unsupportedScenarios
-        .filter((scenario) => supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec))
-        .map((scenario) => expandedUpgradeSurvivorLaneName(poolLane.name, baselineSpec, scenario)),
-    ),
-  );
-  if (supportedScenarios.length === 0 && unsupportedScenarios.length > 0) {
-    return {
-      lanes: poolLanes.filter(
-        (poolLane) =>
-          poolLane.name !== "published-upgrade-survivor" && poolLane.name !== "update-migration",
-      ),
-      omittedLaneNames,
-    };
-  }
-  if (baselineSpecs.length === 0 && scenarios.length === 0) {
-    return { lanes: poolLanes, omittedLaneNames };
-  }
-  return {
-    lanes: poolLanes.flatMap((poolLane) => {
-      if (poolLane.name !== "published-upgrade-survivor" && poolLane.name !== "update-migration") {
-        return [poolLane];
-      }
-      const matrixScenarios = scenarios.length > 0 ? scenarios : [undefined];
-      return matrixBaselines.flatMap((baselineSpec) =>
-        matrixScenarios
+  const omittedLaneNames: string[] = [];
+  const lanes = poolLanes.flatMap((poolLane) => {
+    if (!poolLane.upgradeSurvivorMatrix) {
+      return [poolLane];
+    }
+    const configuredScenarios = parseUpgradeSurvivorScenarios(
+      poolLane.upgradeSurvivorMatrix === "base" ? "base" : rawScenarios,
+    );
+    const requestedScenarios = configuredScenarios.length > 0 ? configuredScenarios : ["base"];
+    // Frozen candidates may not implement current fixture contracts. Report
+    // their omissions while retaining fixed-base live probes independently.
+    const supportedScenarios = filterUpgradeSurvivorScenariosForTarget(
+      requestedScenarios,
+      targetRoot,
+      allowExecutableContract,
+      frozenTarget,
+    );
+    const unsupportedScenarios = requestedScenarios.filter(
+      (scenario) => !supportedScenarios.includes(scenario),
+    );
+    for (const baselineSpec of matrixBaselines) {
+      omittedLaneNames.push(
+        ...unsupportedScenarios
           .filter((scenario) => supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec))
-          .map((scenario) => {
-            const name = expandedUpgradeSurvivorLaneName(poolLane.name, baselineSpec, scenario);
-            const suffix = name.slice(poolLane.name.length + 1);
-            const commandPrefix = [
-              `OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/${name}"`,
-              baselineSpec
-                ? `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${shellQuote(baselineSpec)}`
-                : "",
-              scenario ? `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${shellQuote(scenario)}` : "",
-            ]
-              .filter(Boolean)
-              .join(" ");
-            return Object.assign({}, poolLane, {
-              cacheKey: poolLane.cacheKey
-                ? suffix
-                  ? `${poolLane.cacheKey}-${suffix}`
-                  : poolLane.cacheKey
-                : name,
-              command: commandPrefix ? `${commandPrefix} ${poolLane.command}` : poolLane.command,
-              name,
-            });
-          }),
+          .map((scenario) =>
+            expandedUpgradeSurvivorLaneName(poolLane.name, baselineSpec, scenario),
+          ),
       );
-    }),
-    omittedLaneNames,
-  };
+    }
+    if (supportedScenarios.length === 0) {
+      return [];
+    }
+    const scenarios = configuredScenarios.length > 0 ? supportedScenarios : [];
+    if (baselineSpecs.length === 0 && scenarios.length === 0) {
+      return [poolLane];
+    }
+    const matrixScenarios = scenarios.length > 0 ? scenarios : [undefined];
+    return matrixBaselines.flatMap((baselineSpec) =>
+      matrixScenarios
+        .filter((scenario) => supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec))
+        .map((scenario) => {
+          const name = expandedUpgradeSurvivorLaneName(poolLane.name, baselineSpec, scenario);
+          const suffix = name.slice(poolLane.name.length + 1);
+          const commandPrefix = [
+            `OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/${name}"`,
+            baselineSpec
+              ? `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${shellQuote(baselineSpec)}`
+              : "",
+            scenario ? `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${shellQuote(scenario)}` : "",
+          ]
+            .filter(Boolean)
+            .join(" ");
+          return Object.assign({}, poolLane, {
+            cacheKey: poolLane.cacheKey
+              ? suffix
+                ? `${poolLane.cacheKey}-${suffix}`
+                : poolLane.cacheKey
+              : name,
+            command: commandPrefix ? `${commandPrefix} ${poolLane.command}` : poolLane.command,
+            name,
+          });
+        }),
+    );
+  });
+  return { lanes, omittedLaneNames };
 }
 
 function dedupeLanes(poolLanes: DockerE2eLane[]): DockerE2eLane[] {
@@ -594,6 +581,7 @@ export function findLaneByName(name: string): DockerE2eLane | undefined {
       [
         ...allReleasePathLanes({ includeOpenWebUI: true }),
         ...publicInstallerLanes,
+        liveUpgradeSurvivorLane,
         fleetCacheLane,
         ...mainLanes,
         ...tailLanes,
@@ -783,6 +771,7 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
       releaseProfile: "full",
     }),
     ...publicInstallerLanes,
+    liveUpgradeSurvivorLane,
     fleetCacheLane,
     ...retriedMainLanes,
     ...retriedTailLanes,
@@ -840,9 +829,7 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
           if (expandedLane) {
             const survivorBaseLane = unexpandedSelectableLanes.find(
               (poolLane) =>
-                (poolLane.name === "published-upgrade-survivor" ||
-                  poolLane.name === "update-migration") &&
-                selectedName.startsWith(`${poolLane.name}-`),
+                poolLane.upgradeSurvivorMatrix && selectedName.startsWith(`${poolLane.name}-`),
             );
             if (!survivorBaseLane) {
               return [expandedLane];

@@ -284,6 +284,9 @@ describe("standalone upgrade survivor live OpenAI probe", () => {
     const args = readFileSync(join(captureDir, "docker-args"), "utf8");
     expect(args).toContain("-e OPENAI_API_KEY");
     expect(args).toContain("-e OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL=openai/test-model");
+    expect(args).toContain(
+      "/scripts/e2e/lib/agent-turn-output.mjs:/app/scripts/e2e/lib/agent-turn-output.mjs:ro",
+    );
     expect(args).not.toContain(key);
   });
 });

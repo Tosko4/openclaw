@@ -171,42 +171,55 @@ function hasFailureSignal(value) {
   );
 }
 
-export function extractAgentReplyTexts(text) {
-  return parseJsonPayloads(text).flatMap((payload) => {
-    const envelopeFailed =
-      hasFailureSignal(payload) ||
-      hasFailureSignal(payload?.meta) ||
-      hasFailureSignal(payload?.result) ||
-      hasFailureSignal(payload?.result?.meta);
-    if (envelopeFailed) {
-      return [];
-    }
-    const payloadEntries = Array.isArray(payload?.payloads)
-      ? payload.payloads
-      : Array.isArray(payload?.result?.payloads)
-        ? payload.result.payloads
-        : [];
-    const directTexts = textValues([
-      payload?.finalAssistantVisibleText,
-      payload?.finalAssistantRawText,
-      payload?.meta?.finalAssistantVisibleText,
-      payload?.meta?.finalAssistantRawText,
-      payload?.result?.finalAssistantVisibleText,
-      payload?.result?.finalAssistantRawText,
-      payload?.result?.meta?.finalAssistantVisibleText,
-      payload?.result?.meta?.finalAssistantRawText,
-    ]);
-    const payloadTexts = payloadEntries.flatMap((entry) =>
-      entry?.isError !== true && typeof entry?.text === "string" && entry.text.length > 0
-        ? [entry.text]
-        : [],
-    );
-    return directTexts.concat(payloadTexts);
-  });
+function replyTextsForPayload(payload) {
+  const envelopeFailed =
+    hasFailureSignal(payload) ||
+    hasFailureSignal(payload?.meta) ||
+    hasFailureSignal(payload?.result) ||
+    hasFailureSignal(payload?.result?.meta);
+  if (envelopeFailed) {
+    return [];
+  }
+  const payloadEntries = Array.isArray(payload?.payloads)
+    ? payload.payloads
+    : Array.isArray(payload?.result?.payloads)
+      ? payload.result.payloads
+      : [];
+  const directTexts = textValues([
+    payload?.finalAssistantVisibleText,
+    payload?.finalAssistantRawText,
+    payload?.meta?.finalAssistantVisibleText,
+    payload?.meta?.finalAssistantRawText,
+    payload?.result?.finalAssistantVisibleText,
+    payload?.result?.finalAssistantRawText,
+    payload?.result?.meta?.finalAssistantVisibleText,
+    payload?.result?.meta?.finalAssistantRawText,
+  ]);
+  const payloadTexts = payloadEntries.flatMap((entry) =>
+    entry?.isError !== true && typeof entry?.text === "string" && entry.text.length > 0
+      ? [entry.text]
+      : [],
+  );
+  return directTexts.concat(payloadTexts);
 }
 
-export function assertAgentReplyContainsMarker(marker, outputPath) {
+export function extractAgentReplyTexts(text) {
+  return parseJsonPayloads(text).flatMap(replyTextsForPayload);
+}
+
+/** @param {string} [expectedModel] */
+export function assertAgentReplyContainsMarker(marker, outputPath, expectedModel) {
   const output = readTextFileTail(outputPath, OUTPUT_SCAN_TAIL_BYTES);
+  if (expectedModel) {
+    const matchingReply = parseJsonPayloads(output).find((payload) =>
+      replyTextsForPayload(payload).some((text) => text.includes(marker)),
+    );
+    const agent = matchingReply?.meta?.agentMeta ?? matchingReply?.result?.meta?.agentMeta;
+    if (`${agent?.provider}/${agent?.model}` !== expectedModel) {
+      throw new Error(`agent reply did not confirm requested model ${expectedModel}`);
+    }
+    return;
+  }
   const replyTexts = extractAgentReplyTexts(output);
   if (replyTexts.some((text) => text.includes(marker))) {
     return;

@@ -24,6 +24,7 @@ export type DockerE2eLane = {
   stateScenario?: string;
   timeoutMs?: number;
   upgradeSurvivorScenario?: string;
+  upgradeSurvivorMatrix?: "base" | "scenarios";
   weight: number;
 };
 type LaneOptions = Partial<Omit<DockerE2eLane, "command" | "e2eImageKind" | "name">> & {
@@ -124,6 +125,7 @@ function lane(name: string, command: string, options: LaneOptions = {}): DockerE
     stateScenario: options.stateScenario,
     timeoutMs: options.timeoutMs,
     upgradeSurvivorScenario: options.upgradeSurvivorScenario,
+    upgradeSurvivorMatrix: options.upgradeSurvivorMatrix,
     weight: options.weight ?? 1,
   };
 }
@@ -229,6 +231,7 @@ function createPackageUpdateMaintenanceLanes() {
       weight: 3,
     }),
     npmLane("published-upgrade-survivor", publishedUpgradeSurvivorCommand, {
+      upgradeSurvivorMatrix: "scenarios",
       stateScenario: "upgrade-survivor",
       timeoutMs: 25 * 60 * 1000,
       upgradeSurvivorScenario: "base",
@@ -618,6 +621,7 @@ export const mainLanes: DockerE2eLane[] = [
   ),
   ...createPackageUpdateMaintenanceLanes(),
   npmLane("update-migration", updateMigrationCommand, {
+    upgradeSurvivorMatrix: "scenarios",
     stateScenario: "upgrade-survivor",
     timeoutMs: 30 * 60 * 1000,
     upgradeSurvivorScenario: "plugin-deps-cleanup",
@@ -865,6 +869,26 @@ const releasePathPluginRuntimeLanes = [
 ];
 
 const releasePathBundledChannelLanes = scheduledLaneList("plugin-update");
+
+// Explicit-only: each baseline costs two real requests. The ops-agent probe
+// uses the base recipe; operator-state scenarios retain their mock traffic.
+export const liveUpgradeSurvivorLane = liveLane(
+  "live-upgrade-survivor-openai",
+  upgradeSurvivorScriptCommand(
+    "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=1 OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=base OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=manual",
+    'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
+  ),
+  {
+    e2eImageKind: "bare",
+    provider: "openai",
+    resources: ["npm"],
+    retries: 0,
+    stateScenario: "upgrade-survivor",
+    timeoutMs: 25 * 60 * 1000,
+    upgradeSurvivorScenario: "base",
+    upgradeSurvivorMatrix: "base",
+  },
+);
 
 // Public installer smoke needs a published, immutable package version. Keep it
 // selectable for post-publish verification, but out of frozen-candidate CI.

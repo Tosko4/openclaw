@@ -150,8 +150,6 @@ HEALTHZ_JSON="$ARTIFACT_ROOT/healthz.json"
 READYZ_JSON="$ARTIFACT_ROOT/readyz.json"
 STATUS_JSON="$ARTIFACT_ROOT/status.json"
 STATUS_ERR="$ARTIFACT_ROOT/status.err"
-LIVE_OPENAI_JSON="$ARTIFACT_ROOT/live-openai.json"
-LIVE_OPENAI_ERR="$ARTIFACT_ROOT/live-openai.err"
 BASELINE_CONFIG_VALIDATE_LOG="$ARTIFACT_ROOT/baseline-config-validate.log"
 BASELINE_SERVICE_INSTALL_JSON="$ARTIFACT_ROOT/baseline-service-install.json"
 BASELINE_SERVICE_INSTALL_ERR="$ARTIFACT_ROOT/baseline-service-install.err"
@@ -189,7 +187,8 @@ MOBILE_PAIRING_CANDIDATE_RESTART_EVIDENCE="$ARTIFACT_ROOT/mobile-pairing-candida
 MOBILE_PAIRING_FINAL_EVIDENCE="$ARTIFACT_ROOT/mobile-pairing-final.json"
 HISTORICAL_PACKAGE_REPLACEMENT_EVIDENCE="$ARTIFACT_ROOT/historical-package-replacement.json"
 export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON="$CONFIG_COVERAGE_JSON"
-rm -f "$SUMMARY_JSON" "$CONFIG_COVERAGE_JSON"
+rm -f "$SUMMARY_JSON" "$CONFIG_COVERAGE_JSON" \
+  "$ARTIFACT_ROOT"/live-openai-{baseline,candidate}.{json,out,err}
 : >"$PHASE_LOG"
 
 validate_baseline_package_spec() {
@@ -297,6 +296,8 @@ write_summary() {
     SUMMARY_RESTART_FIXTURE="$restart_fixture_evidence" \
     SUMMARY_RESTART_RUNTIME_FIXTURE="$restart_runtime_evidence" \
     SUMMARY_RESTART_INFERENCE="$restart_inference" \
+    SUMMARY_LIVE_OPENAI_BASELINE="$ARTIFACT_ROOT/live-openai-baseline.json" \
+    SUMMARY_LIVE_OPENAI_CANDIDATE="$ARTIFACT_ROOT/live-openai-candidate.json" \
     node <<'NODE'
 const fs = require("node:fs");
 const phaseLog = process.env.SUMMARY_PHASE_LOG;
@@ -333,6 +334,10 @@ const summary = {
   restartFixture: readJsonOrNull(process.env.SUMMARY_RESTART_FIXTURE),
   restartRuntimeFixture: readJsonOrNull(process.env.SUMMARY_RESTART_RUNTIME_FIXTURE),
   restartInference: process.env.SUMMARY_RESTART_INFERENCE || null,
+  liveOpenAI: {
+    baseline: readJsonOrNull(process.env.SUMMARY_LIVE_OPENAI_BASELINE),
+    candidate: readJsonOrNull(process.env.SUMMARY_LIVE_OPENAI_CANDIDATE),
+  },
   timings: {
     startupSeconds: numberOrNull(process.env.SUMMARY_START_SECONDS),
     updateRestartSeconds: numberOrNull(process.env.SUMMARY_UPDATE_RESTART_SECONDS),
@@ -1848,8 +1853,20 @@ check_gateway_status() {
 }
 
 run_live_openai() {
-  local marker="OPENCLAW_UPGRADE_SURVIVOR_LIVE_OK"
-  local model="${OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL:-openai/gpt-5.5}"
+  local stage="$1"
+  local marker="OPENCLAW_UPGRADE_SURVIVOR_LIVE_${stage}_OK"
+  local model="${OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL:-openai/gpt-5.6-luna}"
+  local agent=main
+  local version
+  local output="$ARTIFACT_ROOT/live-openai-${stage}.out"
+  local error="$ARTIFACT_ROOT/live-openai-${stage}.err"
+  local receipt="$ARTIFACT_ROOT/live-openai-${stage}.json"
+  # The base recipe's ops agent is valid before migration specimens are seeded;
+  # keeping main untouched preserves the existing database-migration assertions.
+  if [ "$SCENARIO" = "base" ]; then
+    agent=ops
+  fi
+  version="$(read_installed_version)"
   local timeout_seconds
   local status=0
   timeout_seconds="$(
@@ -1862,23 +1879,29 @@ run_live_openai() {
     openclaw_e2e_maybe_timeout "${timeout_seconds}s" \
       openclaw agent \
       --local \
-      --agent main \
-      --session-id upgrade-survivor-live-openai \
+      --agent "$agent" \
+      --session-id "upgrade-survivor-live-openai-${stage}" \
       --model "$model" \
       --message "Reply with exactly $marker and no other text." \
       --thinking off \
       --timeout "$timeout_seconds" \
       --json
-  ) >"$LIVE_OPENAI_JSON" 2>"$LIVE_OPENAI_ERR" || status=$?
+  ) >"$output" 2>"$error" || status=$?
   if [ "$status" -ne 0 ]; then
-    echo "live OpenAI survivor turn failed" >&2
-    openclaw_e2e_print_log "$LIVE_OPENAI_ERR" >&2
-    openclaw_e2e_print_log "$LIVE_OPENAI_JSON" >&2
+    echo "live OpenAI survivor ${stage} turn failed" >&2
+    openclaw_e2e_print_log "$error" >&2
+    openclaw_e2e_print_log "$output" >&2
     return "$status"
   fi
-  node --input-type=module - "$marker" "$LIVE_OPENAI_JSON" <<'NODE'
+  node --input-type=module - "$marker" "$output" "$model" "$stage" "$version" "$agent" "$receipt" <<'NODE'
+import fs from "node:fs";
 import { assertAgentReplyContainsMarker } from "./scripts/e2e/lib/agent-turn-output.mjs";
-assertAgentReplyContainsMarker(process.argv[2], process.argv[3]);
+const [marker, output, model, stage, version, agent, receipt] = process.argv.slice(2);
+assertAgentReplyContainsMarker(marker, output, model);
+const evidence = JSON.stringify({ stage, version, model, agent, status: "passed" });
+fs.writeFileSync(receipt, `${evidence}\n`);
+// Scheduler lane logs are uploaded; raw CLI/state artifacts remain private.
+process.stdout.write(`Live OpenAI receipt: ${evidence}\n`);
 NODE
 }
 
@@ -1898,6 +1921,9 @@ if [ "$SCENARIO" = "watchos-direct-node" ]; then
   phase configure-watchos-tls configure_watchos_tls_fixture
 fi
 phase validate-baseline-config validate_baseline_config
+if [ "$LIVE_OPENAI" = "1" ] && [ "$SCENARIO" = "base" ]; then
+  phase live-openai-baseline run_live_openai baseline
+fi
 phase resolve-candidate resolve_candidate_version
 phase resolve-candidate-install-mode resolve_candidate_install_mode
 if companion_survivor_scenario || [ "$SCENARIO" = "legacy-operator-state" ]; then
@@ -2068,7 +2094,7 @@ if [ "$SCENARIO" = "sqlite-volume" ]; then
   phase assert-restarted-survival assert_survival
 fi
 if [ "$LIVE_OPENAI" = "1" ]; then
-  phase live-openai run_live_openai
+  phase live-openai-candidate run_live_openai candidate
 fi
 
 run_completed="1"
