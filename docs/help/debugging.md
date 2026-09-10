@@ -87,6 +87,15 @@ changes keep their existing recovery and rebuild behavior. Windows retains its
 existing termination and restart behavior because its signal emulation does not
 make the same distinction.
 
+The source checkout declares this Unix contract with the numeric field
+`openclaw.devRunnerProtocol: 1` in its root `package.json`. Version 1 covers
+run-node, watch, auto-doctor, and shutdown. Supervisors must also validate the
+selected source checkout and its runner entrypoints; published package metadata
+alone does not establish that source runners are available. This declaration
+does not guarantee descendant cleanup or contain untrusted code. If a supervisor
+requires this version, update the source instead of adding the field to older
+runners.
+
 The UI dev wrapper acknowledges a requested stop only after its child returns
 normally and the captured child tree has stopped. A signaled child or forced
 cleanup retains a signal outcome instead of reporting an acknowledged stop.

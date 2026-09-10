@@ -2,6 +2,7 @@
   "name": "openclaw",
   "version": "2026.9.3",
   "openclaw": {
+    "devRunnerProtocol": 1,
     "schemaVersions": {
       "state": 17,
       "agent": 19
