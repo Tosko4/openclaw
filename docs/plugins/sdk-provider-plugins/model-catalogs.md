@@ -145,17 +145,6 @@ const STATIC_MODELS = [
   },
 ] as const;
 
-// Maps one row of the provider's /v1/models response onto an OpenClaw model
-// entry, or returns undefined to drop it. `fallback` carries the defaults
-// buildLiveModelProviderConfig derives from STATIC_MODELS.
-function projectAcmeModel(
-  row: { id?: string; display_name?: string },
-  fallback: (typeof STATIC_MODELS)[number],
-) {
-  if (!row.id) return undefined;
-  return { ...fallback, id: row.id, name: row.display_name ?? row.id };
-}
-
 async function buildAcmeLiveProvider(params: {
   apiKey: string;
   discoveryApiKey?: string;
