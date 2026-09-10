@@ -183,13 +183,20 @@ struct IOSGatewayChatTransportTests {
         try await self.withSessionTransport { transport, recorder in
             let lease = try #require(await transport.acquireNewSessionRouteLease())
             let roster = try await lease.listAgents()
+            let routingIdentity = try #require(OpenClawChatSessionRoutingIdentity(
+                scope: "per-agent",
+                mainSessionKey: "main",
+                defaultAgentID: "system",
+                selectionRequired: false,
+                sessionRoutingContract: "per-agent|main|system"))
             #expect(roster == OpenClawChatAgentsListResponse(
                 defaultId: "system",
                 agents: [
                     OpenClawChatAgentChoice(id: "zeta", name: " Zeta ", workspaceGit: true),
                     OpenClawChatAgentChoice(id: "legacy"),
                     OpenClawChatAgentChoice(id: "alpha", workspaceGit: false),
-                ]))
+                ],
+                routingIdentity: routingIdentity))
             await transport.gateway.disconnect()
             await #expect(throws: Error.self) {
                 _ = try await lease.listAgents()
