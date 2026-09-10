@@ -106,6 +106,46 @@ struct HealthStoreStateTests {
         try #require(result == -1 && (errno == EPERM || errno == EACCES))
     }
 
+    @Test @MainActor func `health remains pending before the first snapshot`() {
+        let store = HealthStore.shared
+        let previousSnapshot = store.snapshot
+        let previousError = store.lastError
+        defer { store.__setSnapshotForTest(previousSnapshot, lastError: previousError) }
+
+        store.__setSnapshotForTest(nil)
+        #expect(store.state == .unknown)
+        #expect(store.summaryLine == "Health check pending")
+    }
+
+    @Test(arguments: [[], ["telegram"]])
+    @MainActor func `successful health without channels reports healthy`(order: [String]) throws {
+        try Self.withSnapshot([:], order: order) { store in
+            #expect(store.state == .ok)
+            #expect(store.summaryLine == "Gateway healthy")
+        }
+    }
+
+    @Test @MainActor func `failed health without channels reports degraded`() throws {
+        try Self.withSnapshot([:], order: [], ok: false) { store in
+            #expect(store.state == .degraded("health probe failed"))
+            #expect(store.summaryLine == "Health check failed: health probe failed")
+        }
+    }
+
+    @Test @MainActor func `health without channels or overall status remains unknown`() throws {
+        try Self.withSnapshot([:], order: [], ok: nil) { store in
+            #expect(store.state == .unknown)
+            #expect(store.summaryLine == "Health check pending")
+        }
+    }
+
+    @Test @MainActor func `health error overrides a successful snapshot without channels`() throws {
+        try Self.withSnapshot([:], order: [], lastError: "Connection closed") { store in
+            #expect(store.state == .degraded("Connection closed"))
+            #expect(store.summaryLine == "Health check failed: Connection closed")
+        }
+    }
+
     @Test @MainActor func `current channel lifecycle reports healthy`() throws {
         try Self.withSnapshot([
             "telegram": ["running": true, "connected": true, "lifecycle": "ready"],
@@ -391,6 +431,8 @@ struct HealthStoreStateTests {
     @MainActor private static func withSnapshot(
         _ channels: [String: [String: Any]],
         order: [String] = ["telegram"],
+        ok: Bool? = true,
+        lastError: String? = nil,
         body: @MainActor (HealthStore) throws -> Void) throws
     {
         let accounts = channels.mapValues { fields in
@@ -399,8 +441,7 @@ struct HealthStoreStateTests {
             return account
         }
         // Fixed Gateway response time keeps grace and expired lifecycle fixtures deterministic.
-        let fixture: [String: Any] = [
-            "ok": true,
+        var fixture: [String: Any] = [
             "ts": 1_772_798_400_000,
             "durationMs": 2,
             "channels": accounts,
@@ -412,6 +453,7 @@ struct HealthStoreStateTests {
             "heartbeatSeconds": 60,
             "sessions": ["path": "/tmp/sessions.json", "count": 0, "recent": []],
         ]
+        if let ok { fixture["ok"] = ok }
         let data = try JSONSerialization.data(withJSONObject: fixture)
         let snap = try #require(decodeHealthSnapshot(from: data))
         let store = HealthStore.shared
@@ -419,7 +461,7 @@ struct HealthStoreStateTests {
         let previousError = store.lastError
         defer { store.__setSnapshotForTest(previousSnapshot, lastError: previousError) }
 
-        store.__setSnapshotForTest(snap, lastError: nil)
+        store.__setSnapshotForTest(snap, lastError: lastError)
         try body(store)
     }
 }

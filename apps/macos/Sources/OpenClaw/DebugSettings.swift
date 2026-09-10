@@ -107,10 +107,10 @@ struct DebugSettings: View {
 
                 DebugMetricCard(
                     title: "Gateway",
-                    value: self.gatewayManager.status.label,
+                    value: self.gatewayStatus.label,
                     icon: "antenna.radiowaves.left.and.right",
-                    tint: self.gatewayManager.status.debugTint,
-                    subtitle: self.canRestartGateway ? "Local process" : "Remote connection")
+                    tint: self.gatewayStatus.tint,
+                    subtitle: self.gatewayStatus.subtitle)
 
                 DebugMetricCard(
                     title: "App PID",
@@ -142,11 +142,13 @@ struct DebugSettings: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 GridRow {
-                    self.gridLabel("CLI")
+                    self.gridLabel("Local CLI")
                     let loc = CLIInstaller.installedLocation()
-                    Text(loc ?? "missing")
+                    Text(loc ?? (self.state.connectionMode == .remote
+                            ? "Not installed (optional for remote Gateway)" : "missing"))
                         .font(.caption.monospaced())
-                        .foregroundStyle(loc == nil ? Color.red : Color.secondary)
+                        .foregroundStyle(loc == nil && self.state.connectionMode != .remote ? Color.red : Color
+                            .secondary)
                         .textSelection(.enabled)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -175,7 +177,7 @@ struct DebugSettings: View {
                     GridRow {
                         self.gridLabel("Status")
                         HStack(spacing: 8) {
-                            Text(self.gatewayManager.status.label)
+                            Text(self.gatewayStatus.label)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -737,6 +739,35 @@ struct DebugSettings: View {
 
     private var canRestartGateway: Bool {
         self.state.connectionMode == .local
+    }
+
+    private var gatewayStatus: (label: String, tint: Color, subtitle: String) {
+        Self.gatewayStatus(
+            mode: self.state.connectionMode,
+            localStatus: self.gatewayManager.status,
+            connectionState: ControlChannel.shared.state)
+    }
+
+    static func gatewayStatus(
+        mode: AppState.ConnectionMode,
+        localStatus: GatewayProcessManager.Status,
+        connectionState: ControlChannel.ConnectionState) -> (label: String, tint: Color, subtitle: String)
+    {
+        switch mode {
+        case .local:
+            return (localStatus.label, localStatus.debugTint, String(localized: "Local process"))
+        case .remote:
+            // The process manager is intentionally stopped when another host owns the Gateway.
+            let connection = GatewayConnectionPresentation(state: connectionState)
+            return (
+                connection.statusLine,
+                connection.tone == .healthy ? .green : .orange,
+                connection.generalSubtitle)
+        case .unconfigured:
+            return (
+                String(localized: "Not configured"), .secondary,
+                String(localized: "Choose local or remote before the app can attach to a Gateway."))
+        }
     }
 }
 
