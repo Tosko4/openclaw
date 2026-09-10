@@ -349,17 +349,49 @@ struct NativeActionRouterTests {
                 #expect(context.nativeBinding == nil)
                 #expect(!manager._testSessionObserverVisible(connection: fixture.gateway))
             } else {
-                let inspection = try await router.inspect(run)
-                #expect(inspection.run == run)
-                #expect(inspection.association == (historyOwner == run.runID ? .observed : .notObserved))
-                #expect(inspection.outcome == (historyOwner == run.runID ? .done : nil))
-                #expect(!inspection.summary.isEmpty)
-                let gateway = try await manager.captureNativeGateway(gatewayID: fixture.gatewayID)
-                let controller = try manager.presentNative(.inspect(run), gateway: gateway)
-                #expect(controller.hasPresentedNative(.inspect(run)))
-                #expect(!controller.viewModel.isLoading)
-                #expect(controller.viewModel.healthOK)
-                #expect(controller._testWindow?.attachedSheet == nil)
+                enum Stage: String { case inspect, capture, present }
+                var stage = Stage.inspect
+                var capturedLease: GatewayConnection.ServerLease?
+                do {
+                    let inspection = try await router.inspect(run)
+                    #expect(inspection.run == run)
+                    #expect(inspection.association == (historyOwner == run.runID ? .observed : .notObserved))
+                    #expect(inspection.outcome == (historyOwner == run.runID ? .done : nil))
+                    #expect(!inspection.summary.isEmpty)
+                    stage = .capture
+                    let gateway = try await manager.captureNativeGateway(gatewayID: fixture.gatewayID)
+                    capturedLease = gateway.lease
+                    stage = .present
+                    let controller = try manager.presentNative(.inspect(run), gateway: gateway)
+                    #expect(controller.hasPresentedNative(.inspect(run)))
+                    #expect(!controller.viewModel.isLoading)
+                    #expect(controller.viewModel.healthOK)
+                    #expect(controller._testWindow?.attachedSheet == nil)
+                } catch {
+                    let socket = fixture.sockets.latestTask()
+                    let controllers = NSApp.windows.compactMap { $0.delegate as? WebChatSwiftUIWindowController }
+                        .filter { $0.gatewayTransport?.connection === fixture.gateway }
+                    let controller = controllers.count == 1 ? controllers.first : nil
+                    let bindingCurrent = controller?.gatewayTransport?.nativeBindingIsCurrent
+                    let lease = capturedLease ?? controller?.gatewayTransport?.nativeBinding?.lease
+                    let leaseCurrent = lease.map { fixture.gateway.serverLeaseMatchesCurrentState($0) }
+                    func fact(_ value: Bool?) -> String {
+                        value.map(String.init) ?? "unknown"
+                    }
+                    print([
+                        "native inspection failed: case=\(historyOwner); stage=\(stage.rawValue)",
+                        "taskCancelled=\(Task.isCancelled)",
+                        "socketMakes=\(fixture.sockets.snapshotMakeCount())",
+                        "socketCancels=\(fixture.sockets.snapshotCancelCount())",
+                        "socketRunning=\(fact(socket.map { $0.state == .running }))",
+                        "windowCount=\(controllers.count)",
+                        "windowVisible=\(fact(controller?.isVisible))",
+                        "nativeSessionMatches=\(fact(controller.map { $0.matchesNativeSession(run.session) }))",
+                        "bindingCurrent=\(fact(bindingCurrent))",
+                        "leaseStateMatches=\(fact(leaseCurrent))",
+                    ].joined(separator: "; "))
+                    throw error
+                }
             }
             let history = try #require(try fixture.frames(method: "chat.history").first)
             let params = try #require(history["params"] as? [String: Any])

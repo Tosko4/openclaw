@@ -446,6 +446,8 @@ struct NativeActionGatewayWireTests {
                 try #require(response.id == spec.id && response.decision == expected)
             }
             try await withWebChatManagerLifetime(primaryConnection: presenter) { manager in
+                weak var presentedController: WebChatSwiftUIWindowController?
+                var reportedReadinessFailure = false
                 @MainActor func present(_ id: String) async throws {
                     let spec = try #require(descriptor.approvals.requests[id])
                     let session = OpenClawNativeSessionRef(
@@ -454,6 +456,7 @@ struct NativeActionGatewayWireTests {
                     let gateway = try await manager.captureNativeGateway(gatewayID: gatewayID)
                     _ = try await gateway.actions.history(session: session)
                     let controller = try manager.presentNative(.session(session), gateway: gateway)
+                    presentedController = controller
                     let deadline = ContinuousClock.now + .seconds(10)
                     let initialPresented = controller.hasPresentedNative(.session(session))
                     let initialWindowMatches = manager.approvalContext(connection: presenter)?.windowID ==
@@ -470,6 +473,7 @@ struct NativeActionGatewayWireTests {
                     let finalWindowMatches = manager.approvalContext(connection: presenter)?.windowID ==
                         ObjectIdentifier(controller)
                     let finalBindingPresent = manager.approvalContext(connection: presenter)?.nativeBinding != nil
+                    reportedReadinessFailure = true
                     print([
                         "native approval readiness failed: case=\(id == "allowed" ? "allowed" : "control")",
                         "initialPresented=\(initialPresented)",
@@ -495,31 +499,90 @@ struct NativeActionGatewayWireTests {
                 }
                 prompter.start()
                 defer { prompter.stop() }
-                try await present("allowed")
-                try await request("allowed")
-                let allowed = try await self.approvalPanel(
-                    command: #require(descriptor.approvals.requests["allowed"]).command)
-                try self.pressApprovalButton("Allow Once", in: allowed)
-                try await decision("allowed", expected: "allow-once")
-                try await control.request("approval-allowed")
+                enum Stage: String {
+                    case allowedPresent, allowedRequest, allowedLookup, allowedPress, allowedDecision, allowedControl
+                    case visibleRequest, visibleLookup, queuedRequest, controlPresent, controlRequest, visiblePress
+                    case controlLookup, retiredControl, visibleDecision, queuedDecision, controlPress
+                    case controlDecision, controlComplete
+                }
+                var stage = Stage.allowedPresent
+                do {
+                    try await present("allowed")
+                    stage = .allowedRequest
+                    try await request("allowed")
+                    stage = .allowedLookup
+                    let allowed = try await self.approvalPanel(
+                        command: #require(descriptor.approvals.requests["allowed"]).command)
+                    stage = .allowedPress
+                    try await self.pressApprovalButton("Allow Once", in: allowed)
+                    stage = .allowedDecision
+                    try await decision("allowed", expected: "allow-once")
+                    stage = .allowedControl
+                    try await control.request("approval-allowed")
 
-                try await request("visible")
-                let visible = try await self.approvalPanel(
-                    command: #require(descriptor.approvals.requests["visible"]).command)
-                try await request("queued")
-                try await present("control")
-                try await request("control")
-                try self.pressApprovalButton("Allow Once", in: visible)
-                // The fresh panel is a FIFO barrier: the real prompter has
-                // consumed the visible decision and the older queued request.
-                let fresh = try await self.approvalPanel(
-                    command: #require(descriptor.approvals.requests["control"]).command)
-                try await control.request("approval-retired")
-                try await decision("visible", expected: "deny")
-                try await decision("queued", expected: "deny")
-                try self.pressApprovalButton("Don't Allow", in: fresh)
-                try await decision("control", expected: "deny")
-                try await control.request("approval-complete")
+                    stage = .visibleRequest
+                    try await request("visible")
+                    stage = .visibleLookup
+                    let visible = try await self.approvalPanel(
+                        command: #require(descriptor.approvals.requests["visible"]).command)
+                    stage = .queuedRequest
+                    try await request("queued")
+                    stage = .controlPresent
+                    try await present("control")
+                    stage = .controlRequest
+                    try await request("control")
+                    stage = .visiblePress
+                    try await self.pressApprovalButton("Allow Once", in: visible)
+                    // The fresh panel is a FIFO barrier: the real prompter has
+                    // consumed the visible decision and the older queued request.
+                    stage = .controlLookup
+                    let fresh = try await self.approvalPanel(
+                        command: #require(descriptor.approvals.requests["control"]).command)
+                    stage = .retiredControl
+                    try await control.request("approval-retired")
+                    stage = .visibleDecision
+                    try await decision("visible", expected: "deny")
+                    stage = .queuedDecision
+                    try await decision("queued", expected: "deny")
+                    stage = .controlPress
+                    try await self.pressApprovalButton("Don't Allow", in: fresh)
+                    stage = .controlDecision
+                    try await decision("control", expected: "deny")
+                    stage = .controlComplete
+                    try await control.request("approval-complete")
+                } catch {
+                    if !reportedReadinessFailure {
+                        let panels = NSApp.windows.filter {
+                            $0.isVisible && $0.title == "OpenClaw Command Approval"
+                        }
+                        let panel = panels.count == 1 ? panels.first : nil
+                        let context = manager.approvalContext(connection: presenter)
+                        let binding = presentedController?.gatewayTransport?.nativeBinding
+                        let bindingCurrent = presentedController?.gatewayTransport?.nativeBindingIsCurrent
+                        let leaseCurrent = binding.map { presenter.serverLeaseMatchesCurrentState($0.lease) }
+                        let contextMatches = presentedController.map { context?.windowID == ObjectIdentifier($0) }
+                        let panelOwnsKey = presentedController.map {
+                            ExecApprovalsPromptPresenter.ownsKeyWindow(for: ObjectIdentifier($0))
+                        }
+                        func fact(_ value: Bool?) -> String {
+                            value.map(String.init) ?? "unknown"
+                        }
+                        print([
+                            "native approval failed: stage=\(stage.rawValue)",
+                            "panelCount=\(panels.count)",
+                            "panelContentPresent=\(fact(panel.map { $0.contentView != nil }))",
+                            "panelKey=\(fact(panel?.isKeyWindow))",
+                            "windowVisible=\(fact(presentedController?.isVisible))",
+                            "windowKey=\(fact(presentedController?.isKeyWindow))",
+                            "panelOwnsKey=\(fact(panelOwnsKey))",
+                            "contextWindowMatches=\(fact(contextMatches))",
+                            "contextBindingPresent=\(fact(context.map { $0.nativeBinding != nil }))",
+                            "bindingCurrent=\(fact(bindingCurrent))",
+                            "leaseStateMatches=\(fact(leaseCurrent))",
+                        ].joined(separator: "; "))
+                    }
+                    throw error
+                }
             }
         } catch {
             await requester.shutdown()
@@ -530,27 +593,13 @@ struct NativeActionGatewayWireTests {
         await presenter.shutdown()
     }
 
-    private func approvalElements(in root: NSView) -> [AnyObject] {
-        var elements: [AnyObject] = []
-        var visited = Set<ObjectIdentifier>()
-        func visit(_ element: AnyObject) {
-            guard visited.insert(ObjectIdentifier(element)).inserted else { return }
-            elements.append(element)
-            for child in element.accessibilityChildren?() ?? [] {
-                visit(child as AnyObject)
-            }
-        }
-        root.layoutSubtreeIfNeeded()
-        visit(root)
-        return elements
-    }
-
     private func approvalPanel(command: String) async throws -> NSView {
         let deadline = ContinuousClock.now + .seconds(15)
         while ContinuousClock.now < deadline {
             for window in NSApp.windows where window.isVisible && window.title == "OpenClaw Command Approval" {
                 guard let root = window.contentView else { continue }
-                if self.approvalElements(in: root).contains(where: { element in
+                root.layoutSubtreeIfNeeded()
+                if try await AppKitTestSupport.accessibilityElements(in: root).contains(where: { element in
                     let value: Any? = element.accessibilityValue?()
                     return [element.accessibilityLabel?(), element.accessibilityTitle?(), value as? String]
                         .compactMap(\.self).contains(where: { $0.contains(command) })
@@ -563,8 +612,9 @@ struct NativeActionGatewayWireTests {
         throw OpenClawNativeActionError("The expected native approval panel did not appear.")
     }
 
-    private func pressApprovalButton(_ title: String, in root: NSView) throws {
-        let buttons = self.approvalElements(in: root).filter { element in
+    private func pressApprovalButton(_ title: String, in root: NSView) async throws {
+        root.layoutSubtreeIfNeeded()
+        let buttons = try await AppKitTestSupport.accessibilityElements(in: root).filter { element in
             element.accessibilityRole?() == .button &&
                 element.isAccessibilityEnabled?() == true &&
                 [element.accessibilityLabel?(), element.accessibilityTitle?()]
