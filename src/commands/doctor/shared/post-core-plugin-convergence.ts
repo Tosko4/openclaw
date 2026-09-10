@@ -81,13 +81,27 @@ async function repairInstalledNpmOpenClawHostLinks(params: {
   packageReadFailures: Array<{ error: unknown; packageDir: string }>;
 }> {
   const packageReadFailures: Array<{ error: unknown; packageDir: string }> = [];
+  let effectFailure: { error: unknown } | undefined;
+  const beforePersistentEffect = params.beforePersistentEffect
+    ? () => {
+        if (effectFailure) {
+          throw effectFailure.error;
+        }
+        try {
+          params.beforePersistentEffect?.();
+        } catch (error) {
+          effectFailure ??= { error };
+          throw effectFailure.error;
+        }
+      }
+    : undefined;
   try {
     const npmRoots = await listManagedPluginNpmRoots(resolveDefaultPluginNpmDir(params.env));
-    const results = await Promise.all(
+    const results = await Promise.allSettled(
       npmRoots.map((npmRoot) =>
         relinkOpenClawPeerDependenciesInManagedNpmRoot({
           npmRoot,
-          beforePersistentEffect: params.beforePersistentEffect,
+          beforePersistentEffect,
           logger: {},
           onPackageReadError: (error, packageDir) => {
             packageReadFailures.push({ error, packageDir });
@@ -95,14 +109,25 @@ async function repairInstalledNpmOpenClawHostLinks(params: {
         }),
       ),
     );
-    const repaired = results.reduce((total, result) => total + result.repaired, 0);
+    // Join every admitted repair before rejecting; siblings must not keep
+    // mutating after convergence has reported authority loss.
+    if (effectFailure) {
+      throw effectFailure.error;
+    }
+    let repaired = 0;
+    for (const result of results) {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+      repaired += result.value.repaired;
+    }
     // Legacy npm-owned installs live under extensions/, outside every managed npm project root.
     const registeredRepair = await reconcileRegisteredOpenClawHostLinks({
       installRecords: params.installRecords,
       extensionsDir: resolveDefaultPluginExtensionsDir(params.env),
       env: params.env,
       mode: "repair",
-      beforePersistentEffect: params.beforePersistentEffect,
+      beforePersistentEffect,
       onPackageReadError: (error, packageDir) => {
         packageReadFailures.push({ error, packageDir });
       },
@@ -122,7 +147,10 @@ async function repairInstalledNpmOpenClawHostLinks(params: {
       packageReadFailures,
     };
   } catch (err) {
-    params.beforePersistentEffect?.();
+    if (effectFailure) {
+      throw effectFailure.error;
+    }
+    beforePersistentEffect?.();
     const message = `Failed to repair managed npm OpenClaw host peer links: ${err instanceof Error ? err.message : String(err)}`;
     return {
       changes: [],
