@@ -35,6 +35,7 @@ import {
   type StagedPackageInstall,
   type StagedPackageSwapResult,
 } from "./package-update-swap-contract.js";
+import { retireVerifiedPackageSwap } from "./package-update-swap-retirement.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 import {
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
@@ -401,7 +402,7 @@ export async function swapStagedPackageInstall(params: {
     }
     if (params.onTransaction) {
       retained = true;
-      let retirement: Promise<UpdateStepResult | void> | undefined;
+      let retirement: Promise<UpdateStepResult | undefined> | undefined;
       let rollbackRefused = false;
       let rollbackResult: ReturnType<PackageUpdateTransaction["rollback"]> | undefined;
       let retainedAssertion: (() => void) | undefined = params.activation?.fence.assertCurrent;
@@ -474,7 +475,10 @@ export async function swapStagedPackageInstall(params: {
           })();
           return rollbackResult;
         },
-        complete: async ({ activationVerified }, assertion): Promise<UpdateStepResult | void> => {
+        complete: async (
+          { activationVerified },
+          assertion,
+        ): Promise<UpdateStepResult | undefined> => {
           const assertCurrent = retainAuthority(assertion);
           if (retirement) {
             return await retirement;
@@ -498,72 +502,17 @@ export async function swapStagedPackageInstall(params: {
           // Seal automatic rollback once retirement begins, but retain the actual
           // outcome. A repeated completion must not report a renamed backup gone.
           // Recheck after rollback's await so concurrent completion shares this promise.
-          retirement ??= (async () => {
-            const messages: string[] = [];
-            // The filesystem fallback can recheck an assertion after catching it.
-            // A later successful read cannot turn that authority failure into cleanup.
-            let assertionFailure: { cause: unknown } | undefined;
-            const assertRetirementCurrent = () => {
-              if (assertionFailure) {
-                throw assertionFailure.cause;
-              }
-              try {
-                assertCurrent();
-              } catch (cause) {
-                assertionFailure = { cause };
-                throw cause;
-              }
-            };
-            if (activation) {
-              await activation.retire();
-              // The journal has removed itself; only the executor fence remains.
-              assertRetirementCurrent();
-              return;
-            }
-            const linkRetention = rootLink ? await rootLink.retire(assertRetirementCurrent) : null;
-            assertRetirementCurrent();
-            if (linkRetention) {
-              return { ...step(1, null, linkRetention), name: "global install backup retention" };
-            }
-            if (hadPackage && previousRoot?.kind !== "link") {
-              const message = await discardPackageUpdateBackup(
-                backupRoot,
-                "old package",
-                targetLayout.globalRoot,
-                assertRetirementCurrent,
-              );
-              if (message) {
-                messages.push(message);
-              }
-            }
-            if (shimBackupDir) {
-              const message = await discardPackageUpdateBackup(
-                shimBackupDir,
-                "shim backup",
-                targetLayout.globalRoot,
-                assertRetirementCurrent,
-              );
-              if (message) {
-                messages.push(message);
-              }
-            }
-            // Capture authority loss during the final filesystem await in the
-            // retirement outcome, not only in the caller's later publication check.
-            assertRetirementCurrent();
-            if (messages.length) {
-              return {
-                ...step(1, null, messages.join("\n")),
-                name: "global install backup retention",
-                // Only this verified obsolete-resource path qualifies the warning.
-                // Recovery refusal and unclassified link outcomes remain hard.
-                advisory: {
-                  kind: "recoverable-maintenance" as const,
-                  message: `Installation verification succeeded; backup cleanup remains pending. ${messages.join("\n")}. Inspect retained paths before removing obsolete backups manually.`,
-                },
-              };
-            }
-            return undefined;
-          })();
+          retirement ??= retireVerifiedPackageSwap({
+            activation,
+            rootLink,
+            hadPackage,
+            previousRoot,
+            backupRoot,
+            shimBackupDir,
+            globalRoot: targetLayout.globalRoot,
+            assertCurrent,
+            step,
+          });
           return await retirement;
         },
       });
