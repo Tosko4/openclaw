@@ -45,7 +45,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function fixture() {
+async function fixture(beforeCreate?: (anchor: string) => void) {
   const packages = await createPackageSwapFixture(root);
   const anchor = resolvePackageActivationAnchor(packages.packageRoot);
   const launcherRoot = path.join(anchor, "launchers");
@@ -91,6 +91,7 @@ async function fixture() {
         },
       ],
     };
+    beforeCreate?.(anchor);
     const journal = createPackageActivationJournal(anchor, descriptor, fence.assertCurrent);
     return { authority, journal, record: journal.read() };
   });
@@ -141,6 +142,68 @@ function replaceField(
 }
 
 describe.skipIf(process.platform === "win32")("package activation journal", () => {
+  it.each(["exclusive create", "SQLite open"] as const)(
+    "refuses a replacement journal after %s without initializing either file",
+    async (cut) => {
+      const foreign = path.join(root, "foreign.sqlite");
+      const sentinel = new DatabaseSync(foreign);
+      sentinel.exec("CREATE TABLE sentinel(value TEXT); INSERT INTO sentinel VALUES ('keep');");
+      sentinel.close();
+      fs.chmodSync(foreign, 0o600);
+      const foreignBytes = fs.readFileSync(foreign);
+      let journalPath = "";
+      let displacedPath = "";
+      let exchanged = false;
+      let createdFd: number | undefined;
+      const exchange = () => {
+        if (exchanged) {
+          return;
+        }
+        exchanged = true;
+        fs.renameSync(journalPath, displacedPath);
+        fs.renameSync(foreign, journalPath);
+      };
+      const creation = fixture((anchor) => {
+        journalPath = path.join(anchor, PACKAGE_ACTIVATION_JOURNAL);
+        displacedPath = path.join(anchor, "original-empty.sqlite");
+        const open = fs.openSync;
+        vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
+          const descriptor = open(file, flags, mode);
+          if (file === journalPath && flags === "wx") {
+            createdFd = descriptor;
+            if (cut === "exclusive create") {
+              exchange();
+            }
+          }
+          return descriptor;
+        });
+        if (cut === "SQLite open") {
+          vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((location, options) => {
+            const database = openDatabase(location, options);
+            if (location === nodeSqlite.resolveExistingSqliteFileUri(journalPath)) {
+              exchange();
+            }
+            return database;
+          });
+        }
+      });
+      await expect(creation).rejects.toThrow(/journal identity changed/u);
+      expect(exchanged).toBe(true);
+      const closedFd = createdFd;
+      if (closedFd === undefined) {
+        throw new Error("Creation did not reach its owned file descriptor");
+      }
+      expect(() => fs.fstatSync(closedFd)).toThrow(/bad file descriptor/iu);
+      expect(fs.readFileSync(journalPath)).toEqual(foreignBytes);
+      expect(fs.statSync(displacedPath).size).toBe(0);
+      expect(
+        fs
+          .readdirSync(path.dirname(journalPath))
+          .filter((name) => /-(?:journal|wal|shm)$/u.test(name)),
+      ).toEqual([]);
+    },
+  );
+
   it("status refuses a real hot rollback journal without recovering or changing its files", async () => {
     const f = await fixture();
     const setup = new DatabaseSync(f.journalPath);

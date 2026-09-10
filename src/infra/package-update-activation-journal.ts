@@ -11,6 +11,7 @@ import {
   encodePackageActivationIntent,
   assertPackageActivationPhase,
   readPackageActivationRecord,
+  packageActivationIdentity,
   type PackageActivationDescriptor,
   type PackageActivationPhase,
   type PackageActivationIntent,
@@ -136,45 +137,68 @@ export function createPackageActivationJournal(
   descriptor: Omit<PackageActivationDescriptor, "journalIdentity">,
   assertCurrent: () => void,
 ): PackageActivationJournal {
-  assertCurrent();
-  assertPrivatePackageActivationFile(anchor, true);
+  const assertAnchor = () => {
+    assertCurrent();
+    if (
+      assertPrivatePackageActivationFile(anchor, true) !== descriptor.anchorIdentity ||
+      packageActivationIdentity(path.dirname(anchor), true) !== descriptor.parentIdentity ||
+      fs.realpathSync(anchor) !== anchor
+    ) {
+      throw new Error("Package publication journal identity changed");
+    }
+  };
+  assertAnchor();
   encodePackageActivationDescriptor({ ...descriptor, journalIdentity: "0:0" });
   const journalPath = path.join(anchor, PACKAGE_ACTIVATION_JOURNAL);
   const fd = fs.openSync(journalPath, "wx", 0o600);
-  fs.closeSync(fd);
-  const journalIdentity = assertPrivatePackageActivationFile(journalPath, false);
-  const encoded = encodePackageActivationDescriptor({ ...descriptor, journalIdentity });
-  const db = openNodeSqliteDatabase(resolveExistingSqliteFileUri(journalPath));
   try {
-    assertCurrent();
-    executeSqliteQuerySync(
-      db,
-      queries(db)
-        .schema.createTable("package_activation")
-        .addColumn("slot", "integer", (column) => column.primaryKey().notNull())
-        .addColumn("revision", "integer", (column) => column.notNull())
-        .addColumn("phase", "text", (column) => column.notNull())
-        .addColumn("descriptor_json", "text", (column) => column.notNull())
-        .addColumn("intent_json", "text", (column) => column.notNull())
-        .addColumn("publications_json", "text", (column) => column.notNull())
-        .modifyEnd(sql`STRICT`),
-    );
-    assertCurrent();
-    executeSqliteQuerySync(
-      db,
-      queries(db).insertInto("package_activation").values({
-        slot: 1,
-        revision: 0,
-        phase: "prepared",
-        descriptor_json: encoded,
-        intent_json: "null",
-        publications_json: "[]",
-      }),
-    );
-  } finally {
-    if (db.isOpen) {
-      db.close();
+    // Keep the created inode live until all SQLite connections are closed. A
+    // later pathname observation must never become the creation authority.
+    const created = fs.fstatSync(fd, { bigint: true });
+    const journalIdentity = `${created.dev}:${created.ino}`;
+    const assertCreated = () => {
+      assertAnchor();
+      if (assertPrivatePackageActivationFile(journalPath, false) !== journalIdentity) {
+        throw new Error("Package publication journal identity changed");
+      }
+    };
+    assertCreated();
+    const encoded = encodePackageActivationDescriptor({ ...descriptor, journalIdentity });
+    const db = openNodeSqliteDatabase(resolveExistingSqliteFileUri(journalPath));
+    try {
+      assertCreated();
+      executeSqliteQuerySync(
+        db,
+        queries(db)
+          .schema.createTable("package_activation")
+          .addColumn("slot", "integer", (column) => column.primaryKey().notNull())
+          .addColumn("revision", "integer", (column) => column.notNull())
+          .addColumn("phase", "text", (column) => column.notNull())
+          .addColumn("descriptor_json", "text", (column) => column.notNull())
+          .addColumn("intent_json", "text", (column) => column.notNull())
+          .addColumn("publications_json", "text", (column) => column.notNull())
+          .modifyEnd(sql`STRICT`),
+      );
+      assertCreated();
+      executeSqliteQuerySync(
+        db,
+        queries(db).insertInto("package_activation").values({
+          slot: 1,
+          revision: 0,
+          phase: "prepared",
+          descriptor_json: encoded,
+          intent_json: "null",
+          publications_json: "[]",
+        }),
+      );
+    } finally {
+      if (db.isOpen) {
+        db.close();
+      }
     }
+    assertCreated();
+    return openPackageActivationJournal(anchor);
+  } finally {
+    fs.closeSync(fd);
   }
-  return openPackageActivationJournal(anchor);
 }
