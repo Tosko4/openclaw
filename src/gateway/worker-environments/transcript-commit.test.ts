@@ -505,10 +505,13 @@ describe("worker transcript commit application", () => {
       });
       const manager = SessionManager.open(sessionTarget);
       if (persistedPrefix) {
-        manager.appendMessage({
+        const persistedMessage: Parameters<SessionManager["appendMessage"]>[0] & {
+          idempotencyKey: string;
+        } = {
           ...prefixMessage,
           idempotencyKey: messageIdempotencyKey(request.seq, 0),
-        });
+        };
+        manager.appendMessage(persistedMessage);
       }
       const entriesBefore = structuredClone(manager.getEntries());
       const leafBefore = manager.getLeafId();
