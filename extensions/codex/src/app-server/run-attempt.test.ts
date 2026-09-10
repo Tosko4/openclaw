@@ -31,6 +31,7 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import WebSocket from "ws";
+import { captureCodexAgentEventBinding } from "./agent-event-publication.js";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
 import {
@@ -3204,7 +3205,12 @@ describe("runCodexAppServerAttempt", () => {
     const params = createRunParams();
     const onAgentEvent = vi.fn();
     params.onAgentEvent = onAgentEvent;
-    const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1");
+    const projector = new CodexAppServerEventProjector(
+      params,
+      "thread-1",
+      "turn-1",
+      captureCodexAgentEventBinding(params),
+    );
 
     await projector.recordDynamicProgressCardUpdate({
       markdown: '<progress aria-label="private" value="1" max="2"></progress>',
@@ -3243,7 +3249,12 @@ describe("runCodexAppServerAttempt", () => {
 
   it("keeps searchable Codex dynamic tools canonical in mirrored transcript snapshots", async () => {
     const params = createRunParams();
-    const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1");
+    const projector = new CodexAppServerEventProjector(
+      params,
+      "thread-1",
+      "turn-1",
+      captureCodexAgentEventBinding(params),
+    );
     projector.recordDynamicToolCall({
       callId: "call-wiki-status-1",
       tool: "wiki_status",

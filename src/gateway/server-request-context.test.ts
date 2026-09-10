@@ -30,6 +30,7 @@ import { createGatewayRequestContext } from "./server-request-context.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 
 type GatewayRequestContextParams = Parameters<typeof createGatewayRequestContext>[0];
 type TestCronState = GatewayServerLiveState["cronState"];
@@ -256,6 +257,7 @@ describe("createGatewayRequestContext", () => {
       }
       const chatRunState = createChatRunState();
       const subscriptions = startGatewayEventSubscriptions({
+        sessionLifecyclePersistence: createSessionLifecyclePersistenceOwner(),
         ...broadcaster,
         log: params.log,
         nodeSendToSession: vi.fn(),

@@ -52,7 +52,10 @@ function createApnsTransportFixture(transport: "direct" | "relay") {
     updatedAtMs: 1,
   };
   if (transport === "direct") {
-    const send = vi.fn().mockResolvedValue({ status: 200, apnsId: "dispatch-result", body: "" });
+    const send = vi.fn(async (request: { assertCurrent?: () => undefined }) => {
+      request.assertCurrent?.();
+      return { status: 200, apnsId: "dispatch-result", body: "" };
+    });
     return {
       send,
       params: {
@@ -66,7 +69,10 @@ function createApnsTransportFixture(transport: "direct" | "relay") {
       },
     };
   }
-  const send = vi.fn().mockResolvedValue({ ok: true, status: 202, environment: "sandbox" });
+  const send = vi.fn(async (request: { assertCurrent?: () => undefined }) => {
+    request.assertCurrent?.();
+    return { ok: true, status: 202, environment: "sandbox" as const };
+  });
   return {
     send,
     params: {
@@ -104,30 +110,39 @@ describe("APNs dispatch", () => {
       const { send, params } = createApnsTransportFixture(transport);
       const controller = new AbortController();
       const isCurrent = vi.fn().mockResolvedValue(true);
-      const sendPush = (controls: { signal?: AbortSignal; isCurrent?: () => Promise<boolean> }) => {
+      const assertCurrent = vi.fn(() => undefined);
+      const sendPush = (controls: {
+        signal?: AbortSignal;
+        isCurrent?: () => Promise<boolean>;
+        assertCurrent?: () => undefined;
+      }) => {
         const common = { ...params, nodeId: "ios-dispatch", timeoutMs: 2_700, ...controls };
         return kind === "alert"
           ? sendApnsAlert({ ...common, title: "Wake", body: "Ping" })
           : sendApnsBackgroundWake({ ...common, wakeReason: "node.invoke" });
       };
 
-      await sendPush({ signal: controller.signal, isCurrent });
+      await sendPush({ signal: controller.signal, isCurrent, assertCurrent });
       const controlled = requireSendRequest(send);
       expect(Object.keys(controlled)).toEqual([
         ...senderOptionKeys[transport],
         "signal",
         "isCurrent",
+        "assertCurrent",
       ]);
       expect(controlled.signal).toBe(controller.signal);
       expect(controlled.isCurrent).toBe(isCurrent);
+      expect(controlled.assertCurrent).toBe(assertCurrent);
       expect(controlled.pushType).toBe(kind);
       expect(controlled.priority).toBe(kind === "alert" ? "10" : "5");
       expect(isCurrent).toHaveBeenCalledTimes(1);
+      expect(assertCurrent).toHaveBeenCalledTimes(1);
 
       send.mockClear();
       await sendPush({});
       expect(Object.keys(requireSendRequest(send))).toEqual(senderOptionKeys[transport]);
       expect(isCurrent).toHaveBeenCalledTimes(1);
+      expect(assertCurrent).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -151,6 +166,7 @@ describe("APNs dispatch", () => {
         {
           signal: { enumerable: true, get: readControl },
           isCurrent: { enumerable: true, get: readControl },
+          assertCurrent: { enumerable: true, get: readControl },
         },
       );
 
