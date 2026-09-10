@@ -231,7 +231,7 @@ describe("session placement recovery", () => {
       ).recovery;
       const displayed = formatSessionPlacementRecoveryError(checked);
       expect(displayed).toHaveLength(4096);
-      expect(displayed.isWellFormed()).toBe(true);
+      expect(() => encodeURIComponent(displayed)).not.toThrow();
       expect(displayed).toContain("x");
       expect(displayed).toContain("y");
       expect(retainSessionPlacementSendError(checked, "later send error").sendError).toBe(
