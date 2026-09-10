@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createCompiledSdkHost } from "./compiled-sdk-host.test-support.js";
+import { createPluginModuleLoader } from "./loader-module-runtime.js";
 import { publishedSdkBridgeEntrypoints } from "./loader-sdk-bridge-artifacts.test-support.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { resetPluginCache } from "./plugin-cache.js";
@@ -126,12 +127,83 @@ function writePreSplitSdkBridgeConsumerFixture() {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   resetPluginCache();
   vi.unstubAllEnvs();
   tempDirs.cleanup();
 });
 
 describe("createPluginModuleLoader", () => {
+  it.each([
+    { profile: false, throws: false },
+    { profile: true, throws: false },
+    { profile: false, throws: true },
+    { profile: true, throws: true },
+  ])(
+    "preserves native loads with profiling=$profile and throws=$throws",
+    async ({ profile, throws }) => {
+      vi.stubEnv("OPENCLAW_DIAGNOSTICS", profile ? "plugin.load-profile" : "off");
+      const pluginRoot = writeJavaScriptPluginFixture("profile-fixture");
+      const modulePath = path.join(pluginRoot, "index.cjs");
+      const expectedError = new Error("fixture evaluation failed");
+      const errorKey = Symbol.for("openclaw.pluginLoadProfile.fixtureError");
+      if (throws) {
+        fs.writeFileSync(
+          modulePath,
+          'throw globalThis[Symbol.for("openclaw.pluginLoadProfile.fixtureError")];',
+          "utf8",
+        );
+      }
+      const stats = await import("./plugin-module-loader-cache.js");
+      const readStats = vi.spyOn(stats, "getPluginModuleLoaderStats");
+      const clock = vi.spyOn(performance, "now");
+      const output = vi.spyOn(console, "error").mockImplementation(() => {});
+      const load = createPluginModuleLoader({ installNativeSdkResolver: false });
+      try {
+        if (throws) {
+          Reflect.set(globalThis, errorKey, expectedError);
+          let thrown: unknown;
+          try {
+            load(modulePath);
+          } catch (error) {
+            thrown = error;
+          }
+          expect(thrown).toBe(expectedError);
+        } else {
+          const first = load(modulePath);
+          expect(first).toMatchObject({ id: "profile-fixture" });
+          expect(load(modulePath)).toBe(first);
+        }
+        const loads = throws ? 1 : 2;
+        expect(readStats).toHaveBeenCalledTimes(profile ? loads * 2 : 0);
+        if (!profile) {
+          expect(clock).not.toHaveBeenCalled();
+          expect(output).not.toHaveBeenCalled();
+          return;
+        }
+        const lines = output.mock.calls.map(([line]) => line);
+        expect(lines).toHaveLength(loads * 2);
+        for (let index = 0; index < loads; index += 1) {
+          expect(lines[index * 2]).toMatch(
+            /^\[plugin-load-profile\] phase=module-loader-prepare plugin=\(core\) elapsedMs=\d+\.\d source=\(module\)$/,
+          );
+        }
+        expect(lines[1]).toMatch(
+          new RegExp(
+            String.raw`^\[plugin-load-profile\] phase=module-load plugin=\(core\) elapsedMs=\d+\.\d calls=1 nativeHits=${throws ? 0 : 1} nativeMisses=0 sourceTransformForced=0 sourceTransformFallbacks=0 source=\(module\)$`,
+          ),
+        );
+        if (!throws) {
+          expect(lines[3]).toMatch(
+            /^\[plugin-load-profile\] phase=module-load plugin=\(core\) elapsedMs=\d+\.\d calls=0 nativeHits=0 nativeMisses=0 sourceTransformForced=0 sourceTransformFallbacks=0 source=\(module\)$/,
+          );
+        }
+      } finally {
+        Reflect.deleteProperty(globalThis, errorKey);
+      }
+    },
+  );
+
   it("loads bundled JavaScript natively without source transformation", () => {
     const pluginRoot = writeJavaScriptPluginFixture("demo");
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", pluginRoot);

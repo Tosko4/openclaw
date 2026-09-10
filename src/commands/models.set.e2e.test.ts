@@ -113,7 +113,17 @@ describe("models set + fallbacks", () => {
     const previousDiagnostics = process.env.OPENCLAW_DIAGNOSTICS;
     let sequence = 0;
     let commandSettled = false;
-    const record = (event: string, phaseElapsedMs?: number) => {
+    const record = (
+      event: string,
+      phaseElapsedMs?: number,
+      loaderCounts?: {
+        calls: number;
+        nativeHits: number;
+        nativeMisses: number;
+        sourceTransformForced: number;
+        sourceTransformFallbacks: number;
+      },
+    ) => {
       // CPU counters cover the process, not this worker alone.
       const cpu = process.cpuUsage(cpuStartedAt);
       process.stderr.write(
@@ -126,6 +136,7 @@ describe("models set + fallbacks", () => {
           commandSettled,
           aborted: context.signal.aborted,
           ...(phaseElapsedMs === undefined ? {} : { phaseElapsedMs }),
+          ...loaderCounts,
         })}\n`,
       );
     };
@@ -156,8 +167,22 @@ describe("models set + fallbacks", () => {
         return;
       }
       // Only emit known phase labels and numeric timing, never plugin paths or payloads.
+      const loaderMatch =
+        /^\[plugin-load-profile\] phase=module-load plugin=\(core\) elapsedMs=(\d+(?:\.\d+)?) calls=(\d+) nativeHits=(\d+) nativeMisses=(\d+) sourceTransformForced=(\d+) sourceTransformFallbacks=(\d+) source=\(module\)$/.exec(
+          line,
+        );
+      if (args.length === 1 && loaderMatch) {
+        record("module-load", Number(loaderMatch[1]), {
+          calls: Number(loaderMatch[2]),
+          nativeHits: Number(loaderMatch[3]),
+          nativeMisses: Number(loaderMatch[4]),
+          sourceTransformForced: Number(loaderMatch[5]),
+          sourceTransformFallbacks: Number(loaderMatch[6]),
+        });
+        return;
+      }
       const match =
-        /^\[plugin-load-profile\] phase=(models-command-(?:import-start|import-end|metadata|selection|registry|mutation-start|mutation-settled)|discovery(?::register)?|runtime-module) plugin=(?:\(core\)|zai) elapsedMs=(\d+(?:\.\d+)?) source=[^\r\n]*$/.exec(
+        /^\[plugin-load-profile\] phase=(models-command-(?:import-start|import-end|metadata|selection|registry|mutation-start|mutation-settled)|discovery(?::register)?|runtime-module|module-loader-prepare|source-transform-prepare) plugin=(?:\(core\)|zai) elapsedMs=(\d+(?:\.\d+)?) source=[^\r\n]*$/.exec(
           line,
         );
       if (args.length === 1 && match?.[1] !== undefined && match[2] !== undefined) {
