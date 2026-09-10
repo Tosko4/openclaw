@@ -1208,14 +1208,19 @@ function readInstalledPluginIndex() {
   return index;
 }
 
-function assertBaselinePlugin([expectedVersion]) {
-  const record = readInstalledPluginIndex().installRecords.discord;
-  assert(record?.source === "npm", "baseline Discord plugin was not installed from npm");
-  assert(record.spec === "@openclaw/discord@latest", "baseline plugin selector became pinned");
+function assertBaselinePlugin([expectedVersion, pluginId = "discord", tarball]) {
+  const packageName = `@openclaw/${pluginId}`;
+  const record = readInstalledPluginIndex().installRecords[pluginId];
+  assert(record?.source === "npm", `baseline ${pluginId} plugin was not installed from npm`);
+  assert(record.spec === `${packageName}@latest`, "baseline plugin selector became pinned");
   const installed = readJson(path.join(resolveHomePath(record.installPath), "package.json"));
-  assert(installed.name === "@openclaw/discord", "baseline plugin package identity changed");
+  assert(installed.name === packageName, "baseline plugin package identity changed");
   assert(installed.version === expectedVersion, "baseline plugin is not the baseline version");
-  console.log(`Baseline npm plugin: @openclaw/discord@${expectedVersion}, selector=latest.`);
+  if (tarball) {
+    const integrity = `sha512-${createHash("sha512").update(fs.readFileSync(tarball)).digest("base64")}`;
+    assert(record.integrity === integrity, "baseline plugin artifact integrity changed");
+  }
+  console.log(`Baseline npm plugin: ${packageName}@${expectedVersion}, selector=latest.`);
 }
 
 function assertExternalPluginInstall(records, pluginId, packageName) {

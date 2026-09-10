@@ -696,6 +696,15 @@ configure_plugin_registry() {
   local registry_args=()
   local registry_dist_tags="${OPENCLAW_NPM_REGISTRY_DIST_TAGS-}"
 
+  if [ "$stage" = "baseline" ] && [ "$SCENARIO" = "base" ] && [ "$LIVE_OPENAI" = "1" ]; then
+    # Historical bytes are not candidate artifacts; candidate identity is unresolved here.
+    OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=$baseline_version" \
+      openclaw_prepublish_plugin_registry_start \
+      "" "" "$baseline_version" "" "$fixture_root/baseline" plugin_registry_pid \
+      "@openclaw/codex" "$baseline_version" "$2"
+    return
+  fi
+
   if [ "$SCENARIO" = "legacy-operator-state" ]; then
     if [ "$stage" = "baseline" ]; then
       mkdir -p "$fixture_root/baseline"
@@ -1852,6 +1861,37 @@ check_gateway_status() {
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json "$STATUS_JSON"
 }
 
+prepare_live_openai_baseline() (
+  # These shipped cohorts require a native owner; earlier/later implicit routes work without it.
+  case "$baseline_version" in
+    2026.8.1|2026.8.2|2026.9.1) ;;
+    *) return 0 ;;
+  esac
+  local fixture_root="$ARTIFACT_ROOT/plugin-registry/baseline" tarball
+  # ERR unwinds function locals before EXIT; subshell-owned PID state must survive that unwind.
+  plugin_registry_pid=""
+  trap 'openclaw_e2e_stop_process "$plugin_registry_pid"' EXIT
+  mkdir -p "$fixture_root"
+  tarball="$(openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" npm pack \
+    "@openclaw/codex@$baseline_version" --ignore-scripts \
+    --registry=https://registry.npmjs.org --pack-destination "$fixture_root" --silent)"
+  tarball="$fixture_root/$tarball"
+  node --input-type=module - "$tarball" "$baseline_version" >"$fixture_root/package-proof.json" <<'NODE'
+import assert from "node:assert/strict";
+import { inspectNpmPackageTarball } from "./scripts/prepublish-plugin-registry-artifact.mjs";
+const { packageJson, sha256 } = inspectNpmPackageTarball(process.argv[2]);
+assert.equal(packageJson.name, "@openclaw/codex", "historical runtime package identity mismatch");
+assert.equal(packageJson.version, process.argv[3], "historical runtime cohort mismatch");
+console.log(JSON.stringify({ source: "published-npm", name: packageJson.name, version: packageJson.version, sha256 }));
+NODE
+  configure_plugin_registry baseline "$tarball"
+  openclaw_e2e_fixture_plugin_command openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw -- \
+    plugins install "@openclaw/codex@latest"
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    assert-baseline-plugin "$baseline_version" codex "$tarball"
+  # The subshell reaps its registry and restores all parent registry variables before inference.
+)
+
 run_live_openai() {
   local stage="$1"
   local marker="OPENCLAW_UPGRADE_SURVIVOR_LIVE_${stage}_OK"
@@ -1933,6 +1973,7 @@ if [ "$SCENARIO" = "watchos-direct-node" ]; then
 fi
 phase validate-baseline-config validate_baseline_config
 if [ "$LIVE_OPENAI" = "1" ] && [ "$SCENARIO" = "base" ]; then
+  phase prepare-live-openai-baseline prepare_live_openai_baseline
   phase live-openai-baseline run_live_openai baseline
 fi
 phase resolve-candidate resolve_candidate_version
