@@ -43,9 +43,15 @@ jobs:
           node --version
           nproc
           cat /proc/meminfo
-          cat /sys/fs/cgroup/cpu.max
-          cat /sys/fs/cgroup/memory.max
-          cat /sys/fs/cgroup/cpu.stat
+          cat /proc/self/cgroup
+          for counter in /sys/fs/cgroup/{cpu.max,cpu.stat,memory.max,memory.peak,cpu/cpu.cfs_quota_us,cpu/cpu.cfs_period_us,cpu/cpu.stat,memory/memory.limit_in_bytes,memory/memory.max_usage_in_bytes}; do
+            if [ -r "$counter" ]; then
+              printf "%s=" "$counter"
+              cat "$counter"
+            else
+              printf "%s unavailable\n" "$counter"
+            fi
+          done
           cat .diagnostic/scripts/diagnostics/reclamation-group.json
           git diff --exit-code
           git diff --cached --exit-code
@@ -80,6 +86,12 @@ jobs:
       - name: Record final resource counters
         if: always()
         run: |
-          cat /sys/fs/cgroup/cpu.stat
-          cat /sys/fs/cgroup/memory.peak
+          for counter in /sys/fs/cgroup/{cpu.stat,memory.peak,cpu/cpu.stat,memory/memory.max_usage_in_bytes}; do
+            if [ -r "$counter" ]; then
+              printf "%s=" "$counter"
+              cat "$counter"
+            else
+              printf "%s unavailable\n" "$counter"
+            fi
+          done
           git status --short
