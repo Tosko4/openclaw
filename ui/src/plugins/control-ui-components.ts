@@ -85,6 +85,55 @@ export function createControlUiComponents(options: {
   }
 
   return {
+    mountAgentAvatar: (container, props) =>
+      mount(
+        container,
+        props,
+        async () => {
+          const { AgentAvatar } = await import("../components/agent-avatar.ts");
+          return new AgentAvatar();
+        },
+        (element, next, current) => {
+          const agentsList = current().agents.state.agentsList;
+          const id = next.agentId || agentsList?.defaultId || "";
+          element.option = {
+            value: id,
+            label: next.label,
+            agent: agentsList?.agents.find((agent) => agent.id === id),
+          };
+        },
+      ),
+    mountAppearancePicker: (container, props) =>
+      mount(
+        container,
+        props,
+        async () => {
+          const { AppearancePicker } = await import("../components/appearance-picker.ts");
+          return new AppearancePicker();
+        },
+        (element, next, current) => {
+          element.props = {
+            ...next,
+            onChange: (appearance) => {
+              current();
+              next.onChange(appearance);
+            },
+          };
+        },
+      ),
+    mountAppearanceGlyph: (container, props) =>
+      mount(
+        container,
+        props,
+        async () => {
+          const { AppearanceGlyph } = await import("../components/appearance-picker.ts");
+          return new AppearanceGlyph();
+        },
+        (element, next) => {
+          element.props = next;
+          container.style.setProperty("--appearance-color", element.colorCss || "var(--muted)");
+        },
+      ),
     mountDialog: (container, props) =>
       mount(
         container,
@@ -139,6 +188,45 @@ export function createControlUiComponents(options: {
             current();
             next.onSelect(value);
           };
+        },
+      ),
+    mountSelectPicker: (container, props) =>
+      mount(
+        container,
+        props,
+        async () => {
+          const { SelectPicker } = await import("../components/select-picker.ts");
+          return new SelectPicker();
+        },
+        (element, next, current) => {
+          element.className = "settings-select picker-select";
+          element.params = {
+            options: next.options,
+            value: next.value,
+            label: next.accessibleLabel,
+            searchable: next.searchable,
+            disabled: next.disabled,
+            onChange: (value) => {
+              current();
+              next.onSelect(value);
+            },
+          };
+        },
+      ),
+    mountSessionSummary: (container, props) =>
+      mount(
+        container,
+        props,
+        async () => {
+          await import("./control-ui-session-summary.ts");
+          return document.createElement("openclaw-plugin-session-summary");
+        },
+        (element, next, current) => {
+          element.session = next.session;
+          element.gateway = current().gateway;
+          element.agents = current().agents.state.agentsList?.agents ?? [];
+          element.presented = next.presented;
+          element.requestUpdate();
         },
       ),
     mountDashboard: (container, props) =>
