@@ -298,7 +298,7 @@ export async function withNativeActionGateway(
               return { started: id, canvasOrigin: admission.canvasOrigin };
             }
             widgetAttempt = { id, before };
-            return { started: id };
+            return { started: id, canvasOrigin: `http://127.0.0.1:${instance.port}` };
           }
           case "widget-complete": {
             assert(widgetAttempt && widgetAttempt.id === input.case, "widget case was not started");
