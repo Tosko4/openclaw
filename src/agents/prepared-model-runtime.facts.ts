@@ -35,6 +35,7 @@ import {
 } from "./embedded-agent-runner/model.static-catalog.js";
 import { createStaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
+import { resolveSelectedModelProviderIds } from "./model-selection-config.js";
 import {
   buildConfiguredModelCatalog,
   parseConfiguredModelVisibilityEntries,
@@ -78,6 +79,7 @@ import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
+import { resolveProviderAuthAliasMap } from "./provider-auth-aliases.js";
 import { resolveProviderUseAdmission } from "./provider-model-auth-source-plan.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
@@ -110,11 +112,20 @@ function prepareAgentFacts(
     ...(input.env ? { env } : {}),
   });
   const credentials = authFacts.credentials;
+  const requestedProviders = resolveSelectedModelProviderIds({
+    cfg: input.config,
+    agentId: input.agentId,
+  });
   const admitted = includeCredentialProviders
     ? resolveProviderUseAdmission({
         config: input.config,
         env,
         profiles: authFacts.store.profiles,
+        requestedProviders,
+        storedCredentialAuthAliases: resolveProviderAuthAliasMap({
+          ...input,
+          storedCredential: true,
+        }),
         nativeProviders: Object.entries(credentials).flatMap(([provider, credential]) =>
           credential.type === "api_key" && credential.nativeAuth ? [provider] : [],
         ),
@@ -142,6 +153,7 @@ function prepareAgentFacts(
     // stored credential must not pull that provider's complete catalog into the admission path.
     providerIds: [
       ...new Set([
+        ...requestedProviders,
         ...collectPreparedModelRuntimeProviderIds(
           input.config,
           admitted,
