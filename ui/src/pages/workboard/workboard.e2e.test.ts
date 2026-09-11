@@ -399,6 +399,8 @@ suite.define(() => {
         .locator(".workboard-heading__actions")
         .getByRole("button", { name: /New card/u })
         .waitFor({ state: "visible" });
+      await writableGateway.waitForRequest("workboard.cards.list");
+      await expect.poll(() => writable.page.locator(".workboard-refresh").isEnabled()).toBe(true);
       expect(await writable.page.locator(".workboard-card").count()).toBe(0);
       await captureScreenshot(writable.page, artifacts, "01-empty-board");
 
