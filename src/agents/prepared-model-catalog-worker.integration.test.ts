@@ -271,7 +271,7 @@ describe("prepared model catalog worker boundary", () => {
     }
   });
 
-  it("keeps an unaffected configured worker live across a scoped sibling reload", async () => {
+  it("configured runtime refresh keeps an unaffected worker live across a scoped sibling reload", async () => {
     const fixture = createCatalogFixture(makeTempDir, 0);
     // Configured publication reads the process environment; keep both the parent and worker
     // inside the same synthetic plugin/state fixture, without a supplied liveness predicate.
@@ -319,12 +319,16 @@ describe("prepared model catalog worker boundary", () => {
     await expect(loadPreparedModelRuntimeAuth(sibling, authScope)).resolves.toMatchObject({
       authStore: { profiles: { [EXTERNAL_AUTH_PROFILE_ID]: { access: "v1:A" } } },
     });
+    await sibling.loadFullModelCatalog!();
+    const completed = fs.readFileSync(fixture.marker, "utf8");
+    const nextInvocation = () => fs.readFileSync(fixture.marker, "utf8").split("start\n").length;
+    const heldInvocation = nextInvocation();
 
     fs.writeFileSync(`${fixture.marker}.hold`, "", "utf8");
     const inFlight = main.loadFullModelCatalog!({ refresh: true });
     void inFlight.catch(() => undefined);
     try {
-      await expect.poll(() => fs.readFileSync(fixture.marker, "utf8")).toBe("start\ndone\nstart\n");
+      await expect.poll(() => fs.readFileSync(fixture.marker, "utf8")).toBe(`${completed}start\n`);
       const nextConfig = {
         ...initialConfig,
         agents: {
@@ -355,18 +359,24 @@ describe("prepared model catalog worker boundary", () => {
       expect(refreshed).not.toBe(catalog);
       expect(retained.readFullModelCatalog!()).toBe(refreshed);
       expect(refreshed.entries).toContainEqual(
-        expect.objectContaining({ id: "proof-refresh-2-sqlite-true-shared-true-unrelated-true" }),
+        expect.objectContaining({
+          id: `proof-refresh-${heldInvocation}-sqlite-true-shared-true-unrelated-true`,
+        }),
       );
+      const replaced = getPreparedModelRuntimeSnapshot({ ...siblingInput, config: nextConfig })!;
+      await replaced.loadFullModelCatalog!();
       fs.writeFileSync(fixture.externalAuthPath, "B", "utf8");
       await expect(loadPreparedModelRuntimeAuth(retained, authScope)).resolves.toMatchObject({
         authStore: { profiles: { [EXTERNAL_AUTH_PROFILE_ID]: { access: "v1:B" } } },
       });
+      const refreshedInvocation = nextInvocation();
       await expect(retained.loadFullModelCatalog!({ refresh: true })).resolves.toMatchObject({
         entries: expect.arrayContaining([
-          expect.objectContaining({ id: "proof-refresh-3-sqlite-true-shared-true-unrelated-true" }),
+          expect.objectContaining({
+            id: `proof-refresh-${refreshedInvocation}-sqlite-true-shared-true-unrelated-true`,
+          }),
         ]),
       });
-      const replaced = getPreparedModelRuntimeSnapshot({ ...siblingInput, config: nextConfig })!;
       await expect(loadPreparedModelRuntimeAuth(replaced, authScope)).resolves.toMatchObject({
         authStore: { profiles: { [EXTERNAL_AUTH_PROFILE_ID]: { access: "v1:B" } } },
       });

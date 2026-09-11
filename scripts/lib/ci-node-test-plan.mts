@@ -8,6 +8,7 @@ import {
 import { cliProcessTestFiles } from "../../test/vitest/vitest.cli-process-paths.mjs";
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import {
+  gatewayPluginTestFiles,
   gatewayServerExcludedTestFiles,
   gatewayServerIsolatedTestFiles,
   isGatewayServerBackedHttpTestFile,
@@ -2253,6 +2254,7 @@ function listCompactToolingTestFiles(): string[] {
   ]);
   const excludedFiles = new Set([
     ...boundaryTestFiles,
+    ...gatewayPluginTestFiles,
     ...unitFastFiles,
     TOOLING_DOCKER_TEST_FILE,
     ...toolingIsolatedTestFiles,
@@ -2424,7 +2426,10 @@ function readCompleteSplitGenerationSeconds(
 const WHOLE_CONFIG_SPLIT_FILE_LISTERS = new Map<string, () => string[]>([
   ["agentic-cli-process", () => cliProcessTestFiles],
   ["agentic-agents-support", listAgentSupportTestFiles],
-  ["agentic-gateway-methods", () => listTestFiles("src/gateway/server-methods")],
+  [
+    "agentic-gateway-methods",
+    () => [...listTestFiles("src/gateway/server-methods"), ...gatewayPluginTestFiles],
+  ],
   ["core-runtime-config", () => listTestFiles("src/config")],
   // isolate:true gives every file a fresh module graph, so file stripes
   // cannot change behavior.

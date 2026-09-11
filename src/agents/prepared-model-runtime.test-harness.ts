@@ -144,6 +144,7 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
         Promise.resolve({
           authStore: preparedModelRuntimeMocks.preparedAuthStore ?? { version: 1, profiles: {} },
           authModes: {},
+          credentials: {},
         }),
     };
   },

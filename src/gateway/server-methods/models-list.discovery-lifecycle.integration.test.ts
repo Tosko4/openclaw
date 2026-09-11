@@ -169,7 +169,7 @@ it("models.list preserves provider starters and retires unavailable account rows
         result.models
           .filter((model) => model.provider === provider)
           .map((model) => model.id)
-          .sort();
+          .toSorted();
       expect(ids(await list("lifecycle-b"), "lifecycle-b")).toEqual([]);
       const firstUnavailable = await list("lifecycle-c");
       expect(requests.indexOf("lifecycle-b")).toBeGreaterThanOrEqual(0);

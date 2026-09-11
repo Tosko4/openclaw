@@ -120,6 +120,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   observationConfig?: OpenClawConfig;
   providerIds?: readonly string[];
   onDiscoveryStarted?: (provider: string) => void;
+  onDiscoveryCompleted?: (rows: readonly ModelCatalogEntry[]) => void;
   onError?: (error: unknown) => void;
 }): Promise<ModelCatalogSnapshot> {
   const rawDefaultModel = params.defaultModel?.trim();
@@ -199,6 +200,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     if (listedRows.length === 0) {
       return params.snapshot;
     }
+    params.onDiscoveryCompleted?.(listedRows);
     const rows = enrichHarnessRows(listedRows, params.snapshot);
     return {
       ...params.snapshot,
@@ -218,6 +220,7 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
   isCurrent?: () => boolean;
   providerIds?: readonly string[];
   onDiscoveryStarted?: (provider: string) => void;
+  onDiscoveryCompleted?: (rows: readonly ModelCatalogEntry[]) => void;
 }): Promise<ModelCatalogSnapshot> {
   const agentId = params.input.agentId ?? resolveDefaultAgentId(params.input.config);
   return augmentModelCatalogWithAgentHarness({
@@ -236,5 +239,6 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
     observationConfig: params.input.config,
     providerIds: params.providerIds,
     onDiscoveryStarted: params.onDiscoveryStarted,
+    onDiscoveryCompleted: params.onDiscoveryCompleted,
   });
 }

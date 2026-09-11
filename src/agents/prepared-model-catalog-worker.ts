@@ -78,6 +78,7 @@ export type PreparedModelWorkerResult =
       generationFingerprint: string;
       authStore: AuthProfileStore;
       authModes: PreparedAgentCredentialModes;
+      credentials: Readonly<AuthStorageData>;
     }>
   | Readonly<{
       status: "generation-mismatch";
@@ -200,7 +201,9 @@ export function createPreparedModelCatalogWorkerInput(params: {
 }
 
 type PreparedModelCatalogWorker = Readonly<{
-  loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
+  loadAuth: (
+    scope: PreparedModelRuntimeAuthScope,
+  ) => Promise<PreparedModelRuntimeAuth & { credentials: Readonly<AuthStorageData> }>;
   loadCatalog: (
     providerIds?: readonly string[],
   ) => Promise<Pick<PreparedModelRuntimeCatalogFacts, "modelCatalog" | "configuredRuntimeModels">>;
@@ -403,7 +406,11 @@ export function createPreparedModelCatalogWorker(
       if (message.kind !== "auth-refresh") {
         throw new Error("prepared model auth refresh worker returned a catalog result");
       }
-      return { authStore: message.authStore, authModes: message.authModes };
+      return {
+        authStore: message.authStore,
+        authModes: message.authModes,
+        credentials: message.credentials,
+      };
     },
   };
 }

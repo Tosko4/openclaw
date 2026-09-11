@@ -130,6 +130,7 @@ async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
     {
       preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts,
       basePluginIds,
+      providerDiscoveryProviderIds: value.providerIds,
       getConfiguredHarnessRuntimes: () => [],
     },
     undefined,
@@ -189,7 +190,12 @@ export async function runPreparedModelCatalogWorkerRequest(
           authoritativeSyntheticAuthProviderRefs:
             prepared.pluginGeneration.pluginMetadataSnapshot.owners.cliBackends.keys(),
           syntheticAuthProviderRefs: scopeSyntheticAuthProviderRefs(
-            resolveRuntimeSyntheticAuthProviderRefs(),
+            [
+              ...new Set([
+                ...resolveRuntimeSyntheticAuthProviderRefs(),
+                ...request.syntheticAuth.map(({ providerRef }) => providerRef),
+              ]),
+            ],
             providerIds,
           ),
           ...(value.input.workspaceDir ? { workspaceDir: value.input.workspaceDir } : {}),
@@ -206,15 +212,17 @@ export async function runPreparedModelCatalogWorkerRequest(
         providerIds: request.providerIds,
         pluginGeneration: prepared.pluginGeneration,
       });
+      const credentials = {
+        ...resolveSyntheticCredentials(request.providerIds),
+        ...resolveAgentCredentialMapFromStore(authStore, { config: value.input.config }),
+      };
       return {
         status: "ok",
         kind: "auth-refresh",
         generationFingerprint,
         authStore,
-        authModes: resolveUsableAgentCredentialModes({
-          ...resolveSyntheticCredentials(request.providerIds),
-          ...resolveAgentCredentialMapFromStore(authStore, { config: value.input.config }),
-        }),
+        credentials,
+        authModes: resolveUsableAgentCredentialModes(credentials),
       };
     }
     const { prepareAgentCatalogSource } =

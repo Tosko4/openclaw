@@ -6,28 +6,30 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import * as codexPluginModule from "../../../extensions/codex/index.js";
-import * as codexProviderModule from "../../../extensions/codex/provider-discovery.js";
-import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { prepareModelCatalogView } from "../../agents/model-catalog-view.js";
-import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
-import { getRuntimeConfig } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
-import * as pluginModuleLoader from "../../plugins/plugin-module-loader-cache.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import * as codexPluginModule from "../../extensions/codex/index.js";
+import type { ModelsListResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import { prepareModelCatalogView } from "../../src/agents/model-catalog-view.js";
+import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../src/agents/prepared-model-catalog.js";
+import { getRuntimeConfig } from "../../src/config/config.js";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import {
+  listModels,
+  WITHOUT_OPENAI_ENV_AUTH,
+} from "../../src/gateway/server-methods/models-list-result.openai-routes.test-support.js";
+import {
+  disconnectGatewayClient,
+  startGatewayWithClient,
+} from "../../src/gateway/test-helpers.e2e.js";
+import { loadManifestMetadataSnapshot } from "../../src/plugins/manifest-contract-eligibility.js";
+import * as pluginModuleLoader from "../../src/plugins/plugin-module-loader-cache.js";
+import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
-} from "../../plugins/runtime.js";
-import { withEnvAsync } from "../../test-utils/env.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
-import {
-  listModels,
-  WITHOUT_OPENAI_ENV_AUTH,
-} from "./models-list-result.openai-routes.test-support.js";
+} from "../../src/plugins/runtime.js";
+import { withEnvAsync } from "../../src/test-utils/env.js";
+import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 
 describe("models.list native account catalog", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -144,10 +146,9 @@ describe("models.list native account catalog", () => {
                 },
               },
             };
-            const codexRoot = fileURLToPath(new URL("../../../extensions/codex/", import.meta.url));
+            const codexRoot = fileURLToPath(new URL("../../extensions/codex/", import.meta.url));
             const bundledModules = new Map<string, unknown>([
               [path.join(codexRoot, "index.ts"), codexPluginModule],
-              [path.join(codexRoot, "provider-discovery.ts"), codexProviderModule],
             ]);
             const actualModuleLoader = pluginModuleLoader.getCachedPluginModuleLoader;
             // Keep real bundled modules in the host graph; the Gateway still owns registration.
@@ -188,6 +189,11 @@ describe("models.list native account catalog", () => {
                   { timeout: 15_000 },
                 )
                 .toBe(true);
+              await expect
+                .poll(async () => (await registeredList()).pendingProviders ?? [], {
+                  timeout: 15_000,
+                })
+                .not.toContain("openai");
               const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
                 agentId: "main",
                 config: getRuntimeConfig(),
@@ -276,17 +282,7 @@ describe("models.list native account catalog", () => {
                 ]) {
                   account = observed.value;
                   const beforeModels = requests.filter((method) => method === "model/list").length;
-                  const refreshed = await registeredList(true);
-                  console.log(
-                    "NATIVE_API_REFRESH",
-                    JSON.stringify({
-                      account,
-                      pendingProviders: refreshed.pendingProviders,
-                      readiness: readiness(),
-                      requests,
-                      models: refreshed.models.filter((row) => row.id === "synthetic-opaque"),
-                    }),
-                  );
+                  await registeredList(true);
                   await expect
                     .poll(() => requests.filter((method) => method === "model/list").length, {
                       timeout: 15_000,

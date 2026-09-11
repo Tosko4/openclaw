@@ -515,6 +515,8 @@ export function createFullModelCatalogAccess(params: {
       if (includeNative) {
         const current = fullCatalog ?? staticCatalog;
         let nativeDiscoveryStarted = false;
+        const startupProviders = new Set(params.agentFacts.providerIds.map(normalizeProvider));
+        let discoveredProviders: string[] = [];
         const catalog = await augmentPreparedModelCatalogWithAgentHarness({
           input: params.agentFacts.input,
           snapshot: current,
@@ -527,12 +529,45 @@ export function createFullModelCatalogAccess(params: {
             current.authoritative = false;
             attempt.started([normalizeProvider(provider)]);
           },
+          onDiscoveryCompleted: (rows) => {
+            discoveredProviders = [
+              ...new Set(
+                rows
+                  .map((entry) => normalizeProvider(entry.provider))
+                  .filter((provider) => !startupProviders.has(provider)),
+              ),
+            ];
+          },
         });
         assertCurrent();
-        setPreparedModelFullCatalogAuth(
-          catalog,
-          getPreparedModelFullCatalogAuth(current) ?? currentAuth,
-        );
+        const auth = getPreparedModelFullCatalogAuth(current) ?? currentAuth;
+        const nativeAuth =
+          nativeDiscoveryStarted && discoveredProviders.length
+            ? await worker.loadAuth({ providerIds: discoveredProviders })
+            : undefined;
+        assertCurrent();
+        const retainOther = <T>(values: Readonly<Record<string, T>>) => {
+          const refreshedProviders = new Set(
+            scopeSyntheticAuthProviderRefs(Object.keys(values), discoveredProviders).map(
+              normalizeProvider,
+            ),
+          );
+          return Object.fromEntries(
+            Object.entries(values).filter(
+              ([provider]) => !refreshedProviders.has(normalizeProvider(provider)),
+            ),
+          );
+        };
+        setPreparedModelFullCatalogAuth(catalog, {
+          ...auth,
+          ...(nativeAuth
+            ? {
+                authStore: nativeAuth.authStore,
+                credentials: { ...retainOther(auth.credentials ?? {}), ...nativeAuth.credentials },
+                authModes: { ...retainOther(auth.authModes), ...nativeAuth.authModes },
+              }
+            : {}),
+        });
         if (!options.providerIds || nativeDiscoveryStarted) {
           nativeCatalogAcquired = true;
         }

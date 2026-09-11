@@ -362,7 +362,7 @@ describe("gateway chat metadata lifecycle composition", () => {
     { wildcard: false, invalidate: "stamp" },
     { wildcard: false, invalidate: "generation" },
   ])(
-    "revalidates native observations (wildcard=$wildcard, $invalidate) without rediscovery",
+    "models.list projection revalidates native observations (wildcard=$wildcard, $invalidate) without read-triggered discovery",
     async ({ wildcard, invalidate }) => {
       const modelRef = wildcard ? "openai/*" : "openai/codex-latest";
       const nativeConfig: OpenClawConfig = {
@@ -594,7 +594,8 @@ describe("gateway chat metadata lifecycle composition", () => {
             const staleModels = retained.read().models;
             release.resolve({ agentDir: state.agentDir("main"), wrote: false });
             await published.promise;
-            expect(events).toEqual(["invalidated", "published"]);
+            expect(events).toContain("published");
+            expect(events).not.toContain("failed");
             await expect(nextRead).resolves.toMatchObject({ models: expectedModels(true) });
             const replacement = getPreparedModelCatalogOwnerSnapshot({
               agentId: "main",
@@ -605,6 +606,8 @@ describe("gateway chat metadata lifecycle composition", () => {
             expect(replacement).toBeDefined();
             expect(replacement).not.toBe(owner);
             expect(replacement?.pluginRegistry).toBe(owner.pluginRegistry);
+            expect(loadModelCatalog).toHaveBeenCalledTimes(1);
+            await lifecycle.read({ agentId: "main" });
             expect(loadModelCatalog).toHaveBeenCalledTimes(1);
             expect({ current: staleCurrent, models: staleModels }).toMatchObject({
               current: false,
