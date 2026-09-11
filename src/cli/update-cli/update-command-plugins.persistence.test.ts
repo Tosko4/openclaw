@@ -1,11 +1,9 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../../config/config.js";
-import {
-  readPersistedInstalledPluginIndexInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecords,
-} from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
+import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 const mocks = vi.hoisted(() => ({ convergence: vi.fn() }));
@@ -22,7 +20,7 @@ describe("updater plugin commit cancellation", () => {
         const cfg = { plugins: { enabled: false } };
         await state.writeConfig(cfg);
         const originalConfig = await fs.readFile(state.configPath, "utf8");
-        await writePersistedInstalledPluginIndexInstallRecords({}, { config: cfg, env: state.env });
+        await seedInstalledPluginIndex({}, { config: cfg, env: state.env });
         const controller = new AbortController();
         const refusal = new Error(`updater ${effect} refusal`);
         const assertCurrent = () => controller.signal.throwIfAborted();

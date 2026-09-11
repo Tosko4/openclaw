@@ -6,13 +6,11 @@ import * as configIO from "../../config/io.factory.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import {
-  readPersistedInstalledPluginIndexInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecords,
-} from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndexRowSync } from "../../plugins/installed-plugin-index-row.js";
 import { auditDeclaredOpenClawHostDependency } from "../../plugins/plugin-peer-link.js";
 import * as registryRefresh from "../../plugins/registry-refresh.js";
+import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
 import * as pluginUpdates from "../../plugins/update.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -120,10 +118,7 @@ describe("connected in-process plugin finalization authority", () => {
         let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
         const currentConfig = { plugins: { enabled: false } };
         await state.writeConfig(currentConfig);
-        await writePersistedInstalledPluginIndexInstallRecords(
-          {},
-          { config: currentConfig, env: state.env },
-        );
+        await seedInstalledPluginIndex({}, { config: currentConfig, env: state.env });
         const originalConfig = await fs.readFile(state.configPath, "utf8");
         const diagnosticPath = await state.writeText(
           "retained-diagnostic.json",
@@ -244,9 +239,9 @@ describe("connected in-process plugin finalization authority", () => {
                     });
                   try {
                     return await refresh(input);
-                  } catch (error) {
-                    registryRefusal = error;
-                    throw error;
+                  } catch (registryError) {
+                    registryRefusal = registryError;
+                    throw registryError;
                   } finally {
                     readSpy.mockRestore();
                   }
@@ -390,9 +385,8 @@ describe("connected in-process plugin finalization authority", () => {
           const firstAssertCurrent = assertOriginalCurrent;
           recovering = true;
           configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
-          preUpdatePluginInstallRecords = readPersistedInstalledPluginIndexInstallRecords({
-            env: state.env,
-          });
+          preUpdatePluginInstallRecords =
+            readPersistedInstalledPluginIndexInstallRecords({ env: state.env }) ?? {};
           created = createUpdateRun({ trigger: "cli" }, { env: state.env });
           run = { runId: created.runId, env: state.env };
           completed = undefined;
