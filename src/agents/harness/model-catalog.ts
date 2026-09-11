@@ -245,6 +245,7 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
   includesProvider?: (provider: string) => boolean;
   onDiscoveryStarted?: (provider: string) => void;
   onDiscoveryCompleted?: (rows: readonly ModelCatalogEntry[]) => void;
+  onError?: (error: unknown) => void;
 }): Promise<ModelCatalogSnapshot> {
   const agentId = params.input.agentId ?? resolveDefaultAgentId(params.input.config);
   return augmentModelCatalogWithAgentHarness({
@@ -264,5 +265,6 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
     includesProvider: params.includesProvider,
     onDiscoveryStarted: params.onDiscoveryStarted,
     onDiscoveryCompleted: params.onDiscoveryCompleted,
+    onError: params.onError,
   });
 }

@@ -552,6 +552,9 @@ export function createFullModelCatalogAccess(params: {
           includesProvider: options.providerIds
             ? (provider) => requestedProviders.includes(normalizeProvider(provider))
             : undefined,
+          onError: (error) => {
+            throw error;
+          },
           onDiscoveryStarted: (provider) => {
             nativeDiscoveryStarted = true;
             nativeCatalogAcquired = false;

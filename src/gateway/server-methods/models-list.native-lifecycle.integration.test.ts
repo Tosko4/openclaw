@@ -26,6 +26,7 @@ it.each([false, true])(
     const requests: string[] = [];
     let nativeModelId = "native-account-only";
     let emptyNativeCatalog = false;
+    let failedNativeCatalog = false;
     let noteNativeRequested!: () => void;
     const nativeRequested = new Promise<void>((resolve) => {
       noteNativeRequested = resolve;
@@ -47,6 +48,12 @@ it.each([false, true])(
       requests.push(request.url ?? "");
       response.setHeader("Content-Type", "application/json");
       if (request.url === "/native/models") {
+        if (failedNativeCatalog) {
+          response
+            .writeHead(503)
+            .end(JSON.stringify({ error: "Native catalog fixture unavailable" }));
+          return;
+        }
         noteNativeRequested();
         void nativeReleased.then(() =>
           response.end(
@@ -146,6 +153,7 @@ it.each([false, true])(
           supports: () => ({ supported: true }), runAttempt: async () => ({ ok: false, error: "unused" }),
           async loadModelCatalog(params) {
             const response = await fetch(${JSON.stringify(`${baseUrl}/native/models`)});
+            if (!response.ok) throw new Error("Native catalog fixture unavailable");
             const rows = await response.json();
             observed.add(params.config);
             return rows;
@@ -299,6 +307,40 @@ it.each([false, true])(
               provider: "unrelated-native-fixture",
               id: "unrelated-native-model",
             }),
+          );
+          failedNativeCatalog = true;
+          const beforeFailure = requests.length;
+          await expect
+            .soft(client.request("models.list", { agentId: "main", provider, refresh: true }))
+            .rejects.toThrow("Native catalog fixture unavailable");
+          expect(requests.slice(beforeFailure)).toEqual(["/provider/models", "/native/models"]);
+          const beforeFailureReads = requests.length;
+          const failedReads = await Promise.all([list(), list()]);
+          expect(requests).toHaveLength(beforeFailureReads);
+          for (const failed of failedReads) {
+            expect.soft(failed.refreshFailed).toBe(true);
+            expect(failed.pendingProviders ?? []).not.toContain(provider);
+            expect(failed.models).toContainEqual(
+              expect.objectContaining({ provider, id: "native-account-only" }),
+            );
+            expect(failed.models).toContainEqual(
+              expect.objectContaining({ provider, id: "configured-native" }),
+            );
+            expect(failed.models).toContainEqual(
+              expect.objectContaining({
+                provider: "unrelated-native-fixture",
+                id: "unrelated-native-model",
+              }),
+            );
+          }
+          failedNativeCatalog = false;
+          const beforeRecovery = requests.length;
+          await client.request("models.list", { agentId: "main", provider, refresh: true });
+          expect(requests.slice(beforeRecovery)).toEqual(["/provider/models", "/native/models"]);
+          const recovered = await list();
+          expect(recovered.refreshFailed).not.toBe(true);
+          expect(recovered.models).toContainEqual(
+            expect.objectContaining({ provider, id: "native-account-only" }),
           );
           nativeModelId = "native-new-release";
           const beforeScoped = requests.length;

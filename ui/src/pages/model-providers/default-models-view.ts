@@ -36,7 +36,6 @@ type DefaultModelsViewProps = {
   onThinkingReset: () => void;
   onFastModeChange: (mode: FastMode) => void;
   onFastModeReset: () => void;
-  /** Invoked when any default-model picker opens; triggers demand-driven discovery. */
   onCatalogRetry: () => void;
 };
 
