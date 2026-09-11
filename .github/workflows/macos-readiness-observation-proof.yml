@@ -1,0 +1,287 @@
+# Review-only payload pinned to the signed source candidate.
+# Proposed destination on the disposable proof branch only:
+# .github/workflows/macos-readiness-observation-proof.yml
+name: Mac Readiness Contract Proof
+run-name: Mac Readiness Contract Proof ${{ github.sha }}
+
+on:
+  push:
+    branches: [ci-proof/macos-readiness-observation-20260911]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-readiness-observation-proof-20260911
+  cancel-in-progress: false
+
+jobs:
+  readiness-proof:
+    if: github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/ci-proof/macos-readiness-observation-20260911'
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      CANDIDATE_SHA: 2ec6d8ad85d9fed83c26b620e4a7ee4608b03f75
+      CANDIDATE_TREE: b0693dcb3f129d335e1c880e969d6e853ee44917
+      BASE_SHA: cc0d3ca78ecf3b9f0933bea84e19cb26f89a9870
+      PATCH_SHA256: c03f4261886feaf4f80f36a8effeb0f0a9f36b3283799962174a2db3d360f411
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 3
+          persist-credentials: false
+
+      - name: Verify workflow and candidate identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == openclaw/openclaw ]]
+          [[ "$GITHUB_REF" == refs/heads/ci-proof/macos-readiness-observation-20260911 ]]
+          [[ "$GITHUB_RUN_ATTEMPT" == 1 ]]
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CANDIDATE_TREE" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          [[ "$GITHUB_SHA" != "$CANDIDATE_SHA" && "$CANDIDATE_SHA" != "$BASE_SHA" ]]
+          [[ "$(git rev-parse HEAD^)" == "$CANDIDATE_SHA" ]]
+          [[ "$(git rev-parse "$CANDIDATE_SHA^")" == "$BASE_SHA" ]]
+          [[ "$(git rev-parse "$CANDIDATE_SHA^{tree}")" == "$CANDIDATE_TREE" ]]
+          [[ "$(git diff --name-only "$CANDIDATE_SHA" HEAD)" == .github/workflows/macos-readiness-observation-proof.yml ]]
+          [[ "$(git diff --name-only "$BASE_SHA" "$CANDIDATE_SHA")" == apps/macos/Tests/OpenClawIPCTests/GatewayProcessManagerTests.swift ]]
+          actual_patch="$(git diff --no-ext-diff --no-textconv --full-index --binary "$BASE_SHA" "$CANDIDATE_SHA" | shasum -a 256 | awk '{print $1}')"
+          [[ "$actual_patch" == "$PATCH_SHA256" ]]
+          git diff --exit-code
+          printf 'workflow=%s candidate=%s candidate_tree=%s patch_sha256=%s\n' \
+            "$GITHUB_SHA" "$CANDIDATE_SHA" "$CANDIDATE_TREE" "$actual_patch"
+          git switch --detach "$CANDIDATE_SHA"
+          [[ "$(git rev-parse HEAD)" == "$CANDIDATE_SHA" ]]
+          [[ "$(git rev-parse HEAD^{tree})" == "$CANDIDATE_TREE" ]]
+          [[ -z "$(git status --porcelain --untracked-files=no)" ]]
+
+      - name: Setup Node environment for Apple assets
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.x
+          install-bun: "false"
+          install-deps: "true"
+          cache-mode: "off"
+
+      - name: Prepare Apple Mermaid assets
+        run: node scripts/prepare-apple-mermaid.mjs
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Candidate and controlled negatives
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { execFileSync } from "node:child_process";
+          import { createHash } from "node:crypto";
+          import fs from "node:fs";
+          import { hasUnjoinedWork, runManagedCommand } from "./scripts/lib/managed-child-process.mts";
+
+          const owner = "apps/macos/Sources/OpenClaw/GatewayProcessManager.swift";
+          const test = "apps/macos/Tests/OpenClawIPCTests/GatewayProcessManagerTests.swift";
+          const wrapper = "scripts/test-macos-native.mts";
+          const wrapperErrorMarker = "[proof] native wrapper Error";
+          const unjoinedDiagnostic = /\[macos-native\] retained resources|EPROCESSGROUP|\bunjoined\b/i;
+          // Mark typed wrapper exceptions without changing its entry point, argv, or failure handling.
+          const errorObserver = "data:text/javascript," + encodeURIComponent(`
+            import { types } from "node:util";
+            const originalError = console.error.bind(console);
+            console.error = (...values) => {
+              if (values.some(value => types.isNativeError(value))) originalError(${JSON.stringify(wrapperErrorMarker)});
+              originalError(...values);
+            };
+          `);
+          const original = fs.readFileSync(owner);
+          const digest = (data) => createHash("sha256").update(data).digest("hex");
+          const originalHash = digest(original);
+          const testHash = digest(fs.readFileSync(test));
+          const wrapperHash = digest(fs.readFileSync(wrapper));
+          const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
+          assert.equal(git("diff", "--name-only"), "");
+          assert.deepEqual(original, execFileSync("git", ["show", `${process.env.CANDIDATE_SHA}:${owner}`]));
+
+          const logicalCPU = Number(execFileSync("sysctl", ["-n", "hw.logicalcpu"], { encoding: "utf8" }).trim());
+          assert.ok(Number.isSafeInteger(logicalCPU) && logicalCPU > 0);
+          const width = Math.min(logicalCPU, 12);
+          const buildArgs = ["build", "--package-path", "apps/macos", "--build-system", "native",
+            "--enable-code-coverage", "--build-tests"];
+          const stalled = "readiness timeout includes a stalled socket connect";
+          const cancelled = "transport cancellation does not publish readiness failure";
+          const baselineFilter = `AsyncTimeoutTests|GatewayChannelRequestTests|${stalled}|${cancelled}`;
+          let interrupted = false;
+          let unjoined = false;
+          let mutationAttempted = false;
+          const failures = [];
+          for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+            process.on(signal, () => { interrupted = true; });
+          }
+
+          async function command(bin, args, timeoutMs, capture = false) {
+            let output = "";
+            let size = 0;
+            let overflow = false;
+            try {
+              const code = await runManagedCommand({
+                bin, args, timeoutMs, requireProcessTreeExit: true,
+                stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit",
+                onSignal: () => { interrupted = true; },
+                onReady: (child) => {
+                  if (!capture) return;
+                  for (const stream of [child.stdout, child.stderr]) {
+                    let diagnosticTail = "";
+                    stream.setEncoding("utf8");
+                    stream.on("data", (chunk) => {
+                      const diagnosticText = diagnosticTail + chunk;
+                      if (unjoinedDiagnostic.test(diagnosticText)) unjoined = true;
+                      diagnosticTail = diagnosticText.slice(-128);
+                      process.stdout.write(chunk);
+                      size += Buffer.byteLength(chunk);
+                      if (size > 16 * 1024 * 1024) overflow = true;
+                      if (!overflow) output += chunk;
+                    });
+                  }
+                },
+              });
+              assert.ok(!overflow, "Proof output exceeded its bound");
+              assert.ok(!interrupted, "Interrupted proof is not an expected negative");
+              return { code, output: output.replace(/\u001b\[[0-9;]*m/g, "") };
+            } catch (error) {
+              unjoined ||= hasUnjoinedWork(error);
+              throw error;
+            }
+          }
+
+          async function build() {
+            const { code } = await command("swift", buildArgs, 15 * 60_000);
+            assert.equal(code, 0, "Compilation must succeed before any test verdict");
+          }
+
+          async function runTests(filter) {
+            const result = await command(process.execPath, [
+              "--import", errorObserver,
+              wrapper, "default", "--package-path", "apps/macos", "--build-system", "native",
+              "--enable-code-coverage", "--skip-build",
+              "--experimental-maximum-parallelization-width", String(width), "--filter", filter,
+            ], 180_000, true);
+            if (unjoinedDiagnostic.test(result.output)) unjoined = true;
+            assert.ok(!unjoined, "Native wrapper left unjoined work; do not restore or rebuild");
+            assert.ok(!result.output.includes(wrapperErrorMarker),
+              "A native wrapper exception is not an expected test assertion failure");
+            assert.equal(digest(fs.readFileSync(test)), testHash);
+            assert.equal(digest(fs.readFileSync(wrapper)), wrapperHash);
+            assert.ok(!/\[macos-native\] (?:security|retained resources)|EPROCESSGROUP|ETIMEDOUT|Managed command|error: fatalError|Fatal error:|error: emit-module/i.test(result.output),
+              "Bootstrap, compile, cleanup, or process timeout is not an expected negative");
+            return result;
+          }
+
+          function summary(output, count, outcome, issues = 0) {
+            const matches = [...output.matchAll(/Test run with (\d+) tests?(?: in \d+ suites?)? (passed|failed) after[^\n]*/g)];
+            assert.equal(matches.length, 1, "Exactly one Swift Testing terminal summary is required");
+            assert.equal(Number(matches[0][1]), count);
+            assert.equal(matches[0][2], outcome);
+            const issueLines = output.split("\n").filter((line) => line.includes("recorded an issue at "));
+            assert.equal(issueLines.length, issues, "Unexpected or missing test issue");
+          }
+
+          async function baseline(label) {
+            const { code, output } = await runTests(baselineFilter);
+            assert.equal(code, 0, `${label}: candidate baseline failed`);
+            summary(output, 19, "passed");
+            for (const name of [stalled, cancelled]) {
+              assert.ok(output.split("\n").some((line) => line.includes(name) && line.includes(" passed after ")),
+                `${label}: missing changed case ${name}`);
+            }
+            for (const name of ["AsyncTimeoutTests", "GatewayChannelRequestTests", "GatewayProcessManagerTests"]) {
+              assert.ok(output.split("\n").some((line) => line.includes(`Suite ${name} passed after `)),
+                `${label}: missing suite ${name}`);
+            }
+            console.log(`[proof] ${label}: 19 test functions passed; includes both changed cases and both sibling suites`);
+          }
+
+          function replaceOnce(before, after) {
+            const text = original.toString("utf8");
+            assert.equal(text.split(before).length, 2, "Mutant source anchor must occur exactly once");
+            mutationAttempted = true;
+            fs.writeFileSync(owner, text.replace(before, after));
+            assert.equal(git("diff", "--name-only"), owner);
+            assert.notEqual(digest(fs.readFileSync(owner)), originalHash);
+          }
+
+          function restore() {
+            fs.writeFileSync(owner, original);
+            assert.equal(digest(fs.readFileSync(owner)), originalHash);
+            assert.equal(git("diff", "--name-only"), "");
+          }
+
+          async function negative(label, name, expectedAssertions) {
+            await build();
+            const { code, output } = await runTests(name);
+            assert.equal(code, 1, `${label}: expected an assertion failure exit, not a signal or success`);
+            summary(output, 1, "failed", expectedAssertions.length);
+            assert.ok(output.split("\n").some((line) => line.includes(name) && line.includes(" failed after ")),
+              `${label}: missing intended failed test`);
+            const expectations = output.split("\n").filter((line) => line.includes("Expectation failed:"));
+            assert.equal(expectations.length, expectedAssertions.length);
+            for (const expression of expectedAssertions) {
+              assert.equal(expectations.filter((line) => line.includes(expression)).length, 1,
+                `${label}: wrong assertion failure`);
+            }
+            assert.ok(output.includes("[macos-native] FAILED (exit 1)"));
+            console.log(`[proof] ${label}: compiled; exactly ${expectedAssertions.length} intended assertions failed`);
+          }
+
+          try {
+            await build();
+            await baseline("candidate");
+            replaceOnce(
+              `return try await AsyncTimeout.withTimeout(
+                      seconds: max(0.001, timeoutMs / 1000),
+                      onTimeout: { GatewayHealthProbeTimeout(timeoutMs: timeoutMs) },
+                      operation: {
+                          try await connection.request(
+                              method: GatewayConnection.Method.health.rawValue,
+                              params: nil,
+                              timeoutMs: 0,
+                              retryTransportFailures: false)
+                      })`,
+              `return try await connection.request(
+                      method: GatewayConnection.Method.health.rawValue,
+                      params: nil,
+                      timeoutMs: 0,
+                      retryTransportFailures: false)`);
+            await negative("outer timeout removed", stalled, ["socketState", "socketCancelCount"]);
+            restore();
+            await build();
+            replaceOnce(
+              "if self.probeFailureIsCancellation(error) { return .retryWithoutRepair }",
+              "if self.probeFailureIsCancellation(error) { return .fail }");
+            await negative("cancellation misclassified", cancelled,
+              ["manager.status", "manager.lastFailureReason", "manager._testHasLaunchAgentReadinessCandidate"]);
+          } catch (error) {
+            failures.push(error);
+          } finally {
+            if (unjoined) {
+              failures.push(new Error("Unjoined child prevents source restoration or another build; discard the disposable worker"));
+            } else if (mutationAttempted) {
+              try {
+                restore();
+                if (interrupted) throw new Error("Interrupted proof cannot claim final rebuilt baseline");
+                await build();
+                await baseline("restored candidate");
+              } catch (error) {
+                failures.push(error);
+              }
+            }
+          }
+          if (failures.length) throw new AggregateError(failures, "Readiness proof failed; original failures preserved");
+          console.log(`[proof] complete owner_sha256=${originalHash} test_sha256=${testHash} wrapper_sha256=${wrapperHash}`);
+          NODE
