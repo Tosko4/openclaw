@@ -16,6 +16,7 @@ import com.google.android.gms.tasks.Task
 import com.google.android.gms.wearable.ChannelClient
 import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -55,6 +56,14 @@ internal class WearRealtimeTalkClient(
   private val lifecycleLock = Mutex()
   private val channelLock = Mutex()
   private val audioLock = Any()
+  private var pendingStop: CompletableDeferred<WearRealtimeTalkSnapshot>? = null
+  private var unsettledStopTarget: StopTarget? = null
+
+  private data class StopTarget(
+    val nodeId: String,
+    val attemptId: String,
+  )
+
   private val audioFocus =
     WearAudioFocusController(context) {
       activeAttempt?.let { attempt -> scope.launch { clearOutput(attempt, resumeCapture = true) } }
@@ -102,6 +111,12 @@ internal class WearRealtimeTalkClient(
   ): WearRealtimeTalkSnapshot =
     lifecycleLock.withLock {
       val nodeId = session.phoneNodeId
+      // A fresh same-phone Talk intent must first settle known unfinished cleanup.
+      // A different phone is a different owner; never reroute the old attempt.
+      unsettledStopTarget?.let { target ->
+        if (target.nodeId == nodeId) repository.stopRealtimeTalk(target.nodeId, target.attemptId)
+        unsettledStopTarget = null
+      }
       val attemptScopedAudio = WearProxyCapability.AttemptScopedRealtimeAudio in capabilities
       var resources: ChannelResources? = null
       var channelOpened = false
@@ -144,24 +159,51 @@ internal class WearRealtimeTalkClient(
         if (channelOpened) {
           // Finish ambiguous-start cleanup before another attempt can acquire
           // the lifecycle lock and create a replacement relay for this Watch.
-          withContext(NonCancellable) { runCatching { repository.stopRealtimeTalk(nodeId, attemptId) } }
+          withContext(NonCancellable) {
+            unsettledStopTarget = StopTarget(nodeId, attemptId)
+            runCatching { repository.stopRealtimeTalk(nodeId, attemptId) }
+              .onSuccess { unsettledStopTarget = null }
+          }
         }
         throw err
       }
     }
 
-  suspend fun stop(): WearRealtimeTalkSnapshot =
-    lifecycleLock.withLock {
+  suspend fun stop(): WearRealtimeTalkSnapshot {
+    var ownsStop = false
+    val completion =
+      synchronized(audioLock) {
+        pendingStop ?: CompletableDeferred<WearRealtimeTalkSnapshot>().also {
+          pendingStop = it
+          ownsStop = true
+        }
+      }
+    // Concurrent navigation observes the original RPC outcome, not an empty
+    // success caused by that RPC already having closed the local attempt.
+    if (!ownsStop) return completion.await()
+    var locked = false
+    try {
+      lifecycleLock.lock()
+      locked = true
       val attempt = activeAttempt
+      val target = attempt?.let { StopTarget(it.nodeId, it.attemptId) } ?: unsettledStopTarget
+      unsettledStopTarget = target
       // Stop Watch-owned audio before waiting for the phone. A slow or lost
       // Stop response must never keep the microphone or speaker alive.
       closeLocal(attempt)
-      if (attempt == null) {
-        WearRealtimeTalkSnapshot()
-      } else {
-        repository.stopRealtimeTalk(attempt.nodeId, attempt.attemptId)
-      }
+      val snapshot =
+        if (target == null) WearRealtimeTalkSnapshot() else repository.stopRealtimeTalk(target.nodeId, target.attemptId)
+      unsettledStopTarget = null
+      completion.complete(snapshot)
+      return snapshot
+    } catch (err: Throwable) {
+      completion.completeExceptionally(err)
+      throw err
+    } finally {
+      synchronized(audioLock) { if (pendingStop === completion) pendingStop = null }
+      if (locked) lifecycleLock.unlock()
     }
+  }
 
   fun shutdown() {
     closeLocal()

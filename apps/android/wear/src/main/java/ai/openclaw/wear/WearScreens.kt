@@ -1980,12 +1980,12 @@ private fun ConversationContextPicker(
   onOpenContextPicker: () -> Unit,
 ) {
   val session = snapshot.sessions.firstOrNull(WearSessionSummary::selected) ?: snapshot.sessions.firstOrNull()
-  val agent = snapshot.agents.firstOrNull(WearAgentSummary::selected) ?: snapshot.agents.firstOrNull()
+  val agent = snapshot.agents.firstOrNull { it.id == snapshot.conversationAgentId }
   val model = snapshot.models.firstOrNull(WearModelSummary::selected)
   val agentName =
     listOfNotNull(
       agent?.emoji?.takeIf(String::isNotBlank),
-      agent?.name ?: stringResource(R.string.agent),
+      agent?.name ?: snapshot.conversationAgentId ?: stringResource(R.string.agent),
     ).joinToString(" ")
   val modelName = model?.name ?: snapshot.selectedModelRef ?: stringResource(R.string.model)
   ContextPickerOption(
@@ -2058,7 +2058,7 @@ private fun ContextPickerOverlay(
     }
     if (picker == WearContextPicker.Session) {
       item {
-        val agent = snapshot.agents.firstOrNull(WearAgentSummary::selected) ?: snapshot.agents.firstOrNull()
+        val agent = snapshot.agents.firstOrNull { it.id == snapshot.conversationAgentId }
         val model = snapshot.models.firstOrNull(WearModelSummary::selected)
         Panel {
           ContextPickerRow(
@@ -2066,7 +2066,7 @@ private fun ContextPickerOverlay(
             value =
               listOfNotNull(
                 agent?.emoji?.takeIf(String::isNotBlank),
-                agent?.name ?: stringResource(R.string.agent),
+                agent?.name ?: snapshot.conversationAgentId ?: stringResource(R.string.agent),
               ).joinToString(" "),
             onClick = onOpenAgentPicker.takeIf { snapshot.agentControlsSupported && !actionBusy },
           )

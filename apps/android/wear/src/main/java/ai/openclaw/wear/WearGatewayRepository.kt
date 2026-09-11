@@ -100,6 +100,11 @@ internal data class WearAgentList(
   val eventStreamId: String? = null,
 )
 
+internal data class WearConversationTarget(
+  val sessionKey: String,
+  val phoneNodeId: String,
+)
+
 internal data class WearSession(
   val key: String,
   val title: String?,
@@ -109,6 +114,12 @@ internal data class WearSession(
   val agentId: String? = null,
   val modelRef: String? = null,
 )
+
+internal val WearSession.conversationAgentId: String?
+  get() {
+    val parts = key.split(':', limit = 3)
+    return if (parts.size == 3 && parts[0] == "agent" && parts[1].isNotBlank() && parts[2].isNotBlank()) parts[1] else agentId
+  }
 
 internal data class WearSessionList(
   val sessions: List<WearSession>,
@@ -194,25 +205,68 @@ internal class WearSendAttemptTracker(
   private val newId: () -> String = { UUID.randomUUID().toString() },
 ) {
   private var ambiguousAttempt: WearSendAttempt? = null
+  private var latestAttempt: WearSendAttempt? = null
+
+  fun clear() {
+    ambiguousAttempt = null
+    latestAttempt = null
+  }
 
   fun begin(
     sessionKey: String,
     message: String,
     phoneNodeId: String,
   ): WearSendAttempt {
-    ambiguousAttempt
-      ?.takeIf { it.sessionKey == sessionKey && it.message == message && it.phoneNodeId == phoneNodeId }
-      ?.let { return it }
+    val retry = ambiguousAttempt?.takeIf { it.sessionKey == sessionKey && it.message == message && it.phoneNodeId == phoneNodeId }
     ambiguousAttempt = null
-    return WearSendAttempt(sessionKey, message, "wear-${newId()}", phoneNodeId)
+    // A retry shares the logical request key, but each invocation owns only its own callbacks.
+    return (retry?.copy() ?: WearSendAttempt(sessionKey, message, "wear-${newId()}", phoneNodeId)).also { latestAttempt = it }
+  }
+
+  fun markDisconnected() {
+    // A disconnect cannot tell whether the latest unresolved request was accepted.
+    ambiguousAttempt = latestAttempt
+  }
+
+  fun markPhoneRouteUncertain(phoneNodeId: String?) {
+    if (phoneNodeId != null && latestAttempt?.phoneNodeId?.let { it != phoneNodeId } == true) {
+      clear()
+    } else {
+      markDisconnected()
+    }
+  }
+
+  fun retainForTarget(
+    sessionKey: String?,
+    phoneNodeId: String?,
+  ) {
+    val current = latestAttempt ?: return
+    if (current.sessionKey != sessionKey || current.phoneNodeId != phoneNodeId) clear()
   }
 
   fun markAmbiguous(attempt: WearSendAttempt) {
-    ambiguousAttempt = attempt
+    if (latestAttempt === attempt) ambiguousAttempt = attempt
   }
 
   fun markSucceeded(attempt: WearSendAttempt) {
-    if (ambiguousAttempt == attempt) ambiguousAttempt = null
+    if (latestAttempt === attempt) clear()
+  }
+
+  fun markTerminal(
+    sessionKey: String,
+    phoneNodeId: String,
+    runId: String?,
+  ) {
+    val current = latestAttempt ?: return
+    if (current.sessionKey == sessionKey && current.phoneNodeId == phoneNodeId && current.idempotencyKey == runId) clear()
+  }
+
+  fun reconcileTerminalHistory(transcript: WearTranscript) {
+    val current = latestAttempt ?: return
+    if (current.sessionKey != transcript.sessionKey || current.phoneNodeId != transcript.phoneNodeId) return
+    // Canonical run-owned terminal records resolve a lost send acknowledgement,
+    // even after reconnect revoked the UI pending state. Reuse the terminal owner.
+    if (transcript.messages.any { it.replyOutcomeForRun(current.idempotencyKey) != null }) clear()
   }
 }
 
