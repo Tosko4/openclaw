@@ -421,7 +421,7 @@ export function activateGatewayScheduledServices(params: {
   });
   const sessionUpstreamMonitor = startSessionUpstreamMonitor();
   const localSessionBridgeLifetime = new AbortController();
-  startLocalSessionBridge({
+  void startLocalSessionBridge({
     resolveGatewayContext: () => params.resolveGatewayContext?.(),
     getRuntimeConfig,
     signal: localSessionBridgeLifetime.signal,

@@ -13,29 +13,42 @@ import {
   retireLocalInputsForMessages,
   takeRejectedLocalInput,
 } from "./chat-local-input.ts";
-import {
-  getChatSessionProjection,
-  readChatSessionProjectionScope,
-  reduceChatSessionProjection,
-} from "./history-merge.ts";
+import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 
 const sessionKey = "agent:main:live-local";
 
-function makeHost() {
-  const host = makeChatHost({ sessionKey });
+function makeHost(inputModes: Array<"steer" | "followup"> = ["steer"]) {
+  const localSource: SessionLocalSource = {
+    sourceId: "codex",
+    sourceLabel: "Codex",
+    deviceId: "mac-1",
+    threadId: "thread-1",
+    ownerProfileId: "profile-scott",
+    ownerLabel: "Scott",
+    connected: true,
+    state: "idle",
+    canInput: true,
+    inputModes,
+  };
+  const host = makeChatHost({
+    sessionKey,
+    sessionsResult: sessionsResult(
+      [{ key: sessionKey, kind: "direct", updatedAt: 1, localSource }],
+      1,
+    ),
+  });
   reduceChatSessionProjection(host, { type: "snapshotLoaded", messages: [] });
   return host;
 }
 
-function submit(host: ReturnType<typeof makeHost>, inputId = "in-1", inputModes = ["steer"]) {
+// The recorder reads the source and projection scope from the host, as the send path does.
+function submit(host: ReturnType<typeof makeHost>, inputId = "in-1") {
   recordLocalInputSubmission(host, {
     inputId,
     runId: `run-${inputId}`,
     sessionKey,
     agentId: "main",
-    source: { sourceLabel: "Codex", inputModes: inputModes as Array<"steer" | "followup"> },
     message: { text: `hello ${inputId}`, createdAt: 100 },
-    scope: readChatSessionProjectionScope(host, { sessionKey, agentId: "main" }),
   });
 }
 
@@ -157,8 +170,8 @@ describe("live local input receipts", () => {
   });
 
   it("marks next-turn delivery for sources without steering", () => {
-    const host = makeHost();
-    submit(host, "in-2", ["followup"]);
+    const host = makeHost(["followup"]);
+    submit(host, "in-2");
     expect(footers(host)[0]?.nextTurnDelivery).toBe(true);
   });
 

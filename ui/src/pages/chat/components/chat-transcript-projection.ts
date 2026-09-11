@@ -13,6 +13,7 @@ import {
   resolveUiGlobalAliasAgentId,
 } from "../../../lib/sessions/session-key.ts";
 import { agentRunFrameActiveStatusParts } from "../chat-agent-run-grouping.ts";
+import { localSessionHistoryNotice } from "../chat-local-input.ts";
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
 import { readChatThreadMessageIdentity } from "../chat-thread-items.ts";
 import {
@@ -113,17 +114,10 @@ export function projectChatTranscript(
           timestamp: activeSession.archivedAt,
         } satisfies Extract<ChatItem, { kind: "notice" }>)
       : undefined;
-  const localSource = activeSession?.localSource;
-  const historyNotice =
-    localSource?.earliestSeq !== undefined
-      ? ({
-          kind: "notice",
-          key: `local-history:${activeSession?.key ?? props.sessionKey}:${localSource.earliestSeq}`,
-          text: t("chat.localSession.earlierHistory", { owner: localSource.ownerLabel }),
-          // Sorts ahead of every timestamped row: the laptop holds what came before.
-          timestamp: 0,
-        } satisfies Extract<ChatItem, { kind: "notice" }>)
-      : undefined;
+  const historyNotice = localSessionHistoryNotice(
+    activeSession?.localSource,
+    activeSession?.key ?? props.sessionKey,
+  );
   const chatItems = buildCachedChatItems({
     paneId: props.paneId,
     sessionKey: props.sessionKey,

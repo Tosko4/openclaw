@@ -415,7 +415,7 @@ describe("createClaudeLocalSessionSource", () => {
     const before = frames.length;
     await sendHook("SessionStart", workspace, [999_999]);
     await waitFor(() => expect(frames.length).toBeGreaterThan(before));
-    const readmitted = frames.filter((frame) => frame.type === "session").at(-1);
+    const readmitted = frames.findLast((frame) => frame.type === "session");
     expect(readmitted).toMatchObject({ frame: { threadId: SESSION_ID, canInput: false } });
     expect(readmitted).not.toMatchObject({ frame: { state: "closed" } });
   });

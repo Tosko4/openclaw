@@ -55,7 +55,9 @@ function enroll(profile: { profileId: string; displayName: string }, scopes: str
     },
     // SAFETY: the handler reads only the fields stubbed above; the rest of the request surface is unused here.
   } as unknown as GatewayRequestHandlerOptions;
-  return sessionsLocalHandlers["sessions.local.enroll"]!(options).then(() => respond.mock.calls[0]);
+  return Promise.resolve(sessionsLocalHandlers["sessions.local.enroll"]!(options)).then(
+    () => respond.mock.calls[0] ?? [],
+  );
 }
 
 describe("sessions.local.enroll", () => {

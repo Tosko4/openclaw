@@ -5,8 +5,13 @@ import type { SessionProjectionScope } from "@openclaw/gateway-client/browser";
 // (`__openclaw.localInputId`) or replaced by a rejection.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
-import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
+import { t } from "../../i18n/index.ts";
+import type { ChatAttachment, ChatItem, HumanMention } from "../../lib/chat/chat-types.ts";
+import {
+  resolveControlUiFollowUpMode,
+  resolveControlUiServerQueueMode,
+  type ControlUiFollowUpMode,
+} from "../../lib/chat/follow-up-mode.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
@@ -189,11 +194,17 @@ export function recordLocalInputSubmission(
     runId: string;
     sessionKey: string;
     agentId?: string;
-    source: Pick<SessionLocalSource, "sourceLabel" | "inputModes">;
     message: LocalInputMessage;
-    scope: SessionProjectionScope;
   },
 ): void {
+  const source: Pick<SessionLocalSource, "sourceLabel" | "inputModes"> = readLocalSessionSource(
+    host,
+    params.sessionKey,
+  ) ?? { sourceLabel: "", inputModes: [] };
+  const scope = readChatSessionProjectionScope(host, {
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
   const receipts = receiptsFor(host);
   while (receipts.size >= MAX_TRACKED_LOCAL_INPUTS) {
     const oldest = receipts.keys().next().value;
@@ -203,7 +214,7 @@ export function recordLocalInputSubmission(
     receipts.delete(oldest);
   }
   // The device can commit and mirror the record before the ack returns.
-  const alreadyMirrored = getChatSessionProjection(host, params.scope).messages.some(
+  const alreadyMirrored = getChatSessionProjection(host, scope).messages.some(
     (message) => readLocalInputId(message) === params.inputId,
   );
   if (alreadyMirrored) {
@@ -214,13 +225,13 @@ export function recordLocalInputSubmission(
     runId: params.runId,
     sessionKey: params.sessionKey,
     ...(params.agentId ? { agentId: params.agentId } : {}),
-    sourceLabel: params.source.sourceLabel,
-    nextTurnDelivery: !params.source.inputModes.includes("steer"),
+    sourceLabel: source.sourceLabel,
+    nextTurnDelivery: !source.inputModes.includes("steer"),
     state: "accepted",
     message: params.message,
   };
   receipts.set(receipt.inputId, receipt);
-  projectReceipt(host, receipt, params.scope);
+  projectReceipt(host, receipt, scope);
 }
 
 /** Apply one `session.localInput` event; returns whether a tracked bubble changed. */
@@ -288,4 +299,52 @@ export function takeRejectedLocalInput(host: ChatState, inputId: string): LocalI
     { scope: receiptScope(host, receipt) },
   );
   return receipt;
+}
+
+/** Leading transcript notice when the laptop still holds records older than the mirror. */
+export function localSessionHistoryNotice(
+  localSource: SessionLocalSource | undefined,
+  sessionKey: string,
+): Extract<ChatItem, { kind: "notice" }> | undefined {
+  if (localSource?.earliestSeq === undefined) {
+    return undefined;
+  }
+  return {
+    kind: "notice",
+    key: `local-history:${sessionKey}:${localSource.earliestSeq}`,
+    text: t("chat.localSession.earlierHistory", { owner: localSource.ownerLabel }),
+    // Sorts ahead of every timestamped row: the laptop holds what came before.
+    timestamp: 0,
+  };
+}
+
+/**
+ * A live local session offers only the device source's input modes; the
+ * Gateway queue policy does not apply because no Gateway run exists.
+ */
+export function resolveSessionFollowUpMode(
+  state: ChatState,
+  params: {
+    localSource: ReturnType<typeof resolveLocalSessionComposer>;
+    runtimeConfig: {
+      configSnapshot?: { runtimeConfig?: unknown } | null;
+      configNeedsApply: boolean;
+    };
+    settingFollowUpMode: Parameters<typeof resolveControlUiFollowUpMode>[0];
+    sessionMetadataLoaded: boolean;
+  },
+): ControlUiFollowUpMode | undefined {
+  if (params.localSource) {
+    return params.localSource.followUpMode;
+  }
+  return resolveControlUiFollowUpMode(
+    params.settingFollowUpMode,
+    resolveControlUiServerQueueMode(params.runtimeConfig.configSnapshot?.runtimeConfig, {
+      configNeedsApply: params.runtimeConfig.configNeedsApply,
+      effectiveMode: state.chatEffectiveQueueMode,
+      sessionMetadataLoaded:
+        params.sessionMetadataLoaded || state.chatEffectiveQueueMode !== undefined,
+      sessionMode: state.chatQueueModeOverride,
+    }),
+  );
 }

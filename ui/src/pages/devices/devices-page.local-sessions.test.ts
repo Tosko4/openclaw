@@ -4,7 +4,7 @@ import type { LocalSessionEnrollment } from "../../../../packages/gateway-protoc
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import { createInitialDevicesState } from "../../lib/nodes/index.ts";
+import { createInitialDevicesState } from "../../lib/nodes/page-operations.ts";
 import "./devices-page.ts";
 import type { DevicesRouteData } from "./devices-page.ts";
 

@@ -10,10 +10,6 @@ import { personActivityRouting } from "../../components/person-activity-link.ts"
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import {
-  resolveControlUiFollowUpMode,
-  resolveControlUiServerQueueMode,
-} from "../../lib/chat/follow-up-mode.ts";
-import {
   chatModelUnavailableMessage,
   resolveChatModelUnavailableReason,
 } from "../../lib/chat/model-select-state.ts";
@@ -32,7 +28,7 @@ import { showToast } from "../../lib/toast.ts";
 import { mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import { resolveLocalSessionComposer } from "./chat-local-input.ts";
+import { resolveLocalSessionComposer, resolveSessionFollowUpMode } from "./chat-local-input.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
@@ -111,25 +107,14 @@ export class ChatPane extends ChatPaneLayoutRender {
       layout: state.sidebarLayout,
       paneWidth: this.paneWidth,
     });
-    // A live local session offers only the device source's input modes; the
-    // Gateway queue policy does not apply because no Gateway run exists.
     const liveLocalSession = Boolean(selectedSession?.localSource);
     const localSource = resolveLocalSessionComposer(state, selectedSession?.localSource);
-    state.chatFollowUpMode = localSource
-      ? localSource.followUpMode
-      : resolveControlUiFollowUpMode(
-          state.settings.chatFollowUpMode,
-          resolveControlUiServerQueueMode(
-            this.context.runtimeConfig.state.configSnapshot?.runtimeConfig,
-            {
-              configNeedsApply: this.context.runtimeConfig.state.configNeedsApply,
-              effectiveMode: state.chatEffectiveQueueMode,
-              sessionMetadataLoaded:
-                selectedSession !== undefined || state.chatEffectiveQueueMode !== undefined,
-              sessionMode: state.chatQueueModeOverride,
-            },
-          ),
-        );
+    state.chatFollowUpMode = resolveSessionFollowUpMode(state, {
+      localSource,
+      runtimeConfig: this.context.runtimeConfig.state,
+      settingFollowUpMode: state.settings.chatFollowUpMode,
+      sessionMetadataLoaded: selectedSession !== undefined,
+    });
     const currentAgentId = resolveChatAgentId(state);
     const { catalogKey, chatProps } = resolveChatMessageAccess(state);
     const overlays = this.context?.overlays;

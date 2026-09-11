@@ -12,7 +12,7 @@ import { discardChatAttachmentDataUrls } from "./attachment-payload-store.ts";
 import { readChatResetTargetAccess } from "./chat-commands.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { readLocalSessionSource, recordLocalInputSubmission } from "./chat-local-input.ts";
+import { recordLocalInputSubmission } from "./chat-local-input.ts";
 import {
   flushStoredChatOutbox,
   scheduleStoredChatOutboxDrain as scheduleOutboxDrain,
@@ -384,37 +384,28 @@ async function sendQueuedChatMessage(
       retirementFailed = storageMode === "durable" && readQueuedMessageById(host, id) !== null;
     }
     if (isVisible()) {
+      const sentMessage = {
+        text: message,
+        mentions: submitted.mentions,
+        ...(attachments.length ? { attachments } : {}),
+        createdAt: startedAt,
+        ...(prepared.replyToId ? { replyToId: prepared.replyToId } : {}),
+        ...(prepared.sender ? { sender: prepared.sender } : {}),
+      };
       if (localInput) {
         recordLocalInputSubmission(host, {
           inputId: localInput.inputId,
           runId,
           sessionKey,
           agentId: prepared.agentId,
-          source: readLocalSessionSource(host, sessionKey) ?? { sourceLabel: "", inputModes: [] },
-          message: {
-            text: message,
-            mentions: submitted.mentions,
-            ...(attachments.length ? { attachments } : {}),
-            createdAt: startedAt,
-            ...(prepared.replyToId ? { replyToId: prepared.replyToId } : {}),
-            ...(prepared.sender ? { sender: prepared.sender } : {}),
-          },
-          scope: readChatSessionProjectionScope(host, { sessionKey, agentId: prepared.agentId }),
+          message: sentMessage,
         });
       } else if (retireOnAck) {
         const projectionScope = readChatSessionProjectionScope(host, {
           sessionKey,
           agentId: prepared.agentId,
         });
-        const projectedMessage = buildLocalUserMessage({
-          text: message,
-          mentions: submitted.mentions,
-          ...(attachments.length ? { attachments } : {}),
-          createdAt: startedAt,
-          runId,
-          ...(prepared.replyToId ? { replyToId: prepared.replyToId } : {}),
-          ...(prepared.sender ? { sender: prepared.sender } : {}),
-        });
+        const projectedMessage = buildLocalUserMessage({ ...sentMessage, runId });
         if (projectedMessage) {
           reduceChatSessionProjection(
             host,

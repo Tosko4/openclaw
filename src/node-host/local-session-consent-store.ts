@@ -3,7 +3,8 @@
 // Lives in the shared state DB so the node-host service and the CLI share it.
 import { z } from "zod";
 import type { LocalSessionEnrollmentSummary } from "../sessions/local-session-source-protocol.js";
-import { readConfigMachineState, updateConfigMachineState } from "../state/config-machine-state.js";
+import { updateConfigMachineState } from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 
 const LOCAL_SESSION_CONSENT_STATE_KEY = "nodeHost.localSessions";

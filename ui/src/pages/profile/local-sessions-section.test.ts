@@ -36,9 +36,11 @@ function mount(request: (method: string, params?: unknown) => Promise<unknown>) 
     assistantAgentId: "main",
   } as unknown as ApplicationGatewaySnapshot;
   let onEvent: ((event: { event: string; payload?: unknown }) => void) | undefined;
-  const element = document.createElement(
-    "openclaw-profile-local-sessions",
-  ) as ProfileLocalSessions & { context: ApplicationContext };
+  // SAFETY: the element's context is a private consumed field; the test injects it directly.
+  const element = document.createElement("openclaw-profile-local-sessions") as HTMLElement & {
+    context: ApplicationContext;
+    requestUpdate: ProfileLocalSessions["requestUpdate"];
+  };
   element.context = {
     gateway: {
       snapshot,

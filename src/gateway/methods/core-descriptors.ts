@@ -8,6 +8,7 @@ import {
   type GatewayMethodHandler,
   type GatewayMethodScope,
 } from "./descriptor.js";
+import { SESSIONS_LOCAL_METHOD_SPECS } from "./sessions-local-descriptors.js";
 
 type CoreGatewayMethodSpec = {
   name: string;
@@ -26,7 +27,7 @@ type CoreGatewayMethodPolicy = Pick<
   CoreGatewayMethodSpec,
   "advertise" | "startup" | "controlPlaneWrite" | "compatibilityRestored" | "description"
 >;
-type CoreGatewayMethodSpecRow = readonly [
+export type CoreGatewayMethodSpecRow = readonly [
   name: string,
   family: string | null,
   scope: GatewayMethodScope,
@@ -463,12 +464,6 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["terminal.upload", "terminal", "operator.admin", "2026.7"],
   ["sessions.catalog.continue", "session-catalog", "operator.write", "2026.7"],
   ["sessions.catalog.archive", "session-catalog", "operator.write", "2026.7"],
-  ["sessions.local.sources", "sessions-local", "operator.read", "2026.9"],
-  ["sessions.local.enrollments", "sessions-local", "operator.read", "2026.9"],
-  ["sessions.local.enroll", "sessions-local", "operator.write", "2026.9"],
-  ["sessions.local.revoke", "sessions-local", "operator.write", "2026.9"],
-  ["sessions.local.unshare", "sessions-local", "operator.write", "2026.9"],
-  ["sessions.local.connectCode", "sessions-local", "operator.write", "2026.9"],
   ["approval.get", null, "operator.approvals", "2026.7"],
   ["approval.resolve", null, "operator.approvals", "2026.7"],
   ["sessions.search", "sessions-read", "operator.read", "<=2026.7"],
@@ -675,6 +670,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["models.authRefresh", "models-auth-status", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["models.authLogin", "models-auth-login", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["models.authSetApiKey", "models-auth-status", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  // New methods append here: advertised order is index-stable for older clients.
+  ...SESSIONS_LOCAL_METHOD_SPECS,
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;
