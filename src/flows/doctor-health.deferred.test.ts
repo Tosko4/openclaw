@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import {
   resolveStateDatabaseCoordinatorPath,
   resolveStateLifecycleRuntimeDirectory,
@@ -15,6 +16,7 @@ import {
 } from "../infra/state-migrations.workspace-setup.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 
@@ -161,6 +163,7 @@ describe("Doctor health during configured-plugin repair deferral", () => {
         fs.writeFileSync(path.join(pluginRoot, "index.js"), pluginSource);
         fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.js"), pluginSource);
         await state.writeConfig({
+          session: { idleMinutes: 45 },
           agents: { entries: {}, defaults: { pdfMaxBytesMb: 5 } },
           tools: { exec: { security: "deny", ask: "off" } },
           plugins: withPlugin
@@ -177,6 +180,10 @@ describe("Doctor health during configured-plugin repair deferral", () => {
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
         const after = JSON.parse(fs.readFileSync(state.configPath, "utf8"));
+        await withEnvAsync({ OPENCLAW_UPDATE_IN_PROGRESS: "0" }, async () => {
+          expect(validateConfigObjectWithPlugins(after).ok).toBe(true);
+        });
+        expect(after.session).toEqual({ reset: { mode: "idle", idleMinutes: 45 } });
         expect(after.agents.defaults).toMatchObject({ pdfMaxMb: 5 });
         expect(after.agents.defaults).not.toHaveProperty("pdfMaxBytesMb");
         expect(after.tools.exec).toEqual({ mode: "deny" });

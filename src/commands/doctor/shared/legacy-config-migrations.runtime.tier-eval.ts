@@ -285,8 +285,7 @@ function migrateMessagesResponsePrefix(raw: Record<string, unknown>, changes: st
   }
 }
 
-function migratePresenceEnabled(raw: Record<string, unknown>, changes: string[]): boolean {
-  let changed = false;
+function migratePresenceEnabled(raw: Record<string, unknown>, changes: string[]): void {
   const wideArea = getRecord(getRecord(raw.discovery)?.wideArea);
   if (wideArea && Object.hasOwn(wideArea, "enabled")) {
     if (
@@ -299,13 +298,13 @@ function migratePresenceEnabled(raw: Record<string, unknown>, changes: string[])
       changes.push(
         "Removed disabled discovery.wideArea activation fields; domain presence now enables wide-area discovery.",
       );
-      changed = true;
     } else {
       delete wideArea.enabled;
-      changed = true;
+      changes.push(
+        "Removed discovery.wideArea.enabled; domain presence now enables wide-area discovery.",
+      );
     }
   }
-  return changed;
 }
 
 function migrateWebEnabled(raw: Record<string, unknown>, changes: string[]): boolean {
@@ -396,8 +395,7 @@ function stripCompactionInstructionConfig(
   }
 }
 
-/** Exec policy renames do not consume state locators or load plugin contracts. */
-export function migrateExecModeConfig(raw: Record<string, unknown>, changes: string[]): void {
+function migrateExecModeConfig(raw: Record<string, unknown>, changes: string[]): void {
   const inheritedExecPolicy = resolveConfiguredExecPolicy(raw);
   migrateExecMode(raw, "root", changes);
   visitAgentConfigScopes(raw, (scope, path) => {
@@ -408,12 +406,12 @@ export function migrateExecModeConfig(raw: Record<string, unknown>, changes: str
   });
 }
 
-export function migrateTierEvalTranche(raw: Record<string, unknown>, changes: string[]): void {
-  const initialChangeCount = changes.length;
-  let stripped = false;
-  stripTtsPersonaPrompts(raw, changes);
-  stripped = migratePresenceEnabled(raw, changes) || stripped;
-  migrateChannelAliases(raw, changes);
+/** Core aliases do not consume state locators or depend on plugin contracts. */
+export function migrateTierEvalConfigAliases(
+  raw: Record<string, unknown>,
+  changes: string[],
+): void {
+  migratePresenceEnabled(raw, changes);
   const session = getRecord(raw.session);
   if (session && Object.hasOwn(session, "idleMinutes")) {
     const existingReset = getRecord(session.reset);
@@ -422,11 +420,20 @@ export function migrateTierEvalTranche(raw: Record<string, unknown>, changes: st
       reset.idleMinutes = session.idleMinutes;
       session.reset = reset;
       changes.push("Moved session.idleMinutes → session.reset.idleMinutes.");
+    } else {
+      changes.push("Removed session.idleMinutes (session.reset.idleMinutes already set).");
     }
     delete session.idleMinutes;
-    stripped = true;
   }
   migrateExecModeConfig(raw, changes);
+}
+
+export function migrateTierEvalTranche(raw: Record<string, unknown>, changes: string[]): void {
+  const initialChangeCount = changes.length;
+  let stripped = false;
+  stripTtsPersonaPrompts(raw, changes);
+  migrateTierEvalConfigAliases(raw, changes);
+  migrateChannelAliases(raw, changes);
   visitAgentConfigScopes(raw, (scope, path) => {
     stripCompactionInstructionConfig(scope, path, changes);
     migrateCliBackendSessionArgs(scope, path, changes);

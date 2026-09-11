@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { defaultRuntime } from "../../runtime.js";
+import { VERSION } from "../../version.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 const mocks = vi.hoisted(() => ({
@@ -175,6 +176,7 @@ vi.mock("./update-command-post-core.js", async (importOriginal) => ({
   writePostCoreUpdateFailureFile: vi.fn(async () => record("publish-failure")),
 }));
 
+import { readPackageVersion } from "./shared.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import {
@@ -214,6 +216,11 @@ describe("update plugin lifecycle lease boundaries", () => {
     mocks.events = [];
     mocks.leaseActive = false;
     mocks.doctorWarnings = [];
+    vi.mocked(readPackageVersion).mockResolvedValue(VERSION);
+    vi.mocked(continuePostCoreUpdateInFreshProcess).mockImplementation(async () => {
+      record("target-convergence");
+      return { resumed: true, pluginUpdate: { ...successfulPluginUpdate, changed: false } };
+    });
     mocks.readConfig.mockImplementation(async () => {
       record("read-config");
       return validConfigSnapshot;
@@ -224,43 +231,72 @@ describe("update plugin lifecycle lease boundaries", () => {
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
   });
 
-  it("keeps an unchanged already-current update on the no-op path", async () => {
-    vi.mocked(updatePluginsAfterCoreUpdate).mockResolvedValueOnce({
-      ...successfulPluginUpdate,
-      changed: false,
-    });
+  it.each([
+    { installedVersion: VERSION, previousInstallRoot: "/tmp/openclaw", resumed: true },
+    { installedVersion: "2026.8.27", previousInstallRoot: "/tmp/openclaw", resumed: true },
+    { installedVersion: "2026.8.27", previousInstallRoot: "/tmp/openclaw", resumed: false },
+    { installedVersion: VERSION, previousInstallRoot: "/tmp/openclaw-source", resumed: true },
+  ])(
+    "keeps already-current $installedVersion convergence owned by its runtime from $previousInstallRoot (resumed=$resumed)",
+    async ({ installedVersion, previousInstallRoot, resumed }) => {
+      const needsTargetRuntime =
+        installedVersion !== VERSION || previousInstallRoot !== "/tmp/openclaw";
+      vi.mocked(readPackageVersion).mockResolvedValue(installedVersion);
+      if (!needsTargetRuntime) {
+        vi.mocked(updatePluginsAfterCoreUpdate).mockImplementationOnce(async () => {
+          record("plugin-update");
+          return { ...successfulPluginUpdate, changed: false };
+        });
+      }
+      vi.mocked(continuePostCoreUpdateInFreshProcess).mockImplementation(async () => {
+        record("target-convergence");
+        return {
+          resumed,
+          ...(resumed ? { pluginUpdate: { ...successfulPluginUpdate, changed: false } } : {}),
+        };
+      });
 
-    const result = await convergeUpdatePlugins({
-      coreAlreadyCurrent: true,
-      result: {
-        status: "skipped",
-        mode: "npm",
+      const result = await convergeUpdatePlugins({
+        coreAlreadyCurrent: true,
+        result: {
+          status: "skipped",
+          mode: "npm",
+          root: "/tmp/openclaw",
+          reason: "already-current",
+          before: { version: installedVersion },
+          after: { version: installedVersion },
+          steps: [],
+          durationMs: 1,
+        },
         root: "/tmp/openclaw",
-        reason: "already-current",
-        before: { version: "2026.9.3" },
-        after: { version: "2026.9.3" },
-        steps: [],
-        durationMs: 1,
-      },
-      root: "/tmp/openclaw",
-      installKindChanged: false,
-      configSnapshot: validConfigSnapshot,
-      requestedChannel: null,
-      storedChannel: null,
-      channel: "stable",
-      downgradeRisk: false,
-      opts: {},
-      preUpdatePluginInstallRecords: {},
-      startedAt: 1,
-      updateStepTimeoutMs: 1_000,
-    });
+        previousInstallRoot,
+        installKindChanged: false,
+        configSnapshot: validConfigSnapshot,
+        requestedChannel: null,
+        storedChannel: null,
+        channel: "stable",
+        downgradeRisk: false,
+        opts: {},
+        preUpdatePluginInstallRecords: {},
+        startedAt: 1,
+        updateStepTimeoutMs: 1_000,
+      });
 
-    expect(completePostCorePluginUpdate).not.toHaveBeenCalled();
-    expect(result.resultWithPostUpdate).toMatchObject({
-      status: "skipped",
-      reason: "already-current",
-    });
-  });
+      if (needsTargetRuntime) {
+        expect(mocks.events).toEqual(["target-convergence:false"]);
+        expect(updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
+      } else {
+        expect(continuePostCoreUpdateInFreshProcess).not.toHaveBeenCalled();
+        expect(mocks.events).toContain("plugin-update:true");
+      }
+      expect(completePostCorePluginUpdate).not.toHaveBeenCalled();
+      expect(result.resultWithPostUpdate).toMatchObject(
+        resumed
+          ? { status: "skipped", reason: "already-current" }
+          : { status: "error", reason: "post-core-update-failed" },
+      );
+    },
+  );
 
   it.each(["copied", "live"] as const)(
     "preserves the %s invocation environment through a failed phase",
