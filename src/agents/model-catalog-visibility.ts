@@ -3,6 +3,7 @@
  * combines explicit policy, configured models, defaults, and runtime
  * auth-backed availability.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import type {
@@ -33,6 +34,7 @@ export type ModelCatalogAuthChecker = (
 
 type LogicalModelCatalogEntryState = {
   authBacked: boolean;
+  syntheticAuthUnknown: boolean;
   compatible: boolean;
   routeManaged: boolean;
   routeProjection: ModelCatalogRouteProjection;
@@ -53,6 +55,8 @@ export function resolveLogicalModelCatalogEntryState(params: {
       : { kind: "unresolved", policy: params.routePolicy };
   return {
     authBacked: params.authBacked ?? params.evaluation.availability === true,
+    syntheticAuthUnknown:
+      params.evaluation.availability === undefined && params.evaluation.evidence === "synthetic",
     compatible: params.evaluation.routeResolution?.kind !== "incompatible",
     routeManaged,
     routeProjection,
@@ -177,7 +181,11 @@ export async function prepareLogicalVisibleModelCatalog(
       if (!state) {
         throw new Error("Model catalog publication omitted prepared entry state");
       }
-      return state;
+      return state.syntheticAuthUnknown &&
+        !state.routeManaged &&
+        normalizeProviderId(entry.provider) !== "openai"
+        ? { ...state, authBacked: true }
+        : state;
     };
     const projectEntries = (entries: readonly ModelCatalogEntry[]) => {
       const projected = entries.map((entry) => {

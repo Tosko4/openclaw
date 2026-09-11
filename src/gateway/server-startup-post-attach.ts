@@ -361,44 +361,64 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
   if (params.isCurrent?.() === false) {
     return;
   }
-  await refreshPreparedModelRuntimeSnapshots(params.getConfig ?? params.cfg, {
-    gatewayLifecycle: true,
-    catalogMode: "static",
-    allowGatewaySubagentBinding: true,
-    ...(params.isCurrent ? { isPublicationCurrent: params.isCurrent } : {}),
-    ...(params.pluginMetadataSnapshot
-      ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
-      : {}),
-    ...(params.workspaceDir ? { defaultWorkspaceDir: params.workspaceDir } : {}),
-    ...(params.startupTrace
-      ? {
-          onBuildStats: (stats) =>
-            params.startupTrace?.detail("sidecars.model-runtime-build", [
-              ["agentCount", stats.agentCount],
-              ["workspaceGroupCount", stats.workspaceGroupCount],
-              ["configuredFactsGroupCount", stats.configuredFactsGroupCount],
-              ["catalogSourceCount", stats.catalogSourceCount],
-              ["credentialGroupCount", stats.credentialGroupCount],
-              ["catalogGroupCount", stats.catalogGroupCount],
-              ["runtimeRegistryCount", stats.runtimeRegistryCount],
-              ["configuredRuntimeModelCount", stats.configuredRuntimeModelCount],
-              ["generatedCatalogPluginCount", stats.generatedCatalogPluginCount],
-              ["generatedCatalogReadCount", stats.generatedCatalogReadCount],
-              ["workspaceFactsMs", stats.workspaceFactsMs],
-              ["runtimePluginMs", stats.runtimePluginMs],
-              ["pluginMetadataMs", stats.pluginMetadataMs],
-              ["staticProviderCatalogMs", stats.staticProviderCatalogMs],
-              ["ambientCredentialsMs", stats.ambientCredentialsMs],
-              ["agentFactsMs", stats.agentFactsMs],
-              ["configuredProjectionMs", stats.configuredProjectionMs],
-              ["catalogSourceMs", stats.catalogSourceMs],
-              ["registryMs", stats.registryMs],
-              ["sourceConcurrencyLimitCount", stats.sourceConcurrencyLimit],
-              ["fullCatalogConcurrencyLimitCount", stats.fullCatalogConcurrencyLimit],
-            ]),
-        }
-      : {}),
-  });
+  let config = params.cfg;
+  const getConfig = params.getConfig;
+  await refreshPreparedModelRuntimeSnapshots(
+    getConfig ? async () => (config = await getConfig()) : config,
+    {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+      allowGatewaySubagentBinding: true,
+      ...(params.isCurrent ? { isPublicationCurrent: params.isCurrent } : {}),
+      ...(params.pluginMetadataSnapshot
+        ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+        : {}),
+      ...(params.workspaceDir ? { defaultWorkspaceDir: params.workspaceDir } : {}),
+      ...(params.startupTrace
+        ? {
+            onBuildStats: (stats) =>
+              params.startupTrace?.detail("sidecars.model-runtime-build", [
+                ["agentCount", stats.agentCount],
+                ["workspaceGroupCount", stats.workspaceGroupCount],
+                ["configuredFactsGroupCount", stats.configuredFactsGroupCount],
+                ["catalogSourceCount", stats.catalogSourceCount],
+                ["credentialGroupCount", stats.credentialGroupCount],
+                ["catalogGroupCount", stats.catalogGroupCount],
+                ["runtimeRegistryCount", stats.runtimeRegistryCount],
+                ["configuredRuntimeModelCount", stats.configuredRuntimeModelCount],
+                ["generatedCatalogPluginCount", stats.generatedCatalogPluginCount],
+                ["generatedCatalogReadCount", stats.generatedCatalogReadCount],
+                ["workspaceFactsMs", stats.workspaceFactsMs],
+                ["runtimePluginMs", stats.runtimePluginMs],
+                ["pluginMetadataMs", stats.pluginMetadataMs],
+                ["staticProviderCatalogMs", stats.staticProviderCatalogMs],
+                ["ambientCredentialsMs", stats.ambientCredentialsMs],
+                ["agentFactsMs", stats.agentFactsMs],
+                ["configuredProjectionMs", stats.configuredProjectionMs],
+                ["catalogSourceMs", stats.catalogSourceMs],
+                ["registryMs", stats.registryMs],
+                ["sourceConcurrencyLimitCount", stats.sourceConcurrencyLimit],
+                ["fullCatalogConcurrencyLimitCount", stats.fullCatalogConcurrencyLimit],
+              ]),
+          }
+        : {}),
+    },
+  );
+  const [{ listAgentIds }, { loadPreparedModelCatalogSnapshot }] = await Promise.all([
+    import("../agents/agent-scope.js"),
+    import("../agents/prepared-model-catalog.js"),
+  ]);
+  for (const agentId of listAgentIds(config)) {
+    if (params.isCurrent?.() === false) {
+      return;
+    }
+    await loadPreparedModelCatalogSnapshot({
+      config,
+      agentId,
+      readOnly: false,
+      refreshFullCatalog: true,
+    });
+  }
 }
 
 async function publishStartupModelRuntime(
@@ -524,8 +544,7 @@ export async function startGatewaySidecars(params: {
     }
   });
   const getModelRuntimeConfig = params.getModelRuntimeConfig ?? (() => params.cfg);
-  // Agent RPC remains available when transports are disabled. Publish configured/static facts before
-  // accepting work; live provider catalogs stay advisory and never enter the Gateway lifecycle.
+  // Initialize the same complete catalog used by explicit refresh before accepting agent work.
   if ((await params.pluginRuntimeClaim?.waitForUnblocked()) !== false) {
     await measureStartup(params.startupTrace, "sidecars.model-runtime", () =>
       withPluginRuntimeRegistryScope(params.pluginRegistry, () =>

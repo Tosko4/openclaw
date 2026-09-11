@@ -4,6 +4,15 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
+const loadPreparedModelCatalogSnapshotMock = vi.fn(async (_params: unknown) => ({
+  entries: [],
+  routeVariants: [],
+}));
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogSnapshot: (params: unknown) =>
+    loadPreparedModelCatalogSnapshotMock(params),
+}));
+
 const prepareModelRuntimeSnapshotMock = vi.fn(async (_params: unknown) => ({}));
 const refreshPreparedModelRuntimeSnapshotsMock = vi.fn(
   async (
@@ -22,6 +31,7 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentDir: () => "/tmp/agent",
   resolveAgentWorkspaceDir: () => "/tmp/workspace",
   resolveDefaultAgentId: () => "default",
+  listAgentIds: () => ["default"],
 }));
 
 vi.mock("../agents/prepared-model-runtime.js", () => ({
@@ -56,6 +66,7 @@ describe("gateway startup primary model warmup", () => {
   });
 
   beforeEach(() => {
+    loadPreparedModelCatalogSnapshotMock.mockClear();
     prepareModelRuntimeSnapshotMock.mockClear();
     refreshPreparedModelRuntimeSnapshotsMock.mockClear();
   });
@@ -80,6 +91,17 @@ describe("gateway startup primary model warmup", () => {
       allowGatewaySubagentBinding: true,
       gatewayLifecycle: true,
       catalogMode: "static",
+    });
+  });
+
+  it("publishes the full startup catalog through the refresh owner", async () => {
+    const cfg = {};
+    await prewarmConfiguredPrimaryModel({ cfg, log: { warn: vi.fn() } });
+    expect(loadPreparedModelCatalogSnapshotMock).toHaveBeenCalledWith({
+      config: cfg,
+      agentId: "default",
+      readOnly: false,
+      refreshFullCatalog: true,
     });
   });
 

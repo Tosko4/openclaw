@@ -142,6 +142,10 @@ agent on that Gateway. Provider filtering, model visibility and availability use
 the Gateway's captured config and auth facts. The command does not resolve local
 model-provider secrets for that request.
 
+Gateway startup initializes the same provider inventory used by `--refresh`
+before accepting agent requests. Both paths include admitted stored accounts and
+native CLI logins. Ordinary list requests reuse that published inventory.
+
 A selected Gateway must advertise `published-model-catalog`. If it does not,
 update or restart it and retry. Connection, authorization and capability errors
 are reported directly; they do not switch the command to a different local list.

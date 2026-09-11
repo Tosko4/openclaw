@@ -20,7 +20,6 @@ import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.j
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import { resolveProviderBindingEnvVarCandidates } from "../secrets/provider-env-vars.js";
-import type { AgentCredentialMap } from "./agent-auth-credentials.js";
 import { prepareAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
 import {
   discoverAuthStorageFacts,
@@ -90,84 +89,85 @@ type PreparedConfiguredRegistryGroup = {
   pluginCatalogs: readonly PersistedPluginModelCatalog[];
 };
 
+export function resolvePreparedModelRuntimeProviderIds(
+  params: Pick<PreparedModelRuntimeAgentBaseFacts, "input" | "authStore" | "credentials"> & {
+    pluginMetadataSnapshot: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"];
+  },
+): string[] {
+  const { input, authStore, credentials, pluginMetadataSnapshot } = params;
+  const requestedProviders = resolveSelectedModelProviderIds({
+    cfg: input.config,
+    agentId: input.agentId,
+  });
+  const admitted = resolveProviderUseAdmission({
+    config: input.config,
+    env: input.env,
+    profiles: authStore.profiles,
+    requestedProviders,
+    storedCredentialAuthAliases: resolveProviderAuthAliasMap({
+      ...input,
+      metadataSnapshot: pluginMetadataSnapshot,
+      storedCredential: true,
+    }),
+    nativeProviders: Object.entries(credentials).flatMap(([provider, credential]) =>
+      credential.type === "api_key" && credential.nativeAuth ? [provider] : [],
+    ),
+    providerEnvVars: resolveProviderBindingEnvVarCandidates({
+      ...input,
+      metadataSnapshot: pluginMetadataSnapshot,
+    }),
+  });
+  return [
+    ...new Set([
+      ...requestedProviders,
+      ...collectPreparedModelRuntimeProviderIds(
+        input.config,
+        admitted.keys(),
+        collectPreparedModelRuntimeConfiguredRefs(input.config, input.agentId),
+        input.agentId,
+      ),
+      ...parseConfiguredModelVisibilityEntries({ cfg: input.config, agentId: input.agentId })
+        .providerWildcards,
+    ]),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
 function prepareAgentFacts(
   input: PreparedModelRuntimeInput,
-  catalogMode: PreparedModelRuntimeCatalogMode,
-  ambientCredentials: Readonly<AgentCredentialMap>,
-  additionalProviderIds: readonly string[] = [],
-  includeCredentialProviders = catalogMode === "live",
+  pluginMetadataSnapshot: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
 ): PreparedModelRuntimeAgentBaseFacts {
   const env = input.env ?? process.env;
   const preparedStore = loadPreparedModelRuntimeAuthStore(input);
   const authFacts = discoverAuthStorageFacts(input.agentDir, {
     config: input.config,
-    // Prepared owners consume only the already-published runtime auth generation. External CLI
-    // hydration belongs to startup/control-plane and turn-time producers, never rebuilds.
+    // External CLI hydration belongs to startup/control-plane producers, never auth-store reads.
     readOnly: true,
-    ambientCredentials,
+    ambientCredentials: {},
     ...(preparedStore ? { preparedStore } : {}),
     ...(input.skipCredentials ? { skipCredentials: true } : {}),
     ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     ...(input.env ? { env } : {}),
   });
-  const credentials = authFacts.credentials;
-  const requestedProviders = resolveSelectedModelProviderIds({
-    cfg: input.config,
-    agentId: input.agentId,
-  });
-  const admitted = includeCredentialProviders
-    ? resolveProviderUseAdmission({
-        config: input.config,
-        env,
-        profiles: authFacts.store.profiles,
-        requestedProviders,
-        storedCredentialAuthAliases: resolveProviderAuthAliasMap({
-          ...input,
-          storedCredential: true,
-        }),
-        nativeProviders: Object.entries(credentials).flatMap(([provider, credential]) =>
-          credential.type === "api_key" && credential.nativeAuth ? [provider] : [],
-        ),
-        providerEnvVars: resolveProviderBindingEnvVarCandidates({ ...input, env }),
-      }).keys()
-    : [];
-  const templateAuthStorage = authFacts.authStorage;
-  const rawConfiguredModelRefs = collectPreparedModelRuntimeConfiguredRefs(
-    input.config,
-    input.agentId,
-  );
   return {
     input,
     env,
     authStore: authFacts.store,
-    templateAuthStorage,
-    credentials,
-    // Keep order and case-distinct refs: registry lookup remains exact-case even
-    // where static/dynamic completion deduplicates case-insensitive merge keys.
-    configuredModelRefs: rawConfiguredModelRefs.flatMap(({ value }) => {
+    templateAuthStorage: authFacts.authStorage,
+    credentials: authFacts.credentials,
+    configuredModelRefs: collectPreparedModelRuntimeConfiguredRefs(
+      input.config,
+      input.agentId,
+    ).flatMap(({ value }) => {
       const ref = parseModelCatalogRef(value);
       return ref ? [ref] : [];
     }),
-    // Gateway startup prepares only providers named by config/model selection. An unrelated
-    // stored credential must not pull that provider's complete catalog into the admission path.
-    providerIds: [
-      ...new Set([
-        ...requestedProviders,
-        ...collectPreparedModelRuntimeProviderIds(
-          input.config,
-          admitted,
-          includeCredentialProviders,
-          rawConfiguredModelRefs,
-          input.agentId,
-        ),
-        ...parseConfiguredModelVisibilityEntries({
-          cfg: input.config,
-          agentId: input.agentId,
-        }).providerWildcards,
-        ...additionalProviderIds.map(normalizeProviderId).filter(Boolean),
-      ]),
-    ].toSorted((left, right) => left.localeCompare(right)),
+    providerIds: resolvePreparedModelRuntimeProviderIds({
+      input,
+      authStore: authFacts.store,
+      credentials: authFacts.credentials,
+      pluginMetadataSnapshot,
+    }),
   };
 }
 
@@ -177,7 +177,6 @@ export async function prepareWorkspaceBuildGroup(
   options: {
     providerDiscoveryProviderIds?: readonly string[];
     preferBuiltPluginArtifacts?: boolean;
-    includeCredentialProviders?: boolean;
     getConfiguredHarnessRuntimes?: () => readonly string[];
     basePluginIds?: readonly string[];
     onStage?: (stage: string) => void;
@@ -284,23 +283,21 @@ export async function prepareWorkspaceBuildGroup(
       configuredManifestModels.set(key, model);
       return model;
     };
-    const configuredProviderIds = [
-      ...new Set([
-        ...inputs.flatMap(({ config, agentId }) =>
-          withAgentRosterFactsBatch(config, () => [
-            ...collectPreparedModelRuntimeProviderIds(
-              config,
-              [],
-              false,
-              collectPreparedModelRuntimeConfiguredRefs(config, agentId),
-              agentId,
-            ),
-            ...parseConfiguredModelVisibilityEntries({ cfg: config, agentId }).providerWildcards,
-          ]),
-        ),
-        ...(options.providerDiscoveryProviderIds ?? []).map(normalizeProviderId).filter(Boolean),
-      ]),
-    ].toSorted((left, right) => left.localeCompare(right));
+    const authStoreStartedAt = performance.now();
+    const agentBaseFacts = inputs.map((candidate) =>
+      withAgentRosterFactsBatch(candidate.config, () =>
+        prepareAgentFacts(candidate, pluginMetadataSnapshot),
+      ),
+    );
+    const authStoreMs = performance.now() - authStoreStartedAt;
+    const configuredProviderIds =
+      options.providerDiscoveryProviderIds ??
+      [
+        ...new Set([
+          ...agentBaseFacts.flatMap((facts) => facts.providerIds),
+          ...pluginMetadataSnapshot.owners.cliBackends.keys(),
+        ]),
+      ].toSorted((left, right) => left.localeCompare(right));
     const staticCatalogProviderIds = [
       ...new Set([
         ...collectConfiguredProviderIdsNeedingStaticCatalog({
@@ -388,18 +385,23 @@ export async function prepareWorkspaceBuildGroup(
     const ambientCredentialsMs = performance.now() - ambientCredentialsStartedAt;
     const agentFactsStartedAt = performance.now();
     reportStage("agent facts");
-    const agentBaseFacts = inputs.map((candidate) =>
-      withAgentRosterFactsBatch(candidate.config, () =>
-        prepareAgentFacts(
-          candidate,
-          catalogMode,
-          ambientCredentials,
-          options.providerDiscoveryProviderIds,
-          options.includeCredentialProviders,
-        ),
-      ),
-    );
-    const agentFactsMs = performance.now() - agentFactsStartedAt;
+    for (const facts of agentBaseFacts) {
+      const credentials = facts.input.skipCredentials
+        ? {}
+        : { ...ambientCredentials, ...facts.credentials };
+      Object.assign(facts, {
+        credentials,
+        templateAuthStorage: AuthStorage.inMemory(credentials),
+        providerIds: options.providerDiscoveryProviderIds
+          ? [...options.providerDiscoveryProviderIds]
+          : resolvePreparedModelRuntimeProviderIds({
+              ...facts,
+              credentials,
+              pluginMetadataSnapshot,
+            }),
+      });
+    }
+    const agentFactsMs = authStoreMs + performance.now() - agentFactsStartedAt;
     const configuredProjectionStartedAt = performance.now();
     reportStage("configured model projection");
     const providerStaticModels =

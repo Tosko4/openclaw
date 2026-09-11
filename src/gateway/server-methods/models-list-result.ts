@@ -1,5 +1,4 @@
 // Resolves public model catalogs without exposing runtime-only provider params.
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type {
   ModelChoice,
   ModelsListParams,
@@ -583,15 +582,8 @@ export async function prepareModelsListResult(
       return () => {
         const evaluation = evaluateNative(entry, host);
         evaluations.set(resolveModelCatalogIdentityKey(entry), evaluation);
-        const routeManaged = evaluation.routeResolution !== null;
-        const syntheticLocal =
-          !routeManaged &&
-          normalizeProviderId(entry.provider) !== "openai" &&
-          evaluation.availability === undefined &&
-          evaluation.evidence === "synthetic";
         return resolveLogicalModelCatalogEntryState({
           evaluation,
-          authBacked: evaluation.availability === true || syntheticLocal,
           routePolicy: openAIModelCatalogRoutePolicy,
         });
       };

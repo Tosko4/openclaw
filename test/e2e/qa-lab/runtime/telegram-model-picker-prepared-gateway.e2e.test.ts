@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import { createWindowsCmdShimFixture, withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import { createQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
+import type { ModelsListResult } from "../../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import {
   createChannelIngressQueue,
   getChannelIngressKysely,
@@ -720,14 +721,22 @@ test("initializes unrestricted Telegram model browsing and reuses its prepared c
   );
 }, 120_000);
 
-test("lists native CLI-bound models through Telegram polling and provider callbacks", async () => {
+test("keeps native model choices through Telegram browsing, refresh, and restart", async () => {
   const telegramCalls: TelegramCall[] = [];
   const pendingUpdates: unknown[] = [];
   const primaryRef = "anthropic/claude-haiku-4-5";
   const boundRef = "anthropic/claude-sonnet-4-6";
+  const accountProvider = "catalog-account-fixture";
+  let catalogRequests = 0;
   let providerRequests = 0;
   const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+    if (pathname === "/account-models") {
+      expect(req.headers.authorization).toBe("Bearer fixture-account-token");
+      catalogRequests += 1;
+      writeJson(res, 200, [configuredModel("account-model")]);
+      return;
+    }
     const telegramMatch = pathname.match(/^\/bot([^/]+)\/([^/]+)$/);
     if (!telegramMatch) {
       providerRequests += 1;
@@ -787,6 +796,35 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
         void handleRequest(req, res);
       },
       async (apiRoot) => {
+        const accountPlugin = path.join(fixtureRoot, accountProvider);
+        await fs.mkdir(accountPlugin);
+        await fs.writeFile(
+          path.join(accountPlugin, "openclaw.plugin.json"),
+          JSON.stringify({
+            id: accountProvider,
+            providers: [accountProvider],
+            configSchema: { type: "object", properties: {}, additionalProperties: false },
+          }),
+        );
+        await fs.writeFile(
+          path.join(accountPlugin, "index.js"),
+          `module.exports = {
+          id: ${JSON.stringify(accountProvider)}, register(api) {
+            api.registerProvider({ id: ${JSON.stringify(accountProvider)}, label: "Account fixture", auth: [],
+              catalog: { async run(ctx) {
+                const auth = ctx.resolveProviderApiKey(${JSON.stringify(accountProvider)});
+                if (!auth.apiKey) return null;
+                const response = await fetch(${JSON.stringify(`${apiRoot}/account-models`)}, {
+                  headers: { authorization: "Bearer " + auth.apiKey },
+                });
+                if (!response.ok) throw Error("Fixture catalog credential rejected");
+                return { provider: { baseUrl: ${JSON.stringify(apiRoot)}, api: "openai-responses",
+                  apiKey: auth.apiKey, models: await response.json() } };
+              } },
+            });
+          },
+        };`,
+        );
         const gatewayOwner = createQaGatewayChild();
         try {
           const gateway = await gatewayOwner.start({
@@ -816,6 +854,7 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
               PATH: `${fixtureRoot}${path.delimiter}${process.env.PATH ?? ""}`,
               ANTHROPIC_API_KEY: undefined,
               ANTHROPIC_AUTH_TOKEN: undefined,
+              ANTHROPIC_OAUTH_TOKEN: undefined,
               CLAUDE_CODE_OAUTH_TOKEN: undefined,
               CLAUDE_CONFIG_DIR: path.join(fixtureRoot, "claude-state"),
               TELEGRAM_BOT_TOKEN: undefined,
@@ -824,6 +863,12 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
             },
             mutateConfig: (cfg) => ({
               ...cfg,
+              plugins: {
+                ...cfg.plugins,
+                allow: [...(cfg.plugins?.allow ?? []), accountProvider],
+                load: { paths: [accountPlugin] },
+                entries: { ...cfg.plugins?.entries, [accountProvider]: { enabled: true } },
+              },
               auth: { profiles: {} },
               agents: {
                 ...cfg.agents,
@@ -845,7 +890,6 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
             }),
           });
 
-          // Observe startup auth without warming provider discovery before the channel command.
           await expect
             .poll(() => gateway.call("models.list", { preparedOnly: true }), {
               interval: 50,
@@ -860,6 +904,23 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
                 }),
               ]),
             });
+          const catalogChoices = (result: ModelsListResult) =>
+            result.models
+              .map(({ provider, id, available }) => ({ provider, id, available }))
+              .toSorted((left, right) =>
+                `${left.provider}/${left.id}`.localeCompare(`${right.provider}/${right.id}`),
+              );
+          const startupChoices = catalogChoices(
+            (await gateway.call("models.list", {
+              view: "default",
+              preparedOnly: true,
+            })) as ModelsListResult,
+          );
+          expect(startupChoices).toContainEqual({
+            provider: "claude-cli",
+            id: "claude-opus-5",
+            available: true,
+          });
           pendingUpdates.push(initialModelsUpdate());
           await expect
             .poll(() => telegramCalls.find((call) => call.method === "editMessageText"), {
@@ -895,12 +956,6 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
               fixtureProviderRequests: providerRequests,
             }),
           );
-          const cliCalls = (await fs.readFile(authCallsPath, "utf8"))
-            .trim()
-            .split("\n")
-            .map((line) => JSON.parse(line));
-          console.info("MODEL_INVENTORY_AUTH_PROOF", JSON.stringify(cliCalls));
-          expect(cliCalls.length).toBeGreaterThan(0);
           expect(providerButton?.text).toBe("anthropic (2)");
           expect(modelList?.body.text).toContain("Models (anthropic");
           expect(keyboardCallbackData(modelList!)).toContain(`mdl_sel_${boundRef}`);
@@ -914,6 +969,82 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
               }),
             ]),
           });
+          const refreshedModels = (await gateway.call("models.list", {
+            view: "default",
+            refresh: true,
+          })) as ModelsListResult;
+          expect(catalogChoices(refreshedModels)).toEqual(startupChoices);
+          await gateway.restartAfterStateMutation(async () => {});
+          const restartedModels = (await gateway.call("models.list", {
+            view: "default",
+            preparedOnly: true,
+          })) as ModelsListResult;
+          expect(catalogChoices(restartedModels)).toEqual(startupChoices);
+          expect(startupChoices.some((model) => model.provider === accountProvider)).toBe(false);
+          expect(catalogRequests).toBe(0);
+          const beforeLogin = gateway.markLogs();
+          const login = spawn(
+            process.execPath,
+            [
+              path.resolve(import.meta.dirname, "../../../../dist/entry.js"),
+              "models",
+              "auth",
+              "paste-token",
+              "--agent",
+              "qa",
+              "--provider",
+              accountProvider,
+              "--profile-id",
+              `${accountProvider}:fixture`,
+            ],
+            { env: gateway.runtimeEnv, stdio: ["pipe", "pipe", "pipe"] },
+          );
+          login.stdout.resume();
+          let loginError = "";
+          login.stderr.on("data", (chunk) => {
+            loginError += chunk;
+          });
+          login.stdin.end("fixture-account-token\n");
+          try {
+            const [code] = await withTestTimeout(
+              once(login, "close"),
+              30_000,
+              "Token login timed out",
+            );
+            expect(code, loginError).toBe(0);
+          } finally {
+            login.kill("SIGKILL");
+          }
+          await expect
+            .poll(() => gateway.readLogsSince(beforeLogin), { timeout: 30_000 })
+            .toContain(`config hot reload applied (auth.profiles.${accountProvider}:fixture)`);
+          const addedModels = await gateway.call("models.list", {
+            view: "default",
+            refresh: true,
+          });
+          // SAFETY: the real Gateway validates models.list replies against ModelsListResult.
+          const addedChoices = catalogChoices(addedModels as ModelsListResult);
+          expect(addedChoices).toContainEqual({
+            provider: accountProvider,
+            id: "account-model",
+            available: true,
+          });
+          expect(addedChoices.filter((model) => model.provider !== accountProvider)).toEqual(
+            startupChoices,
+          );
+          expect(catalogRequests).toBeGreaterThan(0);
+          await gateway.restartAfterStateMutation(async () => {});
+          for (const view of ["default", "configured"] as const) {
+            const result = await gateway.call("models.list", { view, preparedOnly: true });
+            // SAFETY: the real Gateway validates models.list replies against ModelsListResult.
+            expect(catalogChoices(result as ModelsListResult)).toEqual(addedChoices);
+          }
+          const cliCalls = (await fs.readFile(authCallsPath, "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          console.info("MODEL_INVENTORY_AUTH_PROOF", JSON.stringify(cliCalls));
+          expect(cliCalls.length).toBeGreaterThan(0);
           expect(
             cliCalls.every((args) => JSON.stringify(args) === '["auth","status","--json"]'),
           ).toBe(true);

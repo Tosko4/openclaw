@@ -17,7 +17,6 @@ import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic
 import { manifestPluginResolvesRuntimeModelCatalogAugment } from "../plugins/providers.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
-import { resolveProviderBindingEnvVarCandidates } from "../secrets/provider-env-vars.js";
 import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
@@ -30,7 +29,6 @@ import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime
 import { loadAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
 import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.js";
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
-import { resolveSelectedModelProviderIds } from "./model-selection-config.js";
 import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers.discovery-scope.js";
 import {
   fingerprintPreparedModelCatalogGeneration,
@@ -41,8 +39,6 @@ import {
 } from "./prepared-model-catalog-worker.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
-import { resolveProviderAuthAliasMap } from "./provider-auth-aliases.js";
-import { resolveProviderUseAdmission } from "./provider-model-auth-source-plan.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
@@ -222,6 +218,8 @@ export async function runPreparedModelCatalogWorkerRequest(
     const { prepareAgentCatalogSource } =
       await import("./prepared-model-runtime.scoped-catalog.js");
     const { prepareFullCatalogFacts } = await import("./prepared-model-runtime.full-catalog.js");
+    const { resolvePreparedModelRuntimeProviderIds } =
+      await import("./prepared-model-runtime.facts.js");
     // Full discovery is one point-in-time operation: refresh first, then let every provider hook
     // and the returned availability projection consume the same exact store.
     const authStore = refreshAuthStore({
@@ -234,41 +232,25 @@ export async function runPreparedModelCatalogWorkerRequest(
       pluginGeneration: prepared.pluginGeneration,
     });
     replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: value.input.agentDir, store: authStore }]);
-    const ambientCredentials = resolveSyntheticCredentials(value.providerIds);
+    const ambientCredentials = resolveSyntheticCredentials(
+      request.syntheticAuth.map(({ providerRef }) => providerRef),
+    );
     const startupProviderIds = new Set(value.providerIds.map(normalizeProviderId));
     const credentials = {
       ...ambientCredentials,
       ...resolveAgentCredentialMapFromStore(authStore, { config: value.input.config }),
     };
-    const admitted = resolveProviderUseAdmission({
-      config: value.input.config,
-      env: value.input.env,
-      profiles: authStore.profiles,
-      requestedProviders: resolveSelectedModelProviderIds({
-        cfg: value.input.config,
-        agentId: value.input.agentId,
-      }),
-      storedCredentialAuthAliases: resolveProviderAuthAliasMap({
-        ...value.input,
-        metadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
-        storedCredential: true,
-      }),
-      nativeProviders: Object.entries(credentials).flatMap(([provider, credential]) =>
-        credential.type === "api_key" && credential.nativeAuth ? [provider] : [],
-      ),
-      providerEnvVars: resolveProviderBindingEnvVarCandidates({
-        ...value.input,
-        metadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
-      }),
-    });
     const exactAgentFacts = {
       ...prepared.agentFacts,
       authStore,
       templateAuthStorage: AuthStorage.inMemory(credentials),
       credentials,
-      providerIds: [...new Set([...value.providerIds, ...admitted.keys()])].toSorted(
-        (left, right) => left.localeCompare(right),
-      ),
+      providerIds: resolvePreparedModelRuntimeProviderIds({
+        input: value.input,
+        authStore,
+        credentials,
+        pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
+      }),
     };
     const { pluginMetadataSnapshot, pluginRegistry } = prepared.pluginGeneration;
     const discoveryScope = resolveImplicitProviderDiscoveryScope({
