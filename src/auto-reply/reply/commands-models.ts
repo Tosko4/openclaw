@@ -92,6 +92,23 @@ export type ModelsProviderData = {
 type ModelsProviderMenu = { available: number; notice: string };
 type ModelReadiness = Pick<ModelAuthAvailabilityEvaluation, "availability" | "unavailableReason">;
 
+export function formatModelsAllowListNotice(
+  data: Pick<ModelsProviderData, "allowList" | "providers">,
+): string {
+  const facts = data.allowList;
+  if (!facts) {
+    return "";
+  }
+  const lines = [
+    ...(facts.hiddenCount > 0
+      ? [`${facts.hiddenCount} newer models hidden by your allow list`]
+      : []),
+    ...(data.providers.length === 0 ? ["No models match your allow list."] : []),
+    ...(facts.selectedModelBlocked ? ["The current model is not allowed by your allow list."] : []),
+  ];
+  return lines.length ? [...lines, `Settings: ${facts.settingsPath}`].join("\n") : "";
+}
+
 type PreparedModelsProviderData = ModelsProviderData & {
   modelCatalog: ModelCatalogEntry[];
 };
@@ -645,11 +662,12 @@ export async function resolveModelsCommandReply(
     }
     throw error;
   }
+  const notice = formatModelsAllowListNotice(data);
   if (data.providers.length === 0 && data.allowList) {
-    return { text: data.allowList.message };
+    return { text: notice };
   }
   const reply = buildModelsCommandReply(params, parsed, data);
-  return { ...reply, text: [data.refreshWarning, reply.text, data.allowList?.message].filter(Boolean).join("\n\n") };
+  return { ...reply, text: [data.refreshWarning, reply.text, notice].filter(Boolean).join("\n\n") };
 }
 
 function buildModelsCommandReply(

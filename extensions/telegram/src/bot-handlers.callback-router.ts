@@ -7,6 +7,7 @@ import { applySessionModelSelection } from "openclaw/plugin-sdk/model-session-ru
 import {
   formatModelsAvailableHeader,
   MODEL_PICKER_CHANGED_MESSAGE,
+  formatModelsAllowListNotice,
 } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -533,7 +534,7 @@ async function handleTelegramModelCallback(params: {
     return { sessionState: session, modelData: providerData };
   });
   const { byProvider, providers, resolvedDefault: activeResolvedDefault } = modelData;
-  const notice = modelData.allowList?.message;
+  const notice = formatModelsAllowListNotice(modelData);
   const withNotice = (text: string) => (notice ? `${text}\n\n${notice}` : text);
   const providerInfos: ProviderInfo[] = providers.map((provider) => ({
     id: provider,

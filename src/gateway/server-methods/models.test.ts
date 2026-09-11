@@ -1381,8 +1381,6 @@ describe("models.list", () => {
           allowList: {
             hiddenCount: 1,
             settingsPath: "agents.defaults.modelPolicy.allow",
-            message:
-              "1 newer models hidden by your allow list\nSettings: agents.defaults.modelPolicy.allow",
           },
         }),
         undefined,
@@ -1435,7 +1433,6 @@ describe("models.list", () => {
           allowList: {
             hiddenCount: 0,
             settingsPath: "agents.defaults.modelPolicy.allow",
-            message: "",
           },
           models: [
             {
@@ -1595,7 +1592,6 @@ describe("models.list", () => {
                 allowList: {
                   hiddenCount: 0,
                   settingsPath: "agents.defaults.modelPolicy.allow",
-                  message: "",
                 },
               },
               undefined,
