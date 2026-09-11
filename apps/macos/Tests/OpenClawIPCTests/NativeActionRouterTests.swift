@@ -80,6 +80,10 @@ final class MacNativeActionFixture: @unchecked Sendable {
                     payload = ["profile": ["id": profileID.value]]
                 case "agents.list":
                     payload = Self.agents
+                case "models.list":
+                    payload = ["models": [[
+                        "id": "fixture-model", "name": "Fixture Model", "provider": "fixture", "available": true,
+                    ]]]
                 case "sessions.list":
                     payload = ["ts": 1, "sessions": [Self.session]]
                 case "chat.history":
@@ -136,6 +140,7 @@ final class MacNativeActionFixture: @unchecked Sendable {
                         "chat.history",
                         "chat.send",
                         "sessions.patch",
+                        "models.authLogin",
                     ],
                     capabilities: advertised))
             })
@@ -192,6 +197,185 @@ final class MacNativeActionFixture: @unchecked Sendable {
             "key": self.sessionKey, "agentId": "main", "sessionId": "native-session",
             "kind": "direct", "updatedAt": 1, "permissionMode": "guarded",
         ]
+    }
+}
+
+extension NativeActionRouterTests {
+    @Test(arguments: [nil, " profile-one ", "profile-e\u{301}", "profile-\u{E9}"] as [String?])
+    func `model sign-in and catalog requests preserve native profile bytes and ordinary envelopes`(
+        profileID: String?) async throws
+    {
+        try await self.withFixture { fixture, _, _ in
+            fixture.capabilities.withValue { $0.append(GatewayServerCapability.publishedModelCatalog.rawValue) }
+            if let profileID { fixture.profileID.setValue(profileID) }
+            let lease = try await fixture.gateway.acquireServerLease()
+            let binding = profileID.map { _ in
+                MacGatewayChatTransport.NativeBinding(owner: fixture.target.owner, lease: lease)
+            }
+            let transport = MacGatewayChatTransport(
+                connection: fixture.gateway, defaultGlobalAgentID: "main", nativeBinding: binding)
+            let context = try #require(await transport.acquireModelSignInContext(agentID: nil))
+            #expect(context.agentID == "main")
+            #expect(await context.isCurrent())
+            let calls: [(String, [String: AnyCodable])] = [
+                ("models.authStatus", ["agentId": AnyCodable(context.agentID)]),
+                ("models.authLogin", [
+                    "agentId": AnyCodable(context.agentID), "sessionId": AnyCodable("fixture-login"),
+                    "authChoice": AnyCodable("fixture/device"),
+                ]),
+                ("wizard.next", ["sessionId": AnyCodable("fixture-login")]),
+            ]
+            for (method, params) in calls {
+                _ = try await context.request(method, params)
+            }
+            let catalog = try await transport.loadModelCatalog(
+                sessionKey: MacNativeActionFixture.sessionKey, agentID: "main")
+            #expect(catalog.choices.map(\.modelID) == ["fixture-model"])
+            #expect(catalog.availabilityIsSessionScoped)
+            for method in calls.map(\.0) + ["models.list"] {
+                let frames = try fixture.frames(method: method)
+                try #require(frames.count == 1)
+                let actual = frames[0]["expectedProfileId"] as? String
+                #expect(actual.map { Array($0.utf8) } == profileID.map { Array($0.utf8) })
+                #expect((frames[0]["params"] as? [String: Any])?["expectedProfileId"] == nil)
+            }
+            let catalogFrame = try #require(try fixture.frames(method: "models.list").first)
+            let params = try #require(catalogFrame["params"] as? [String: Any])
+            #expect(params["agentId"] as? String == "main")
+            #expect(params["sessionKey"] as? String == MacNativeActionFixture.sessionKey)
+            #expect(params["view"] as? String == "configured")
+            #expect(params["includeDetails"] as? Bool == true)
+            _ = try await context.closeWizard("fixture-login")
+            let cleanup = try #require(try fixture.frames(method: "wizard.cancel").first)
+            let cleanupParams = try #require(cleanup["params"] as? [String: Any])
+            #expect(cleanup["expectedProfileId"] == nil)
+            #expect(Set(cleanupParams.keys) == ["sessionId", "closeInput"])
+            #expect(cleanupParams["sessionId"] as? String == "fixture-login")
+            #expect(cleanupParams["closeInput"] as? Bool == true)
+            #expect(fixture.sockets.snapshotMakeCount() == 1)
+        }
+    }
+
+    @Test(arguments: ["models.authLogin", "models.list"])
+    func `model profile rejection retires fresh actions but retains cleanup on the original socket`(
+        rejectedMethod: String) async throws
+    {
+        try await self.withFixture { fixture, _, _ in
+            fixture.capabilities.withValue { $0.append(GatewayServerCapability.publishedModelCatalog.rawValue) }
+            let lease = try await fixture.gateway.acquireServerLease()
+            let transport = MacGatewayChatTransport(
+                connection: fixture.gateway,
+                defaultGlobalAgentID: "main",
+                nativeBinding: .init(owner: fixture.target.owner, lease: lease))
+            let context = try #require(await transport.acquireModelSignInContext(agentID: nil))
+            fixture.profileID.setValue("replacement-profile")
+            if rejectedMethod == "models.list" {
+                await #expect(throws: GatewayResponseError.self) {
+                    _ = try await transport.loadModelCatalog(
+                        sessionKey: MacNativeActionFixture.sessionKey, agentID: "main")
+                }
+            } else {
+                await #expect(throws: GatewayResponseError.self) {
+                    _ = try await context.request(rejectedMethod, [
+                        "agentId": AnyCodable("main"), "sessionId": AnyCodable("fixture-login"),
+                        "authChoice": AnyCodable("fixture/device"),
+                    ])
+                }
+            }
+            #expect(fixture.profileRejections.value.count == 1)
+            #expect(!transport.nativeBindingIsCurrent)
+            #expect(await context.isCurrent() == false)
+            #expect(await transport.acquireModelSignInContext(agentID: "main") == nil)
+            let requestCount = fixture.requests.value.count
+            for method in ["models.authStatus", "models.authLogin", "wizard.next"] {
+                await #expect(throws: OpenClawChatTransportSendError.self) {
+                    _ = try await context.request(method, ["sessionId": AnyCodable("fixture-login")])
+                }
+            }
+            await #expect(throws: OpenClawChatTransportSendError.self) {
+                _ = try await transport.loadModelCatalog(
+                    sessionKey: MacNativeActionFixture.sessionKey, agentID: "main")
+            }
+            #expect(fixture.requests.value.count == requestCount)
+            #expect(await fixture.gateway.isCurrentServerLease(lease))
+            _ = try await context.closeWizard("fixture-login")
+            let cleanup = try #require(try fixture.frames(method: "wizard.cancel").first)
+            #expect(cleanup["expectedProfileId"] == nil)
+            #expect((cleanup["params"] as? [String: Any])?["sessionId"] as? String == "fixture-login")
+            #expect((cleanup["params"] as? [String: Any])?["closeInput"] as? Bool == true)
+            #expect(fixture.requests.value.count == requestCount + 1)
+            #expect(fixture.sockets.snapshotMakeCount() == 1)
+            #expect(fixture.profileRejections.value.count == 1)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `retired model actions cannot reconnect or use a replacement but fresh ordinary catalog can`(
+        reconnectFirst: Bool) async throws
+    {
+        try await self.withFixture { fixture, _, _ in
+            fixture.capabilities.withValue { $0.append(GatewayServerCapability.publishedModelCatalog.rawValue) }
+            let lease = try await fixture.gateway.acquireServerLease()
+            let transport = MacGatewayChatTransport(
+                connection: fixture.gateway,
+                defaultGlobalAgentID: "main",
+                nativeBinding: .init(owner: fixture.target.owner, lease: lease))
+            let context = try #require(await transport.acquireModelSignInContext(agentID: nil))
+            await fixture.gateway.shutdown()
+            if reconnectFirst {
+                let replacement = try await fixture.gateway.acquireServerLease()
+                #expect(replacement != lease)
+            }
+            let requestCount = fixture.requests.value.count
+            let socketCount = fixture.sockets.snapshotMakeCount()
+            #expect(await context.isCurrent() == false)
+            #expect(await transport.acquireModelSignInContext(agentID: "main") == nil)
+            await #expect(throws: OpenClawChatTransportSendError.self) {
+                _ = try await context.closeWizard("original-login")
+            }
+            await #expect(throws: OpenClawChatTransportSendError.self) {
+                _ = try await context.request("models.authLogin", [
+                    "agentId": AnyCodable("main"), "sessionId": AnyCodable("stale-login"),
+                    "authChoice": AnyCodable("fixture/device"),
+                ])
+            }
+            await #expect(throws: OpenClawChatTransportSendError.self) {
+                _ = try await transport.loadModelCatalog(
+                    sessionKey: MacNativeActionFixture.sessionKey, agentID: "main")
+            }
+            #expect(fixture.requests.value.count == requestCount)
+            #expect(fixture.sockets.snapshotMakeCount() == socketCount)
+            #expect(try fixture.frames(method: "wizard.cancel").isEmpty)
+
+            let ordinary = MacGatewayChatTransport(connection: fixture.gateway, defaultGlobalAgentID: "main")
+            let catalog = try await ordinary.loadModelCatalog(
+                sessionKey: MacNativeActionFixture.sessionKey, agentID: "main")
+            #expect(catalog.choices.map(\.modelID) == ["fixture-model"])
+            #expect(fixture.sockets.snapshotMakeCount() == 2)
+            let fresh = try #require(await ordinary.acquireModelSignInContext(agentID: nil))
+            #expect(await fresh.isCurrent())
+            _ = try await fresh.request("models.authStatus", ["agentId": AnyCodable("main")])
+            #expect(try fixture.frames(method: "models.list").last?["expectedProfileId"] == nil)
+            #expect(try fixture.frames(method: "models.authStatus").last?["expectedProfileId"] == nil)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `model catalog requires its published capability for native and ordinary transports`(
+        native: Bool) async throws
+    {
+        try await self.withFixture { fixture, _, _ in
+            let lease = try await fixture.gateway.acquireServerLease()
+            let transport = MacGatewayChatTransport(
+                connection: fixture.gateway,
+                nativeBinding: native ? .init(owner: fixture.target.owner, lease: lease) : nil)
+            let catalog = try await transport.loadModelCatalog(
+                sessionKey: MacNativeActionFixture.sessionKey, agentID: "main")
+            #expect(catalog.choices.isEmpty)
+            #expect(!catalog.availabilityIsSessionScoped)
+            #expect(try fixture.frames(method: "models.list").isEmpty)
+            #expect(try fixture.frames(method: "health").count == (native ? 1 : 2))
+        }
     }
 }
 
