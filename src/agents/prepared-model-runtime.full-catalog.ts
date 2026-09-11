@@ -73,6 +73,7 @@ export async function prepareFullCatalogFacts(
     includePluginCatalogs: true,
     modelsJsonContents: catalogSource.modelsJsonContents,
     pluginCatalogs: catalogSource.pluginCatalogs,
+    admittedProviderIds: agentFacts.admittedProviderIds,
     staticProviderConfigs: Object.fromEntries(
       Object.entries(resolvePreparedProviderStaticConfigs(preparedStaticProviderCatalog)).filter(
         ([provider]) => !observedProviders.has(normalizeProviderId(provider)),
