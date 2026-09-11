@@ -2,6 +2,7 @@
 // prints these; nothing here touches the filesystem so the description stays
 // accurate whether or not Claude Code is installed yet.
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -30,9 +31,26 @@ export type ClaudeLocalSessionSetup = {
   commands: { addMcpServer: string; launchClaude: string };
 };
 
-/** Resolve a shipped channel artifact next to this module (source tree or dist). */
-function resolveClaudeChannelArtifact(fileName: string): string {
-  return fileURLToPath(new URL(`./claude-channel/${fileName}`, import.meta.url));
+/**
+ * Resolve a shipped channel artifact. In the source tree this module sits in
+ * `extensions/anthropic/`, so the artifacts are its direct siblings. In a build
+ * the module is bundled into a flat chunk at the dist root while the artifacts
+ * are copied to `extensions/anthropic/claude-channel/` under that same root, so
+ * the sibling assumption resolves to a path that does not exist. Registering a
+ * missing path is silently fatal: Claude Code reports the channel as failing to
+ * connect, no session is ever marked live, and nothing mirrors.
+ */
+export function resolveClaudeChannelArtifact(
+  fileName: string,
+  deps: { baseUrl?: string | URL; exists?: (candidate: string) => boolean } = {},
+): string {
+  const baseUrl = deps.baseUrl ?? import.meta.url;
+  const exists = deps.exists ?? existsSync;
+  const resolved = [
+    `./claude-channel/${fileName}`,
+    `./extensions/anthropic/claude-channel/${fileName}`,
+  ].map((candidate) => fileURLToPath(new URL(candidate, baseUrl)));
+  return resolved.find((candidate) => exists(candidate)) ?? resolved[0]!;
 }
 
 export function describeClaudeLocalSessionSetup(

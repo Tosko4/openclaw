@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { enableClaudeLocalSharing } from "./local-session-setup.js";
+import {
+  describeClaudeLocalSessionSetup,
+  enableClaudeLocalSharing,
+  resolveClaudeChannelArtifact,
+} from "./local-session-setup.js";
 
 describe("enableClaudeLocalSharing", () => {
   let configDir: string;
@@ -64,6 +68,41 @@ describe("enableClaudeLocalSharing", () => {
     const again = JSON.parse(await fs.readFile(path.join(configDir, "settings.json"), "utf8"));
     expect(again.hooks.Stop).toHaveLength(2);
     expect(again.hooks.SessionStart).toHaveLength(1);
+  });
+
+  it("finds the channel artifact in the bundled layout, not just the source tree", () => {
+    // Bundling flattens this module to the dist root while the artifacts are
+    // copied under extensions/anthropic/. Resolving only against siblings yields
+    // a path that does not exist, and registering it is silently fatal: Claude
+    // Code reports the channel as failing to connect, so nothing ever mirrors.
+    const distBase = "file:///app/dist/chunk-abc123.mjs";
+    const bundled = "/app/dist/extensions/anthropic/claude-channel/server.mjs";
+    expect(
+      resolveClaudeChannelArtifact("server.mjs", {
+        baseUrl: distBase,
+        exists: (candidate) => candidate === bundled,
+      }),
+    ).toBe(bundled);
+
+    const sourceBase = "file:///repo/extensions/anthropic/local-session-setup.ts";
+    const sibling = "/repo/extensions/anthropic/claude-channel/server.mjs";
+    expect(
+      resolveClaudeChannelArtifact("server.mjs", {
+        baseUrl: sourceBase,
+        exists: (candidate) => candidate === sibling,
+      }),
+    ).toBe(sibling);
+  });
+
+  it("points the channel and hooks at artifacts that exist on disk", async () => {
+    // Registering a path that does not exist is silently fatal: Claude Code
+    // reports the channel as failing to connect, so no session is ever marked
+    // live and nothing mirrors to the team.
+    const setup = describeClaudeLocalSessionSetup({});
+    for (const artifact of [setup.channelServerPath, setup.hookScriptPath]) {
+      await expect(fs.access(artifact)).resolves.toBeUndefined();
+    }
+    expect(setup.mcpServerEntry.args).toEqual([setup.channelServerPath]);
   });
 
   it("refuses to touch a settings file it cannot parse", async () => {
