@@ -9,6 +9,7 @@ import {
   type MissingPluginInstallPayload,
 } from "./payload-verification.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import {
   capturePluginPackageUpdateSnapshot,
   reconcilePluginPackageUpdateConfig,
@@ -48,6 +49,15 @@ export async function convergePluginReleaseCohort(params: {
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void;
 }): Promise<PluginCohortConvergenceResult> {
+  return await withPluginLifecycleLease(
+    { env: params.env, assertCurrent: params.beforePersistentEffect },
+    () => convergePluginReleaseCohortWithLease(params),
+  );
+}
+
+async function convergePluginReleaseCohortWithLease(
+  params: Parameters<typeof convergePluginReleaseCohort>[0],
+): Promise<PluginCohortConvergenceResult> {
   const sync = await syncPluginsForUpdateChannel({
     config: params.config,
     channel: params.channel,
