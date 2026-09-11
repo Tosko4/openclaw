@@ -31,31 +31,52 @@ export async function convergeUpdatePlugins(
   params: Parameters<typeof convergeUpdatePluginsInternal>[0],
   assertCurrent?: () => void,
 ): ReturnType<typeof convergeUpdatePluginsInternal> {
-  const backup = params.updateRecoveryBackup;
-  if (!backup) {
-    return await convergeUpdatePluginsInternal(params);
-  }
-  if (!assertCurrent) {
-    throw new Error("Backed plugin convergence requires its finalization authority.");
-  }
-  assertCurrent();
-  return await withUpdateRecoveryConfigWrites(backup, { assertOwned: assertCurrent }, () =>
-    convergeUpdatePluginsInternal({
-      ...params,
-      beforeDoctor: async () => {
-        await params.beforeDoctor?.();
-        assertCurrent();
-        await persistUpdateRecoveryConfigWrites(backup, { assertOwned: assertCurrent });
-        assertCurrent();
-      },
-    }),
-  );
+  // Receipt publication must remain in the same profile as its config writes.
+  return await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () => {
+    if (!params.updateRecoveryBackup && !params.preparePersistentMutation) {
+      return await convergeUpdatePluginsInternal(params);
+    }
+    if (!assertCurrent) {
+      throw new Error("Backed plugin convergence requires its finalization authority.");
+    }
+    const pending = { ...params };
+    const prepare = async () => {
+      assertCurrent();
+      if (!pending.updateRecoveryBackup && params.preparePersistentMutation) {
+        pending.updateRecoveryBackup = await params.preparePersistentMutation();
+        pending.candidateUpdateRecovery = "parent-v1";
+      }
+      await params.beforePersistentEffect?.();
+      assertCurrent();
+    };
+    pending.beforePersistentEffect = prepare;
+    pending.beforeDoctor = async () => {
+      await prepare();
+      await params.beforeDoctor?.();
+      assertCurrent();
+      if (pending.updateRecoveryBackup) {
+        await persistUpdateRecoveryConfigWrites(pending.updateRecoveryBackup, {
+          assertOwned: assertCurrent,
+        });
+      }
+      assertCurrent();
+    };
+    return await withUpdateRecoveryConfigWrites(
+      () => pending.updateRecoveryBackup,
+      { assertOwned: assertCurrent },
+      () => convergeUpdatePluginsInternal(pending),
+    );
+  });
 }
 
 async function convergeUpdatePluginsInternal(params: {
   updateRecoveryBackup?: import("../../infra/update-recovery-backup-contract.js").UpdateRecoveryBackupRef;
   candidateUpdateRecovery?: "parent-v1";
+  deferFailureRecoveryToParent?: boolean;
   coreAlreadyCurrent?: boolean;
+  preparePersistentMutation?: () => Promise<
+    import("../../infra/update-recovery-backup-contract.js").UpdateRecoveryBackupRef
+  >;
   result: UpdateRunResult;
   root: string;
   previousInstallRoot?: string;
@@ -98,10 +119,13 @@ async function convergeUpdatePluginsInternal(params: {
     params.previousInstallRoot ?? params.root,
     postUpdateRoot,
   );
+  // A protected target worker is already fresh; its parent retains recovery ownership.
   const retainedDifferentRuntime =
+    !params.deferFailureRecoveryToParent &&
     params.coreAlreadyCurrent === true &&
     (runtimeRootChanged || (versionComparison !== null && versionComparison !== 0));
   const shouldResumePostCoreInFreshProcess =
+    !params.deferFailureRecoveryToParent &&
     (!params.coreAlreadyCurrent || retainedDifferentRuntime) &&
     shouldResumePostCoreUpdateInFreshProcess({
       // An already-current install can still differ from the retained updater.
@@ -144,183 +168,181 @@ async function convergeUpdatePluginsInternal(params: {
     );
   }
 
-  return await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () => {
-    const previousCompatibilityHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-    const compatibilityDowngradeTarget =
-      versionComparison != null && versionComparison > 0 ? postUpdateInstalledVersion : null;
-    if (compatibilityDowngradeTarget) {
-      // The parent still reports its pre-update VERSION. Convergence and fresh
-      // completion must both use the installed target's compatibility contract.
-      process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityDowngradeTarget;
-    }
-    try {
-      let postCorePluginUpdate;
-      const doctorWarnings: string[] = [];
-      let pluginsUpdatedInFreshProcess = false;
-      if (shouldResumePostCoreInFreshProcess) {
-        const freshProcessResult = await continuePostCoreUpdateInFreshProcess({
-          root: postUpdateRoot,
-          channel: params.channel,
-          requestedChannel: params.requestedChannel,
-          opts: params.opts,
-          pluginInstallRecords: params.preUpdatePluginInstallRecords,
-          updateStartedAtMs: params.startedAt,
-          timeoutMs: params.updateStepTimeoutMs,
-          nodeRunner: params.packageUpdateNodeRunner,
-          preUpdateConfig,
-        });
-        if (freshProcessResult.exitCode !== undefined) {
-          return {
-            resultWithPostUpdate: {
-              ...params.result,
-              status: "error" as const,
-              reason: "post-core-update-failed",
-            },
-            detail: freshProcessResult.error,
-            cancelled: freshProcessResult.exitCode === 130 || freshProcessResult.exitCode === 143,
-          };
-        }
-        pluginsUpdatedInFreshProcess = freshProcessResult.resumed;
-        postCorePluginUpdate = freshProcessResult.pluginUpdate;
-      }
-
-      if (retainedDifferentRuntime && !pluginsUpdatedInFreshProcess) {
+  const previousCompatibilityHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+  const compatibilityDowngradeTarget =
+    versionComparison != null && versionComparison > 0 ? postUpdateInstalledVersion : null;
+  if (compatibilityDowngradeTarget) {
+    // The parent still reports its pre-update VERSION. Convergence and fresh
+    // completion must both use the installed target's compatibility contract.
+    process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityDowngradeTarget;
+  }
+  try {
+    let postCorePluginUpdate;
+    const doctorWarnings: string[] = [];
+    let pluginsUpdatedInFreshProcess = false;
+    if (shouldResumePostCoreInFreshProcess) {
+      const freshProcessResult = await continuePostCoreUpdateInFreshProcess({
+        root: postUpdateRoot,
+        channel: params.channel,
+        requestedChannel: params.requestedChannel,
+        opts: params.opts,
+        pluginInstallRecords: params.preUpdatePluginInstallRecords,
+        updateStartedAtMs: params.startedAt,
+        timeoutMs: params.updateStepTimeoutMs,
+        nodeRunner: params.packageUpdateNodeRunner,
+        preUpdateConfig,
+      });
+      if (freshProcessResult.exitCode !== undefined) {
         return {
           resultWithPostUpdate: {
             ...params.result,
             status: "error" as const,
             reason: "post-core-update-failed",
           },
-          detail:
-            "The installed target could not resume plugin convergence. Run openclaw update using the installed target executable.",
+          detail: freshProcessResult.error,
+          cancelled: freshProcessResult.exitCode === 130 || freshProcessResult.exitCode === 143,
         };
       }
+      pluginsUpdatedInFreshProcess = freshProcessResult.resumed;
+      postCorePluginUpdate = freshProcessResult.pluginUpdate;
+    }
 
-      if (!pluginsUpdatedInFreshProcess) {
-        postCorePluginUpdate = await withPluginLifecycleLease({}, async () => {
-          const preparedConfig = await preparePostCorePluginConfig({
-            requestedChannel: params.requestedChannel,
-            preUpdateConfig,
-            suppressFutureVersionWarning: shouldResumePostCoreInFreshProcess,
-          });
-          postUpdateConfigSnapshot = preparedConfig.configSnapshot;
-          const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
-          return await updatePluginsAfterCoreUpdate({
-            root: postUpdateRoot,
-            channel: params.channel,
-            ...preparedConfig,
-            json: params.opts.json,
-            acceptCapabilities: params.opts.acceptCapabilities,
-            timeoutMs: params.updateStepTimeoutMs,
-            pluginInstallRecords,
-            beforePersistentEffect: params.beforePersistentEffect,
-          });
+    if (retainedDifferentRuntime && !pluginsUpdatedInFreshProcess) {
+      return {
+        resultWithPostUpdate: {
+          ...params.result,
+          status: "error" as const,
+          reason: "post-core-update-failed",
+        },
+        detail:
+          "The installed target could not resume plugin convergence. Run openclaw update using the installed target executable.",
+      };
+    }
+
+    if (!pluginsUpdatedInFreshProcess) {
+      postCorePluginUpdate = await withPluginLifecycleLease({}, async () => {
+        const preparedConfig = await preparePostCorePluginConfig({
+          requestedChannel: params.requestedChannel,
+          preUpdateConfig,
+          suppressFutureVersionWarning: shouldResumePostCoreInFreshProcess,
+          beforePersistentEffect: params.beforePersistentEffect,
         });
-      }
-
-      if (postCorePluginUpdate && (!params.coreAlreadyCurrent || postCorePluginUpdate.changed)) {
-        // Release the plugin lease before fresh Doctor. The finalizer either
-        // retains its stopped interval or parks an already-current core here.
-        const completedPluginUpdate = await completePostCorePluginUpdate({
-          updateRecoveryBackup:
-            params.candidateUpdateRecovery === "parent-v1"
-              ? params.updateRecoveryBackup
-              : undefined,
+        postUpdateConfigSnapshot = preparedConfig.configSnapshot;
+        const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+        return await updatePluginsAfterCoreUpdate({
           root: postUpdateRoot,
-          pluginUpdate: postCorePluginUpdate,
-          freshDoctorRequired: postCorePluginUpdate.changed,
-          beforeDoctor: params.beforeDoctor,
-          yes: params.opts.yes === true,
-          json: params.opts.json === true,
+          channel: params.channel,
+          ...preparedConfig,
+          json: params.opts.json,
+          acceptCapabilities: params.opts.acceptCapabilities,
           timeoutMs: params.updateStepTimeoutMs,
-          onWarnings: (warnings) => {
-            doctorWarnings.push(...warnings);
-          },
-          ...(params.packageUpdateNodeRunner ? { nodeRunner: params.packageUpdateNodeRunner } : {}),
+          pluginInstallRecords,
+          beforePersistentEffect: params.beforePersistentEffect,
         });
-        postCorePluginUpdate = completedPluginUpdate.pluginUpdate;
-        postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
-      }
+      });
+    }
 
-      let resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
-        ? {
-            ...params.result,
-            status: postCorePluginUpdate.status === "error" ? "error" : params.result.status,
-            ...(postCorePluginUpdate.status === "error" ? { reason: "post-update-plugins" } : {}),
-            postUpdate: {
-              ...params.result.postUpdate,
-              plugins: postCorePluginUpdate,
-            },
-          }
-        : params.result;
-      if (doctorWarnings.length) {
-        resultWithPostUpdate = {
-          ...resultWithPostUpdate,
-          steps: [
-            ...resultWithPostUpdate.steps,
-            ...normalizeUpdatePostInstallDoctorWarnings(doctorWarnings).map((message, index) => ({
-              name: `post-plugin doctor warning ${index + 1}`,
-              command: "openclaw doctor --fix",
-              cwd: postUpdateRoot,
-              durationMs: 0,
-              exitCode: 0,
-              advisory: { kind: "package-post-install-doctor" as const, message },
-            })),
-          ],
-        };
-      }
-      const pluginAdvisories = (postCorePluginUpdate?.warnings ?? []).filter(
-        (warning) => warning.reason === "plugin-target-unavailable",
-      );
+    if (postCorePluginUpdate && (!params.coreAlreadyCurrent || postCorePluginUpdate.changed)) {
+      // Release the plugin lease before fresh Doctor. The finalizer either
+      // retains its stopped interval or parks an already-current core here.
+      const completedPluginUpdate = await completePostCorePluginUpdate({
+        updateRecoveryBackup:
+          params.candidateUpdateRecovery === "parent-v1" ? params.updateRecoveryBackup : undefined,
+        root: postUpdateRoot,
+        pluginUpdate: postCorePluginUpdate,
+        freshDoctorRequired: postCorePluginUpdate.changed,
+        beforeDoctor: params.beforeDoctor,
+        yes: params.opts.yes === true,
+        json: params.opts.json === true,
+        timeoutMs: params.updateStepTimeoutMs,
+        onWarnings: (warnings) => {
+          doctorWarnings.push(...warnings);
+        },
+        ...(params.packageUpdateNodeRunner ? { nodeRunner: params.packageUpdateNodeRunner } : {}),
+      });
+      postCorePluginUpdate = completedPluginUpdate.pluginUpdate;
+      postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
+    }
+
+    let resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
+      ? {
+          ...params.result,
+          status: postCorePluginUpdate.status === "error" ? "error" : params.result.status,
+          ...(postCorePluginUpdate.status === "error" ? { reason: "post-update-plugins" } : {}),
+          postUpdate: {
+            ...params.result.postUpdate,
+            plugins: postCorePluginUpdate,
+          },
+        }
+      : params.result;
+    if (doctorWarnings.length) {
       resultWithPostUpdate = {
         ...resultWithPostUpdate,
         steps: [
           ...resultWithPostUpdate.steps,
-          ...pluginAdvisories.map((warning, index) => ({
-            name: `finalize:plugins:${index}`,
-            command: "openclaw plugins update",
+          ...normalizeUpdatePostInstallDoctorWarnings(doctorWarnings).map((message, index) => ({
+            name: `post-plugin doctor warning ${index + 1}`,
+            command: "openclaw doctor --fix",
             cwd: postUpdateRoot,
             durationMs: 0,
             exitCode: 0,
-            advisory: { kind: "recoverable-maintenance" as const, message: warning.message },
+            advisory: { kind: "package-post-install-doctor" as const, message },
           })),
         ],
       };
-      if (
-        params.coreAlreadyCurrent &&
-        resultWithPostUpdate.status !== "error" &&
-        (postCorePluginUpdate?.changed ||
-          (params.requestedChannel !== null && params.requestedChannel !== params.storedChannel))
-      ) {
-        resultWithPostUpdate = { ...resultWithPostUpdate, status: "ok" };
-        delete resultWithPostUpdate.reason;
-      }
-      if (params.opts.run) {
-        for (const step of resultWithPostUpdate.steps.flatMap(updateRunStepsFromResultStep)) {
-          if (step.step.startsWith("warning:")) {
-            recordUpdateRunStep(params.opts.run.runId, step, { env: params.opts.run.env });
-          }
+    }
+    const pluginAdvisories = (postCorePluginUpdate?.warnings ?? []).filter(
+      (warning) => warning.reason === "plugin-target-unavailable",
+    );
+    resultWithPostUpdate = {
+      ...resultWithPostUpdate,
+      steps: [
+        ...resultWithPostUpdate.steps,
+        ...pluginAdvisories.map((warning, index) => ({
+          name: `finalize:plugins:${index}`,
+          command: "openclaw plugins update",
+          cwd: postUpdateRoot,
+          durationMs: 0,
+          exitCode: 0,
+          advisory: { kind: "recoverable-maintenance" as const, message: warning.message },
+        })),
+      ],
+    };
+    if (
+      params.coreAlreadyCurrent &&
+      resultWithPostUpdate.status !== "error" &&
+      (postCorePluginUpdate?.changed ||
+        params.updateRecoveryBackup !== undefined ||
+        (params.requestedChannel !== null && params.requestedChannel !== params.storedChannel))
+    ) {
+      resultWithPostUpdate = { ...resultWithPostUpdate, status: "ok" };
+      delete resultWithPostUpdate.reason;
+    }
+    if (params.opts.run) {
+      for (const step of resultWithPostUpdate.steps.flatMap(updateRunStepsFromResultStep)) {
+        if (step.step.startsWith("warning:")) {
+          recordUpdateRunStep(params.opts.run.runId, step, { env: params.opts.run.env });
         }
-        recordUpdateRunStep(
-          params.opts.run.runId,
-          {
-            step: "post-update verification",
-            status: postCorePluginUpdate?.status === "error" ? "failed" : "completed",
-            endedAtMs: Date.now(),
-          },
-          { env: params.opts.run.env },
-        );
       }
+      recordUpdateRunStep(
+        params.opts.run.runId,
+        {
+          step: "post-update verification",
+          status: postCorePluginUpdate?.status === "error" ? "failed" : "completed",
+          endedAtMs: Date.now(),
+        },
+        { env: params.opts.run.env },
+      );
+    }
 
-      return { resultWithPostUpdate, postUpdateConfigSnapshot };
-    } finally {
-      if (compatibilityDowngradeTarget) {
-        if (previousCompatibilityHostVersion === undefined) {
-          delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-        } else {
-          process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = previousCompatibilityHostVersion;
-        }
+    return { resultWithPostUpdate, postUpdateConfigSnapshot };
+  } finally {
+    if (compatibilityDowngradeTarget) {
+      if (previousCompatibilityHostVersion === undefined) {
+        delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+      } else {
+        process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = previousCompatibilityHostVersion;
       }
     }
-  });
+  }
 }
