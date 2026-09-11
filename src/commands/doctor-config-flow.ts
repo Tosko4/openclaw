@@ -156,6 +156,8 @@ async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
  */
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
+  /** The health flow imported retired install records and converged migration plugins. */
+  migrationPluginsConverged?: true;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
   runtime?: RuntimeEnv;
   prompter?: DoctorPrompter;
@@ -173,6 +175,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         repairPrefixedConfig: shouldRepair,
         recoverCorruptTargetStore: shouldRepair,
         doctorOnlyStateMigrations: shouldRepair,
+        migrationPluginsConverged: params.migrationPluginsConverged,
         preparePluginMetadataSnapshot: true,
         beforeWorkspaceStateMigration: createWorkspaceAliasMigrationRepair(
           params.prompter,

@@ -114,6 +114,8 @@ export async function runDoctorConfigPreflight(
     skipPristineStartupStateMigrations?: boolean;
     /** Enable migrations that may retire security-sensitive stores only during explicit repair. */
     doctorOnlyStateMigrations?: boolean;
+    /** Explicit Doctor repair has imported install records and converged migration plugins. */
+    migrationPluginsConverged?: true;
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
   const stateMigrationsRequested = options.migrateState !== false;
@@ -477,7 +479,11 @@ export async function runDoctorConfigPreflight(
         automaticConfigRepair = snapshot.valid ? null : planScopedConfigRepair(snapshot);
       }
     }
-    const stateMigrationInput = resolveStateMigrationConfigInput({ snapshot, baseConfig });
+    const stateMigrationInput = resolveStateMigrationConfigInput({
+      snapshot,
+      baseConfig,
+      migrationPluginsConverged: options.migrationPluginsConverged,
+    });
     if (migrationCheckpoint) {
       migrationCheckpointIdentity = resolveMigrationCheckpointIdentity({
         snapshot,

@@ -160,6 +160,7 @@ async function runDoctorHealthFlowWithResult(
       json: options.json,
     });
 
+    let migrationPluginsConverged: true | undefined;
     if (prompter.shouldRepair) {
       const { convergeDoctorMigrationPlugins } =
         await import("../commands/doctor/shared/migration-plugin-convergence.js");
@@ -177,6 +178,7 @@ async function runDoctorHealthFlowWithResult(
             }),
         }),
       });
+      migrationPluginsConverged = true;
     }
 
     // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
@@ -193,6 +195,7 @@ async function runDoctorHealthFlowWithResult(
     const { loadAndMaybeMigrateDoctorConfig } = await import("../commands/doctor-config-flow.js");
     const configResult = await loadAndMaybeMigrateDoctorConfig({
       options,
+      ...(migrationPluginsConverged ? { migrationPluginsConverged } : {}),
       confirm: (p) => prompter.confirm(p),
       runtime: effectiveRuntime,
       prompter,
