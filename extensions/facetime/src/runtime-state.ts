@@ -1,11 +1,8 @@
 import type { FaceTimeCallStatusEvent, AuthenticatedFaceTimeOwner } from "./call-events.js";
 import { FaceTimeCallInstance } from "./call-lifecycle.js";
-import type { FaceTimeConfig } from "./config.js";
 import type { HelperActionResult, FaceTimeHelperPeer } from "./helper-rpc.js";
 import type { FaceTimeHelperSupervisorStatus } from "./helper-supervisor.js";
-import type { FaceTimeDialMode, FaceTimeDialResult, PendingFaceTimeDial } from "./outbound-call.js";
-import type { FaceTimePreflightResult } from "./preflight.js";
-import type { FaceTimeSetupReport } from "./setup.js";
+import type { FaceTimeDialMode, PendingFaceTimeDial } from "./outbound-call.js";
 import type { FaceTimeTalkDriver } from "./talk-driver.js";
 import type { FaceTimeTalkEventSummary } from "./talk-events-summary.js";
 
@@ -132,17 +129,6 @@ export type FaceTimeRuntimeStatus = {
     carrierHangupPending?: boolean;
     recentTalkEvents?: FaceTimeTalkEventSummary[];
   }>;
-};
-
-export type FaceTimeRuntime = {
-  config: FaceTimeConfig;
-  status(): Promise<FaceTimeRuntimeStatus>;
-  setup(): Promise<FaceTimeSetupReport>;
-  preflight(): Promise<FaceTimePreflightResult>;
-  dial(params: { handle: unknown; mode?: unknown }): Promise<FaceTimeDialResult>;
-  hangup(params?: { callUUID?: unknown }): Promise<{ callUUID?: string; dialID?: string }>;
-  installDriver(): Promise<{ started: true }>;
-  stop(): Promise<void>;
 };
 
 export function readCallUUID(event: FaceTimeCallStatusEvent): string {

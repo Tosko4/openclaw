@@ -7,7 +7,7 @@ import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { FaceTimeConfig } from "./config.js";
 import { inspectFaceTimeDriver, type FaceTimeDriverStatus } from "./driver-setup.js";
 import type { FaceTimePreflightCheck, FaceTimePreflightResult } from "./preflight.js";
-import type { FaceTimeRuntimeStatus } from "./runtime.js";
+import type { FaceTimeRuntimeStatus } from "./runtime-state.js";
 
 type RunCommandWithTimeout = PluginRuntime["system"]["runCommandWithTimeout"];
 

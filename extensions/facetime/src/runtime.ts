@@ -42,15 +42,22 @@ import {
   readOutboundProxyIdentifier,
   retainHelperResultPeers,
 } from "./runtime-helper-results.js";
-import type {
-  ActiveFaceTimeCall,
-  FaceTimeRuntime,
-  FaceTimeRuntimeStatus,
-} from "./runtime-state.js";
+import type { ActiveFaceTimeCall, FaceTimeRuntimeStatus } from "./runtime-state.js";
 import { buildFaceTimeRuntimeStatus } from "./runtime-status.js";
-import { runFaceTimeSetup } from "./setup.js";
+import { runFaceTimeSetup, type FaceTimeSetupReport } from "./setup.js";
 
-export type { FaceTimeRuntime, FaceTimeRuntimeStatus } from "./runtime-state.js";
+export type { FaceTimeRuntimeStatus } from "./runtime-state.js";
+
+export type FaceTimeRuntime = {
+  config: FaceTimeConfig;
+  status(): Promise<FaceTimeRuntimeStatus>;
+  setup(): Promise<FaceTimeSetupReport>;
+  preflight(): Promise<FaceTimePreflightResult>;
+  dial(params: { handle: unknown; mode?: unknown }): Promise<FaceTimeDialResult>;
+  hangup(params?: { callUUID?: unknown }): Promise<{ callUUID?: string; dialID?: string }>;
+  installDriver(): Promise<{ started: true }>;
+  stop(): Promise<void>;
+};
 
 const OUTBOUND_RECONCILE_ATTEMPTS = 12;
 const OUTBOUND_RECONCILE_INTERVAL_MS = 250;
