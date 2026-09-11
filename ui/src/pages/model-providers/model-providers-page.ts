@@ -11,7 +11,6 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { subscribeModelCatalogChanges } from "../../lib/model-catalog-store.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -130,6 +129,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     getData: () => this.data,
     setData: (data) => (this.data = data),
     requestUpdate: () => this.requestUpdate(),
+    readPublished: () => this.refresh({ force: false }),
   });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -182,10 +182,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     refresh: () => this.refresh({ force: false }),
   });
   private readonly subscriptions = new SubscriptionsController(this)
-    .effect(
-      () => this.context?.gateway,
-      (gateway) => subscribeModelCatalogChanges(gateway, () => void this.refresh({ force: false })),
-    )
+    .effect(() => this.context?.gateway, this.catalogDiscovery.subscribe)
     .watch(
       () => this.context?.runtimeConfig,
       (runtimeConfig, notify) => runtimeConfig.subscribe(notify),

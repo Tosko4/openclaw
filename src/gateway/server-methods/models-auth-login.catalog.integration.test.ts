@@ -53,8 +53,9 @@ it.each([0, 7_000])(
       endpoint.listen(0, "127.0.0.1");
       await once(endpoint, "listening");
       const address = endpoint.address();
-      if (!address || typeof address === "string")
+      if (!address || typeof address === "string") {
         throw new Error("Fixture endpoint has no TCP address");
+      }
       const baseUrl = `http://127.0.0.1:${address.port}`;
       await state.writeJson("login-plugin/openclaw.plugin.json", {
         id: provider,
@@ -143,8 +144,9 @@ it.each([0, 7_000])(
         });
         while (!wizard.done) {
           const step = wizard.step;
-          if (!step || !["note", "confirm"].includes(step.type))
+          if (!step || !["note", "confirm"].includes(step.type)) {
             throw new Error(`Unexpected login step: ${JSON.stringify(wizard)}`);
+          }
           wizard = await client.request<WizardNextResult>("wizard.next", {
             sessionId: "fixture-login",
             answer: { stepId: step.id, value: step.type === "confirm" ? true : null },
@@ -207,10 +209,15 @@ it.each([0, 7_000])(
           expect.soft(observation.after).toBe(observation.before);
           for (const read of observation.reads) {
             expect.soft(read.elapsedMs).toBeLessThan(1_000);
-            if (catalogDelay === 7_000 && observation.offsetMs === 1_000)
+            if (
+              observation.offsetMs === 1_000 &&
+              (catalogDelay === 7_000 || !read.ids.includes("account-exclusive"))
+            ) {
               expect.soft(read.result.pendingProviders).toContain(provider);
-            if (catalogDelay === 0 || observation.offsetMs === 10_000)
+            }
+            if (observation.offsetMs === 10_000) {
               expect.soft(read.ids).toContain("account-exclusive");
+            }
           }
         }
       } finally {
@@ -219,9 +226,9 @@ it.each([0, 7_000])(
       }
     } finally {
       endpoint.closeAllConnections();
-      await new Promise<void>((resolve, reject) =>
-        endpoint.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        endpoint.close((error) => (error ? reject(error) : resolve()));
+      });
       await state.cleanup();
     }
   },

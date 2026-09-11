@@ -17,7 +17,8 @@ export type ChatModelCatalogState = {
 };
 
 export function resolveModelCatalogState(
-  result: Pick<ModelCatalogResult, "models" | "refreshFailed" | "pendingProviders">,
+  result: Pick<ModelCatalogResult, "models" | "refreshFailed"> &
+    Pick<ChatModelCatalogState, "pendingProviders">,
   {
     connected = true,
     loading = false,

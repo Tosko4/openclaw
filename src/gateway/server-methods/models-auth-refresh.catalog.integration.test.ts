@@ -39,8 +39,11 @@ describe("models.authRefresh learned catalog", () => {
       response.setHeader("Content-Type", "application/json");
       const reply = () =>
         response.end(JSON.stringify([{ id: `${account}-learned`, name: `${account} learned` }]));
-      if (holdDiscovery) heldResponses.push(reply);
-      else reply();
+      if (holdDiscovery) {
+        heldResponses.push(reply);
+      } else {
+        reply();
+      }
     });
     const saveAccount = async (accountId: string, access: string) => {
       const store: AuthProfileStore = {
@@ -179,7 +182,9 @@ describe("models.authRefresh learned catalog", () => {
         const logoutMs = Date.now() - logoutStarted;
         console.log("LOGOUT_DURING_DISCOVERY_MS", logoutMs);
         expect(logoutMs).toBeLessThan(1_000);
-        for (const reply of heldResponses) reply();
+        for (const reply of heldResponses) {
+          reply();
+        }
         await refreshSettled;
         expect((await list()).filter((model) => model.available)).toEqual([]);
         expect((await list()).map((model) => model.id)).not.toContain("account-two-learned");

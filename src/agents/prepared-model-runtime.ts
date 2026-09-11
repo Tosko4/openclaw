@@ -509,10 +509,16 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   const catalogMode = options.catalogMode ?? "live";
   gatewayLifecycleActive ||= options.gatewayLifecycle === true;
   const staleError = new Error("prepared model runtime owner is stale after config publication");
+  // Provider inventory outlives runtime selection; rebuilding checks each provider's source/auth.
   const inventories = new Map(
     [...owners.values()].flatMap((owner) =>
       owner.provenance === "configured" && owner.catalogInventory
-        ? [[ownerKey(owner.input), owner.catalogInventory] as const]
+        ? [
+            [
+              ownerKey({ ...owner.input, runtimePluginSelections: undefined }),
+              owner.catalogInventory,
+            ] as const,
+          ]
         : [],
     ),
   );
@@ -551,7 +557,9 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
       catalogMode,
       existing?.provenance === "configured" ? existing : undefined,
     );
-    owner.catalogInventory = inventories.get(ownerKey(input));
+    owner.catalogInventory = inventories.get(
+      ownerKey({ ...input, runtimePluginSelections: undefined }),
+    );
     return { input, owner };
   });
   await publishPreparedModelRuntimeOwnerBatch({

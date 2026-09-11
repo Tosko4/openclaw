@@ -107,16 +107,13 @@ async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
   // Rediscovery under agent workspaces or runtime activation overlays loses the owner's
   // metadata generation. Its source/built artifact selection must survive reconstruction too.
   const metadata = restorePluginMetadataSnapshot(value.pluginMetadataSnapshot);
-  // Runtime catalog and harness owners declare their role in the prepared manifest snapshot.
+  // The parent owns native harness observations; this worker owns provider catalog hooks.
   // An empty eligible set stays empty instead of reopening unscoped plugin discovery.
   const normalizedConfig = normalizePluginsConfig(value.input.config.plugins);
   const basePluginIds = metadata.plugins
     .filter(
       (plugin) =>
-        (manifestPluginResolvesRuntimeModelCatalogAugment(plugin) ||
-          plugin.cliBackends.length > 0 ||
-          Boolean(plugin.setup?.cliBackends?.length) ||
-          Boolean(plugin.activation?.onAgentHarnesses?.length)) &&
+        manifestPluginResolvesRuntimeModelCatalogAugment(plugin) &&
         isManifestPluginAvailableForControlPlane({
           snapshot: metadata,
           plugin,
@@ -128,9 +125,13 @@ async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
   const prepared = await prepareWorkspaceBuildGroup(
-    [value.input],
+    [{ ...value.input, runtimePluginSelections: [] }],
     "static",
-    { preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts, basePluginIds },
+    {
+      preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts,
+      basePluginIds,
+      getConfiguredHarnessRuntimes: () => [],
+    },
     undefined,
     undefined,
     metadata,
@@ -272,6 +273,8 @@ export async function runPreparedModelCatalogWorkerRequest(
       // catalog owners from the captured metadata before binding the authoritative registry.
       const catalogRegistry = loadAgentRuntimePluginRegistryHandle({
         ...value.input,
+        selections: [],
+        configuredHarnessRuntimes: [],
         metadataSnapshot: pluginMetadataSnapshot,
         preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts,
         reusableRegistry: pluginRegistry,

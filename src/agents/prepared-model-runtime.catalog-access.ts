@@ -280,18 +280,25 @@ export function createFullModelCatalogAccess(params: {
     setPreparedModelFullCatalogAuth(inventory.catalog, currentAuth);
   }
   let fullCatalog = inventory ? project(inventory.catalog) : undefined;
+  const hasNativeCatalog = params.pluginGeneration.pluginRegistry?.agentHarnesses.some(
+    ({ harness }) => typeof harness.loadModelCatalog === "function",
+  );
+  let nativeCatalogAcquired = !hasNativeCatalog;
   if (fullCatalog) {
-    if (
-      params.pluginGeneration.pluginRegistry?.agentHarnesses.some(
-        ({ harness }) => typeof harness.loadModelCatalog === "function",
-      )
-    ) {
+    if (hasNativeCatalog) {
       fullCatalog.authoritative = false;
     } else if (eligibleProviders.every((provider) => retainedProviders.has(provider))) {
       markPreparedModelCatalogFull(fullCatalog);
     }
   }
-  let pending: { providers: readonly string[]; promise: Promise<ModelCatalogSnapshot> } | undefined;
+  let pending:
+    | {
+        providers: readonly string[] | undefined;
+        /** Undefined covers unscoped native selection; an empty list schedules none. */
+        nativeProviders: readonly string[] | undefined;
+        promise: Promise<ModelCatalogSnapshot>;
+      }
+    | undefined;
   let pendingAuth:
     | {
         key: string;
@@ -310,6 +317,9 @@ export function createFullModelCatalogAccess(params: {
     isCurrent: params.isCurrent,
   });
   const staticCatalog = project(params.catalogFacts.modelCatalog);
+  if (!nativeCatalogAcquired) {
+    staticCatalog.authoritative = false;
+  }
   setPreparedModelFullCatalogAuth(staticCatalog, currentAuth);
   const acquireCatalog = async (
     options: PreparedModelCatalogRefreshOptions = {},
@@ -337,20 +347,41 @@ export function createFullModelCatalogAccess(params: {
         inventory?.providerCredentials.get(provider) !==
           preparedProviderCatalogCredentials(params.agentFacts, provider, normalizeProvider),
     );
-    const includeNative = !options.changedOnly && !options.providerIds;
-    if (!providers.length && !includeNative) return fullCatalog ?? staticCatalog;
+    const fullRefresh = !options.changedOnly && !options.providerIds;
+    const includeNative = hasNativeCatalog && (!options.changedOnly || !nativeCatalogAcquired);
+    const nativeProviders = includeNative
+      ? options.providerIds
+        ? requestedProviders
+        : undefined
+      : [];
+    if (!providers.length && !includeNative && !fullRefresh) return fullCatalog ?? staticCatalog;
     if (pending) {
       const current = pending;
-      if (!includeNative && providers.every((provider) => current.providers.includes(provider)))
+      const pendingProviders = current.providers;
+      const coversProviders =
+        pendingProviders === undefined ||
+        (!fullRefresh && providers.every((provider) => pendingProviders.includes(provider)));
+      const pendingNative = current.nativeProviders;
+      const coversNative =
+        !includeNative ||
+        pendingNative === undefined ||
+        (nativeProviders !== undefined &&
+          nativeProviders.every((provider) => pendingNative.includes(provider)));
+      if (coversNative && coversProviders) {
         return current.promise;
+      }
       await current.promise;
       return acquireCatalog(options);
     }
     const resourceClaim = retainPreparedModelRuntimeGenerationResources(params.pluginGeneration);
+    if (includeNative && !options.providerIds) {
+      nativeCatalogAcquired = false;
+    }
+    attempt.started(providers);
     // Discovery is read-only. Holding the directory build queue here would block an auth
     // replacement and every picker waiting for its static publication.
     const promise = (async () => {
-      const scopes: Array<readonly string[] | undefined> = includeNative
+      const scopes: Array<readonly string[] | undefined> = fullRefresh
         ? [undefined]
         : providers.map((provider) => [provider]);
       for (const providerIds of scopes)
@@ -471,25 +502,46 @@ export function createFullModelCatalogAccess(params: {
             providerCredentials: completedCredentials,
           };
           params.inventoryOwner.catalogInventory = inventory;
-          fullCatalog = eligibleProviders.every((provider) => completedSources.has(provider))
-            ? markPreparedModelCatalogFull(catalog)
-            : catalog;
+          if (!nativeCatalogAcquired) {
+            catalog.authoritative = false;
+          }
+          fullCatalog =
+            eligibleProviders.every((provider) => completedSources.has(provider)) &&
+            nativeCatalogAcquired
+              ? markPreparedModelCatalogFull(catalog)
+              : catalog;
           attempt.published(providerIds);
         });
       if (includeNative) {
         const current = fullCatalog ?? staticCatalog;
+        let nativeDiscoveryStarted = false;
         const catalog = await augmentPreparedModelCatalogWithAgentHarness({
           input: params.agentFacts.input,
           snapshot: current,
           pluginRegistry: params.pluginGeneration.pluginRegistry,
           isCurrent: params.isCurrent,
+          providerIds: options.providerIds?.map(normalizeProvider),
+          onDiscoveryStarted: (provider) => {
+            nativeDiscoveryStarted = true;
+            nativeCatalogAcquired = false;
+            current.authoritative = false;
+            attempt.started([normalizeProvider(provider)]);
+          },
         });
         assertCurrent();
         setPreparedModelFullCatalogAuth(
           catalog,
           getPreparedModelFullCatalogAuth(current) ?? currentAuth,
         );
-        fullCatalog = markPreparedModelCatalogFull(attempt.withRefreshStatus(catalog));
+        if (!options.providerIds || nativeDiscoveryStarted) {
+          nativeCatalogAcquired = true;
+        }
+        catalog.authoritative = nativeCatalogAcquired ? inventory?.catalog.authoritative : false;
+        fullCatalog =
+          nativeCatalogAcquired &&
+          eligibleProviders.every((provider) => inventory?.providerSources.has(provider))
+            ? markPreparedModelCatalogFull(attempt.withRefreshStatus(catalog))
+            : attempt.withRefreshStatus(catalog);
         attempt.published();
       }
       return fullCatalog ?? staticCatalog;
@@ -499,8 +551,7 @@ export function createFullModelCatalogAccess(params: {
         resourceClaim?.release();
         pending = undefined;
       });
-    pending = { providers, promise };
-    attempt.started(providers);
+    pending = { providers: fullRefresh ? undefined : providers, nativeProviders, promise };
     return promise;
   };
   return {

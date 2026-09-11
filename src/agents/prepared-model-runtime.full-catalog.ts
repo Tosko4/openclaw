@@ -164,6 +164,10 @@ export function prepareModelCatalogPublication(
       if (
         discoveryOrigins.some((origin) => origin.provider === provider) ||
         (!previousOrigins?.length &&
+          ![...(previous?.entries ?? []), ...(previous?.routeVariants ?? [])].some(
+            (entry) => normalizeProvider(entry.provider) === provider,
+          )) ||
+        (!previousOrigins?.length &&
           previous?.providerOutcomes?.some(
             (candidate) => normalizeProvider(candidate.provider) === provider,
           )) ||

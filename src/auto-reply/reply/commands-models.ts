@@ -438,7 +438,9 @@ async function projectPreparedModelsProviderData(
         [...visibilityPolicy.allowedKeys].some((key) => key.startsWith(`${provider}/`))),
   );
   for (const provider of pendingProviders ?? []) {
-    if (!byProvider.has(provider)) byProvider.set(provider, new Set());
+    if (!byProvider.has(provider)) {
+      byProvider.set(provider, new Set());
+    }
   }
 
   const providers = [...byProvider.keys()].toSorted();
@@ -855,7 +857,9 @@ export async function resolveModelsCommandReply(params: {
   const total = models.length;
 
   if (total === 0) {
-    if (checking) return { text: checking };
+    if (checking) {
+      return { text: checking };
+    }
     const emptyProviderLabel = resolveProviderLabel({
       provider,
       cfg: params.cfg,

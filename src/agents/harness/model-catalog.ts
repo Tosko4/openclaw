@@ -118,6 +118,8 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   pluginRegistry?: PluginRegistry | null;
   isCurrent?: () => boolean;
   observationConfig?: OpenClawConfig;
+  providerIds?: readonly string[];
+  onDiscoveryStarted?: (provider: string) => void;
   onError?: (error: unknown) => void;
 }): Promise<ModelCatalogSnapshot> {
   const rawDefaultModel = params.defaultModel?.trim();
@@ -132,6 +134,9 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     allowPluginNormalization: true,
   })?.ref;
   if (!ref) {
+    return params.snapshot;
+  }
+  if (params.providerIds && !params.providerIds.includes(ref.provider)) {
     return params.snapshot;
   }
   const refKey = resolveModelCatalogIdentityKey({ provider: ref.provider, id: ref.model });
@@ -177,6 +182,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
       })?.ref;
       return resolved ? [resolved] : [];
     });
+    params.onDiscoveryStarted?.(ref.provider);
     const listedRows = await harness.loadModelCatalog({
       config: params.observationConfig ?? params.cfg,
       agentId: params.agentId,
@@ -210,6 +216,8 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
   snapshot: ModelCatalogSnapshot;
   pluginRegistry?: PluginRegistry;
   isCurrent?: () => boolean;
+  providerIds?: readonly string[];
+  onDiscoveryStarted?: (provider: string) => void;
 }): Promise<ModelCatalogSnapshot> {
   const agentId = params.input.agentId ?? resolveDefaultAgentId(params.input.config);
   return augmentModelCatalogWithAgentHarness({
@@ -226,5 +234,7 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
     pluginRegistry: params.pluginRegistry,
     isCurrent: params.isCurrent,
     observationConfig: params.input.config,
+    providerIds: params.providerIds,
+    onDiscoveryStarted: params.onDiscoveryStarted,
   });
 }
