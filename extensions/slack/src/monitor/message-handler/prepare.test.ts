@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { App } from "@slack/bolt";
+import { WebClient } from "@slack/web-api";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -301,15 +302,15 @@ describe("slack prepareSlackMessage inbound contract", () => {
     "keeps native source identities when buffered room requests combine: $followup",
     async ({ followup, channelId, requestSourceIds }) => {
       const { storePath } = storeFixture.makeTmpStorePath();
+      const client = new WebClient("xoxb-synthetic");
+      vi.spyOn(client.conversations, "replies").mockResolvedValue({ ok: true, messages: [] });
       const ctx = createInboundSlackCtx({
         cfg: {
           session: { store: storePath },
           messages: { inbound: { debounceMs: 10 } },
           channels: { slack: { enabled: true, historyLimit: 0 } },
         },
-        appClient: {
-          conversations: { replies: vi.fn().mockResolvedValue({ ok: true, messages: [] }) },
-        } as App["client"],
+        appClient: client,
       });
       ctx.resolveUserName = async () => ({ name: "Alice" });
       ctx.resolveChannelName = async () => ({ name: "room", type: "channel" });

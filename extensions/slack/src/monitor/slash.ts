@@ -12,7 +12,6 @@ import {
   resolveAgentDir,
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveTextCommand } from "openclaw/plugin-sdk/command-auth";
 import {
   formatCommandArgMenuTitle,
   resolveEffectiveAgentRuntime,
@@ -20,6 +19,7 @@ import {
   type ChatCommandDefinition,
   type CommandArgs,
   resolveNativeCommandSessionTargets,
+  resolveTextCommand,
 } from "openclaw/plugin-sdk/command-auth-native";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";

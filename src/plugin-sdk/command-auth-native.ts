@@ -14,6 +14,7 @@ export {
   serializeCommandArgs,
   resolveCommandArgChoices,
   resolveCommandArgMenu,
+  resolveTextCommand,
 } from "../auto-reply/commands-registry.js";
 export type {
   ChatCommandDefinition,

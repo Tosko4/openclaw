@@ -70,20 +70,6 @@ export function hasSlackThreadParticipation(
   return threadParticipation.peek(makeKey(accountId, channelId, threadTs, teamId));
 }
 
-export async function hasSlackThreadParticipationWithPersistence(params: {
-  accountId: string;
-  channelId: string;
-  threadTs: string;
-  teamId?: string;
-}): Promise<boolean> {
-  if (!params.accountId || !params.channelId || !params.threadTs) {
-    return false;
-  }
-  return await threadParticipation.lookup(
-    makeKey(params.accountId, params.channelId, params.threadTs, params.teamId),
-  );
-}
-
 export function clearSlackThreadParticipationCache(): void {
   threadParticipation.clearForTest();
 }

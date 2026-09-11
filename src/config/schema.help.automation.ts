@@ -268,7 +268,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "messages.groupChat.historyLimit":
     "Maximum prior group messages loaded as context on channels that use bounded history windows. Discord, Slack, and Telegram retain unread context independently of this setting.",
   "messages.groupChat.unmentionedInbound":
-    "Legacy inbound classification retained for existing configurations. Discord, Slack, and Telegram ignore this setting: permitted chatter is observed without a model turn, and native addressing starts the next request.",
+    "Legacy inbound classification retained for existing configurations. Discord, Slack, and Telegram ignore this setting: permitted chatter is observed without a model turn. Use a native bot mention or reply to start the next request.",
   "messages.groupChat.visibleReplies":
     'Overrides model-authored source replies for group/channel conversations. Defaults to "automatic" when no global visible reply policy is set. "message_tool" requires message(action=send) for normal assistant output and generic tool media; explicitly host-owned runtime output remains deliverable except for ambient room events. "automatic" posts normal replies as before.',
   "messages.queue":

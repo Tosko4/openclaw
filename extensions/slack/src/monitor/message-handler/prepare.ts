@@ -14,6 +14,7 @@ import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { ConversationHistoryCapture } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -1242,9 +1243,7 @@ export async function prepareSlackMessage(params: {
       commandBody,
       inboundHistory,
     },
-    sessionTranscript: {
-      historyLimit: isDirectMessage ? dmHistoryLimit : undefined,
-    },
+    sessionTranscript: isDirectMessage ? { historyLimit: dmHistoryLimit } : undefined,
     access: {
       mentions: {
         canDetectMention: isRoomish,
@@ -1279,7 +1278,7 @@ export async function prepareSlackMessage(params: {
     },
     extra: {
       ConversationHistory: conversationHistory
-        ? {
+        ? ({
             ...conversationHistory,
             includeMessage: async (observed, kind = "history") => {
               const senderAllowed = await isContextSenderAllowed(observed.sender);
@@ -1289,7 +1288,7 @@ export async function prepareSlackMessage(params: {
                 senderAllowed,
               }).include;
             },
-          }
+          } satisfies ConversationHistoryCapture)
         : undefined,
       GroupSubject: groupSessionSubject,
       ChannelPromptContext: channelMetadata ? [channelMetadata] : undefined,

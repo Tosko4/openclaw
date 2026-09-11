@@ -36,7 +36,6 @@ const historyWindowFiles = [
   "extensions/mattermost/src/mattermost/monitor-posts.ts",
   "extensions/msteams/src/monitor-handler/message-handler.ts",
   "extensions/signal/src/monitor/event-handler.ts",
-  "extensions/slack/src/monitor/message-handler/prepare.ts",
   "extensions/whatsapp/src/auto-reply/monitor/group-gating.ts",
   "extensions/zalouser/src/monitor.ts",
 ];
