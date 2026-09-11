@@ -12,7 +12,6 @@ export {
   resolveValidatedMatrixHomeserverUrl,
   validateMatrixHomeserverUrl,
 } from "./client/config.js";
-export { createMatrixClient } from "./client/create-client.js";
 export { acquireSharedMatrixClient, stopSharedClientForAccount } from "./client/shared.js";
 export type {
   MatrixClientLeaseRole,

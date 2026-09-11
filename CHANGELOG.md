@@ -3,6 +3,716 @@
 Docs: https://docs.openclaw.ai
 2026.8.2 release notes: https://docs.openclaw.ai/releases/2026.8.2
 
+## 2026.9.5
+
+### Highlights
+
+- **More dependable updates:** keep upgrading core when a plugin target is unavailable, handle pnpm 12 global installs, and give large snapshots and slow Gateway restarts time to finish. (#145045, #144713, #144901, #144890) Related #144973, #145027, #144667, #144858, #144859 Thanks @blaekmajik, @noma-marketplacedb, @obviyus, @xilopaint, @vincentkoc, and @Baumus.
+- **Local and remote Gateways on one Mac:** host a local Gateway alongside your remote primary without moving the primary connection or Mac capabilities away from it. (#145038)
+- **Answer without stopping Codex:** respond to asynchronous questions in chat while the agent continues working. (#144664) Related #144643.
+- **Prepared private-repository workers:** reuse prepared private projects while keeping authenticated Git fetches and remote credentials on the Gateway. (#144237)
+- **Review changes on Android:** inspect uncommitted conversation changes, select diff lines, and add Before/After references to your draft without sending automatically. (#144101) Related #144093 Thanks @ansxor and @IWhatsskill.
+- **Answer questions where you chat:** use native option controls for supported agent questions in LINE direct chats and Mattermost. (#133421, #135350) Related #133418, #133288 Thanks @edenfunf and @Patrick-Erichsen.
+- **Sign in without unexpectedly switching models:** save provider credentials separately from activation, keep replacement accounts inactive until chosen, and use activated credentials for automatic chats. (#144329, #144524, #144975) Thanks @obviyus.
+- **Start drafting sooner:** type while chat history loads and navigate the conversation position rail with the keyboard. (#143625, #143611) Related #143607, #143604 Thanks @vyctorbrzezowski.
+
+### Changes
+
+- **macOS local hosting:** enable “Also run a Gateway on this Mac” with a remote primary, then open either Gateway from the “This Mac” catalog entry; the remote primary retains Mac capabilities and Talk Mode, while the local Gateway uses its own port and credentials. (#145038)
+- **Nonblocking Codex questions:** choose an answer or reply to an asynchronous question in chat without treating it as a blocking approval; unsupported question payloads retain their plain-text fallback. Related #144643. (#144664)
+- **Native CLI sessions:** open native CLI sessions in a main-area terminal view; disabled terminals and connections without admin access show an unavailable notice with a route back to New session. (#145065)
+- **Task launch choices:** choose where to start suggested tasks rather than accepting a single implicit destination. (#145019)
+- **GitHub link previews:** prefetch previews for visible GitHub links in chat so their details are ready sooner. (#145123)
+- **Channel discovery:** include channel labels and official documentation in JSON listings. (#93265) Thanks @fuller-stack-dev.
+- **Codex refusal recovery:** retry an OpenAI cyber-policy refusal once on the configured Daybreak model only when the turn is explicitly safe to replay; workspace authorization remains enforced, the saved session model is unchanged, and denied fallback access retains the original refusal and an explanatory notice. (#143761, #145105)
+- **Private cloud projects:** prepare and reuse private repositories by transferring verified Git packs rather than uploading Git credentials to workers. (#144237)
+- **Android change review:** open an Uncommitted-only diff viewer from a conversation, copy code, or append selected Before/After lines to the current draft. (#144101) Related #144093 Thanks @ansxor and @IWhatsskill.
+- **Native question controls:** answer supported single-select questions with LINE direct-chat controls or Mattermost buttons; unsupported question shapes retain text, and rejected answers do not falsely retire the prompt. (#133421, #135350) Related #133418, #133288 Thanks @edenfunf and @Patrick-Erichsen.
+- **Provider login and activation:** offer credential-only sign-in and a provider login menu, ask before showing restricted models, and require explicit GitHub Copilot activation. (#144329, #144468, #144749) Thanks @obviyus.
+- **OpenRouter sign-in:** start `/login openrouter` from private chat and receive the browser sign-in link before completion; managed HTTPS callbacks support cancellation, while unavailable publication retains CLI/setup guidance. (#144491) Thanks @obviyus.
+- **Automation history:** query and page run history from the CLI, with readable timer-wake timestamps. (#141777, #141742) Related #141745, #58574 Thanks @Alix-007, @Patrick-Erichsen, and @Celthi.
+- **Browser downloads:** download assets from the Browser sidebar. (#144480) Related #144477 Thanks @Patrick-Erichsen.
+- **Chat navigation:** draft while history loads, navigate the position rail by keyboard, and reveal widget actions on hover or focus. (#143625, #143611, #143541) Related #143607, #143604, #143539 Thanks @vyctorbrzezowski.
+- **Plugin discovery:** organize bundled plugins by product purpose with expanded categories and icons, and identify the owning plugin on tool calls. (#142759, #142760, #143711) Related #143683 Thanks @Patrick-Erichsen.
+- **Session and inbox navigation:** search session environments, recognize session links by their claw icon, and access Inbox settings from the compact Mentions footer. (#144453, #144251, #144412) Related #144443, #144403 Thanks @Patrick-Erichsen and @vyctorbrzezowski.
+- **Fleet logs:** show timestamps alongside log output. (#132554) Related #141952 Thanks @Alix-007 and @Patrick-Erichsen.
+- **Plugin SDK:** expose the selected runtime entry and the focused asynchronous embedding-batch runtime for plugin integrations. (#144818, #129625) Thanks @ekinnee.
+
+### Fixes
+
+- **Backup integrity:** preserve committed SQLite data behind hardlink aliases and tolerate AppleDouble metadata without skipping SQLite validation. (#144624, #140989) Related #144585, #140193 Thanks @obviyus, @ericcaiwx-star, and @PollyBot13.
+- **Sandbox and channel boundaries:** authorize canonical filesystem destinations before sandbox mutations, match verified users in command allowlists, redact active Mattermost credentials from errors, and ignore Teams reactions outside allowed channels. (#143501, #144601, #144172, #143735) Related #144173 Thanks @eleqtrizit, @JamesY023, @obviyus, @wangmiao0668000666, and @pgondhi987.
+- **Configuration stability:** avoid false model changes when saving unrelated settings and preserve concurrent config edits during provider preparation. (#144807, #144568) Thanks @vincentkoc and @obviyus.
+- **Workshop actions:** reconcile Apply and Reject with the Gateway's committed record, preserve reviewed content, and ignore stale page reads; keep mobile confirmations and revision warnings visible. (#131600) Thanks @yangxiansheng and @obviyus.
+- **Subagent conversation routing:** keep completion delivery on the selected conversation or topic, without inheriting a previous route's thread after a route override. (#144704)
+- **Container update recovery:** after in-container package-update permission failures, recommend rebuilding or pulling the target image and redeploying with the existing state/config mounts instead of relying on non-durable package changes. (#95887) Thanks @fuller-stack-dev.
+- **Package-manager updates:** unblock pnpm 12 global updates, retain update ownership across package generations, recover misplaced duplicate agent databases, and prevent retired handoff records from rejecting unrelated sources. (#144713, #144778, #144714, #144208) Related #144667 Thanks @obviyus and @xilopaint.
+- **Update activation and reporting:** repair managed Linux service activation, preserve original recovery authority through config effects, and report the built runtime rather than an unbuilt source version. (#144532, #144314, #144315, #143538) Thanks @jalehman, @vincentkoc, @fuller-stack-dev, and @RomneyDa.
+- **Stalled and streamed turns:** unblock sessions after embedded runs stall, honor provider backoff during recovery, complete compressed Responses streams, and prefer accumulated streamed tool arguments over stale final snapshots. (#123055, #144543, #141592, #139534) Related #144424, #139110 Thanks @RomneyDa, @obviyus, @corvid-reads, @anyech, @SunnyShu0925, and @reisball.
+- **Conversation continuity:** keep earlier answers after tool continuations, deduplicate channel mirrors and overtaken commentary, queue input arriving after terminal delivery, and prevent streamed code examples from redirecting replies. (#143525, #121871, #144498, #129001, #144632) Related #121643, #144471 Thanks @jalehman, @aadi-joshi, @obviyus, @fatihfulness, @fuller-stack-dev, and @Finn763.
+- **File access and attachments:** expose inline chat uploads to file tools, attach fetched directories to replies, and restore remote iMessage attachments in external installations. (#143753, #138427, #144048) Related #138383, #144025 Thanks @harjothkhara, @obviyus, @NianJiuZst, @igs-rogenlo, @LiuwqGit, and @mlapida.
+- **Exact model choices:** preserve selections across fallback, auth refresh, lightweight inference, PDF work, TTS summaries, and compaction; report the actual settled fallback model. (#143961, #144238, #144417, #144354, #144432, #144438, #134496)
+- **Model limits and configuration:** include tool schemas in overflow checks, clamp input caps to actual model windows, retain context-engine budgets, avoid borrowing unrelated models' output limits, and preserve literal provider-prefixed IDs and authored pricing. (#140902, #144168, #142871, #144292, #144275, #144182) Related #140770, #142870, #144160 Thanks @SunnyShu0925, @Patrick-Erichsen, @jlapenna, @Marvinthebored, @jalehman, @ylcn91, @obviyus, and @yetval.
+- **Model setup recovery:** retain saved credentials after failed connection checks, preserve login settings during auth refresh, report saved-but-unapplied outcomes accurately, and restore saved-account secrets for local inference. (#144195, #144181, #144436, #141569) Related #141033 Thanks @obviyus, @Bruce-Yii, and @Richard355168.
+- **Native model controls:** keep Apple, Quick Chat, Android, and Wear choices aligned with the selected session's catalog and capabilities, and report catalog refresh outcomes for the selected Android agent. (#144762, #144804, #144711, #144717, #142355) Thanks @obviyus.
+- **Provider compatibility:** honor configured MiniMax discovery endpoints, preserve DeepSeek object-union tool arguments and Flash thinking controls, and start the Gateway when configured providers have no models. (#144782, #143819, #144469, #144599) Related #143790 Thanks @vantang, @obviyus, and @azuretek.
+- **Slack delivery:** keep threads responsive during queued turns, use one progress card per tool call, preserve authored fallback without duplicate controls, and honor relay proxy settings without silently falling back to a direct connection. (#143661, #143879, #144653, #143881) Thanks @pash-openai, @n1hility, and @obviyus.
+- **LINE conversations:** treat a multi-image send as one turn, quote the message being answered, preserve invalid carousel output as text, accept shared block-streaming settings, and explain unusable webhook destinations. (#132136, #142092, #113366, #142145, #133649) Related #132025, #142090, #113365, #142144, #133648 Thanks @edenfunf, @Patrick-Erichsen, and @vincentkoc.
+- **Discord permissions and replies:** report parent-channel denies for thread permissions, preserve sender/persona text limits and reply receipts, and reject unavailable model runtime selections. (#121144, #137969, #144629, #143322) Related #91860 Thanks @Alix-007, @anyech, @davidbennett1979, and @obviyus.
+- **Channel resilience:** distinguish Telegram forum conversations by topic title, avoid failing jobs for intentionally suppressed Telegram sends, restore eligible Buzz rooms, reject excess concurrent Feishu webhook reads, and handle malformed Matrix directory responses. (#140983, #143583, #144070, #137230, #131718) Related #143461 Thanks @obviyus, @sunlit-deng, @jerabinovich, @sla55er, @Alix-007, and @xu-kai-quan.
+- **Memory recovery and privacy:** reuse completed embeddings after failed rebuilds, retain daily checkpoints across capped sweeps, purge phase signals when forgetting sessions, and route session-search hits to sanitized history retrieval. (#144404, #144611, #76359, #144622, #144669) Related #76225, #144668 Thanks @jalehman, @jinliyl, @obviyus, @neeravmakwana, @joewang2003-tech, and @fuller-stack-dev.
+- **Memory diagnostics:** preserve full skill-verification reports and embedding quota errors, explain bootstrap truncation against the correct limit, and reject directories during Obsidian CLI discovery. (#144559, #144619, #136967, #144681) Thanks @Patrick-Erichsen, @xialonglee, @Alix-007, and @obviyus.
+- **Scheduled work:** preserve the Claude CLI auth profile for scheduled runs, complete ownerless manual runs without timing out, and retain heartbeat outcomes across retry and cancellation. (#144266, #143804, #144377) Related #144047, #144148 Thanks @MasterSwords1, @fuller-stack-dev, @angeliti999, @SunnyShu0925, @obviyus, and @JLahullier.
+- **Session safety:** reject stale reset/deletion requests after replacement and incompatible model changes before persistence; retain HTTP conversation keys and the selected conversation in terminal history. (#123864, #144525, #136833, #142746, #143995) Related #123862, #136611, #142616 Thanks @PollyBot13, @Patrick-Erichsen, @SunnyShu0925, @jalehman, @ruel225, @obviyus, @KevinAmmerman, and @von8794.
+- **Review changes:** include remote default-branch changes in session review instead of limiting the comparison to the local default branch. (#144246) Related #144205 Thanks @zhangguiping-xydt, @obviyus, and @ansxor.
+- **Usage views:** retain total-only and cache-only footers, refresh details after session recreation, and clear old timeline ranges after replacement. (#144302, #144430, #144497)
+- **Chat layout and focus:** preserve reader position when prepending history, keep retained panes stable, leave model pickers open across updates, keep transcript endings visible, and make Side chat questions wrap and focus correctly. (#143343, #144284, #144399, #144703, #144413, #144428, #144435) Related #144283 Thanks @jalehman and @Patrick-Erichsen.
+- **Rendering and settings:** render CJK emphasis and table line breaks, show permission icons in WebKit, keep string-or-false settings editable, and retain controls after partial catalog refresh. (#123084, #144423, #143700, #144750) Related #102405, #143646, #144726 Thanks @RomneyDa, @shng-fujiwara, @Patrick-Erichsen, @wangyan2026, @obviyus, @gregbond, and @Conan-Scott.
+- **Plugin browsing:** serve marketplace/detail documents, preserve category navigation during searches, load ClawHub skill icons, resolve channel icons through their owning plugins, and keep plugin tabs usable in limited vertical space. (#142798, #144661, #123051, #144177, #144652) Related #144152 Thanks @Patrick-Erichsen, @RomneyDa, @emoriwan, and @obviyus.
+- **Cloud and desktop UI:** keep snapshot builds visible when image loading fails, preserve workspace-transfer diagnostics, retain cached history during worker setup, and keep Mac browser tabs scoped to each chat session. (#144127, #144272, #144385, #144508) Related #144384 Thanks @jalehman and @Patrick-Erichsen.
+- **macOS startup and cancellation:** recover from local Gateway setup failures, keep dashboard controls visible in full screen, and discard late MLX speech after cancellation. (#144554, #144571, #144586) Thanks @fuller-stack-dev.
+- **Gateway lifecycle:** finish restarts when children need forced cleanup, keep restart timing correct across clock changes, and avoid shutdown hangs after database-verifier IPC errors. (#144069, #137191, #144451) Thanks @jalehman and @xialonglee.
+- **Doctor repairs:** finish bundled-alias cleanup, preserve reserved system-agent ownership, and identify automation paths broken by Workshop relocation. (#144367, #144156, #144680) Related #144325, #144125, #144610 Thanks @TheAngryPit, @CassieMei, @obviyus, @emes, and @rayseling.
+- **CLI and service diagnostics:** keep transcript output free of startup notes, identify pairing auth mode in setup errors, accept padded pairing request IDs, and reject blank audit bounds or APNs environments early. (#144579, #144136, #110848, #137335, #144687) Related #144357, #144124 Thanks @Bruce-Yii, @obviyus, @LiuwqGit, @delIcaTe-xqy, @nocodet888-arch, and @Alix-007.
+- **Web tools:** retain visible page text after hidden HTML and report the first useful error when every web-search provider fails. (#144210, #132755) Related #144150, #132752 Thanks @ruel225, @obviyus, @yetval, and @tommyjoseph.
+- **Workspace transfer revocation:** abort already-admitted workspace downloads when worker credentials are permanently revoked; routine credential rotation does not interrupt healthy transfers. (#144640) Thanks @eleqtrizit.
+- **Repair and migration safety:** preserve configuration edits saved during Doctor confirmation, retain legacy registry files when quarantine fails, and leave unrelated sibling files untouched when Matrix migration fails. Related #145114, #144773, #144882. (#145140, #144787, #144883) Thanks @shakkernerd, @Alix-007, and @obviyus.
+- **Update state and handoff:** initialize fresh profiles with the selected stable runtime while retaining existing-state downgrade protection, recover interrupted handoff-store initialization, and allow configuration and service locks before handoff storage exists. Related #144132. (#144155, #145085, #144715) Thanks @fuller-stack-dev.
+- **Update service ownership:** prevent stale update children from changing native services and allow managed parking and recovery when the systemd unit is already failed. (#143905, #145094) Thanks @fuller-stack-dev and @eleqtrizit.
+- **Update completion:** continue core updates when a plugin target is unavailable, let large candidate snapshots and slow first-hop restarts finish, and continue after baseline fingerprint timeouts. Related #144973, #145027, #144858, #144859. (#145045, #144901, #144890, #144758) Thanks @blaekmajik, @noma-marketplacedb, @vincentkoc, @Baumus, and @Richard355168.
+- **Update artifacts and diagnostics:** preserve local package overrides, install explicitly selected same-version artifacts, handle Windows extended-length agent paths, retain the triggering failure in update reports, and avoid reporting a rollback before activation. Related #144581. (#89985, #144894, #144688, #144729, #145039) Thanks @fuller-stack-dev, @RomneyDa, @fszcd, @rogerspires4452-dev, and @Richard355168.
+- **Older updater compatibility:** resolve update compatibility bridges inside the runtime graph so replacement code can load during the update handoff. (#144831)
+- **Task and reply delivery:** recover tasks when Responses streams end mid-tool-call, deliver child replies even when their text matches the empty placeholder, and preserve ACP completion when cancellation races with the result. (#144583, #130647, #144949, #145111) Thanks @zeroaltitude, @obviyus, and @Gabrielnkl.
+- **Delegation and goals:** carry project and current-task context into visible child sessions, keep the sidebar active during subagent work, and preserve goal objectives and optional budgets. (#145102, #145028, #145041)
+- **Telegram ordering:** preserve the order of mixed text fragments and buffered messages, and honor stop requests while input is pending. Related #144722. (#144839) Thanks @obviyus and @xilopaint.
+- **Matrix delivery:** keep outbound sends independent of the monitor’s lifetime and preserve native message relations in recovered receipts. (#144907, #145173) Thanks @RomneyDa.
+- **Mattermost and message commands:** honor the pinned account in Mattermost model menus and reject blank CLI channel selectors before outbound actions. Related #144795. (#144880, #144802) Thanks @obviyus and @ly85206559.
+- **Provider text and model selection:** hide encoded MiniMax tool envelopes, retain discovered models after token renewal, preserve hosted Ollama model context, and resolve the documented Fireworks alias. Related #144857. (#126307, #144861, #144891, #144913) Thanks @zhucegep, @obviyus, and @shakkernerd.
+- **Credentials and setup:** use activated credentials for automatic chats, retain displayed models and allow commands before sign-in, and preserve replacement API keys when removing an older key. (#144975, #144967, #145143, #144420) Thanks @obviyus.
+- **Memory and reminders:** recover missing full-text index rows and same-name view collisions, keep Bun writes and indexing correct, and retain standing intents after prompt-hook timeouts. Related #115450. (#144641, #144783, #144700, #145107) Thanks @jinliyl, @nilsmichels, and @obviyus.
+- **Session storage:** avoid stack overflows during bulk session locking, speed up database cleanup, and find transcript archives consistently. Related #145116, #144212. (#145129, #144232) Thanks @aatreya.
+- **Cloud-worker controls:** resume provisioning after Gateway restarts, archive sessions whose workers are still provisioning, dismiss failed snapshot builds even when refresh fails, and hide Stop after cleanup confirms the worker is gone. (#145068, #145170, #144671, #145122, #145153)
+- **Control UI continuity:** allow cross-browser steering and ACP binding in dashboard conversations, keep earlier messages selected on refresh, retain plugin detail tabs during loading, and prevent sidebar menus from disappearing behind Browser. (#144694, #145147, #145240, #144647, #145108) Thanks @fuller-stack-dev and @Patrick-Erichsen.
+- **Settings and session navigation:** keep agent creation in Settings, compact the New Session environment picker, hide empty native CLI catalogs, and dismiss expired Skill Workshop notices. (#145062, #145061, #145054, #145015) Thanks @hannesrudolph.
+- **Plugin pages and loading:** restore plugin-catalog refreshes on trailing-slash URLs and initialize the SDK runtime before plugin bundles require it. Related #144721. (#144740, #145026) Thanks @gokay-ai, @obviyus, and @Conan-Scott.
+- **Gateway connections:** keep slow Control UI connections online while pings wait behind outgoing data, preserve the original dashboard HTTP error when diagnostics fail, and cancel dashboard preparation during shutdown. Related #145189. (#145191, #145227, #145118) Thanks @fuller-stack-dev.
+- **macOS recovery:** show browser sign-in recovery in Gateway windows and keep Mac desktops available when resolving session views. (#145040, #144226)
+- **Doctor diagnostics:** discover historical Workshop workspace setup before migration, contain MCP child-cleanup failures, reject directory paths used as MCP commands, and identify the actual service-ownership blocker. Related #145050, #144919, #144997. (#145084, #144941, #144998, #145023) Thanks @compoodment, @LibraHo, @masatohoshino, and @obviyus.
+- **Browser and logs:** warn when browser response bodies are truncated and preserve OpenClaw package references in diagnostic output. (#145210, #144808) Thanks @RomneyDa.
+- **Discovery noise:** avoid bursts of transient mDNS warnings when Linux network interfaces disappear. Related #144796. (#144870) Thanks @tzy-17, @obviyus, and @tontoko.
+- **Responsiveness:** speed up searches in large model catalogs and streaming commentary updates, and reduce cold provider-discovery and heartbeat-preflight work. (#145139, #145149, #145212, #145033)
+- **Matrix Docker builds:** retain lazy client bootstrap and construction when Matrix is bundled, fixing the build without changing client readiness or lease ownership.
+
+### Upcoming deprecations
+
+- **Synchronous plugin keyed stores** (`plugin-state-sync-keyed-store`; deprecation starts **2026-09-11**): migrate `api.runtime.state.openSyncKeyedStore` and `PluginStateSyncKeyedStore` to awaited `api.runtime.state.openKeyedStore` and `PluginStateKeyedStore` operations. Transaction callbacks remain synchronous. The synchronous API stays supported until the next Plugin SDK major and a supported external-plugin migration. See the [keyed-store migration guide](https://docs.openclaw.ai/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration).
+- **Channel prompt-context aliases** (`sdk-untrusted-context-identifier-aliases`; removal review **2026-09-08**): use `ChannelPromptContext`, `ChannelStructuredContext`, `channelStructuredContext`, and `buildChannelMetadata` instead of the deprecated Untrusted-named identifiers. Removal remains pending: published Slack 2026.7.1 still uses these aliases, so they remain supported until published-reader migration is verified and a breaking release is explicitly approved. See [plugin compatibility](https://docs.openclaw.ai/plugins/compatibility#channel-prompt-context-identifier-aliases).
+
+### Complete contribution record
+
+This audited record covers the complete 7af9cef3040e90902e83f86c8ad48fccacc7acb2..744ebd948aa5411ad7cfca7272e04829bd67d1f5 history: 597 in-range PRs + 0 retained seed-only PRs = 597 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+
+Shipped baseline exclusions: v2026.9.4 (15 PRs: #130352, #138542, #140108, #140339, #142933, #143128, #143767, #143768, #143801, #143814, #143838, #143893, #143929, #143994, #144402).
+
+#### Pull requests
+
+- **PR #143837** Thanks @obviyus.
+- **PR #143343** Thanks @jalehman.
+- **PR #144112**
+- **PR #144141**
+- **PR #143468** Thanks @vincentkoc.
+- **PR #144145**
+- **PR #144102** Thanks @vincentkoc.
+- **PR #144157**
+- **PR #144166**
+- **PR #144170** Thanks @vincentkoc.
+- **PR #144178**
+- **PR #144174**
+- **PR #144175**
+- **PR #143540**
+- **PR #143735** Thanks @pgondhi987.
+- **PR #144167**
+- **PR #144127**
+- **PR #144188**
+- **PR #144180**
+- **PR #121871** Related #121643. Thanks @aadi-joshi and @obviyus and @fatihfulness.
+- **PR #144182**
+- **PR #144193**
+- **PR #144138**
+- **PR #144070** Thanks @sla55er and @obviyus.
+- **PR #144194** Thanks @vincentkoc.
+- **PR #144189**
+- **PR #144154**
+- **PR #140983** Thanks @obviyus.
+- **PR #143753** Thanks @harjothkhara and @obviyus.
+- **PR #144168**
+- **PR #144186**
+- **PR #144201**
+- **PR #144198**
+- **PR #144211**
+- **PR #144197**
+- **PR #144208**
+- **PR #144215** Related #144213.
+- **PR #144185**
+- **PR #144196**
+- **PR #143961**
+- **PR #143503** Thanks @vincentkoc.
+- **PR #144219** Related #144218.
+- **PR #144217**
+- **PR #143819** Related #143790. Thanks @azuretek and @obviyus.
+- **PR #143525** Thanks @jalehman.
+- **PR #144041**
+- **PR #144225** Thanks @vincentkoc.
+- **PR #144238**
+- **PR #144230** Related #144229.
+- **PR #144224**
+- **PR #144228**
+- **PR #143588** Thanks @obviyus.
+- **PR #143322** Thanks @obviyus.
+- **PR #144234** Related #144233.
+- **PR #144069** Thanks @jalehman.
+- **PR #144249**
+- **PR #144206**
+- **PR #143804** Thanks @SunnyShu0925 and @obviyus.
+- **PR #144257**
+- **PR #144239**
+- **PR #144260**
+- **PR #144242** Related #144241.
+- **PR #144220**
+- **PR #144247** Related #144245.
+- **PR #144261**
+- **PR #144264** Thanks @vincentkoc.
+- **PR #144273**
+- **PR #144267**
+- **PR #144274**
+- **PR #144278** Related #144277.
+- **PR #144287**
+- **PR #143881** Thanks @n1hility and @obviyus.
+- **PR #144297**
+- **PR #144279**
+- **PR #144290** Related #144288.
+- **PR #144301**
+- **PR #144296** Related #144295.
+- **PR #144236** Related #144235. Thanks @vincentkoc.
+- **PR #144298**
+- **PR #144303** Thanks @vincentkoc.
+- **PR #144285**
+- **PR #144254**
+- **PR #144195** Thanks @obviyus.
+- **PR #144275**
+- **PR #129001** Thanks @Finn763 and @obviyus.
+- **PR #143711** Related #143683. Thanks @Patrick-Erichsen.
+- **PR #144300**
+- **PR #144305** Related #144304.
+- **PR #144311** Related #144310.
+- **PR #144246** Related #144205. Thanks @zhangguiping-xydt and @obviyus and @ansxor.
+- **PR #144330**
+- **PR #144133** Thanks @vincentkoc.
+- **PR #144312**
+- **PR #144344**
+- **PR #144339** Thanks @vincentkoc.
+- **PR #144342** Thanks @obviyus.
+- **PR #144332**
+- **PR #144284** Related #144283.
+- **PR #144309**
+- **PR #144335** Related #144334.
+- **PR #144321**
+- **PR #144323**
+- **PR #144343** Related #144341.
+- **PR #144338** Thanks @vincentkoc.
+- **PR #144350** Related #144349.
+- **PR #144328**
+- **PR #143986** Thanks @RomneyDa.
+- **PR #143985** Thanks @RomneyDa.
+- **PR #143987** Thanks @RomneyDa.
+- **PR #144365** Related #144364.
+- **PR #142866** Related #136338. Thanks @Finn763 and @obviyus and @quangtran88.
+- **PR #142746** Related #142616. Thanks @ruel225 and @obviyus and @KevinAmmerman.
+- **PR #144388** Thanks @vyctorbrzezowski.
+- **PR #143992** Thanks @RomneyDa.
+- **PR #144379**
+- **PR #143957** Thanks @RomneyDa.
+- **PR #143943** Thanks @RomneyDa.
+- **PR #144382** Thanks @vincentkoc.
+- **PR #144393** Thanks @vyctorbrzezowski.
+- **PR #144376** Related #144375.
+- **PR #144385** Related #144384.
+- **PR #144181** Thanks @obviyus.
+- **PR #144340**
+- **PR #144386**
+- **PR #144381** Related #144380.
+- **PR #144187** Thanks @ericcaiwx-star and @obviyus.
+- **PR #143988** Thanks @RomneyDa.
+- **PR #143933** Thanks @RomneyDa.
+- **PR #143934** Thanks @RomneyDa.
+- **PR #143935** Thanks @RomneyDa.
+- **PR #144377** Related #144148. Thanks @obviyus and @JLahullier.
+- **PR #144389** Thanks @vyctorbrzezowski.
+- **PR #144412** Related #144403. Thanks @vyctorbrzezowski.
+- **PR #134496**
+- **PR #144362** Related #144361.
+- **PR #123084** Related #102405. Thanks @RomneyDa and @shng-fujiwara.
+- **PR #144418** Thanks @vincentkoc.
+- **PR #143936** Thanks @RomneyDa.
+- **PR #144409** Thanks @vyctorbrzezowski.
+- **PR #144410** Thanks @vyctorbrzezowski.
+- **PR #144419**
+- **PR #144408** Thanks @vyctorbrzezowski.
+- **PR #144048** Related #144025. Thanks @LiuwqGit and @obviyus and @mlapida.
+- **PR #144406** Thanks @vyctorbrzezowski.
+- **PR #144407** Thanks @vyctorbrzezowski.
+- **PR #144405** Thanks @vyctorbrzezowski.
+- **PR #144415**
+- **PR #144302**
+- **PR #144417**
+- **PR #144399**
+- **PR #144421**
+- **PR #144423** Thanks @Patrick-Erichsen.
+- **PR #144426**
+- **PR #144390** Thanks @vyctorbrzezowski.
+- **PR #144428** Thanks @Patrick-Erichsen.
+- **PR #144425**
+- **PR #144360**
+- **PR #144430**
+- **PR #144436** Thanks @obviyus.
+- **PR #144435** Thanks @Patrick-Erichsen.
+- **PR #144172** Related #144173. Thanks @wangmiao0668000666 and @obviyus.
+- **PR #144156** Related #144125. Thanks @emes and @obviyus.
+- **PR #144442** Thanks @Patrick-Erichsen.
+- **PR #144413**
+- **PR #144433**
+- **PR #144429**
+- **PR #144434**
+- **PR #144444**
+- **PR #144432**
+- **PR #144445**
+- **PR #144437** Thanks @vincentkoc.
+- **PR #144441**
+- **PR #144446**
+- **PR #144411** Thanks @RomneyDa and @vincentkoc.
+- **PR #144431**
+- **PR #144329** Thanks @obviyus.
+- **PR #144450**
+- **PR #144101** Related #144093. Thanks @ansxor and @IWhatsskill.
+- **PR #143879** Thanks @n1hility.
+- **PR #144456**
+- **PR #144451**
+- **PR #144461**
+- **PR #143995** Thanks @von8794 and @obviyus.
+- **PR #143661** Thanks @pash-openai.
+- **PR #143538** Thanks @RomneyDa.
+- **PR #144449**
+- **PR #144466**
+- **PR #144457**
+- **PR #144448**
+- **PR #144469** Thanks @obviyus.
+- **PR #144266** Related #144047. Thanks @MasterSwords1 and @fuller-stack-dev and @angeliti999.
+- **PR #144472**
+- **PR #144367** Related #144325. Thanks @TheAngryPit and @CassieMei and @obviyus.
+- **PR #144438**
+- **PR #144478**
+- **PR #144292** Related #144160. Thanks @ylcn91 and @obviyus and @yetval.
+- **PR #144485**
+- **PR #144489**
+- **PR #144354**
+- **PR #144420** Thanks @obviyus.
+- **PR #144492**
+- **PR #144498** Related #144471. Thanks @fuller-stack-dev.
+- **PR #144505**
+- **PR #144497**
+- **PR #144509**
+- **PR #144481** Thanks @vincentkoc.
+- **PR #144496**
+- **PR #129625** Thanks @ekinnee.
+- **PR #144506**
+- **PR #144504**
+- **PR #141527** Thanks @PollyBot13.
+- **PR #144512**
+- **PR #144210** Related #144150. Thanks @ruel225 and @obviyus and @yetval.
+- **PR #137191** Thanks @xialonglee.
+- **PR #144510**
+- **PR #137969** Related #91860. Thanks @anyech and @davidbennett1979.
+- **PR #136967** Thanks @xialonglee and @Patrick-Erichsen.
+- **PR #137230** Thanks @Alix-007.
+- **PR #144491** Thanks @obviyus.
+- **PR #144513**
+- **PR #144453** Related #144443. Thanks @Patrick-Erichsen.
+- **PR #137335** Thanks @Alix-007.
+- **PR #121144** Thanks @Alix-007.
+- **PR #141777** Related #141745. Thanks @Alix-007 and @Patrick-Erichsen.
+- **PR #141592** Thanks @anyech.
+- **PR #136833** Related #136611. Thanks @SunnyShu0925 and @jalehman.
+- **PR #144501**
+- **PR #141742** Related #58574. Thanks @Alix-007 and @Celthi.
+- **PR #142145** Related #142144. Thanks @edenfunf.
+- **PR #144355**
+- **PR #132116** Thanks @PollyBot13.
+- **PR #139534** Related #139110. Thanks @SunnyShu0925 and @reisball.
+- **PR #143700** Related #143646. Thanks @wangyan2026 and @obviyus and @gregbond.
+- **PR #100432** Related #100405. Thanks @obviyus.
+- **PR #140902** Related #140770. Thanks @SunnyShu0925 and @Patrick-Erichsen and @jlapenna.
+- **PR #141569** Related #141033. Thanks @Bruce-Yii and @obviyus and @Richard355168.
+- **PR #133649** Related #133648. Thanks @edenfunf.
+- **PR #144272** Thanks @jalehman.
+- **PR #144508** Thanks @Patrick-Erichsen.
+- **PR #144517**
+- **PR #144404** Thanks @jalehman.
+- **PR #133752** Related #133311. Thanks @xialonglee and @Gracy769.
+- **PR #132554** Related #141952. Thanks @Alix-007 and @Patrick-Erichsen.
+- **PR #144474**
+- **PR #142092** Related #142090. Thanks @edenfunf.
+- **PR #144525**
+- **PR #144106**
+- **PR #144468** Thanks @obviyus.
+- **PR #144530** Thanks @Patrick-Erichsen.
+- **PR #135350** Related #133288. Thanks @edenfunf.
+- **PR #144537**
+- **PR #143583** Related #143461. Thanks @sunlit-deng and @obviyus and @jerabinovich.
+- **PR #144533** Thanks @obviyus.
+- **PR #144538**
+- **PR #144480** Related #144477. Thanks @Patrick-Erichsen.
+- **PR #132136** Related #132025. Thanks @edenfunf and @Patrick-Erichsen.
+- **PR #144550**
+- **PR #123864** Related #123862. Thanks @PollyBot13 and @Patrick-Erichsen.
+- **PR #113366** Related #113365. Thanks @edenfunf and @vincentkoc.
+- **PR #144528** Thanks @vincentkoc.
+- **PR #144529** Related #144526.
+- **PR #144539**
+- **PR #144531**
+- **PR #134815** Related #134667. Thanks @jason-allen-oneal.
+- **PR #144524** Thanks @obviyus.
+- **PR #144570**
+- **PR #132453** Thanks @jesse-merhi.
+- **PR #144543** Related #144424. Thanks @obviyus and @corvid-reads.
+- **PR #132454** Thanks @jesse-merhi.
+- **PR #144563** Thanks @obviyus.
+- **PR #144571** Thanks @fuller-stack-dev.
+- **PR #139023** Thanks @PollyBot13.
+- **PR #144568** Thanks @obviyus.
+- **PR #144559** Thanks @Patrick-Erichsen.
+- **PR #144560**
+- **PR #110848** Thanks @nocodet888-arch and @obviyus.
+- **PR #144177** Related #144152. Thanks @emoriwan and @obviyus.
+- **PR #144591** Thanks @obviyus.
+- **PR #144503** Related #144494. Thanks @ericcaiwx-star and @obviyus.
+- **PR #142871** Related #142870. Thanks @Marvinthebored and @jalehman.
+- **PR #144554** Thanks @fuller-stack-dev.
+- **PR #144589** Thanks @obviyus.
+- **PR #144588** Thanks @obviyus.
+- **PR #144580** Thanks @vincentkoc.
+- **PR #144569** Thanks @Patrick-Erichsen.
+- **PR #144605**
+- **PR #144599** Thanks @obviyus.
+- **PR #144613**
+- **PR #133421** Related #133418. Thanks @edenfunf and @Patrick-Erichsen.
+- **PR #144619**
+- **PR #144523**
+- **PR #143501** Thanks @eleqtrizit.
+- **PR #142759** Thanks @Patrick-Erichsen.
+- **PR #142760** Thanks @Patrick-Erichsen.
+- **PR #142798** Thanks @Patrick-Erichsen.
+- **PR #138952** Thanks @marmar9615-cloud and @obviyus.
+- **PR #140989** Related #140193. Thanks @ericcaiwx-star and @obviyus and @PollyBot13.
+- **PR #144623**
+- **PR #144313** Thanks @vincentkoc and @fuller-stack-dev.
+- **PR #144593**
+- **PR #144628** Thanks @vincentkoc.
+- **PR #144629**
+- **PR #144626** Thanks @obviyus.
+- **PR #144633**
+- **PR #144636** Thanks @vincentkoc.
+- **PR #144634**
+- **PR #144611** Thanks @jinliyl and @obviyus.
+- **PR #76359** Related #76225. Thanks @neeravmakwana and @obviyus and @joewang2003-tech.
+- **PR #144638** Thanks @vincentkoc.
+- **PR #144253**
+- **PR #144251**
+- **PR #144624** Related #144585. Thanks @obviyus.
+- **PR #144642**
+- **PR #144632**
+- **PR #144579** Related #144357. Thanks @Bruce-Yii and @obviyus.
+- **PR #144635**
+- **PR #144621**
+- **PR #144595**
+- **PR #144314** Thanks @vincentkoc.
+- **PR #144648**
+- **PR #144652** Thanks @Patrick-Erichsen.
+- **PR #144651** Thanks @Patrick-Erichsen.
+- **PR #144620** Thanks @jesse-merhi.
+- **PR #144645**
+- **PR #144136** Related #144124. Thanks @LiuwqGit and @obviyus and @delIcaTe-xqy.
+- **PR #144653** Thanks @obviyus.
+- **PR #144646**
+- **PR #144622** Thanks @jinliyl and @obviyus.
+- **PR #142355** Thanks @obviyus.
+- **PR #144665** Related #144657. Thanks @hannesrudolph.
+- **PR #144682** Thanks @obviyus.
+- **PR #144659** Thanks @obviyus.
+- **PR #144680** Related #144610. Thanks @obviyus and @rayseling.
+- **PR #144532** Thanks @jalehman.
+- **PR #144693** Thanks @hannesrudolph.
+- **PR #144698**
+- **PR #144641** Thanks @jinliyl and @obviyus.
+- **PR #144650**
+- **PR #144681** Thanks @Alix-007 and @obviyus.
+- **PR #144237**
+- **PR #144655**
+- **PR #144717** Thanks @obviyus.
+- **PR #142165** Thanks @obviyus.
+- **PR #144586**
+- **PR #144711** Thanks @obviyus.
+- **PR #144687** Thanks @Alix-007 and @obviyus.
+- **PR #143541** Related #143539. Thanks @vyctorbrzezowski.
+- **PR #138427** Related #138383. Thanks @NianJiuZst and @igs-rogenlo and @obviyus.
+- **PR #144601** Thanks @JamesY023 and @obviyus.
+- **PR #144669** Related #144668. Thanks @fuller-stack-dev.
+- **PR #144677** Thanks @fuller-stack-dev.
+- **PR #144615** Thanks @vincentkoc.
+- **PR #144759**
+- **PR #144696**
+- **PR #143611** Related #143604. Thanks @vyctorbrzezowski.
+- **PR #144690**
+- **PR #144750** Related #144726. Thanks @obviyus and @Conan-Scott.
+- **PR #144716**
+- **PR #144760** Thanks @vincentkoc.
+- **PR #144676**
+- **PR #144663**
+- **PR #132755** Related #132752. Thanks @tommyjoseph and @obviyus.
+- **PR #144661**
+- **PR #144697**
+- **PR #144777**
+- **PR #144775**
+- **PR #144686**
+- **PR #131718** Thanks @xu-kai-quan and @obviyus.
+- **PR #144761**
+- **PR #144713** Related #144667. Thanks @obviyus and @xilopaint.
+- **PR #144749** Thanks @obviyus.
+- **PR #144724**
+- **PR #144703**
+- **PR #144762** Thanks @obviyus.
+- **PR #144315** Thanks @vincentkoc and @fuller-stack-dev.
+- **PR #144715** Thanks @fuller-stack-dev.
+- **PR #144741**
+- **PR #144463** Thanks @RomneyDa.
+- **PR #144465** Thanks @RomneyDa.
+- **PR #144464** Thanks @RomneyDa.
+- **PR #144771**
+- **PR #144658** Thanks @vincentkoc.
+- **PR #143976** Thanks @vincentkoc.
+- **PR #144778** Thanks @obviyus.
+- **PR #127215** Thanks @vincentkoc.
+- **PR #144345** Thanks @vincentkoc.
+- **PR #140249** Related #127528. Thanks @SunnyShu0925.
+- **PR #144781**
+- **PR #144666**
+- **PR #144727** Related #144728.
+- **PR #123051** Thanks @RomneyDa.
+- **PR #143625** Related #143607. Thanks @vyctorbrzezowski.
+- **PR #123055** Thanks @RomneyDa.
+- **PR #144805** Thanks @vincentkoc.
+- **PR #144815** Thanks @vincentkoc.
+- **PR #144462** Thanks @RomneyDa.
+- **PR #144714**
+- **PR #144804** Thanks @obviyus.
+- **PR #95887** Thanks @fuller-stack-dev.
+- **PR #144818**
+- **PR #144746** Related #144725.
+- **PR #144704**
+- **PR #144821**
+- **PR #144782** Thanks @vantang and @obviyus.
+- **PR #144820**
+- **PR #144731**
+- **PR #144758** Thanks @Richard355168.
+- **PR #143314** Thanks @zackmsa777-a11y and @obviyus.
+- **PR #144555**
+- **PR #144807** Thanks @vincentkoc.
+- **PR #144817**
+- **PR #131600** Thanks @yangxiansheng and @obviyus.
+- **PR #144708** Thanks @vincentkoc.
+- **PR #144783**
+- **PR #144839** Related #144722. Thanks @obviyus and @xilopaint.
+- **PR #144802** Related #144795. Thanks @ly85206559 and @obviyus.
+- **PR #130647** Thanks @zeroaltitude and @obviyus.
+- **PR #126307** Thanks @zhucegep and @obviyus.
+- **PR #144838** Related #144200. Thanks @shakkernerd.
+- **PR #144856**
+- **PR #144831**
+- **PR #89985** Thanks @fuller-stack-dev.
+- **PR #144861** Thanks @obviyus.
+- **PR #144647**
+- **PR #144808** Thanks @RomneyDa.
+- **PR #144729** Thanks @Richard355168.
+- **PR #144880** Thanks @obviyus.
+- **PR #144813** Thanks @RomneyDa.
+- **PR #144891** Thanks @obviyus.
+- **PR #144887**
+- **PR #144810**
+- **PR #144159** Thanks @vincentkoc.
+- **PR #144864**
+- **PR #144913** Related #144857. Thanks @shakkernerd.
+- **PR #144162** Thanks @vincentkoc.
+- **PR #144673**
+- **PR #144929**
+- **PR #144707** Thanks @jesse-merhi.
+- **PR #144244** Thanks @vincentkoc.
+- **PR #144894** Thanks @RomneyDa.
+- **PR #144871**
+- **PR #144883** Related #144882.
+- **PR #144870** Related #144796. Thanks @tzy-17 and @obviyus and @tontoko.
+- **PR #144926**
+- **PR #144787** Related #144773. Thanks @Alix-007 and @obviyus.
+- **PR #144848** Thanks @vincentkoc.
+- **PR #144939** Thanks @vincentkoc.
+- **PR #144955**
+- **PR #144824**
+- **PR #144705** Thanks @jesse-merhi.
+- **PR #144832**
+- **PR #144710**
+- **PR #144965**
+- **PR #144904** Thanks @vincentkoc.
+- **PR #144854**
+- **PR #144888** Thanks @vincentkoc.
+- **PR #144989**
+- **PR #144684**
+- **PR #144583**
+- **PR #144671**
+- **PR #145019**
+- **PR #145015**
+- **PR #144688** Related #144581. Thanks @fszcd and @rogerspires4452-dev.
+- **PR #144935**
+- **PR #144664** Related #144643.
+- **PR #144940**
+- **PR #144999** Related #144995.
+- **PR #144975** Thanks @obviyus.
+- **PR #143761**
+- **PR #144226**
+- **PR #144232** Related #144212.
+- **PR #144941** Related #144919. Thanks @LibraHo.
+- **PR #145023**
+- **PR #144890** Related #144859. Thanks @Baumus.
+- **PR #144985** Thanks @vincentkoc.
+- **PR #143679**
+- **PR #99352** Thanks @kevinslin.
+- **PR #145042**
+- **PR #144828**
+- **PR #145039**
+- **PR #144967** Thanks @obviyus.
+- **PR #144798** Thanks @vincentkoc.
+- **PR #145026**
+- **PR #145049**
+- **PR #145054**
+- **PR #145053** Related #145052.
+- **PR #145028**
+- **PR #144998** Related #144997. Thanks @masatohoshino and @obviyus.
+- **PR #145060** Thanks @vincentkoc.
+- **PR #144949** Thanks @Gabrielnkl and @obviyus.
+- **PR #144740** Related #144721. Thanks @gokay-ai and @obviyus and @Conan-Scott.
+- **PR #145033**
+- **PR #144816** Thanks @vincentkoc.
+- **PR #144948**
+- **PR #144826** Thanks @vincentkoc.
+- **PR #145041**
+- **PR #145040**
+- **PR #145077** Thanks @obviyus.
+- **PR #145059**
+- **PR #145078**
+- **PR #145068**
+- **PR #144359**
+- **PR #145055**
+- **PR #145064**
+- **PR #143905** Thanks @fuller-stack-dev.
+- **PR #145097**
+- **PR #145082**
+- **PR #144734** Related #144733.
+- **PR #145100**
+- **PR #144700**
+- **PR #145084** Related #145050. Thanks @compoodment.
+- **PR #145094** Thanks @eleqtrizit.
+- **PR #145102**
+- **PR #145115**
+- **PR #145108** Thanks @Patrick-Erichsen.
+- **PR #145065**
+- **PR #145107** Related #115450. Thanks @nilsmichels.
+- **PR #145111** Thanks @obviyus.
+- **PR #145125**
+- **PR #145113**
+- **PR #145122**
+- **PR #145106**
+- **PR #145118**
+- **PR #144674**
+- **PR #145129** Related #145116. Thanks @aatreya.
+- **PR #145105**
+- **PR #145135**
+- **PR #144957** Related #144956.
+- **PR #145130**
+- **PR #145109**
+- **PR #145139**
+- **PR #145144**
+- **PR #145045** Related #144973, #145027. Thanks @blaekmajik and @noma-marketplacedb.
+- **PR #145046**
+- **PR #144901** Related #144858. Thanks @vincentkoc and @Baumus.
+- **PR #144694**
+- **PR #145146**
+- **PR #145128**
+- **PR #145085**
+- **PR #144983**
+- **PR #145149**
+- **PR #144988**
+- **PR #145153**
+- **PR #145031**
+- **PR #144907** Thanks @RomneyDa.
+- **PR #144962** Related #144961.
+- **PR #145173**
+- **PR #145047**
+- **PR #144833** Thanks @RomneyDa.
+- **PR #144841** Thanks @RomneyDa.
+- **PR #144852** Thanks @RomneyDa.
+- **PR #145185**
+- **PR #145061**
+- **PR #145178**
+- **PR #145151** Related #145150.
+- **PR #145131**
+- **PR #145140** Related #145114. Thanks @shakkernerd.
+- **PR #145170**
+- **PR #145158**
+- **PR #145143** Thanks @obviyus.
+- **PR #145155**
+- **PR #145187**
+- **PR #145163**
+- **PR #145198**
+- **PR #145090**
+- **PR #145162**
+- **PR #145191** Related #145189. Thanks @fuller-stack-dev.
+- **PR #145159**
+- **PR #145147** Thanks @fuller-stack-dev.
+- **PR #145204**
+- **PR #145210**
+- **PR #145165**
+- **PR #145212**
+- **PR #145239**
+- **PR #145233**
+- **PR #144252**
+- **PR #144640** Thanks @eleqtrizit.
+- **PR #145227**
+- **PR #145240**
+- **PR #145246**
+- **PR #145123**
+- **PR #145062** Thanks @hannesrudolph.
+- **PR #144155** Related #144132.
+- **PR #145247**
+- **PR #145110**
+- **PR #145243**
+- **PR #145048**
+- **PR #145164**
+- **PR #145222**
+- **PR #145211** Related #145208.
+- **PR #145038**
+- **PR #145281**
+- **PR #145269**
+- **PR #145175** Related #145174.
+- **PR #145283**
+- **PR #93265** Thanks @fuller-stack-dev.
+- **PR #145030**
 ## 2026.9.4
 
 ### Highlights
