@@ -34,6 +34,15 @@ beyond the grace period.
 
 ## Checks 0-2
 
+`doctor --repair` refreshes configured plugin packages before running their
+migrations. During an update, if the parent updater requires plugin repair to
+wait for the new process, Doctor defers its config and state repairs too. It
+leaves the original config and migration inputs intact and reports the deferral.
+The updated process repairs plugins, finishes Doctor, and validates the result
+before reporting completion to the parent. If plugin repair fails, fix the
+reported cause and run `openclaw update repair`; deferred work is not marked
+complete.
+
 <AccordionGroup>
   <Accordion title="0. Optional update (git installs)">
     If this is a git checkout and doctor is running interactively, it offers to update (fetch/rebase/build) before running doctor.

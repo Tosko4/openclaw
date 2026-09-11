@@ -137,10 +137,13 @@ vi.mock("./update-command-config.js", async (importOriginal) => ({
 }));
 
 vi.mock("./update-command-fresh-doctor.js", () => ({
-  completePostCorePluginUpdate: vi.fn(async () => {
+  convergeUpdateDoctorMigrationPlugins: vi.fn(async () => {
+    record("migration-plugins");
+  }),
+  completePostCorePluginUpdate: vi.fn(async (params: { pluginUpdate: unknown }) => {
     record("complete");
     return {
-      pluginUpdate: successfulPluginUpdate,
+      pluginUpdate: params.pluginUpdate,
       configSnapshot: validConfigSnapshot,
     };
   }),
@@ -167,16 +170,24 @@ vi.mock("./update-command-post-core.js", async (importOriginal) => ({
     return {};
   }),
   resolvePostCoreUpdateStartedAtMs: vi.fn(async () => 1_000),
-  writePostCorePluginUpdateResultFile: vi.fn(async () => undefined),
+  continuePostCoreUpdateInFreshProcess: vi.fn(),
+  writePostCorePluginUpdateResultFile: vi.fn(async () => record("publish-result")),
+  writePostCoreUpdateFailureFile: vi.fn(async () => record("publish-failure")),
 }));
 
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import {
   completePostCorePluginUpdate,
+  convergeUpdateDoctorMigrationPlugins,
   runUpdateFinalizationDoctorInFreshProcess,
 } from "./update-command-fresh-doctor.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
+import {
+  continuePostCoreUpdateInFreshProcess,
+  writePostCorePluginUpdateResultFile,
+  writePostCoreUpdateFailureFile,
+} from "./update-command-post-core.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 
 function expectLifecycleBoundary(preLeaseEvent: string): void {
@@ -305,7 +316,144 @@ describe("update plugin lifecycle lease boundaries", () => {
     }
   });
 
-  it("returns resumed package work without Doctor completion and rereads state under the lease", async () => {
+  it.each([false, true])(
+    "finishes resumed migrations before publication (changed=%s)",
+    async (changed) => {
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", "/fixture/plugins.json");
+      vi.mocked(updatePluginsAfterCoreUpdate).mockImplementationOnce(async () => {
+        record("plugin-update");
+        return { ...successfulPluginUpdate, changed };
+      });
+      await resumePostCoreUpdate({
+        root: "/tmp/openclaw",
+        channel: "stable",
+        opts: { yes: true },
+        timeoutMs: 1_000,
+      });
+
+      expectLifecycleBoundary("handoff-records");
+      expect(mocks.events.indexOf("migration-plugins:false")).toBeLessThan(
+        mocks.events.indexOf("fresh-doctor:false"),
+      );
+      expect(mocks.events.indexOf("fresh-doctor:false")).toBeLessThan(
+        mocks.events.indexOf("read-config:false"),
+      );
+      expect(mocks.events).not.toContain("fresh-doctor:true");
+      expect(mocks.events).not.toContain("config-snapshot:false");
+      expect(mocks.events).not.toContain("config-snapshot:true");
+      expect(mocks.events.indexOf("complete:false")).toBeGreaterThan(
+        mocks.events.lastIndexOf("lease-exit:false"),
+      );
+      expect(mocks.events).not.toContain("complete:true");
+      expect(mocks.events).toContain("persisted-index:true");
+      expect(mocks.events.at(-1)).toBe("publish-result:false");
+      expect(runUpdateFinalizationDoctorInFreshProcess).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ phase: "post-plugin" }),
+      );
+      expect(completePostCorePluginUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ freshDoctorRequired: changed }),
+      );
+    },
+  );
+
+  it.each(["convergence", "doctor"] as const)(
+    "publishes only failure when initial %s refuses resumed migration",
+    async (phase) => {
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", "/fixture/plugins.json");
+      const failure = new Error("configured plugin cannot converge");
+      vi.mocked(
+        phase === "convergence"
+          ? convergeUpdateDoctorMigrationPlugins
+          : runUpdateFinalizationDoctorInFreshProcess,
+      ).mockRejectedValueOnce(failure);
+
+      await expect(
+        resumePostCoreUpdate({
+          root: "/tmp/openclaw",
+          channel: "stable",
+          opts: { yes: true },
+          timeoutMs: 1_000,
+        }),
+      ).rejects.toBe(failure);
+
+      expect(updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
+      expect(completePostCorePluginUpdate).not.toHaveBeenCalled();
+      expect(mocks.readConfig).not.toHaveBeenCalled();
+      expect(writePostCorePluginUpdateResultFile).not.toHaveBeenCalled();
+      expect(writePostCoreUpdateFailureFile).toHaveBeenCalledWith("/fixture/plugins.json", failure);
+      expect(mocks.events.at(-1)).toBe("publish-failure:false");
+    },
+  );
+
+  it("does not repeat a fresh child's completed migrations in the old parent", async () => {
+    vi.mocked(continuePostCoreUpdateInFreshProcess).mockResolvedValueOnce({
+      resumed: true,
+      pluginUpdate: successfulPluginUpdate,
+    });
+    const result = await convergeUpdatePlugins({
+      result: {
+        status: "ok",
+        mode: "npm",
+        root: "/tmp/openclaw",
+        before: { version: "2026.7.1" },
+        after: { version: "2026.9.4" },
+        steps: [],
+        durationMs: 1,
+      },
+      root: "/tmp/openclaw",
+      installKindChanged: false,
+      configSnapshot: validConfigSnapshot,
+      requestedChannel: null,
+      storedChannel: null,
+      channel: "stable",
+      downgradeRisk: false,
+      opts: {},
+      preUpdatePluginInstallRecords: {},
+      startedAt: 1,
+      updateStepTimeoutMs: 1_000,
+    });
+
+    expect(continuePostCoreUpdateInFreshProcess).toHaveBeenCalledOnce();
+    expect(updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
+    expect(completePostCorePluginUpdate).not.toHaveBeenCalled();
+    expect(result.resultWithPostUpdate).toMatchObject({
+      status: "ok",
+      postUpdate: { plugins: successfulPluginUpdate },
+    });
+  });
+
+  it.each(["resume", "finalize"] as const)(
+    "preserves updater capability consent at the %s migration boundary",
+    async (lane) => {
+      const opts = { yes: true, json: true, acceptCapabilities: true };
+      if (lane === "resume") {
+        await resumePostCoreUpdate({
+          root: "/tmp/openclaw",
+          channel: "stable",
+          opts,
+          timeoutMs: 1_000,
+        });
+      } else {
+        await updateFinalizeCommand({ ...opts, deferCompletionCache: true });
+      }
+      expect(convergeUpdateDoctorMigrationPlugins).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining(opts),
+      );
+    },
+  );
+
+  it("publishes target validation failure instead of the successful package result", async () => {
+    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", "/fixture/plugins.json");
+    const invalid = {
+      ...successfulPluginUpdate,
+      status: "error" as const,
+      reason: "post-plugin-doctor-invalid-config",
+    };
+    vi.mocked(completePostCorePluginUpdate).mockResolvedValueOnce({
+      pluginUpdate: invalid,
+      configSnapshot: validConfigSnapshot,
+    });
+
     await resumePostCoreUpdate({
       root: "/tmp/openclaw",
       channel: "stable",
@@ -313,14 +461,11 @@ describe("update plugin lifecycle lease boundaries", () => {
       timeoutMs: 1_000,
     });
 
-    expectLifecycleBoundary("handoff-records");
-    expect(mocks.events).not.toContain("fresh-doctor:false");
-    expect(mocks.events).not.toContain("fresh-doctor:true");
-    expect(mocks.events).not.toContain("config-snapshot:false");
-    expect(mocks.events).not.toContain("config-snapshot:true");
-    expect(mocks.events).not.toContain("complete:false");
-    expect(mocks.events).not.toContain("complete:true");
-    expect(mocks.events).toContain("persisted-index:true");
+    expect(writePostCorePluginUpdateResultFile).toHaveBeenCalledExactlyOnceWith(
+      "/fixture/plugins.json",
+      invalid,
+    );
+    expect(mocks.events.at(-1)).toBe("publish-result:false");
   });
 
   it.each([undefined, "5"])(
@@ -343,8 +488,9 @@ describe("update plugin lifecycle lease boundaries", () => {
       expect(mocks.events).not.toContain("persisted-index:true");
       const timeoutMs = timeout === undefined ? undefined : 5_000;
       expect(runUpdateFinalizationDoctorInFreshProcess).toHaveBeenCalledWith(
-        expect.objectContaining({ timeoutMs }),
+        expect.objectContaining({ timeoutMs, phase: "post-plugin" }),
       );
+      expect(mocks.events.indexOf("migration-plugins:false")).toBeLessThan(doctorIndex);
       expect(completePostCorePluginUpdate).toHaveBeenCalledWith(
         expect.objectContaining({ timeoutMs }),
       );

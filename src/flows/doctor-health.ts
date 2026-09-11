@@ -3,10 +3,12 @@ import fs from "node:fs";
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
+import { shouldDeferConfiguredPluginInstallRepair } from "../commands/doctor/shared/update-phase.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import {
   captureUpdateDoctorConfigWrites,
+  createDeferredConfiguredPluginRepairDoctorResult,
   normalizeUpdatePostInstallDoctorWarnings,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
@@ -117,6 +119,18 @@ async function runDoctorHealthFlowWithResult(
   let exitCode: number | undefined;
   let doctorResult: UpdatePostInstallDoctorResult = { status: "error" };
   try {
+    if (shouldDeferConfiguredPluginInstallRepair(process.env)) {
+      // The returning updater can overwrite refreshed plugin records. Leave the
+      // original config and migration inputs intact for its fresh post-core owner.
+      const message =
+        "Doctor repair deferred until post-core plugin convergence; config and state migrations have not run.";
+      effectiveRuntime.log(message);
+      doctorResult = createDeferredConfiguredPluginRepairDoctorResult([message]);
+      if (updateResult) {
+        exitCode = UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE;
+      }
+      return;
+    }
     const { beginDoctorMaintenance } = await import("../commands/doctor-maintenance.js");
     maintenance = await beginDoctorMaintenance({ options, root, runtime: effectiveRuntime });
     const { createDoctorPrompter } = await import("../commands/doctor-prompter.js");
@@ -145,6 +159,25 @@ async function runDoctorHealthFlowWithResult(
       runtime: effectiveRuntime,
       json: options.json,
     });
+
+    if (prompter.shouldRepair) {
+      const { convergeDoctorMigrationPlugins } =
+        await import("../commands/doctor/shared/migration-plugin-convergence.js");
+      const { createPluginCapabilityConsentPrompter } =
+        await import("../wizard/plugin-capability-consent.js");
+      const { note } = await import("../../packages/terminal-core/src/note.js");
+      await convergeDoctorMigrationPlugins({
+        env: process.env,
+        onCapabilityConsent: createPluginCapabilityConsentPrompter({
+          note: async (message, title) => note(message, title),
+          confirm: (confirmation) =>
+            prompter.confirmRuntimeRepair({
+              ...confirmation,
+              requiresInteractiveConfirmation: true,
+            }),
+        }),
+      });
+    }
 
     // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
     const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");

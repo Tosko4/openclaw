@@ -123,6 +123,8 @@ describe("runDoctorHealthFlow", () => {
     "admits offline state repair only after safe service inspection: $kind (update=$updateParent)",
     async ({ kind, updateParent }) => {
       if (updateParent) {
+        // The parent hands actual repair to post-core Doctor after package convergence.
+        vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", "1");
         for (const [key, value] of Object.entries(
           buildUpdateDoctorEnv({
             allowGatewayServiceRepair: true,
@@ -542,6 +544,7 @@ describe("runDoctorHealthFlow", () => {
             for (const [key, value] of Object.entries(buildUpdateDoctorEnv(policy))) {
               vi.stubEnv(key, value);
             }
+            vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", "1");
           } else if (outcome === "update-legacy") {
             vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
           }

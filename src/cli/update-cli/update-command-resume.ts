@@ -19,6 +19,11 @@ import {
   persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
 } from "./update-command-config.js";
+import {
+  completePostCorePluginUpdate,
+  convergeUpdateDoctorMigrationPlugins,
+  runUpdateFinalizationDoctorInFreshProcess,
+} from "./update-command-fresh-doctor.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   readPostCorePluginInstallRecordsFile,
@@ -76,6 +81,17 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
   process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION =
     (await readPackageVersion(params.root)) ?? VERSION;
 
+  // Shipped parents cannot migrate with the new plugin generation, and may
+  // terminate this child immediately after its result file appears.
+  await convergeUpdateDoctorMigrationPlugins(params.opts);
+  await runUpdateFinalizationDoctorInFreshProcess({
+    phase: "post-plugin",
+    root: params.root,
+    yes: params.opts.yes === true,
+    json: params.opts.json === true,
+    timeoutMs: params.timeoutMs,
+  });
+
   const configSnapshot = await readConfigFileSnapshot({
     skipPluginValidation: true,
     suppressFutureVersionWarning: true,
@@ -89,9 +105,9 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
   const parentPluginInstallRecords = await readPostCorePluginInstallRecordsFile(
     process.env[POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV],
   );
-  const pluginUpdate = await withPluginLifecycleLease({}, async () => {
-    // The core migration owner committed before activation. This fresh process
-    // reads that generation and only owns plugin convergence.
+  let pluginUpdate = await withPluginLifecycleLease({}, async () => {
+    // The fresh Doctor committed core migrations with the repaired contracts.
+    // Broader channel updates can now consume its normalized config.
     const preparedConfig = await preparePostCorePluginConfig({
       requestedChannel,
       preUpdateConfig: preUpdateSourceConfig,
@@ -123,9 +139,20 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
       pluginInstallRecords,
     });
   });
+  // Release the plugin lease before Doctor acquires it. No success result may
+  // escape while migrations or target-runtime validation remain incomplete.
+  const completed = await completePostCorePluginUpdate({
+    root: params.root,
+    pluginUpdate,
+    freshDoctorRequired: pluginUpdate.changed,
+    yes: params.opts.yes === true,
+    json: params.opts.json === true,
+    timeoutMs: params.timeoutMs,
+  });
+  pluginUpdate = completed.pluginUpdate;
   // Only the target process may restamp an unchanged downgrade config. Plugin
   // migrations that still invalidate it will write through the target Doctor later.
-  await persistValidatedDowngradeConfig(await readConfigFileSnapshot());
+  await persistValidatedDowngradeConfig(completed.configSnapshot);
   if (process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]) {
     await writePostCorePluginUpdateResultFile(
       process.env[POST_CORE_UPDATE_RESULT_PATH_ENV],
