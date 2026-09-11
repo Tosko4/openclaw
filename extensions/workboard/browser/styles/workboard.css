@@ -2292,8 +2292,13 @@
 
 @media (max-width: 900px) {
   .workboard {
+    overflow: visible;
     padding-inline: 12px;
     --workboard-control-height: 44px;
+  }
+
+  .workboard-board-viewport {
+    overflow: visible;
   }
 
   .workboard-main {

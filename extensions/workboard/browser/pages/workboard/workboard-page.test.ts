@@ -1,6 +1,6 @@
 import "../../test/dom.setup.ts";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { ControlUiSessionListResult } from "openclaw/plugin-sdk/control-ui";
+import type { ControlUiAgentPickerProps, ControlUiSessionListResult } from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentsListResult } from "../../api/types.ts";
@@ -102,6 +102,30 @@ it("loads and refreshes cards through the plugin's authenticated host", async ()
   page.fixture.emit("plugin.workboard.changed", { epoch: "current", revision: 1 });
   await vi.waitFor(() => expect(page.container.textContent).toContain("Updated card"));
   expect(page.container.textContent).not.toContain("Initial card");
+});
+
+it("keeps a historical scope recoverable after the roster shrinks to one agent", async () => {
+  const page = mountPage({ connected: true });
+  await vi.waitFor(() => expect(page.container.textContent).toContain("Initial card"));
+  page.fixture.host.agents.setScope("writer");
+  page.agents([{ id: "main" }]);
+  await page.fixture.host.agents.refresh();
+  await vi.waitFor(() => expect(page.container.textContent).not.toContain("Initial card"));
+  const picker = expectDefined(
+    page.container.querySelector<HTMLElement & ControlUiAgentPickerProps>(
+      ".workboard-scope [data-test-agent-picker]",
+    ),
+    "historical scope picker",
+  );
+  expect(picker.value).toBe("writer");
+  expect(picker.options).toEqual(expect.arrayContaining([
+    expect.objectContaining({ value: "writer", label: "writer" }),
+    expect.objectContaining({ value: "", label: "All agents" }),
+  ]));
+  picker.onSelect("");
+  await vi.waitFor(() => expect(page.container.textContent).toContain("Initial card"));
+  expect(page.fixture.host.agents.scopeId).toBeNull();
+  expect(page.container.querySelector(".workboard-scope")).toBeNull();
 });
 
 it.each([
