@@ -2382,8 +2382,8 @@ private func waitUntil(
             suppressStoredDeviceAuth: false,
             instanceId: instanceID))
         let cache = try #require(appModel.makeChatOfflineStore())
-        let routing = OpenClawChatSessionRoutingIdentity(
-            scope: "per-sender", mainSessionKey: "main", defaultAgentID: "main")
+        let routing = try #require(OpenClawChatSessionRoutingIdentity(
+            scope: "per-sender", mainSessionKey: "main", defaultAgentID: "main"))
         await cache.storeSessionRoutingIdentity(routing)
         let databases = try OpenClawClientDatabases(
             directoryURL: #require(NodeAppModel.chatDatabaseDirectoryURL()))
@@ -2478,8 +2478,8 @@ private func waitUntil(
             GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: connectedID, agentId: nil)
         }
         let cache = try #require(appModel.makeChatOfflineStore())
-        let routing = OpenClawChatSessionRoutingIdentity(
-            scope: "per-sender", mainSessionKey: "main", defaultAgentID: "main")
+        let routing = try #require(OpenClawChatSessionRoutingIdentity(
+            scope: "per-sender", mainSessionKey: "main", defaultAgentID: "main"))
         await cache.storeSessionRoutingIdentity(routing)
         let databases = try OpenClawClientDatabases(
             directoryURL: #require(NodeAppModel.chatDatabaseDirectoryURL()))
