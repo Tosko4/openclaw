@@ -197,6 +197,16 @@ const sessionTaskDefaults = {
   notifyPolicy: "silent",
 } as const;
 
+const cronTaskDefaults = {
+  runtime: "cron",
+  requesterSessionKey: "",
+  ownerKey: "",
+  scopeKind: "system",
+  status: "running",
+  deliveryStatus: "not_applicable",
+  notifyPolicy: "silent",
+} as const;
+
 function createParams(): SubscriptionParams {
   const chatRunState = createChatRunState();
   return {
@@ -927,14 +937,8 @@ describe("startGatewayEventSubscriptions", () => {
       await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
 
       const task = createTaskRecord({
-        runtime: "cron",
-        requesterSessionKey: "",
-        ownerKey: "",
-        scopeKind: "system",
+        ...cronTaskDefaults,
         task: `${status} cron task`,
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
       });
       if (!task) {
         throw new Error("expected task record");
@@ -976,16 +980,10 @@ describe("startGatewayEventSubscriptions", () => {
     const runId = "cron:job-1:run-1";
     const runSessionKey = "agent:main:cron:job-1:run:run-1";
     const task = createTaskRecord({
-      runtime: "cron",
-      requesterSessionKey: "",
-      ownerKey: "",
-      scopeKind: "system",
+      ...cronTaskDefaults,
       childSessionKey: runSessionKey,
       runId,
       task: "Cron task",
-      status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
     });
     if (!task) {
       throw new Error("expected task record");
@@ -1035,15 +1033,9 @@ describe("startGatewayEventSubscriptions", () => {
 
     const runSessionKey = "agent:main:cron:job-1:run:run-1";
     const task = createTaskRecord({
-      runtime: "cron",
-      requesterSessionKey: "",
-      ownerKey: "",
-      scopeKind: "system",
+      ...cronTaskDefaults,
       childSessionKey: runSessionKey,
       task: "Cron task",
-      status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
     });
     if (!task) {
       throw new Error("expected task record");
