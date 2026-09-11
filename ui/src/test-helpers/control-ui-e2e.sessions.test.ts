@@ -751,3 +751,50 @@ it.for([
     expect((await request("sessions.list")).payload.sessions).toEqual(beforeReplay);
   },
 );
+
+it.for([
+  { targeted: true, outcome: "success" },
+  { targeted: false, outcome: "success" },
+  { targeted: true, outcome: "not-aborted" },
+  { targeted: false, outcome: "not-aborted" },
+  { targeted: true, outcome: "error" },
+  { targeted: false, outcome: "error" },
+])(
+  "preserves $outcome abort before send ACK (targeted: $targeted)",
+  async ({ targeted, outcome }, { connect }) => {
+    const key = "agent:main:abort-before-ack";
+    const runId = "pending-run";
+    const aborted = outcome === "success";
+    const { send, request, controls, frames } = await connect({
+      sessions: [{ key, status: "queued", hasActiveRun: false, activeRunIds: [] }],
+      deferredMethods: ["chat.send"],
+      methodResponses: {
+        "chat.send": { runId, status: "started" },
+        "chat.abort":
+          outcome === "error"
+            ? { __mockError: { code: "INVALID_REQUEST", message: "Abort rejected" } }
+            : { aborted, runIds: aborted ? [runId] : [] },
+      },
+    });
+    await send("chat.send", { sessionKey: key, message: "Start", idempotencyKey: runId });
+    const result = await request("chat.abort", { sessionKey: key, ...(targeted ? { runId } : {}) });
+    if (outcome === "error") {
+      expect(result.ok).toBe(false);
+    } else {
+      expect(result.payload).toEqual({ aborted, runIds: aborted ? [runId] : [] });
+    }
+    controls.resolveDeferred("chat.send");
+    await flush();
+    expect((await request("sessions.list")).payload.sessions).toEqual([
+      expect.objectContaining({
+        key,
+        status: aborted ? "killed" : "running",
+        hasActiveRun: !aborted,
+        activeRunIds: aborted ? [] : [runId],
+      }),
+    ]);
+    expect(frames.filter((frame) => frame.event === "chat").map((frame) => frame.payload)).toEqual(
+      aborted ? [expect.objectContaining({ sessionKey: key, runId, state: "aborted" })] : [],
+    );
+  },
+);

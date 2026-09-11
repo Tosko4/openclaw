@@ -50,6 +50,33 @@ export function createControlUiSessionRow(
   };
 }
 
+export function createControlUiMockSessionRow(
+  key: string,
+  label: string,
+  updatedAt: number,
+  options: { model?: string; modelProvider?: string } & Record<string, unknown> = {},
+) {
+  const { model, modelProvider, ...extra } = options;
+  return createControlUiSessionRow(key, label, updatedAt, {
+    contextTokens: 200_000,
+    model: model ?? "gpt-5-mini",
+    modelProvider: modelProvider ?? "openai",
+    ...extra,
+  });
+}
+
+export function createControlUiChatHistoryMessage(
+  role: "assistant" | "user",
+  text: string,
+  timestamp: number,
+) {
+  return {
+    content: [{ text, type: "text" }],
+    role,
+    timestamp,
+  };
+}
+
 export function createControlUiSessionFixtures(input: {
   rows: ControlUiSessionFixture[];
   mainKey: string;
@@ -214,16 +241,18 @@ export function createControlUiSessionFixtures(input: {
       value.changed.add(field);
     }
   };
-  const abortRuns = (inputKey: string, runId?: string) => {
+  const abortRuns = (inputKey: string, runId?: string, confirmedRunIds?: string[]) => {
     const key = canonicalKey(inputKey);
-    const value = records.get(key);
+    const value = confirmedRunIds?.length ? record(inputKey) : records.get(key);
     if (!value) {
       return { aborted: false, runIds: [] as string[] };
     }
     const activeRunIds = Array.isArray(value.row.activeRunIds)
       ? value.row.activeRunIds.filter((id): id is string => typeof id === "string")
       : [];
-    const runIds = runId ? activeRunIds.filter((id) => id === runId) : activeRunIds;
+    // Explicit abort receipts can precede the send ACK that lists the run locally.
+    const candidates = confirmedRunIds ?? activeRunIds;
+    const runIds = runId ? candidates.filter((id) => id === runId) : candidates;
     const aborted = runIds.length > 0 || (!runId && value.row.hasActiveRun === true);
     if (!aborted) {
       return { aborted: false, runIds };
