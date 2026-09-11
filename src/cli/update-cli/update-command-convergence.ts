@@ -15,12 +15,12 @@ import { VERSION } from "../../version.js";
 import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
 import { preparePostCorePluginConfig } from "./update-command-config.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
   shouldResumePostCoreUpdateInFreshProcess,
 } from "./update-command-post-core.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 export async function convergeUpdatePlugins(params: {
   coreAlreadyCurrent?: boolean;
@@ -39,12 +39,16 @@ export async function convergeUpdatePlugins(params: {
   packageUpdateNodeRunner?: string;
   updateStepTimeoutMs: number;
   beforeDoctor?: () => Promise<void>;
+  assertCurrent?: () => void;
 }): Promise<{
   resultWithPostUpdate: UpdateRunResult;
   postUpdateConfigSnapshot?: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   detail?: string;
   cancelled?: boolean;
 }> {
+  // The finalizer also fences replacement of the original run and executor objects.
+  const assertCurrent = params.assertCurrent ?? params.opts.run?.executorFence?.assertCurrent;
+  assertCurrent?.();
   const postUpdateRoot = params.result.root ?? params.root;
   const preUpdateConfig = params.configSnapshot.valid
     ? {
@@ -91,6 +95,7 @@ export async function convergeUpdatePlugins(params: {
   return await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () => {
     const previousCompatibilityHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
     const postUpdateInstalledVersion = await readPackageVersion(postUpdateRoot);
+    assertCurrent?.();
     const versionComparison =
       postUpdateInstalledVersion && VERSION
         ? compareSemverStrings(VERSION, postUpdateInstalledVersion)
@@ -118,6 +123,7 @@ export async function convergeUpdatePlugins(params: {
           nodeRunner: params.packageUpdateNodeRunner,
           preUpdateConfig,
         });
+        assertCurrent?.();
         if (freshProcessResult.exitCode !== undefined) {
           return {
             resultWithPostUpdate: {
@@ -134,14 +140,16 @@ export async function convergeUpdatePlugins(params: {
       }
 
       if (!pluginsUpdatedInFreshProcess) {
-        postCorePluginUpdate = await withPluginLifecycleLease({}, async () => {
+        postCorePluginUpdate = await withPluginLifecycleLease({ assertCurrent }, async () => {
           const preparedConfig = await preparePostCorePluginConfig({
             requestedChannel: params.requestedChannel,
             preUpdateConfig,
             suppressFutureVersionWarning: shouldResumePostCoreInFreshProcess,
           });
+          assertCurrent?.();
           postUpdateConfigSnapshot = preparedConfig.configSnapshot;
           const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+          assertCurrent?.();
           return await updatePluginsAfterCoreUpdate({
             root: postUpdateRoot,
             channel: params.channel,
@@ -150,9 +158,11 @@ export async function convergeUpdatePlugins(params: {
             acceptCapabilities: params.opts.acceptCapabilities,
             timeoutMs: params.updateStepTimeoutMs,
             pluginInstallRecords,
+            assertCurrent,
           });
         });
       }
+      assertCurrent?.();
 
       if (postCorePluginUpdate && (!params.coreAlreadyCurrent || postCorePluginUpdate.changed)) {
         // Release the plugin lease before fresh Doctor. The finalizer either
@@ -170,6 +180,7 @@ export async function convergeUpdatePlugins(params: {
           },
           ...(params.packageUpdateNodeRunner ? { nodeRunner: params.packageUpdateNodeRunner } : {}),
         });
+        assertCurrent?.();
         postCorePluginUpdate = completedPluginUpdate.pluginUpdate;
         postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
       }
