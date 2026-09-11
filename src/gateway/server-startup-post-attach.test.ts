@@ -1869,7 +1869,7 @@ describe("startGatewayPostAttachRuntime", () => {
   it.each(["complete", "before readiness", "between agents"] as const)(
     "keeps catalog acquisition after readiness and stops at %s",
     async (stopAt) => {
-      const ready = createDeferred<void>();
+      const ready = createDeferred();
       const firstCatalog = createDeferred<{ entries: []; routeVariants: [] }>();
       const cfg: OpenClawConfig = { agents: { entries: { main: {}, second: {} } } };
       hoisted.acquireModelCatalog.mockImplementationOnce(() => firstCatalog.promise);
@@ -1919,7 +1919,7 @@ describe("startGatewayPostAttachRuntime", () => {
     ["config replaced", new PreparedModelCatalogConfigReplacedError("/tmp/agent"), 1],
     ["retired owner", new Error("lifetime closed"), 1],
   ] as const)("contains %s catalog failure after readiness", async (kind, error, calls) => {
-    const ready = createDeferred<void>();
+    const ready = createDeferred();
     const cfg: OpenClawConfig = { agents: { entries: { main: {}, second: {} } } };
     hoisted.catalogOwnerIsCurrent.mockReturnValue(kind !== "retired owner");
     hoisted.acquireModelCatalog.mockRejectedValueOnce(error);

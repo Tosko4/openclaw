@@ -21,6 +21,7 @@ import {
   resolveLogicalVisibleModelCatalog,
 } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import { modelKey } from "../../agents/model-ref-shared.js";
 import { dedupeModelCatalogEntries } from "../../agents/model-selection-shared.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
@@ -36,6 +37,7 @@ import {
   PreparedModelRuntimePublicationSupersededError,
 } from "../../agents/prepared-model-runtime.errors.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
+import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -57,6 +59,10 @@ type ModelsCommandSessionEntry = Partial<
     | "authProfileOverrideSource"
     | "modelProvider"
     | "providerOverride"
+    | "modelOverride"
+    | "modelOverrideRouteResolution"
+    | "modelOverrideFallbackOriginProvider"
+    | "modelOverrideFallbackOriginModel"
     | "model"
     | "modelSelectionLocked"
     | "agentRuntimeOverride"
@@ -195,18 +201,15 @@ async function projectPreparedModelsProviderData(
   const cliRuntimeProviders = new Set(
     listCliRuntimeModelBackendBindings().map((binding) => normalizeProviderId(binding.runtime)),
   );
-  const snapshot = owner.modelCatalog;
   const authStore = getPreparedModelRuntimeAuthStore(owner);
-  const catalog = snapshot.entries;
-  const defaultModel = resolveAgentEffectiveModelPrimary(cfg, selectedAgentId);
-  const visibilityPolicy = createModelVisibilityPolicy({
-    cfg,
-    catalog,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel,
-    agentId: selectedAgentId,
-    ...runtimeNormalization,
-  });
+  const selectedModel = options.sessionEntry?.modelOverride
+    ? resolveSessionModelRef(cfg, options.sessionEntry, selectedAgentId, {
+        allowPluginNormalization: false,
+      })
+    : undefined;
+  const defaultModel = selectedModel
+    ? modelKey(selectedModel.provider, selectedModel.model)
+    : resolveAgentEffectiveModelPrimary(cfg, selectedAgentId);
   if (!authStore) {
     throw new Error("Model catalog owner omitted its auth store");
   }
@@ -215,7 +218,8 @@ async function projectPreparedModelsProviderData(
     agentId: selectedAgentId,
     agentDir: owner.agentDir,
     workspaceDir,
-    snapshot,
+    selectedModel,
+    snapshot: owner.modelCatalog,
     metadataSnapshot: owner.metadataSnapshot,
     preparedAuthStore: authStore,
     preparedRuntimeAuthModes: owner.authModes,
@@ -229,6 +233,16 @@ async function projectPreparedModelsProviderData(
         : undefined,
     profileProvider: options.sessionEntry?.providerOverride ?? options.sessionEntry?.modelProvider,
     runtimeOverride: options.sessionEntry?.agentRuntimeOverride,
+  });
+  const snapshot = decisions.snapshot;
+  const catalog = snapshot.entries;
+  const visibilityPolicy = createModelVisibilityPolicy({
+    cfg,
+    catalog,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel,
+    agentId: selectedAgentId,
+    ...runtimeNormalization,
   });
   const visibleCatalog = await resolveLogicalVisibleModelCatalog({
     cfg,
