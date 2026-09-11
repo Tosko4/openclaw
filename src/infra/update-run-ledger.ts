@@ -23,6 +23,10 @@ import {
 } from "./kysely-sync.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 import {
+  mergeUpdateRecoveryCaptureState,
+  type UpdateRecoveryCaptureState,
+} from "./update-recovery-backup-contract.js";
+import {
   isAbandonedUpdateRun,
   isStaleIdentitylessUpdateRun,
   recordedUpdateRunDrivers,
@@ -41,8 +45,8 @@ import {
 } from "./update-run-driver.js";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
 import {
+  canReconcileCandidates,
   inspectUpdateRunReconciliation,
-  listUpdateRuns,
   readUpdateRunReconciliationCandidates,
   readUpdateRunRecord as readRun,
   type UpdateRunReconciliationCandidate,
@@ -59,6 +63,8 @@ import { isUpdateRecoveryPending } from "./update-run-recovery-schema.js";
 import { hasStoredUpdateRecovery, readRecoveries } from "./update-run-recovery-store.js";
 
 export {
+  findActiveUpdateRun,
+  getUpdateRun,
   getLatestUpdateFetchFailure,
   getUpdateRunAsync,
   listUpdateRuns,
@@ -357,18 +363,6 @@ export function acknowledgeAbandonedUpdateRun(runId: string, options: LedgerOpti
   );
 }
 
-function canReconcileCandidates(
-  candidates: UpdateRunReconciliationCandidate[],
-  input: UpdateRunReconciliationInput,
-): boolean {
-  return (
-    candidates.some(
-      ({ rule }) => rule && (!input.legacyOnly || rule === LEGACY_UPDATE_RUN_EXPIRED_REASON),
-    ) &&
-    !(input.explicit && candidates.some(({ record, rule }) => record.status === "running" && !rule))
-  );
-}
-
 /** Prepare eligibility without write access, then revalidate under the writer's transaction. */
 export function reconcileAbandonedUpdateRuns(
   input: UpdateRunReconciliationInput = {},
@@ -556,6 +550,26 @@ export function recordUpdateRunStep(
   );
 }
 
+/** Exact recovery receipts share the existing run owner, outside diagnostic eviction. */
+export function recordUpdateRunRecoveryCapture(
+  runId: string,
+  patch: Pick<UpdateRecoveryCaptureState, "manifestSha256"> & Partial<UpdateRecoveryCaptureState>,
+  assertCurrent: () => void,
+  options: LedgerOptions = {},
+): UpdateRunRecord {
+  return mutateRun(
+    runId,
+    (record) => {
+      assertCurrent();
+      record.origin.updateRecoveryCapture = mergeUpdateRecoveryCaptureState(
+        record.origin.updateRecoveryCapture,
+        patch,
+      );
+    },
+    options,
+  );
+}
+
 /** A terminal process diagnostic adds evidence without reopening the recorded outcome. */
 export function recordUpdateRunDiagnostic(
   runId: string,
@@ -734,20 +748,4 @@ export function recordUpdateRunRepairAttempt(
     },
     options,
   );
-}
-
-export function getUpdateRun(
-  runId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): UpdateRunRecord | undefined {
-  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-    ({ db }) => (tableExists(db, "update_runs") ? readRun(db, runId) : undefined),
-    options,
-  );
-}
-
-export function findActiveUpdateRun(
-  options: OpenClawStateDatabaseOptions = {},
-): UpdateRunRecord | undefined {
-  return listUpdateRuns({ limit: 1, active: true }, options)[0];
 }
