@@ -702,6 +702,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       shouldWriteConfig,
       shouldRepair,
       blocksWrite: legacyStep.blocksWrite,
+      explicitSetPaths,
     }),
     ...(pluginInstallConfigImport ? { pluginInstallConfigImport } : {}),
     path: snapshot.path ?? CONFIG_PATH,
@@ -709,7 +710,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ...(shouldWriteConfig && pendingChangePanels.length > 0 ? { pendingChangePanels } : {}),
     sourceConfigValid: snapshot.valid,
     ...(legacyStep.partiallyValid === true ? { skipPluginValidationOnWrite: true } : {}),
-    ...(shouldWriteConfig && explicitSetPaths.length > 0 ? { explicitSetPaths } : {}),
     ...(shouldWriteConfig && persistCanonicalAgentRoster
       ? { persistCanonicalAgentRoster: true }
       : {}),
