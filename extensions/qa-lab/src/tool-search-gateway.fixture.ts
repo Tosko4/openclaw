@@ -416,7 +416,7 @@ export async function runToolSearchGatewayLane(params: {
   const requestCursorBefore = readQaMockRequestCursor(
     await fetchJson(qaMockRequestCursorUrl(providerBaseUrl)),
   );
-  const gatewayLogsBefore = env.gateway.logs?.() ?? "";
+  const gatewayLogMark = env.gateway.markLogs?.();
   const sessionKey = `tool-search-gateway-${lane}`;
   const response = await fetchJson(
     `${env.gateway.baseUrl}/v1/responses`,
@@ -452,12 +452,9 @@ export async function runToolSearchGatewayLane(params: {
     throwToolSearchGatewayRequestFailure({
       cause,
       fetchJson,
-      gatewayLogs: (() => {
-        const current = env.gateway.logs?.() ?? "";
-        // A rolled bounded buffer cannot prove which surviving lines belong to
-        // this request, so omit Gateway facts instead of misattributing them.
-        return current.startsWith(gatewayLogsBefore) ? current.slice(gatewayLogsBefore.length) : "";
-      })(),
+      // The log owner preserves attribution and redaction across bounded-buffer rollover.
+      gatewayLogs:
+        gatewayLogMark === undefined ? "" : (env.gateway.readLogsSince?.(gatewayLogMark) ?? ""),
       lane,
       mentionCountsBefore,
       providerBaseUrl,

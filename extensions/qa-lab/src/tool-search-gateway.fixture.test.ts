@@ -10,6 +10,10 @@ import {
   outputText,
   outputToolNames,
 } from "./fixture-utils.js";
+import {
+  createQaGatewayChildLogAccess,
+  createQaGatewayChildLogCollector,
+} from "./gateway-child-process.js";
 import { QA_TOOL_SEARCH_SECONDARY_TARGET } from "./providers/mock-openai/mock-openai-tooling.js";
 import {
   qaMockRequestCursorUrl,
@@ -370,91 +374,99 @@ describe("tool search gateway e2e lane result", () => {
     }
   });
 
-  it("renders bounded stage evidence for a failed gateway request without leaking diagnostics", async () => {
-    const gatewaySecret = "gateway-secret-value";
-    const responseSecret = "raw-response-secret";
-    const promptSecret = "raw-prompt-secret";
-    const toolOutputSecret = "raw-tool-output-secret";
-    let requestFailed = false;
-    const logsBeforeRequest = "before-request-log tool_describe\n";
-    const { env, tempRoot } = await createLaneHarness(() =>
-      requestFailed
-        ? `${"old-log-line\n".repeat(500)}OPENAI_API_KEY=${gatewaySecret}\n${promptSecret}\n${toolOutputSecret}\ntool_search_code\nfake_plugin_tool_17-variant`
-        : logsBeforeRequest,
-    );
-    const sessionsDir = path.join(tempRoot, "state", "agents", "qa", "sessions");
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      if (url.endsWith("/debug/request-cursor")) {
-        return jsonResponse({ cursor: 0 });
+  it.each(["retained", "rolled", "unavailable"] as const)(
+    "renders safe failure evidence with %s gateway logs",
+    async (logMode) => {
+      const gatewaySecret = "gateway-secret-value";
+      const responseSecret = "raw-response-secret";
+      const promptSecret = "raw-prompt-secret";
+      const toolOutputSecret = "raw-tool-output-secret";
+      const logs = createQaGatewayChildLogCollector();
+      logs.push("stdout", Buffer.from("before-request-log tool_describe\n"));
+      const { env, tempRoot } = await createLaneHarness(() => logs.text());
+      if (logMode !== "unavailable") {
+        Object.assign(env.gateway, createQaGatewayChildLogAccess(logs));
       }
-      if (url.endsWith("/v1/responses")) {
-        requestFailed = true;
-        await fs.mkdir(sessionsDir, { recursive: true });
-        await fs.writeFile(
-          path.join(sessionsDir, "failed.jsonl"),
-          `${JSON.stringify({
-            message: {
-              role: "assistant",
-              content: "tool_search_code tool_describe fake_plugin_tool_17-variant",
+      const sessionsDir = path.join(tempRoot, "state", "agents", "qa", "sessions");
+      const fetchMock = vi.fn(async (input: string | URL | Request) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.endsWith("/debug/request-cursor")) {
+          return jsonResponse({ cursor: 0 });
+        }
+        if (url.endsWith("/v1/responses")) {
+          logs.push(
+            "stdout",
+            Buffer.from(
+              `${logMode === "rolled" ? "old-log-line\n".repeat(6_000) : ""}OPENAI_API_KEY=${gatewaySecret}\n${promptSecret}\n${toolOutputSecret}\ntool_search_code\nfake_plugin_tool_17-variant\n`,
+            ),
+          );
+          await fs.mkdir(sessionsDir, { recursive: true });
+          await fs.writeFile(
+            path.join(sessionsDir, "failed.jsonl"),
+            `${JSON.stringify({
+              message: {
+                role: "assistant",
+                content: "tool_search_code tool_describe fake_plugin_tool_17-variant",
+              },
+            })}\n`,
+            "utf8",
+          );
+          return jsonResponse({ error: { message: responseSecret } }, { status: 502 });
+        }
+        if (url.includes("/debug/requests?after=0")) {
+          return jsonResponse([
+            {
+              body: {
+                tools: [{ type: "function", name: "tool_search_code" }],
+              },
+              plannedToolName: "tool_search_code",
+              raw: responseSecret,
+              prompt: promptSecret,
+              toolOutput: `${toolOutputSecret} FAKE_PLUGIN_OK fake_plugin_tool_17`,
             },
-          })}\n`,
-          "utf8",
-        );
-        return jsonResponse({ error: { message: responseSecret } }, { status: 502 });
-      }
-      if (url.includes("/debug/requests?after=0")) {
-        return jsonResponse([
+          ]);
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      try {
+        const scenario = await runQaSuiteScenarioSteps("Tool Search failure evidence", [
           {
-            body: {
-              tools: [{ type: "function", name: "tool_search_code" }],
+            name: "runs the compact lane",
+            run: async () => {
+              await runToolSearchGatewayLane({
+                env,
+                fixture: { fakePluginDir: tempRoot, targetTool: "fake_plugin_tool_17" },
+                lane: "code",
+              });
             },
-            plannedToolName: "tool_search_code",
-            raw: responseSecret,
-            prompt: promptSecret,
-            toolOutput: `${toolOutputSecret} FAKE_PLUGIN_OK fake_plugin_tool_17`,
           },
         ]);
+
+        expect(scenario.status).toBe("fail");
+        const renderedError = scenario.details ?? "";
+        expect(renderedError).toContain("Tool Search code lane gateway request failed (HTTP 502)");
+        expect(renderedError).toContain(
+          'providerRequests=[{"plannedToolName":"tool_search_code","declaredToolCount":1,"targetDeclared":false,"bridgeDeclared":true,"targetResultObserved":true}]',
+        );
+        expect(renderedError).toContain(
+          'sessionMentions={"tool_search_code":1,"tool_search":0,"tool_describe":1,"tool_call":0,"fake_plugin_tool_17":0}',
+        );
+        expect(renderedError).toContain(
+          `gatewayLogFacts={"captured":${logMode !== "unavailable"},"mentions":{"tool_search_code":${logMode !== "unavailable"},"tool_search":false,"tool_describe":false,"tool_call":false,"fake_plugin_tool_17":false}}`,
+        );
+        expect(renderedError).not.toContain(gatewaySecret);
+        expect(renderedError).not.toContain(responseSecret);
+        expect(renderedError).not.toContain(promptSecret);
+        expect(renderedError).not.toContain(toolOutputSecret);
+        expect(renderedError.length).toBeLessThan(6_000);
+      } finally {
+        await fs.rm(tempRoot, { force: true, recursive: true });
       }
-      throw new Error(`unexpected fetch: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    try {
-      const scenario = await runQaSuiteScenarioSteps("Tool Search failure evidence", [
-        {
-          name: "runs the compact lane",
-          run: async () => {
-            await runToolSearchGatewayLane({
-              env,
-              fixture: { fakePluginDir: tempRoot, targetTool: "fake_plugin_tool_17" },
-              lane: "code",
-            });
-          },
-        },
-      ]);
-
-      expect(scenario.status).toBe("fail");
-      const renderedError = scenario.details ?? "";
-      expect(renderedError).toContain("Tool Search code lane gateway request failed (HTTP 502)");
-      expect(renderedError).toContain(
-        'providerRequests=[{"plannedToolName":"tool_search_code","declaredToolCount":1,"targetDeclared":false,"bridgeDeclared":true,"targetResultObserved":true}]',
-      );
-      expect(renderedError).toContain(
-        'sessionMentions={"tool_search_code":1,"tool_search":0,"tool_describe":1,"tool_call":0,"fake_plugin_tool_17":0}',
-      );
-      expect(renderedError).toContain(
-        'gatewayLogFacts={"captured":false,"mentions":{"tool_search_code":false,"tool_search":false,"tool_describe":false,"tool_call":false,"fake_plugin_tool_17":false}}',
-      );
-      expect(renderedError).not.toContain(gatewaySecret);
-      expect(renderedError).not.toContain(responseSecret);
-      expect(renderedError).not.toContain(promptSecret);
-      expect(renderedError).not.toContain(toolOutputSecret);
-      expect(renderedError.length).toBeLessThan(6_000);
-    } finally {
-      await fs.rm(tempRoot, { force: true, recursive: true });
-    }
-  });
+    },
+  );
 });
 
 describe("qa fixture response helpers", () => {
