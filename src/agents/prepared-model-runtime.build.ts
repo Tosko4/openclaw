@@ -14,13 +14,15 @@ import type {
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
 import {
+  fingerprintPreparedRuntimeFacts,
+  prepareConfiguredRuntimeFactsBatch,
+} from "./prepared-model-runtime.configured-catalog.js";
+import {
   assertPreparedModelRuntimeInputCurrent,
   assertPreparedModelRuntimeCandidatesCurrent,
   PreparedModelRuntimePublicationSupersededError,
 } from "./prepared-model-runtime.errors.js";
 import {
-  fingerprintPreparedRuntimeFacts,
-  prepareConfiguredRuntimeFactsBatch,
   prepareWorkspaceBuildGroup,
 } from "./prepared-model-runtime.facts.js";
 import {
