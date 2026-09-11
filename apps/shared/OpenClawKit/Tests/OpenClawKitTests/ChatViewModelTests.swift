@@ -11226,7 +11226,10 @@ struct ChatViewModelTests {
 
         await MainActor.run { vm.syncActiveAgentId("beta") }
         try await waitUntil("replacement agent bootstrap completes") {
-            await MainActor.run { vm.activeAgentId == "beta" && vm.sessionId == "sess-beta" }
+            await MainActor.run {
+                // History publishes sessionId before the session list and model catalog settle.
+                vm.activeAgentId == "beta" && vm.sessionId == "sess-beta" && !vm.isLoading
+            }
         }
         await patchGate.open()
         try await waitUntil("late patch updates canonical main row") {

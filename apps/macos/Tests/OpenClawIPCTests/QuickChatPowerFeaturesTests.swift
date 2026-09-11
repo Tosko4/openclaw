@@ -478,7 +478,7 @@ struct QuickChatPowerFeaturesTests {
             #"{"key":"agent:main:main","modelProvider":"fixture","model":"choice"}"#.utf8))
         var keys: [String] = []
         let model = Self.model(
-            sendProvider: { _, _, _, _, key, _ in
+            sendProvider: { _, _, _, key, _ in
                 keys.append(key)
                 if keys.count == 1 { throw URLError(.networkConnectionLost) }
                 return "ok"
@@ -523,7 +523,7 @@ struct QuickChatPowerFeaturesTests {
             #"{"key":"agent:main:main","modelProvider":"fixture","model":"choice","fastMode":false}"#.utf8))
         var keys: [String] = []
         let model = Self.model(
-            sendProvider: { _, _, _, _, key, _ in
+            sendProvider: { _, _, _, key, _ in
                 keys.append(key)
                 if keys.count == 1 { throw URLError(.networkConnectionLost) }
                 return "ok"
@@ -556,7 +556,7 @@ struct QuickChatPowerFeaturesTests {
         var reads = 0
         var sends = 0
         let model = Self.model(
-            sendProvider: { _, _, _, _, _, _ in sends += 1
+            sendProvider: { _, _, _, _, _ in sends += 1
                 return "ok"
             },
             controlsProvider: { _ in
