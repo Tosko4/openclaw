@@ -90,9 +90,11 @@ function renderCustomSessionIconEntry(props: AppearancePickerProps) {
         </button>
       </div>
       <div class="session-menu__icon-custom-hint">
-        ${shortcut
-          ? t("sessionsView.customEmojiHint", { shortcut })
-          : t("sessionsView.customEmojiHintNoShortcut")}
+        ${
+          shortcut
+            ? t("sessionsView.customEmojiHint", { shortcut })
+            : t("sessionsView.customEmojiHintNoShortcut")
+        }
       </div>
     </div>
   `;
@@ -147,22 +149,24 @@ function renderSessionIconGrid(props: AppearancePickerProps) {
         </div>
         <div class="session-menu__icon-section-label">${t("sessionsView.iconGlyphSection")}</div>
         <div class="session-menu__icon-grid">
-          ${props.clearable !== false
-            ? html`
-                <button
-                  type="button"
-                  class="session-menu__icon-choice session-menu__icon-choice--glyph"
-                  aria-label=${t("sessionsView.noIcon")}
-                  title=${props.disabledReason ?? t("sessionsView.noIcon")}
-                  aria-pressed=${String(props.currentIcon === null)}
-                  tabindex=${tabStop === null ? "0" : "-1"}
-                  ?disabled=${props.disabled}
-                  @click=${(event: MouseEvent) => props.onSelect(event, null)}
-                >
-                  ${icons.circleX}
-                </button>
-              `
-            : nothing}
+          ${
+            props.clearable !== false
+              ? html`
+                  <button
+                    type="button"
+                    class="session-menu__icon-choice session-menu__icon-choice--glyph"
+                    aria-label=${t("sessionsView.noIcon")}
+                    title=${props.disabledReason ?? t("sessionsView.noIcon")}
+                    aria-pressed=${String(props.currentIcon === null)}
+                    tabindex=${tabStop === null ? "0" : "-1"}
+                    ?disabled=${props.disabled}
+                    @click=${(event: MouseEvent) => props.onSelect(event, null)}
+                  >
+                    ${icons.circleX}
+                  </button>
+                `
+              : nothing
+          }
           ${SESSION_ICON_GLYPH_IDS.map((icon) => renderChoice(icon, true))}
         </div>
       </div>
@@ -182,18 +186,20 @@ export function renderAppearancePicker(props: AppearancePickerProps) {
       onSelect: props.onSelectColor,
     })}
     ${renderSessionIconGrid(props)}
-    ${props.clearable !== false
-      ? html`<div class="session-menu__separator" role="separator"></div>
-          <button
-            type="button"
-            class="session-menu__icon-remove"
-            ?disabled=${props.disabled || props.colorDisabled}
-            title=${props.disabledReason ?? props.colorDisabledReason ?? nothing}
-            @click=${props.onReset}
-          >
-            ${t("sessionsView.resetAppearance")}
-          </button>`
-      : nothing}
+    ${
+      props.clearable !== false
+        ? html`<div class="session-menu__separator" role="separator"></div>
+            <button
+              type="button"
+              class="session-menu__icon-remove"
+              ?disabled=${props.disabled || props.colorDisabled}
+              title=${props.disabledReason ?? props.colorDisabledReason ?? nothing}
+              @click=${props.onReset}
+            >
+              ${t("sessionsView.resetAppearance")}
+            </button>`
+        : nothing
+    }
   </div>`;
 }
 
