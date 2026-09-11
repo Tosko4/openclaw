@@ -147,10 +147,12 @@ describe("memory source temporal ranking", () => {
       });
       if (ftsUnavailable) {
         await manager.close();
+        // An empty read-only view rejects FTS backfill while leaving canonical chunks intact.
         openOpenClawAgentDatabase({ agentId: "main" }).db.exec(`
           DROP TABLE memory_index_chunks_fts;
           CREATE VIEW memory_index_chunks_fts AS
-            SELECT text, id, path, source, model, start_line, end_line FROM memory_index_chunks;
+            SELECT text, id, path, source, model, start_line, end_line
+            FROM memory_index_chunks WHERE 0;
         `);
         manager = await fixture.getFreshManager(cfg, "cli");
         expect(manager.status().fts).toMatchObject({ enabled: true, available: false });
