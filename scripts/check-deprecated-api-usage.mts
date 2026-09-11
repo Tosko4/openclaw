@@ -174,6 +174,23 @@ const rules: Array<DeprecatedRule & { id: string }> = [
     message: "extensions must use focused non-deprecated plugin SDK subpaths",
   },
   {
+    id: "extension-reply-history-map-helpers",
+    roots: ["extensions"],
+    names: [
+      "buildInboundHistoryFromMap",
+      "buildHistoryContextFromMap",
+      "buildPendingHistoryContextFromMap",
+      "clearHistoryEntriesIfEnabled",
+      "recordPendingHistoryEntryIfEnabled",
+      "recordPendingHistoryEntryWithMedia",
+    ],
+    allowedFiles: [
+      "extensions/mattermost/runtime-api.ts",
+      "extensions/mattermost/src/mattermost/runtime-api.ts",
+    ],
+    message: "use recordConversationObservation or createChannelHistoryWindow",
+  },
+  {
     // Deprecated facades stay exported for third-party plugins, but internal code
     // must not reach them via package specifier or relative import.
     id: "facade-internal-imports",

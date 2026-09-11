@@ -1,5 +1,4 @@
 import { expect, it, vi } from "vitest";
-import { createContextPayload } from "./bot-message-dispatch.context-test-support.js";
 import {
   describeTelegramDispatch,
   createContext,
@@ -11,38 +10,6 @@ import {
 } from "./bot-message-dispatch.test-harness.js";
 
 describeTelegramDispatch("dispatchTelegramMessage status-reactions", () => {
-  it("does not send visible error fallbacks for room events", async () => {
-    dispatchReplyWithBufferedBlockDispatcher.mockRejectedValue(new Error("provider down"));
-
-    await dispatchWithContext({
-      context: createContext({
-        ctxPayload: createContextPayload("ambient failure", {
-          InboundEventKind: "room_event",
-          SessionKey: "agent:main:telegram:group:-100123",
-          ChatType: "group",
-          MessageSid: "101",
-          RawBody: "ambient failure",
-          BodyForAgent: "ambient failure",
-          CommandBody: "ambient failure",
-          CommandAuthorized: false,
-          From: "telegram:group:-100123",
-          To: "telegram:-100123",
-        }),
-        msg: {
-          chat: { id: -100123, type: "supergroup", title: "Room" },
-          message_id: 101,
-          date: 1_700_000_000,
-        },
-        chatId: -100123,
-        isGroup: true,
-        threadSpec: { id: undefined, scope: "none" },
-      }),
-      streamMode: "partial",
-    });
-
-    expect(deliverReplies).not.toHaveBeenCalled();
-  });
-
   it("shows compacting reaction during auto-compaction and resumes thinking", async () => {
     const statusReactionController = {
       setThinking: vi.fn(async () => {}),

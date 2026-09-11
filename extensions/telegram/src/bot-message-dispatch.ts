@@ -296,7 +296,6 @@ export const dispatchTelegramMessage = async (
   const telegramDeps =
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
   const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
-  const isRoomEvent = dispatchContext.ctxPayload.InboundEventKind === "room_event";
   const status = createTelegramDispatchStatus({ context: dispatchContext });
   const tableMode = resolveMarkdownTableMode({
     cfg,
@@ -388,7 +387,7 @@ export const dispatchTelegramMessage = async (
       status.finalizeInBackground({ outcome: "cancelled" }, "cancelled finalize");
       return { kind: "completed" };
     }
-    if (status.controller && !isRoomEvent) {
+    if (status.controller) {
       void status.controller.setThinking();
     }
     try {
@@ -426,7 +425,6 @@ export const dispatchTelegramMessage = async (
   let sentFallback = false;
   const terminalFailure = turn.dispatchError || turn.agentRunFailed;
   const shouldSendFailureFallback =
-    !isRoomEvent &&
     !turn.sendPolicyDenied &&
     (!suppressFailureFallback || turn.agentRunFailed) &&
     !turn.finalAnswerDelivered &&

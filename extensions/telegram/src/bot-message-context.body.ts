@@ -4,7 +4,6 @@ import {
   implicitMentionKindWhen,
   logInboundDrop,
   type BuildChannelInboundEventContextParams,
-  type InboundEventKind,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
@@ -72,7 +71,7 @@ type TelegramInboundBodyResult = {
   commandAuthorized: boolean;
   effectiveWasMentioned: boolean;
   mentionFacts: TelegramMentionFacts;
-  inboundEventKind: InboundEventKind;
+  inboundEventKind: "user_request";
   canDetectMention: boolean;
   shouldBypassMention: boolean;
   hasControlCommand: boolean;

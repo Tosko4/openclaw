@@ -8,7 +8,6 @@ import {
   resolveEnvelopeFormatOptions,
   toLocationContext,
   type NormalizedLocation,
-  type InboundEventKind,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
 import type {
@@ -233,7 +232,7 @@ export async function buildTelegramInboundContextPayload(params: {
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   effectiveWasMentioned: boolean;
-  inboundEventKind: InboundEventKind;
+  inboundEventKind: "user_request";
   groupRequireMention: boolean;
   mentionFacts: TelegramMentionFacts;
   conversationHistory?: ConversationHistoryCapture;

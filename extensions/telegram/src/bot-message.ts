@@ -236,10 +236,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
       );
     }
-    if (
-      context.ctxPayload.InboundEventKind !== "room_event" &&
-      context.initialTypingCueSent !== true
-    ) {
+    if (context.initialTypingCueSent !== true) {
       void context.sendTyping().catch((err: unknown) => {
         logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
       });

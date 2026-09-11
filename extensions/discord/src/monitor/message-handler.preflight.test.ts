@@ -1586,44 +1586,6 @@ describe("preflightDiscordMessage", () => {
     expect(result).toBeNull();
   });
 
-  it.each([
-    { content: "openclaw, take over", pattern: "openclaw" },
-    { content: "`example`\nopenclaw", pattern: "^openclaw$" },
-    { content: "openclaw\n`example`", pattern: "^openclaw$" },
-    { content: "`example` openclaw", pattern: "(?<=`example` )openclaw" },
-    { content: "openclaw `example`", pattern: "openclaw\\s" },
-    { content: "`openclaw` openclaw", pattern: "openclaw" },
-    { content: "hello `openclaw`", pattern: "hello.*openclaw" },
-    { content: "\u200b`openclaw`", pattern: "openclaw" },
-    { content: "İ `openclaw`", pattern: "openclaw" },
-  ])(
-    "does not turn configured pattern $pattern into native bot addressing in $content",
-    async ({ content, pattern }) => {
-      const channelId = "channel-bot-reply-active-pattern";
-      const guildId = "guild-bot-reply-active-pattern";
-      const message = createDiscordMessage({
-        id: "m-bot-reply-active-pattern",
-        channelId,
-        content,
-        mentionedUsers: [{ id: "openclaw-bot" }],
-        type: MessageType.Reply,
-        author: { id: "relay-bot-1", bot: true, username: "Relay" },
-      });
-
-      const result = await runMentionOnlyBotPreflight({
-        cfg: {
-          ...DEFAULT_PREFLIGHT_CFG,
-          messages: { groupChat: { mentionPatterns: [pattern] } },
-        },
-        channelId,
-        guildId,
-        message,
-      });
-
-      expect(result).toBeNull();
-    },
-  );
-
   it.each<{
     contents: [string, string];
     mentions: [boolean, boolean];

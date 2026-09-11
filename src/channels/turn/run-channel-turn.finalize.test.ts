@@ -646,6 +646,22 @@ describe("channel turn finalize", () => {
     expect(afterRecord).not.toHaveBeenCalled();
   });
 
+  it("drops when ingest returns null", async () => {
+    const result = await runChannelTurn({
+      channel: "test",
+      raw: {},
+      adapter: {
+        ingest: () => null,
+        resolveTurn: vi.fn(),
+      },
+    });
+
+    expect(result).toEqual({
+      admission: { kind: "drop", reason: "ingest-null" },
+      dispatched: false,
+    });
+  });
+
   it("handles non-turn event classes without dispatch", async () => {
     const resolveTurn = vi.fn();
     const result = await runChannelTurn({

@@ -4,8 +4,7 @@ import type { TelegramMessageContext } from "./bot-message-context.js";
 
 export function createTelegramDispatchStatus(params: { context: TelegramMessageContext }) {
   const { context } = params;
-  const controller =
-    context.ctxPayload.InboundEventKind === "room_event" ? null : context.statusReactionController;
+  const controller = context.statusReactionController;
   const finalize = async (final: { outcome: "done" | "error" | "cancelled" }) => {
     if (!controller) {
       return;

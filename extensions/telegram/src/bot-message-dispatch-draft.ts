@@ -54,10 +54,9 @@ function renderStreamText(
 }
 
 export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
-  const isRoomEvent = params.context.ctxPayload.InboundEventKind === "room_event";
   const forceBlockStreamingForReasoning =
     params.resolvedReasoningLevel === "on" && params.streamMode !== "progress";
-  const streamDeliveryEnabled = !isRoomEvent && params.streamMode !== "off";
+  const streamDeliveryEnabled = params.streamMode !== "off";
   const previewAvailable =
     params.allowProviderPreview &&
     streamDeliveryEnabled &&
@@ -72,10 +71,7 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
   const streamReasoningInProgressDraft =
     streamReasoningDraft && params.streamMode === "progress" && canStreamAnswerDraft;
   const canStreamReasoningDraft =
-    params.allowProviderPreview &&
-    !isRoomEvent &&
-    streamReasoningDraft &&
-    !streamReasoningInProgressDraft;
+    params.allowProviderPreview && streamReasoningDraft && !streamReasoningInProgressDraft;
   const draftMaxChars =
     params.streamMode === "block"
       ? Math.min(

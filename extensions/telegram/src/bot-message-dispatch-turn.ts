@@ -52,7 +52,6 @@ const TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES = 5;
 
 export async function runTelegramDispatchTurn(turn: Turn) {
   const { context } = turn;
-  const isRoomEvent = context.ctxPayload.InboundEventKind === "room_event";
   const toolProgressEnabled =
     turn.streamMode !== "off" &&
     resolveChannelStreamingPreviewToolProgress(
@@ -60,17 +59,15 @@ export async function runTelegramDispatchTurn(turn: Turn) {
       turn.streamMode !== "progress",
       turn.streamMode,
     );
-  const beginDeliveryCorrelation = () =>
-    telegramInboundEventDelivery.begin(
-      context.ctxPayload.SessionKey,
-      {
-        outboundTo: context.historyKey || String(context.chatId),
-        outboundAccountId: context.route.accountId,
-        markInboundEventDelivered: turn.deliveryState.markDelivered,
-      },
-      { inboundEventKind: context.ctxPayload.InboundEventKind },
-    );
-  const endDeliveryCorrelation = beginDeliveryCorrelation();
+  const endDeliveryCorrelation = telegramInboundEventDelivery.begin(
+    context.ctxPayload.SessionKey,
+    {
+      outboundTo: context.historyKey || String(context.chatId),
+      outboundAccountId: context.route.accountId,
+      markInboundEventDelivered: turn.deliveryState.markDelivered,
+    },
+    { inboundEventKind: context.ctxPayload.InboundEventKind },
+  );
 
   try {
     const { onModelSelected, ...replyPipeline } = (
@@ -162,11 +159,9 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                   abortSignal: turn.turnAdoptionLifecycle.abortSignal,
                 }
               : undefined,
-            sourceReplyDeliveryMode: isRoomEvent ? "message_tool_only" : undefined,
-            queuedDeliveryCorrelations: isRoomEvent
-              ? [{ begin: beginDeliveryCorrelation }]
-              : undefined,
-            suppressTyping: isRoomEvent,
+            sourceReplyDeliveryMode: undefined,
+            queuedDeliveryCorrelations: undefined,
+            suppressTyping: false,
             onPartialReply:
               turn.answerLane.stream || turn.reasoningLane.stream
                 ? (payload) => {
@@ -263,8 +258,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             suppressDefaultToolProgressMessages:
               !turn.streamDeliveryEnabled || Boolean(turn.answerLane.stream),
             suppressToolProgressMessages: !toolProgressEnabled,
-            allowProgressCallbacksWhenSourceDeliverySuppressed:
-              !isRoomEvent && Boolean(turn.answerLane.stream),
+            allowProgressCallbacksWhenSourceDeliverySuppressed: Boolean(turn.answerLane.stream),
             onVerboseProgressVisibility: (isActive) => {
               turn.verboseProgressActive = isActive;
             },
@@ -303,14 +297,8 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             },
             onCommandOutput: (payload) => handleCommandOutput(turn, payload),
             onPatchSummary: (payload) => handlePatchSummary(turn, payload),
-            // Ambient room events are intentionally invisible, including reactions.
-            // User requests in group chats are not room_event turns and retain these callbacks.
-            onCompactionStart: isRoomEvent
-              ? undefined
-              : async () => await handleCompactionStart(turn),
-            onCompactionEnd: isRoomEvent
-              ? undefined
-              : async (payload) => await handleCompactionEnd(turn, payload),
+            onCompactionStart: async () => await handleCompactionStart(turn),
+            onCompactionEnd: async (payload) => await handleCompactionEnd(turn, payload),
             onModelSelected,
           },
         }),

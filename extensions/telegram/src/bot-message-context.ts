@@ -364,7 +364,6 @@ export const buildTelegramMessageContext = async ({
   ) {
     return null;
   }
-  let initialTypingCueSent = false;
   const ensureConfiguredBindingReady = async (): Promise<boolean> => {
     if (bindingMode.kind !== "configured") {
       return true;
@@ -470,14 +469,10 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
 
-  // Send the first typing cue before expensive context/session construction,
-  // but only after intake has accepted the message as a non-room-event turn.
-  if (bodyResult.inboundEventKind !== "room_event") {
-    initialTypingCueSent = true;
-    void sendTyping().catch((err: unknown) => {
-      logVerbose(`telegram early typing cue failed for chat ${chatId}: ${String(err)}`);
-    });
-  }
+  // Send the first typing cue after admission and before expensive context/session construction.
+  void sendTyping().catch((err: unknown) => {
+    logVerbose(`telegram early typing cue failed for chat ${chatId}: ${String(err)}`);
+  });
 
   const { ctxPayload, skillFilter, turn } = await buildTelegramInboundContextPayload({
     cfg,
@@ -520,8 +515,6 @@ export const buildTelegramMessageContext = async ({
     topicName,
     sessionRuntime,
   });
-  const isRoomEvent = ctxPayload.InboundEventKind === "room_event";
-  const canShowStatusReaction = !isRoomEvent;
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "telegram",
     accountId: account.accountId,
@@ -542,10 +535,7 @@ export const buildTelegramMessageContext = async ({
   );
   const statusReactionsConfig = cfg.messages?.statusReactions;
   const statusReactionsEnabled =
-    canShowStatusReaction &&
-    statusReactionsConfig?.enabled === true &&
-    Boolean(reactionApi) &&
-    shouldSendAckReaction;
+    statusReactionsConfig?.enabled === true && Boolean(reactionApi) && shouldSendAckReaction;
   const resolvedStatusReactionEmojis = statusReactionsEnabled
     ? resolveTelegramStatusReactionEmojis({
         initialEmoji: ackReaction,
@@ -654,7 +644,7 @@ export const buildTelegramMessageContext = async ({
     sendTyping,
     sendRecordVoice,
     sendChatActionHandler,
-    initialTypingCueSent,
+    initialTypingCueSent: true,
     ackReactionPromise,
     reactionApi,
     statusReactionController,

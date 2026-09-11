@@ -1,12 +1,8 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it } from "vitest";
-import { createContextPayload } from "./bot-message-dispatch.context-test-support.js";
 import {
   describeTelegramDispatch,
   createContext,
   createReasoningStreamContext,
-  createStatusReactionController,
-  createTelegramDraftStream,
   deliverReplies,
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
@@ -21,9 +17,6 @@ import type {
   DispatchReplyWithBufferedBlockDispatcherArgs,
   TelegramMessageContext,
 } from "./bot-message-dispatch.test-harness.js";
-
-const GROUP_CHAT_ID = -100123;
-const GROUP_SESSION_KEY = "agent:main:telegram:group:-100123";
 
 const emptyDispatchResult = {
   queuedFinal: false,
@@ -45,41 +38,7 @@ function mockTurn(
   });
 }
 
-function createGroupFixture(params: { commandAuthorized?: boolean } = {}) {
-  const { commandAuthorized } = params;
-  const context = (
-    messageId: number,
-    body: string,
-    kind: "user_request" | "room_event" = "room_event",
-    overrides: Partial<TelegramMessageContext> = {},
-  ) =>
-    createContext({
-      ...overrides,
-      ctxPayload: createContextPayload(body, {
-        InboundEventKind: kind,
-        SessionKey: GROUP_SESSION_KEY,
-        ChatType: "group",
-        MessageSid: String(messageId),
-        RawBody: body,
-        BodyForAgent: body,
-        CommandBody: body,
-        CommandAuthorized: commandAuthorized === true,
-        From: `telegram:group:${GROUP_CHAT_ID}`,
-        To: `telegram:${GROUP_CHAT_ID}`,
-      }),
-      msg: {
-        chat: { id: GROUP_CHAT_ID, type: "supergroup", title: "Room" },
-        message_id: messageId,
-        date: 1_700_000_000,
-      },
-      chatId: GROUP_CHAT_ID,
-      isGroup: true,
-      threadSpec: { scope: "none" },
-    });
-  return { context };
-}
-
-describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => {
+describeTelegramDispatch("dispatchTelegramMessage reasoning delivery", () => {
   it("keeps shared durable reasoning payloads disabled when reasoning is off", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue(emptyDispatchResult);
 
@@ -274,91 +233,5 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(sendMessageTelegram).not.toHaveBeenCalled();
-  });
-
-  it("runs ambient room events as tool-only invisible turns", async () => {
-    const { context } = createGroupFixture();
-    const statusReactionController = createStatusReactionController();
-    loadSessionStore.mockReturnValue({
-      [GROUP_SESSION_KEY]: { reasoningLevel: "stream" },
-    });
-    mockTurn(async ({ replyOptions }) => {
-      await replyOptions?.onReasoningStream?.({ text: "<think>ambient reasoning</think>" });
-      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-      await replyOptions?.onCompactionStart?.();
-      await replyOptions?.onCompactionEnd?.();
-    }, messageToolOnlyDispatchResult);
-
-    await dispatchWithContext({
-      context: context(99, "ambient", "room_event", {
-        statusReactionController: statusReactionController as never,
-      }),
-      streamMode: "partial",
-    });
-
-    const dispatchParams = mockCallArg(dispatchReplyWithBufferedBlockDispatcher) as {
-      replyOptions?: {
-        sourceReplyDeliveryMode?: string;
-        suppressTyping?: boolean;
-        allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
-        onReasoningStream?: unknown;
-        onCompactionStart?: unknown;
-        onCompactionEnd?: unknown;
-      };
-    };
-    expect(dispatchParams.replyOptions?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(dispatchParams.replyOptions?.suppressTyping).toBe(true);
-    expect(dispatchParams.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(
-      false,
-    );
-    expect(dispatchParams.replyOptions?.onReasoningStream).toBeUndefined();
-    expect(dispatchParams.replyOptions?.onCompactionStart).toBeUndefined();
-    expect(dispatchParams.replyOptions?.onCompactionEnd).toBeUndefined();
-    expect(createTelegramDraftStream).not.toHaveBeenCalled();
-    expect(statusReactionController.setTool).not.toHaveBeenCalled();
-    expect(statusReactionController.setCompacting).not.toHaveBeenCalled();
-    expect(statusReactionController.setThinking).not.toHaveBeenCalled();
-    expect(deliverReplies).not.toHaveBeenCalled();
-  });
-
-  it("does not let room events supersede active user-request dispatch", async () => {
-    const { context } = createGroupFixture({ commandAuthorized: true });
-    const firstStarted = createDeferred<void>();
-    const firstRelease = createDeferred<void>();
-    const roomEventStarted = createDeferred<void>();
-    dispatchReplyWithBufferedBlockDispatcher
-      .mockImplementationOnce(async ({ dispatcherOptions }) => {
-        firstStarted.resolve();
-        await firstRelease.promise;
-        await dispatcherOptions.deliver({ text: "visible request answer" }, { kind: "final" });
-        return {
-          queuedFinal: true,
-          counts: { block: 0, final: 1, tool: 0 },
-        };
-      })
-      .mockImplementationOnce(async () => {
-        roomEventStarted.resolve();
-        return messageToolOnlyDispatchResult;
-      });
-
-    const userRequestPromise = dispatchWithContext({
-      context: context(99, "@bot answer this", "user_request"),
-      streamMode: "off",
-    });
-    await firstStarted.promise;
-    const roomEventPromise = dispatchWithContext({
-      context: context(100, "ambient chatter"),
-      streamMode: "off",
-    });
-    await roomEventStarted.promise;
-    firstRelease.resolve();
-    await Promise.all([userRequestPromise, roomEventPromise]);
-
-    const deliveredTexts = deliverReplies.mock.calls.flatMap((call) =>
-      ((call[0] as { replies?: Array<{ text?: string }> }).replies ?? []).map(
-        (reply) => reply.text,
-      ),
-    );
-    expect(deliveredTexts).toContain("visible request answer");
   });
 });
