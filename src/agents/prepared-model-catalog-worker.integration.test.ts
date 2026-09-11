@@ -64,11 +64,7 @@ const { makeTempDir, retireAfterTest, waitForWorkers, waitForMarker } =
 async function createStaticSnapshot(
   spinMs: number,
   envOverride: NodeJS.ProcessEnv = {},
-  options?: {
-    hydrateExternalCliProviderIds?: readonly string[];
-    codexNativeOwner?: boolean;
-    builtPluginVersion?: string;
-    asyncSyntheticAuth?: boolean;
+  options?: Parameters<typeof createCatalogFixture>[3] & {
     prepareInboundPluginRegistry?: boolean;
     readOnly?: boolean;
     metadataWorkspace?: "gateway" | "none" | "activation";
@@ -184,7 +180,7 @@ describe("prepared model catalog worker boundary", () => {
   });
 
   it("keeps explicit read-only full inventories discoverable without a runtime registry", async () => {
-    const fixture = await createStaticSnapshot(0, {}, { readOnly: true });
+    const fixture = await createStaticSnapshot(0, {}, { readOnly: true, declareProvider: true });
     expect(fixture.snapshot.pluginRegistry).toBeUndefined();
 
     const catalog = await fixture.snapshot.loadFullModelCatalog!();
@@ -436,8 +432,9 @@ describe("prepared model catalog worker boundary", () => {
         },
       );
       const syntheticAuthProbePath = path.join(fixture.root, "synthetic-auth-probes.txt");
+      const nativeMode = { source: "native", mode: "oauth" };
 
-      expect(fixture.snapshot.authModes[HARNESS_ID]).toBe("api_key");
+      expect(fixture.snapshot.authModes[HARNESS_ID]).toEqual(nativeMode);
       expect(fixture.snapshot.authModes[DISCOVERED_HARNESS_ID]).toBeUndefined();
       expect(fixture.snapshot.authModes[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
       expect(fixture.snapshot.authModes[PROVIDER_ID]).toBeUndefined();
@@ -451,6 +448,7 @@ describe("prepared model catalog worker boundary", () => {
       expect(fullAuth?.credentials?.[DISCOVERED_HARNESS_ID]).toEqual({
         type: "api_key",
         key: "discovered-native-login-not-real",
+        nativeAuth: { runtime: DISCOVERED_HARNESS_ID, mode: "oauth" },
       });
       expect(catalog).not.toHaveProperty("credentials");
 
@@ -468,8 +466,8 @@ describe("prepared model catalog worker boundary", () => {
           MISSING_AUTH_HARNESS_ID,
         ]);
       }
-      expect(fullAuth?.authModes[HARNESS_ID]).toBe("api_key");
-      expect(fullAuth?.authModes[DISCOVERED_HARNESS_ID]).toBe("api_key");
+      expect(fullAuth?.authModes[HARNESS_ID]).toEqual(nativeMode);
+      expect(fullAuth?.authModes[DISCOVERED_HARNESS_ID]).toEqual(nativeMode);
       expect(fullAuth?.authModes[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
       expect(fullAuth?.authModes[PROVIDER_ID]).toBe("oauth");
     },
@@ -529,7 +527,7 @@ describe("prepared model catalog worker boundary", () => {
   );
 
   it("refreshes durable auth before provider hooks decide catalog membership", async () => {
-    const fixture = await createStaticSnapshot(0);
+    const fixture = await createStaticSnapshot(0, {}, { declareProvider: true });
     saveAuthProfileStore(
       {
         version: 1,
@@ -1007,7 +1005,7 @@ describe("prepared model catalog worker boundary", () => {
   });
 
   it("preserves ref-only api-key and token profiles through the real worker", async () => {
-    const fixture = await createStaticSnapshot(0);
+    const fixture = await createStaticSnapshot(0, {}, { declareProvider: true });
     const authStore = {
       version: 1,
       profiles: {

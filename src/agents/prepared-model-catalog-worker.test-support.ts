@@ -333,6 +333,7 @@ export function createCatalogFixture(
     codexNativeOwner?: boolean;
     builtPluginVersion?: string;
     asyncSyntheticAuth?: boolean;
+    declareProvider?: boolean;
   },
 ) {
   const root = makeTempDir("openclaw-model-catalog-worker-");
@@ -356,6 +357,15 @@ export function createCatalogFixture(
     [REF_ONLY_TOKEN_ENV]: "ref-only-token-secret-not-real",
   };
   const config = {
+    ...(options?.declareProvider
+      ? {
+          models: {
+            providers: {
+              [PROVIDER_ID]: { baseUrl: "https://worker-catalog.invalid/v1", models: [] },
+            },
+          },
+        }
+      : {}),
     agents: {
       defaults: {
         model: `${PROVIDER_ID}/sqlite-model`,
