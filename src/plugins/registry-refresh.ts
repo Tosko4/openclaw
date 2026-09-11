@@ -104,7 +104,7 @@ export async function refreshPluginRegistryAfterConfigMutation(
   if (params.invalidateRuntimeCache !== false) {
     await invalidatePluginRuntimeDiscoveryAfterConfigMutation({
       ...params,
-      assertCurrent: lease?.assertOwned,
+      assertCurrent: lease ? () => lease.assertOwned() : undefined,
     });
   }
 }

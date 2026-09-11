@@ -238,6 +238,9 @@ describe("plugin lifecycle lease", () => {
         const recordsModuleUrl = pathToFileURL(
           path.resolve("src/plugins/installed-plugin-index-records.ts"),
         ).href;
+        const seedModuleUrl = pathToFileURL(
+          path.resolve("src/plugins/test-helpers/installed-plugin-index.ts"),
+        ).href;
         const goMarker = state.path("go");
         const childScript = await state.writeText(
           "record-cache-child.mts",
@@ -246,8 +249,8 @@ describe("plugin lifecycle lease", () => {
           import { withPluginLifecycleLease } from ${JSON.stringify(leaseModuleUrl)};
           import {
             loadInstalledPluginIndexInstallRecords,
-            writePersistedInstalledPluginIndexInstallRecords,
           } from ${JSON.stringify(recordsModuleUrl)};
+          import { seedInstalledPluginIndex } from ${JSON.stringify(seedModuleUrl)};
           const [pluginId, stateDir, goMarker] = process.argv.slice(2);
           process.env.OPENCLAW_STATE_DIR = stateDir;
           const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -263,7 +266,7 @@ describe("plugin lifecycle lease", () => {
           }
           await withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 5_000 }, async () => {
             const records = await loadInstalledPluginIndexInstallRecords();
-            await writePersistedInstalledPluginIndexInstallRecords({
+            await seedInstalledPluginIndex({
               ...records,
               [pluginId]: {
                 source: "path",

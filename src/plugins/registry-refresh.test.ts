@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { initializePublishedConfigRuntimeEnv } from "../config/config-env-vars.js";
 import * as configIO from "../config/io.factory.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { writePersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndexRowSync } from "./installed-plugin-index-row.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
@@ -12,6 +11,7 @@ import {
   refreshPluginRegistryAfterConfigMutation,
 } from "./registry-refresh.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
+import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 
 const runtimeCache = vi.hoisted(() => ({ clear: vi.fn() }));
 vi.mock("./loader.js", () => ({ clearPluginRegistryLoadCache: runtimeCache.clear }));
@@ -25,7 +25,7 @@ describe("plugin registry refresh config ownership", () => {
     await withOpenClawTestState({ label: "registry-refresh-lease-loss" }, async (state) => {
       const config = { plugins: { enabled: false } };
       await state.writeConfig(config);
-      await writePersistedInstalledPluginIndexInstallRecords({}, { config, env: state.env });
+      await seedInstalledPluginIndex({}, { config, env: state.env });
       const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
       const controller = new AbortController();
       const assertCurrent = vi.fn();
@@ -76,13 +76,16 @@ describe("plugin registry refresh config ownership", () => {
         async (state) => {
           const config = { plugins: { enabled: false } };
           await state.writeConfig(config);
-          await writePersistedInstalledPluginIndexInstallRecords({}, { config, env: state.env });
+          await seedInstalledPluginIndex({}, { config, env: state.env });
           const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
           const warn = vi.fn();
           await withPluginLifecycleLease({ env: state.env }, async (lease) => {
             const assertOwnedInTransaction = vi
-              .fn(lease.assertOwnedInTransaction)
+              .fn<typeof lease.assertOwnedInTransaction>((database) =>
+                lease.assertOwnedInTransaction(database),
+              )
               .mockImplementationOnce(() => {
+                // oxlint-disable-next-line typescript/only-throw-error -- JavaScript callbacks may throw falsey values; retain exact refusal identity.
                 throw refusal;
               });
             const result = await refreshPluginRegistryAfterConfigMutation({
@@ -111,7 +114,7 @@ describe("plugin registry refresh config ownership", () => {
     await withOpenClawTestState({ label: "registry-refresh-explicit-database" }, async (state) => {
       const config = { plugins: { enabled: false } };
       await state.writeConfig(config);
-      await writePersistedInstalledPluginIndexInstallRecords(
+      await seedInstalledPluginIndex(
         { default: { source: "archive" } },
         {
           config,
@@ -121,7 +124,7 @@ describe("plugin registry refresh config ownership", () => {
       const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
       const filePath = state.path("owned-plugin-state.sqlite");
       const records = { owned: { source: "archive" as const } };
-      await writePersistedInstalledPluginIndexInstallRecords(records, { config, filePath });
+      await seedInstalledPluginIndex(records, { config, filePath });
       await withPluginLifecycleLease({ path: filePath }, async (lease) => {
         await refreshPluginRegistryAfterConfigMutation({
           reason: "source-changed",

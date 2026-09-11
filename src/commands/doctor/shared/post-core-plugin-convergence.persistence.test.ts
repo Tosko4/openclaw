@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { cleanupRetainedPluginInstallGenerations } from "../../../gateway/server-retained-plugin-cleanup.js";
@@ -7,11 +8,11 @@ import { commitPluginInstallRecordsWithConfig } from "../../../plugins/install-r
 import {
   loadInstalledPluginIndexInstallRecords,
   readPersistedInstalledPluginIndexInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecords,
 } from "../../../plugins/installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndexRowSync } from "../../../plugins/installed-plugin-index-row.js";
 import { resolveRetainedManagedNpmInstallMarkerPath } from "../../../plugins/managed-npm-retention.js";
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
+import { seedInstalledPluginIndex } from "../../../plugins/test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "../../../plugins/test-helpers/managed-npm-plugin.js";
 import { runPluginUpdateAttempt } from "../../../plugins/update-attempt.js";
 import * as pluginUpdates from "../../../plugins/update.js";
@@ -26,7 +27,7 @@ describe("post-core plugin persistence cancellation", () => {
     await withOpenClawTestState({ label: "plugin-marker-fresh-owner" }, async (state) => {
       const cfg = { plugins: { enabled: false } };
       await state.writeConfig(cfg);
-      const records: Record<string, PluginInstallRecord> = {};
+      const records: Record<string, PluginInstallRecord & { installPath: string }> = {};
       for (const pluginId of ["first-retained", "second-retained"]) {
         const installPath = writeManagedNpmPlugin({
           stateDir: state.stateDir,
@@ -42,16 +43,16 @@ describe("post-core plugin persistence cancellation", () => {
           resolvedVersion: "1.0.0",
         };
       }
-      await writePersistedInstalledPluginIndexInstallRecords(records, {
+      await seedInstalledPluginIndex(records, {
         config: cfg,
         env: state.env,
       });
       const configBefore = fs.readFileSync(state.configPath, "utf8");
       const firstMarker = resolveRetainedManagedNpmInstallMarkerPath(
-        records["first-retained"].installPath!,
+        expectDefined(records["first-retained"], "first retained record").installPath,
       );
       const secondMarker = resolveRetainedManagedNpmInstallMarkerPath(
-        records["second-retained"].installPath!,
+        expectDefined(records["second-retained"], "second retained record").installPath,
       );
       const controller = new AbortController();
       const refusal = new Error("caller revoked during marker compensation");
@@ -97,7 +98,7 @@ describe("post-core plugin persistence cancellation", () => {
           cfg,
           env: state.env,
           baselineInstallRecords: freshRecords,
-          beforePersistentEffect: lease.assertOwned,
+          beforePersistentEffect: () => lease.assertOwned(),
         });
         expect(result.errored).toBe(false);
         expect(result.warnings).toEqual([]);
@@ -107,7 +108,7 @@ describe("post-core plugin persistence cancellation", () => {
       await cleanupRetainedPluginInstallGenerations({ log, startupInstallPaths: [] });
       expect(controller.signal.aborted).toBe(true);
       for (const record of Object.values(records)) {
-        expect(fs.readFileSync(path.join(record.installPath!, "dist", "index.js"), "utf8")).toBe(
+        expect(fs.readFileSync(path.join(record.installPath, "dist", "index.js"), "utf8")).toBe(
           "export {};\n",
         );
       }
@@ -121,7 +122,7 @@ describe("post-core plugin persistence cancellation", () => {
       const cfg = { plugins: { enabled: false } };
       const previous: Record<string, PluginInstallRecord> = { previous: { source: "archive" } };
       const next: Record<string, PluginInstallRecord> = { next: { source: "archive" } };
-      await writePersistedInstalledPluginIndexInstallRecords(previous, {
+      await seedInstalledPluginIndex(previous, {
         config: cfg,
         env: state.env,
       });
@@ -156,7 +157,7 @@ describe("post-core plugin persistence cancellation", () => {
         spec: "peerplugin@1.0.0",
         installPath: state.statePath("extensions", "peerplugin"),
       };
-      await writePersistedInstalledPluginIndexInstallRecords({}, { config: cfg, env: state.env });
+      await seedInstalledPluginIndex({}, { config: cfg, env: state.env });
       const refusal = new Error("initiating-owner store read failed");
       let checks = 0;
       vi.spyOn(pluginUpdates, "updateNpmInstalledPlugins").mockImplementationOnce(
