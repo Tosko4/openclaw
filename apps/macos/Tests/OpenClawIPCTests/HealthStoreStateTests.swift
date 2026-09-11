@@ -106,8 +106,7 @@ struct HealthStoreStateTests {
                 try Self.render(
                     DebugSettings(state: state),
                     to: output.appendingPathComponent("\(name).png"))
-                try store.summaryLine.write(
-                    to: output.appendingPathComponent("\(name)-health.txt"), atomically: true, encoding: .utf8)
+                try Data(store.summaryLine.utf8).write(to: output.appendingPathComponent("\(name)-health.txt"))
             }
         }
     }
