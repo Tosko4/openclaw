@@ -124,7 +124,7 @@ describe("prepared model catalog builder", () => {
       expect(
         loadManifestModelCatalog({
           config,
-          get metadataSnapshot() {
+          get metadataSnapshot(): never {
             throw new Error("replace must not resolve manifest metadata");
           },
         }),
