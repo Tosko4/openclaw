@@ -150,8 +150,10 @@ async function repairMissingPluginInstalls(params: {
 }): Promise<RepairMissingPluginInstallsResult> {
   // Baseline, awaited review, package publication, and the index write share one generation.
   return await withPluginLifecycleLease({ env: params.env }, (lease) =>
-    withPluginInstallTransactions(params, lease.assertOwned, (owned) =>
-      repairMissingPluginInstallsWithLease(owned, lease),
+    withPluginInstallTransactions(
+      params,
+      () => lease.assertOwned(),
+      (owned) => repairMissingPluginInstallsWithLease(owned, lease),
     ),
   );
 }

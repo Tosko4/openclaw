@@ -89,7 +89,7 @@ export async function syncPluginsForUpdateChannel(params: {
     (lease) =>
       withPluginInstallTransactions(
         params,
-        lease.assertOwned,
+        () => lease.assertOwned(),
         syncPluginsForUpdateChannelWithLease,
       ),
   );

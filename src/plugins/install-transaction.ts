@@ -127,7 +127,9 @@ export async function withPluginInstallTransactions<
         await settlePluginInstallTransactions(transactions, "rollback");
       } catch (rollbackError) {
         if (!refusal) {
-          throw new AggregateError([error, rollbackError], "Plugin install recovery failed");
+          throw new AggregateError([error, rollbackError], "Plugin install recovery failed", {
+            cause: rollbackError,
+          });
         }
       }
     }

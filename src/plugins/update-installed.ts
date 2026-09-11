@@ -116,7 +116,7 @@ export async function updateNpmInstalledPlugins(params: {
     return await runInstalledPluginUpdate(params);
   }
   return await withPluginLifecycleLease({}, (lease) =>
-    withPluginInstallTransactions(params, lease.assertOwned, runInstalledPluginUpdate),
+    withPluginInstallTransactions(params, () => lease.assertOwned(), runInstalledPluginUpdate),
   );
 }
 
