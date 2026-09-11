@@ -5,7 +5,7 @@ The sidebar is cropped, and provider/model names are synthetic fixture labels.
 
 - Before: `f32dcfefe6e013dafd660845d008f1cf6b158170`.
 - Routing after: `981050e982410cac1c3e440272b671dbd8ee2dfe`.
-- Commands after: `6956cd7e53f2e53bf852c2da2bb77919c2f78a15`.
+- Commands after: `6ea40794701d7064a5ed6c2ed47afedeb86cc470`.
 
 `routing-before.png` shows the first reply changing to Model Y after New session displayed Model X. `routing-after.png` keeps Model X. Later corrections do not change session creation or reply selection.
 
