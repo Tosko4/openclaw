@@ -5,11 +5,18 @@ import fs from "node:fs/promises";
 import type http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  releaseUpdateCommandPreflightForHandoff,
+  withUpdateCommandExecutor,
+} from "../cli/update-cli/update-command-executor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as temporaryState from "../infra/tmp-openclaw-dir.js";
+import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
 import {
@@ -36,6 +43,7 @@ import {
   type RegistryPackage,
 } from "./test-helpers/npm-registry-fixtures.js";
 import { syncPluginsForUpdateChannel } from "./update-channel.js";
+import { convergePluginReleaseCohort } from "./update-cohort.js";
 
 const tempDirs = createTempDirTracker();
 const servers: http.Server[] = [];
@@ -44,6 +52,7 @@ const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[ke
 const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const server of servers.splice(0)) {
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
@@ -105,6 +114,146 @@ async function installNpmPlugin(params: {
 }
 
 describe("installPluginFromNpmSpec e2e", () => {
+  it.each(["bridge", "installed"] as const)(
+    "keeps the old %s package when updater authority closes after consent",
+    { timeout: 180_000 },
+    async (route) => {
+      await withOpenClawTestState(
+        { label: `cohort-publication-${route}`, env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+        async (state) => {
+          const packageName = uniquePackageName("cohort-owner");
+          const versions = await packPlugins(state.path("packages"), [
+            { packageName, version: "1.0.0", manifest: { providers: ["existing-provider"] } },
+            {
+              packageName,
+              version: "2.0.0",
+              manifest: { providers: ["existing-provider", "new-provider"] },
+            },
+          ]);
+          await useStaticRegistry([{ packageName, latest: "2.0.0", versions }]);
+          const npmRoot = state.statePath("npm");
+          const roots = {
+            npmDir: npmRoot,
+            extensionsDir: state.statePath("extensions"),
+            gitDir: state.statePath("git"),
+            stateDir: state.stateDir,
+          };
+          const installed = await installNpmPlugin({ npmRoot, spec: `${packageName}@1.0.0` });
+          if (!installed.ok) {
+            throw new Error(installed.error);
+          }
+          const projectRoot = pluginNpmProjectRoot(npmRoot, packageName);
+          const protectedFiles = [
+            path.join(projectRoot, "package.json"),
+            path.join(projectRoot, "package-lock.json"),
+            path.join(installed.targetDir, "package.json"),
+            path.join(installed.targetDir, "dist", "index.js"),
+          ];
+          const original = await Promise.all(protectedFiles.map((file) => fs.readFile(file)));
+          const originalIdentity = await fs.stat(projectRoot);
+          const bundledPath = state.path("old", "extensions", packageName);
+          const config: OpenClawConfig = {
+            plugins: {
+              entries: { [packageName]: { enabled: true } },
+              ...(route === "bridge" ? { load: { paths: [bundledPath] } } : {}),
+              installs: {
+                [packageName]:
+                  route === "bridge"
+                    ? { source: "path", sourcePath: bundledPath, installPath: bundledPath }
+                    : {
+                        source: "npm",
+                        spec: packageName,
+                        installPath: installed.targetDir,
+                        version: "1.0.0",
+                      },
+              },
+            },
+          };
+          const control = state.path("control");
+          await fs.mkdir(control);
+          vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+
+          for (const revoke of [true, false]) {
+            const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
+            await withUpdateCommandExecutor(run.runId, async (executor) => {
+              const fence = await executor.enter(state.root, { preflight: true });
+              let consented = false;
+              let publicationProbeReached = false;
+              const realpath = fs.realpath;
+              const probe = vi
+                .spyOn(fs, "realpath")
+                .mockImplementation(async (...args: Parameters<typeof fs.realpath>) => {
+                  const result = await realpath(...args);
+                  if (
+                    consented &&
+                    !publicationProbeReached &&
+                    String(args[0]) === path.dirname(projectRoot)
+                  ) {
+                    publicationProbeReached = true;
+                    fence.assertCurrent();
+                    if (revoke) {
+                      // Consent has completed; close the real updater across the
+                      // install owner's subsequent filesystem preparation await.
+                      releaseUpdateCommandPreflightForHandoff(fence);
+                      expect(fence.assertCurrent).toThrow();
+                    }
+                  }
+                  return result;
+                });
+              try {
+                const operation = withPluginInstallRoots(roots, () =>
+                  convergePluginReleaseCohort({
+                    config,
+                    channel: "stable",
+                    timeoutMs: 120_000,
+                    env: state.env,
+                    workspaceDir: state.root,
+                    beforePersistentEffect: fence.assertCurrent,
+                    ...(route === "bridge"
+                      ? {
+                          externalizedBundledPluginBridges: [
+                            { bundledPluginId: packageName, npmSpec: packageName },
+                          ],
+                        }
+                      : {}),
+                    onCapabilityConsent: async (review) => {
+                      consented = true;
+                      return { reviewToken: review.reviewToken };
+                    },
+                  }),
+                );
+                if (revoke) {
+                  await expect(operation).rejects.toThrow("ownership is no longer current");
+                  expect(
+                    await Promise.all(protectedFiles.map((file) => fs.readFile(file))),
+                  ).toEqual(original);
+                  const currentIdentity = await fs.stat(projectRoot);
+                  expect([currentIdentity.dev, currentIdentity.ino]).toEqual([
+                    originalIdentity.dev,
+                    originalIdentity.ino,
+                  ]);
+                } else {
+                  const result = await operation;
+                  expect(result.config.plugins?.installs?.[packageName]?.version).toBe("2.0.0");
+                  expect(result.remainingMissingPayloads).toEqual([]);
+                  expect(
+                    await readJson<{ version: string }>(
+                      path.join(installed.targetDir, "package.json"),
+                    ),
+                  ).toMatchObject({ version: "2.0.0" });
+                }
+                expect(consented).toBe(true);
+                expect(publicationProbeReached).toBe(true);
+              } finally {
+                probe.mockRestore();
+              }
+            });
+          }
+        },
+      );
+    },
+  );
+
   it.each(["npm", "npm-pack"] as const)(
     "preserves a real %s successor when an earlier lifecycle lease has closed",
     { timeout: 120_000 },

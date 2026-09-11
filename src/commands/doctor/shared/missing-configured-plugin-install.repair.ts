@@ -8,6 +8,10 @@ import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
 } from "../../../plugins/config-state.js";
+import {
+  copyPluginInstallTransactionRequest,
+  withPluginInstallTransactions,
+} from "../../../plugins/install-transaction.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../../../plugins/install-types.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "../../../plugins/installed-plugin-index-records.js";
 import { isPayloadMissing } from "../../../plugins/payload-verification.js";
@@ -144,34 +148,12 @@ async function repairMissingPluginInstalls(params: {
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<RepairMissingPluginInstallsResult> {
-  // Installer outcomes can normalize exceptions. Preserve the first owner
-  // refusal through that conversion and every later persistent effect.
-  let effectFailure: { error: unknown } | undefined;
-  const beforePersistentEffect = params.beforePersistentEffect
-    ? async () => {
-        if (effectFailure) {
-          throw effectFailure.error;
-        }
-        try {
-          await params.beforePersistentEffect?.();
-        } catch (error) {
-          effectFailure ??= { error };
-          throw effectFailure.error;
-        }
-      }
-    : undefined;
-  try {
-    // Baseline, awaited review, package publication, and the index write share one generation.
-    const result = await withPluginLifecycleLease({ env: params.env }, (lease) =>
-      repairMissingPluginInstallsWithLease({ ...params, beforePersistentEffect }, lease),
-    );
-    if (effectFailure) {
-      throw effectFailure.error;
-    }
-    return result;
-  } catch (error) {
-    throw effectFailure ? effectFailure.error : error;
-  }
+  // Baseline, awaited review, package publication, and the index write share one generation.
+  return await withPluginLifecycleLease({ env: params.env }, (lease) =>
+    withPluginInstallTransactions(params, lease.assertOwned, (owned) =>
+      repairMissingPluginInstallsWithLease(owned, lease),
+    ),
+  );
 }
 
 async function repairMissingPluginInstallsWithLease(
@@ -305,32 +287,34 @@ async function repairMissingPluginInstallsWithLease(
         repairRecords[pluginId] = forceNpmInstallRecordRepair(record);
       }
     }
-    const updateResult = await updateNpmInstalledPlugins({
-      config: {
-        ...params.cfg,
-        plugins: {
-          ...params.cfg.plugins,
-          installs: repairRecords,
+    const updateResult = await updateNpmInstalledPlugins(
+      copyPluginInstallTransactionRequest(params, {
+        config: {
+          ...params.cfg,
+          plugins: {
+            ...params.cfg.plugins,
+            installs: repairRecords,
+          },
         },
-      },
-      pluginIds: missingRecordedPluginIds,
-      skipDisabledPlugins: true,
-      updateChannel,
-      coreVersion: resolveCompatibilityHostVersion(env),
-      logger: {
-        terminalLinks: false,
-        warn: (message) => {
-          if (isClawHubReviewNotice(message)) {
-            notices.push(stripAnsi(message));
-            return;
-          }
-          warnings.push(message);
+        pluginIds: missingRecordedPluginIds,
+        skipDisabledPlugins: true,
+        updateChannel,
+        coreVersion: resolveCompatibilityHostVersion(env),
+        logger: {
+          terminalLinks: false,
+          warn: (message) => {
+            if (isClawHubReviewNotice(message)) {
+              notices.push(stripAnsi(message));
+              return;
+            }
+            warnings.push(message);
+          },
+          error: (message) => warnings.push(message),
         },
-        error: (message) => warnings.push(message),
-      },
-      ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
-      beforePersistentEffect: params.beforePersistentEffect,
-    });
+        ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
+        beforePersistentEffect: params.beforePersistentEffect,
+      }),
+    );
     for (const outcome of updateResult.outcomes) {
       if (
         outcome.status === "unchanged" &&
@@ -416,18 +400,20 @@ async function repairMissingPluginInstallsWithLease(
         })
       : null;
     const previousRecords = nextRecords;
-    const installed = await installCandidate({
-      candidate,
-      config: params.cfg,
-      records: nextRecords,
-      env,
-      updateChannel,
-      mode: shouldReplaceBrokenOfficialInstall ? "update" : "install",
-      preferNpm: preferNpmInstalls,
-      repairReason,
-      ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
-      beforePersistentEffect: params.beforePersistentEffect,
-    });
+    const installed = await installCandidate(
+      copyPluginInstallTransactionRequest(params, {
+        candidate,
+        config: params.cfg,
+        records: nextRecords,
+        env,
+        updateChannel,
+        mode: shouldReplaceBrokenOfficialInstall ? "update" : "install",
+        preferNpm: preferNpmInstalls,
+        repairReason,
+        ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
+        beforePersistentEffect: params.beforePersistentEffect,
+      }),
+    );
     if (shouldReplaceBrokenOfficialInstall) {
       const installedRecord = installed.records[candidate.pluginId];
       const replacementSucceeded = installed.records !== previousRecords;
