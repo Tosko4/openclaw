@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import "../styles/base.css";
 import "../styles/chat/text.css";
+import "../styles/chat/grouped.css";
 
 const title = "A resolved session title long enough to need truncation in a narrow chat bubble";
 
@@ -56,18 +57,18 @@ describe("session link presentation", () => {
     },
   );
 
-  it.each(["sidebar-markdown", "chat-reply-attribution"])(
-    "shares the titled-link treatment in %s",
-    (className) => {
-      const host = document.createElement("div");
-      host.id = "session-link-proof";
-      host.className = className;
-      host.innerHTML = `<a class="markdown-session-link markdown-session-link--titled"><span class="session-label">${title}</span></a><a class="markdown-session-link">untitled</a>`;
-      document.body.append(host);
-      const [titled, untitled] = host.querySelectorAll("a");
-      expect(getComputedStyle(titled!).color).toBe(getComputedStyle(untitled!).color);
-      expect(getComputedStyle(titled!).display).toBe("inline-grid");
-      expect(getComputedStyle(titled!.firstElementChild!).textOverflow).toBe("ellipsis");
-    },
-  );
+  it.each([
+    ["sidebar-markdown", "inline-grid"],
+    ["chat-reply-attribution", "grid"],
+  ])("shares the titled-link treatment in %s", (className, expectedDisplay) => {
+    const host = document.createElement("div");
+    host.id = "session-link-proof";
+    host.className = className;
+    host.innerHTML = `<a class="markdown-session-link markdown-session-link--titled"><span class="session-label">${title}</span></a><a class="markdown-session-link">untitled</a>`;
+    document.body.append(host);
+    const [titled, untitled] = host.querySelectorAll("a");
+    expect(getComputedStyle(titled!).color).toBe(getComputedStyle(untitled!).color);
+    expect(getComputedStyle(titled!).display).toBe(expectedDisplay);
+    expect(getComputedStyle(titled!.firstElementChild!).textOverflow).toBe("ellipsis");
+  });
 });
