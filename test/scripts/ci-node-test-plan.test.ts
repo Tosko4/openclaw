@@ -87,6 +87,69 @@ function nonToolingPlacement(plan: CompactNodeTestShard[]) {
     })
     .toSorted((a, b) => a.groups.join("\0").localeCompare(b.groups.join("\0")));
 }
+const timingFamilies = (plan: CompactNodeTestShard[]) => {
+  const families = new Map<
+    string,
+    Array<{ group: CompactNodeTestShard["groups"][number]; part: number }>
+  >();
+  for (const group of plan.flatMap((shard) => shard.groups)) {
+    if (/^core-tooling-\d+-hosted-\d+$/u.test(group.shard_name)) {
+      expect(group.timing_key).toBeDefined();
+    }
+    if (group.timing_key === undefined) {
+      continue;
+    }
+    const key = expectDefined(
+      parseCompactSplitTimingKey(group.timing_key),
+      "parsed compact split timing key",
+    );
+    const name = expectDefined(
+      /^(.+)-hosted-([1-9]\d*)$/u.exec(group.shard_name),
+      "numbered hosted group name",
+    );
+    const parent = expectDefined(name[1], "hosted group parent");
+    const part = Number(name[2]);
+    expect(
+      key.selectorKey.split("#selector-")[0],
+      "timing key parent must match hosted group name",
+    ).toBe(parent);
+    expect(key.part, "timing key part must match hosted group ordinal").toBe(part);
+    const family = families.get(parent) ?? [];
+    family.push({ group, part });
+    families.set(parent, family);
+  }
+  for (const family of families.values()) {
+    family.sort((a, b) => a.part - b.part);
+  }
+  return families;
+};
+const expectedTimingKeys = (
+  parent: string,
+  family: Array<{ group: CompactNodeTestShard["groups"][number]; part: number }>,
+) => {
+  const first = expectDefined(family[0], "first timing family entry").group;
+  return createCompactSplitTimingGeneration({
+    parentShardName: parent,
+    configs: first.configs,
+    env: first.env,
+    stripes: family.map(({ group }) => {
+      expect(group.configs).toEqual(first.configs);
+      expect(group.env).toEqual(first.env);
+      const files = expectDefined(group.includePatterns, "timing family group membership");
+      expect(files.length).toBeGreaterThan(0);
+      return files;
+    }),
+  }).timingKeys;
+};
+const expectTimingFamilies = (plan: CompactNodeTestShard[]) => {
+  for (const [parent, family] of timingFamilies(plan)) {
+    expect(family.map(({ part }) => part)).toEqual(
+      Array.from({ length: family.length }, (_, index) => index + 1),
+    );
+    expect(family.map(({ group }) => group.timing_key)).toEqual(expectedTimingKeys(parent, family));
+  }
+};
+
 function isCombinedUnbuiltCliJob(job: CompactNodeTestShard) {
   return (
     job.groups.length > 1 &&
@@ -2236,6 +2299,26 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     );
   });
 
+  it("refuses tooling redistribution when fixed jobs already exceed the cap", () => {
+    const originalTimings = testTimings.readCompactGroupTimings;
+    const tooling = defaultShards.filter((shard) => /^core-tooling-\d+$/u.test(shard.shardName));
+    vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation((profile) => ({
+      ...originalTimings(profile),
+      ...(profile === "github"
+        ? {
+            ...Object.fromEntries(tooling.map((shard) => [shard.shardName, 150])),
+            "core-tooling-8": 5_000,
+            "core-tooling-10": 151,
+          }
+        : {}),
+    }));
+    // A slow runtime-owning family expands the fixed jobs; a small no-build
+    // family still enters redistribution and fits their spare capacity.
+    expect(() =>
+      createNodeTestShardBundles({ compactMode: "pull-request", runnerBackend: "github" }),
+    ).toThrow("exceeds 80 jobs");
+  });
+
   it("keeps the private runtime prerequisite on precise tooling readers", () => {
     const shards = createToolingNodeTestShardBundles([PRIVATE_QA_TOOLING_TEST]);
     expect(shards).not.toBeNull();
@@ -2281,9 +2364,23 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const createPlanWithInventory = async (
       includeGrowthFile: boolean,
       extraFiles: string[] = [],
+      additionalTimings: Readonly<Record<string, number>> = {},
     ) => {
       vi.resetModules();
       vi.doMock("../vitest/vitest.unit-fast-paths.mjs", () => unitFastPaths);
+      vi.doMock("../../scripts/lib/ci-test-timings.mts", async (importOriginal) => {
+        const actual =
+          await importOriginal<typeof import("../../scripts/lib/ci-test-timings.mts")>();
+        return {
+          ...actual,
+          readCompactGroupTimings(profile: "blacksmith" | "github") {
+            return {
+              ...actual.readCompactGroupTimings(profile),
+              ...(profile === "github" ? additionalTimings : {}),
+            };
+          },
+        };
+      });
       vi.doMock("../../scripts/lib/list-test-files.mts", async (importOriginal) => {
         const actual =
           await importOriginal<typeof import("../../scripts/lib/list-test-files.mts")>();
@@ -2315,6 +2412,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         return createPlan(options);
       } finally {
         vi.doUnmock("../../scripts/lib/list-test-files.mts");
+        vi.doUnmock("../../scripts/lib/ci-test-timings.mts");
         vi.doUnmock("../vitest/vitest.unit-fast-paths.mjs");
         vi.resetModules();
       }
@@ -2335,6 +2433,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       [...baselineToolingFiles, inventoryGrowthFile].toSorted(),
     );
     expect(nonToolingPlacement(grown)).toEqual(nonToolingPlacement(baseline));
+    expectTimingFamilies(grown);
 
     for (const job of grown) {
       const hostedToolingGroups = job.groups.filter(isHostedToolingGroup);
@@ -2382,6 +2481,42 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       );
       expect(nonToolingPlacement(extraBaseline)).toEqual(nonToolingPlacement(baseline));
       expect(nonToolingPlacement(expanded)).toEqual(nonToolingPlacement(extraBaseline));
+      expectTimingFamilies(expanded);
+      if (extraFiles.length === 10) {
+        const children = [...timingFamilies(expanded)]
+          .filter(
+            ([parent, parts]) =>
+              /^core-tooling-\d+$/u.test(parent) &&
+              parts.every(({ group }) => !group.pretestBuildMode),
+          )
+          .flatMap(([, parts]) => parts.map(({ group }) => group));
+        for (const placement of ["shared", "standalone"] as const) {
+          const measured = expectDefined(
+            children.find(
+              (group) =>
+                (group.includePatterns?.length ?? 0) > 1 &&
+                expanded.some(
+                  (job) =>
+                    job.groups.includes(group) &&
+                    (placement === "shared" ? job.groups.length > 1 : job.groups.length === 1),
+                ),
+            ),
+            `redistributed multi-file tooling child in a ${placement} job`,
+          );
+          const key = expectDefined(measured.timing_key, "redistributed child timing identity");
+          await expect(createPlanWithInventory(true, extraFiles, { [key]: 151 })).rejects.toThrow(
+            "exceeds 80 jobs",
+          );
+        }
+        const distRoom = await createPlanWithInventory(true, extraFiles, {
+          "core-runtime-tui-pty": 100,
+        });
+        expect(
+          distRoom.every((job) =>
+            job.groups.every((group) => group.requiresDist === job.requiresDist),
+          ),
+        ).toBe(true);
+      }
       for (const job of expanded.filter((candidate) =>
         candidate.groups.some(isHostedToolingGroup),
       )) {
@@ -3288,67 +3423,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           group.runner,
         );
       const toolingParent = (group: Group) => group.shard_name.replace(/-hosted-\d+$/u, "");
-      const timingFamilies = (plan: typeof before) => {
-        const families = new Map<string, Array<{ group: Group; part: number }>>();
-        for (const group of plan.flatMap((shard) => shard.groups)) {
-          if (/^core-tooling-\d+-hosted-\d+$/u.test(group.shard_name)) {
-            expect(group.timing_key).toBeDefined();
-          }
-          if (group.timing_key === undefined) {
-            continue;
-          }
-          const key = expectDefined(
-            parseCompactSplitTimingKey(group.timing_key),
-            "parsed compact split timing key",
-          );
-          const name = expectDefined(
-            /^(.+)-hosted-([1-9]\d*)$/u.exec(group.shard_name),
-            "numbered hosted group name",
-          );
-          const parent = expectDefined(name[1], "hosted group parent");
-          const part = Number(name[2]);
-          expect(
-            key.selectorKey.split("#selector-")[0],
-            "timing key parent must match hosted group name",
-          ).toBe(parent);
-          expect(key.part, "timing key part must match hosted group ordinal").toBe(part);
-          const family = families.get(parent) ?? [];
-          family.push({ group, part });
-          families.set(parent, family);
-        }
-        for (const family of families.values()) {
-          family.sort((a, b) => a.part - b.part);
-        }
-        return families;
-      };
-      const expectedTimingKeys = (
-        parent: string,
-        family: Array<{ group: Group; part: number }>,
-      ) => {
-        const first = expectDefined(family[0], "first timing family entry").group;
-        return createCompactSplitTimingGeneration({
-          parentShardName: parent,
-          configs: first.configs,
-          env: first.env,
-          stripes: family.map(({ group }) => {
-            expect(group.configs).toEqual(first.configs);
-            expect(group.env).toEqual(first.env);
-            const files = expectDefined(group.includePatterns, "timing family group membership");
-            expect(files.length).toBeGreaterThan(0);
-            return files;
-          }),
-        }).timingKeys;
-      };
-      const expectTimingFamilies = (plan: typeof before) => {
-        for (const [parent, family] of timingFamilies(plan)) {
-          expect(family.map(({ part }) => part)).toEqual(
-            Array.from({ length: family.length }, (_, index) => index + 1),
-          );
-          expect(family.map(({ group }) => group.timing_key)).toEqual(
-            expectedTimingKeys(parent, family),
-          );
-        }
-      };
       const policies = (plan: typeof before) => {
         const nonPlugin = plan
           .flatMap((shard) => shard.groups)

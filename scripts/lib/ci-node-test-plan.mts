@@ -2431,12 +2431,19 @@ const WHOLE_CONFIG_SPLIT_FILE_LISTERS = new Map<string, () => string[]>([
   ["core-unit-fast-isolated", getUnitFastIsolatedTestFiles],
 ]);
 
+type CompactToolingPartition = {
+  files: string[];
+  estimateSeconds: (patterns: string[]) => number;
+  createGroups: (stripes: string[][]) => Array<{ group: NodeTestShardGroup; seconds: number }>;
+};
+
 function splitOversizedCompactGroup(
   group: NodeTestShardGroup,
   runnerBackend: string | undefined,
   runtimePartition?: ReturnType<typeof partitionRuntimeTestFiles>,
   splitHostedToolingTails = false,
   balancedHostedToolingTailParents?: ReadonlySet<string>,
+  prepareToolingPartition?: (partition: CompactToolingPartition) => void,
 ): Array<{ group: NodeTestShardGroup; seconds: number }> {
   // Hybrid groups must fit both the first-attempt runner and hosted retries;
   // a faster retry estimate must not leave a slow first attempt unsplit.
@@ -2553,7 +2560,7 @@ function splitOversizedCompactGroup(
     return runtimePartition ? [runtimePartition.runtimeFiles, ...stripes] : stripes;
   };
   let stripes = createStripes(splitSeconds);
-  let timingGeneration = createCompactSplitTimingGeneration({
+  const timingGeneration = createCompactSplitTimingGeneration({
     configs: group.configs,
     env: group.env,
     parentShardName: group.shard_name,
@@ -2581,31 +2588,45 @@ function splitOversizedCompactGroup(
   }
   if (completeMeasuredSeconds > splitSeconds) {
     stripes = createStripes(completeMeasuredSeconds);
-    timingGeneration = createCompactSplitTimingGeneration({
-      configs: group.configs,
-      env: group.env,
-      parentShardName: group.shard_name,
-      stripes,
-    });
   }
   const distributedProfileSeconds = Math.max(
     profileSeconds,
     runnerBackend === "github" ? (completeHostedSeconds ?? 0) : (completeBlacksmithSeconds ?? 0),
   );
-  return stripes.map((patterns, index) => ({
-    group: {
-      ...group,
-      includePatterns: patterns,
-      pretestBuildMode: mergeVitestPretestBuildModes(patterns.map((file) => buildModes.get(file))),
-      shard_name: `${group.shard_name}-hosted-${index + 1}`,
-      timing_key: timingGeneration.timingKeys[index]!,
-    },
-    seconds: Math.ceil(
+  const estimateSeconds = (patterns: string[]) =>
+    Math.ceil(
       (distributedProfileSeconds *
         patterns.reduce((seconds, file) => seconds + weightForFile(file), 0)) /
         totalWeight,
-    ),
-  }));
+    );
+  const createGroups = (allocation: string[][]) => {
+    const generation = createCompactSplitTimingGeneration({
+      configs: group.configs,
+      env: group.env,
+      parentShardName: group.shard_name,
+      stripes: allocation,
+    });
+    return allocation.map((patterns, index) => ({
+      group: {
+        ...group,
+        includePatterns: patterns,
+        pretestBuildMode: mergeVitestPretestBuildModes(
+          patterns.map((file) => buildModes.get(file)),
+        ),
+        shard_name: `${group.shard_name}-hosted-${index + 1}`,
+        timing_key: generation.timingKeys[index]!,
+      },
+      seconds: estimateSeconds(patterns),
+    }));
+  };
+  if (packTooling && !runtimePartition && !group.pretestBuildMode && !group.requiresDist) {
+    prepareToolingPartition?.({
+      files: includePatterns,
+      estimateSeconds,
+      createGroups,
+    });
+  }
+  return createGroups(stripes);
 }
 
 // Owners supply admission order and compatibility; placement retains the original
@@ -2680,6 +2701,10 @@ function createCompactNodeTestShardBundles(
   );
   const groupsByRunner = new Map<string, [NodeTestShardGroup, ...NodeTestShardGroup[]]>();
   const synthesizedSplitSeconds = new Map<string, number>();
+  const toolingPartitions = new Map<
+    string,
+    CompactToolingPartition & { runnerFor: (files: string[]) => string }
+  >();
 
   for (const shard of shards) {
     const runner = resolveCiNodeTestRunner(shard);
@@ -2713,6 +2738,18 @@ function createCompactNodeTestShardBundles(
             runtimePartition,
             splitHostedToolingTails,
             balancedHostedToolingTailParents,
+            selectedToolingFiles
+              ? undefined
+              : (toolingPartition) => {
+                  toolingPartitions.set(group.shard_name, {
+                    ...toolingPartition,
+                    runnerFor: (files) =>
+                      resolveCiNodeTestRunner(
+                        { ...shard, includePatterns: files },
+                        options.runnerBackend ?? "blacksmith",
+                      ),
+                  });
+                },
           )
         : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
     const selectedTooling = selectedToolingFiles && group.configs.includes(TOOLING_CONFIG);
@@ -2782,11 +2819,18 @@ function createCompactNodeTestShardBundles(
     group.pretestBuildMode === undefined &&
     /^core-tooling-\d+-hosted-\d+$/u.test(group.shard_name) &&
     group.configs.includes(TOOLING_CONFIG) &&
-    runnerRank(group) >= 0;
-  const runnerRank = (group: NodeTestShardGroup) =>
+    runnerRank(group.runner) >= 0;
+  const runnerRank = (runner: string) =>
     [BUNDLED_NODE_TEST_RUNNER, DEFAULT_NODE_TEST_RUNNER, EXTRA_LARGE_NODE_TEST_RUNNER].indexOf(
-      group.runner,
+      runner,
     );
+  const canShareHostedPlacement = (
+    owner: Pick<NodeTestShardGroup, "runner" | "requiresDist">,
+    group: Pick<NodeTestShardGroup, "runner" | "requiresDist">,
+    hostedOnly: boolean,
+  ) =>
+    (owner.runner === group.runner && owner.requiresDist === group.requiresDist) ||
+    (hostedOnly && runnerRank(owner.runner) > runnerRank(group.runner));
   const hasDistinctStripeFamilies = (groups: NodeTestShardGroup[]) => {
     const families = groups
       .map(compactStripeFamily)
@@ -2869,7 +2913,7 @@ function createCompactNodeTestShardBundles(
     const anchors = packedBins;
     const hostedGroups = hostedToolingGroups.toSorted(
       (a, b) =>
-        runnerRank(b) - runnerRank(a) ||
+        runnerRank(b.runner) - runnerRank(a.runner) ||
         estimateBinSeconds([b]) - estimateBinSeconds([a]) ||
         a.shard_name.localeCompare(b.shard_name),
     );
@@ -2893,8 +2937,7 @@ function createCompactNodeTestShardBundles(
       const group = unit[0];
       const combined = [...candidateGroups, group];
       return (
-        ((owner.runner === group.runner && owner.requiresDist === group.requiresDist) ||
-          (combined.every(isHostedToolingGroup) && runnerRank(owner) > runnerRank(group))) &&
+        canShareHostedPlacement(owner, group, combined.every(isHostedToolingGroup)) &&
         isExclusiveCompactGroup(owner) === isExclusiveCompactGroup(group) &&
         candidateGroups.length < COMPACT_NODE_TEST_JOB_GROUPS &&
         hasDistinctStripeFamilies(combined) &&
@@ -2912,7 +2955,7 @@ function createCompactNodeTestShardBundles(
           .toSorted(
             (a, b) =>
               estimateBinSeconds([b]) - estimateBinSeconds([a]) ||
-              runnerRank(b) - runnerRank(a) ||
+              runnerRank(b.runner) - runnerRank(a.runner) ||
               a.shard_name.localeCompare(b.shard_name),
           )
           .map((group) => [group]),
@@ -2926,53 +2969,59 @@ function createCompactNodeTestShardBundles(
     }
   }
 
-  const compactJobs: CompactNodeTestShard[] = [];
-  const nextJobIndexByClass = new Map<string, number>();
-  for (const bin of packedBins) {
-    const [firstGroup] = bin;
-    const { name: runnerClass } = resolveCiNodeTestRunnerClass(firstGroup.runner);
-    const distSuffix = firstGroup.requiresDist ? "-dist" : "";
-    const jobClass = `${runnerClass}${distSuffix}`;
-    const jobIndex = (nextJobIndexByClass.get(jobClass) ?? 0) + 1;
-    nextJobIndexByClass.set(jobClass, jobIndex);
-    const checkName = `checks-node-compact-${jobClass}-${jobIndex}`;
-    const runner = firstGroup.runner;
-    const pretestBuildMode = mergeVitestPretestBuildModes(
-      bin.map((group) => group.pretestBuildMode),
-    );
-    // The runner admits overlap only after measuring capacity; exclusive and
-    // runtime-building jobs stay serial regardless of the requested class.
-    const planConcurrency =
-      usesBlacksmithCapacity(firstGroup.runner) &&
-      bin.length > 1 &&
-      bin.every(isParallelCompactGroup)
-        ? 2
-        : 1;
-    // Tooling and the full CLI need host capacity while keeping serial isolation.
-    // Promote only the emitted runner so packing, names and timing keys stay stable.
-    const capacityRunner =
-      runner === EXTRA_LARGE_NODE_TEST_RUNNER ||
-      planConcurrency === 2 ||
-      (isBlacksmithProfile && bin.some((group) => group.configs.includes(TOOLING_CONFIG)))
-        ? EXTRA_LARGE_NODE_TEST_RUNNER
-        : usesBlacksmithCapacity(runner) && bin.some((group) => group.shard_name === "agentic-cli")
-          ? CLI_NODE_TEST_RUNNER
-          : runner;
-    compactJobs.push({
-      checkName,
-      groups: bin,
-      ...(pretestBuildMode ? { pretestBuildMode } : {}),
-      requiresDist: firstGroup.requiresDist,
-      runner: capacityRunner,
-      shardName: `compact-${jobClass}-${jobIndex}`,
-      // Whole-config groups run entire suites; keep their generous timeout.
-      ...(bin.some((group) => !group.includePatterns)
-        ? { timeoutMinutes: COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES }
-        : {}),
-      planConcurrency,
-      predictedSeconds: estimateBinSeconds(bin),
-    });
-  }
+  const createCompactJobs = (bins: Array<[NodeTestShardGroup, ...NodeTestShardGroup[]]>) => {
+    const compactJobs: CompactNodeTestShard[] = [];
+    const nextJobIndexByClass = new Map<string, number>();
+    for (const bin of bins) {
+      const [firstGroup] = bin;
+      const { name: runnerClass } = resolveCiNodeTestRunnerClass(firstGroup.runner);
+      const distSuffix = firstGroup.requiresDist ? "-dist" : "";
+      const jobClass = `${runnerClass}${distSuffix}`;
+      const jobIndex = (nextJobIndexByClass.get(jobClass) ?? 0) + 1;
+      nextJobIndexByClass.set(jobClass, jobIndex);
+      const checkName = `checks-node-compact-${jobClass}-${jobIndex}`;
+      const runner = firstGroup.runner;
+      const pretestBuildMode = mergeVitestPretestBuildModes(
+        bin.map((group) => group.pretestBuildMode),
+      );
+      // The runner admits overlap only after measuring capacity; exclusive and
+      // runtime-building jobs stay serial regardless of the requested class.
+      const planConcurrency =
+        usesBlacksmithCapacity(firstGroup.runner) &&
+        bin.length > 1 &&
+        bin.every(isParallelCompactGroup)
+          ? 2
+          : 1;
+      // Tooling and the full CLI need host capacity while keeping serial isolation.
+      // Promote only the emitted runner so packing, names and timing keys stay stable.
+      const capacityRunner =
+        runner === EXTRA_LARGE_NODE_TEST_RUNNER ||
+        planConcurrency === 2 ||
+        (isBlacksmithProfile && bin.some((group) => group.configs.includes(TOOLING_CONFIG)))
+          ? EXTRA_LARGE_NODE_TEST_RUNNER
+          : usesBlacksmithCapacity(runner) &&
+              bin.some((group) => group.shard_name === "agentic-cli")
+            ? CLI_NODE_TEST_RUNNER
+            : runner;
+      compactJobs.push({
+        checkName,
+        groups: bin,
+        ...(pretestBuildMode ? { pretestBuildMode } : {}),
+        requiresDist: firstGroup.requiresDist,
+        runner: capacityRunner,
+        shardName: `compact-${jobClass}-${jobIndex}`,
+        // Whole-config groups run entire suites; keep their generous timeout.
+        ...(bin.some((group) => !group.includePatterns)
+          ? { timeoutMinutes: COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES }
+          : {}),
+        planConcurrency,
+        predictedSeconds: estimateBinSeconds(bin),
+      });
+    }
+
+    return compactJobs.toSorted((a, b) => a.checkName.localeCompare(b.checkName));
+  };
+  const compactJobs = createCompactJobs(packedBins);
 
   if (compactJobs.length > COMPACT_NODE_TEST_JOB_CAP) {
     if (packsHostedTooling && !splitHostedToolingTails) {
@@ -3011,10 +3060,207 @@ function createCompactNodeTestShardBundles(
         );
       }
     }
+    if (packsHostedTooling && toolingPartitions.size > 0) {
+      type FileEntry = { parent: string; file: string; runner: string; seconds: number };
+      type FileBin = {
+        fixed: NodeTestShardGroup[];
+        files: Map<string, string[]>;
+        order: FileEntry[];
+        runner: string;
+      };
+      const parentName = (group: NodeTestShardGroup) =>
+        group.shard_name.replace(/-hosted-\d+$/u, "");
+      const fileBins: FileBin[] = packedBins.flatMap((bin) => {
+        const fixed = bin.filter((group) => !toolingPartitions.has(parentName(group)));
+        return fixed.length ? [{ fixed, files: new Map(), order: [], runner: bin[0].runner }] : [];
+      });
+      const files = [...toolingPartitions]
+        .flatMap(([parent, partition]) =>
+          partition.files.map((file) => ({
+            parent,
+            file,
+            runner: partition.runnerFor([file]),
+            seconds: partition.estimateSeconds([file]),
+          })),
+        )
+        .toSorted(
+          (a, b) =>
+            runnerRank(b.runner) - runnerRank(a.runner) ||
+            b.seconds - a.seconds ||
+            a.parent.localeCompare(b.parent, "en", { numeric: true }) ||
+            (a.file < b.file ? -1 : a.file > b.file ? 1 : 0),
+        );
+      // Keep all available slots visible so early families do not strand the tail.
+      while (fileBins.length < COMPACT_NODE_TEST_JOB_CAP) {
+        fileBins.push({ fixed: [], files: new Map(), order: [], runner: BUNDLED_NODE_TEST_RUNNER });
+      }
+      const cost = (bin: FileBin) =>
+        estimateBinSeconds(bin.fixed) +
+        [...bin.files].reduce(
+          (total, [parent, patterns]) =>
+            total + toolingPartitions.get(parent)!.estimateSeconds(patterns),
+          0,
+        );
+      const replaceFiles = (bin: FileBin, removed: FileEntry[], added: FileEntry[]): FileBin => {
+        const order = [...bin.order.filter((entry) => !removed.includes(entry)), ...added];
+        const patterns = new Map<string, string[]>();
+        for (const entry of order) {
+          patterns.set(entry.parent, [...(patterns.get(entry.parent) ?? []), entry.file]);
+        }
+        return {
+          ...bin,
+          files: patterns,
+          order,
+          runner:
+            bin.fixed.length + bin.order.length === 0 && added[0] ? added[0].runner : bin.runner,
+        };
+      };
+      const validFiles = (bin: FileBin) => {
+        if (
+          bin.fixed.length + bin.files.size > COMPACT_NODE_TEST_JOB_GROUPS ||
+          (bin.fixed[0] && !isExclusiveCompactGroup(bin.fixed[0]))
+        ) {
+          return false;
+        }
+        if (
+          !bin.order.every((entry) =>
+            canShareHostedPlacement(
+              { runner: bin.runner, requiresDist: bin.fixed[0]?.requiresDist ?? false },
+              { runner: entry.runner, requiresDist: false },
+              bin.fixed.every(isHostedToolingGroup),
+            ),
+          )
+        ) {
+          return false;
+        }
+        return (
+          cost(bin) <= COMPACT_EXCLUSIVE_JOB_SECONDS ||
+          (bin.fixed.length === 0 && bin.order.length === 1)
+        );
+      };
+      const unplaced: FileEntry[] = [];
+      // Reuse owned capacity and family processes before claiming an empty slot.
+      for (const entry of files) {
+        const candidates = fileBins
+          .flatMap((bin, index) => {
+            const candidate = replaceFiles(bin, [], [entry]);
+            return validFiles(candidate)
+              ? [
+                  {
+                    index,
+                    candidate,
+                    sameParent: bin.files.has(entry.parent),
+                    changesRunner: candidate.runner !== bin.runner,
+                    seconds: cost(candidate),
+                  },
+                ]
+              : [];
+          })
+          .toSorted(
+            (a, b) =>
+              Number(a.changesRunner) - Number(b.changesRunner) ||
+              Number(b.sameParent) - Number(a.sameParent) ||
+              a.seconds - b.seconds ||
+              a.index - b.index,
+          );
+        const chosen = candidates[0];
+        if (chosen) {
+          fileBins[chosen.index] = chosen.candidate;
+        } else {
+          unplaced.push(entry);
+        }
+      }
+      // One exchange only; the fixed comparison cap also bounds future inventory growth.
+      if (unplaced.length === 1) {
+        const incoming = unplaced[0]!;
+        let remainingPairs = 100_000;
+        exchange: for (let firstIndex = 0; firstIndex < fileBins.length; firstIndex++) {
+          const first = fileBins[firstIndex]!;
+          for (const firstFile of first.order) {
+            for (let secondIndex = 0; secondIndex < fileBins.length; secondIndex++) {
+              if (firstIndex === secondIndex) {
+                continue;
+              }
+              const second = fileBins[secondIndex]!;
+              for (const secondFile of second.order) {
+                if (remainingPairs-- === 0) {
+                  break exchange;
+                }
+                const firstCandidate = replaceFiles(first, [firstFile], [secondFile, incoming]);
+                if (!validFiles(firstCandidate)) {
+                  continue;
+                }
+                const secondCandidate = replaceFiles(second, [secondFile], [firstFile]);
+                if (!validFiles(secondCandidate)) {
+                  continue;
+                }
+                fileBins[firstIndex] = firstCandidate;
+                fileBins[secondIndex] = secondCandidate;
+                unplaced.pop();
+                break exchange;
+              }
+            }
+          }
+        }
+      }
+      if (unplaced.length === 0) {
+        // Final memberships own timing keys; matching samples can still reject this allocation.
+        const allocated = fileBins.map((bin) => [...bin.fixed]);
+        for (const [parent, partition] of toolingPartitions) {
+          const placements = fileBins.flatMap((bin, index) => {
+            const patterns = bin.files.get(parent);
+            return patterns
+              ? [
+                  {
+                    index,
+                    patterns: patterns.toSorted(
+                      (a, b) => partition.files.indexOf(a) - partition.files.indexOf(b),
+                    ),
+                  },
+                ]
+              : [];
+          });
+          const groups = partition.createGroups(placements.map(({ patterns }) => patterns));
+          groups.forEach((planned, index) => {
+            planned.group.runner = partition.runnerFor(planned.group.includePatterns!);
+            synthesizedSplitSeconds.set(compactGroupTimingKey(planned.group), planned.seconds);
+            allocated[placements[index]!.index]!.push(planned.group);
+          });
+        }
+        const valid =
+          allocated.filter((bin) => bin.length > 0).length <= COMPACT_NODE_TEST_JOB_CAP &&
+          allocated.every(
+            (bin, index) =>
+              fileBins[index]!.files.size === 0 ||
+              (bin.length > 0 &&
+                bin.length <= COMPACT_NODE_TEST_JOB_GROUPS &&
+                hasDistinctStripeFamilies(bin) &&
+                (estimateBinSeconds(bin) <= COMPACT_EXCLUSIVE_JOB_SECONDS ||
+                  (bin.length === 1 && bin[0]!.includePatterns?.length === 1)) &&
+                bin.every(
+                  (group) =>
+                    group.requiresDist === bin[0]!.requiresDist &&
+                    runnerRank(group.runner) <= runnerRank(fileBins[index]!.runner),
+                )),
+          );
+        if (valid) {
+          for (const bin of allocated) {
+            if (bin.every(isHostedToolingGroup)) {
+              bin.sort((a, b) => runnerRank(b.runner) - runnerRank(a.runner));
+            }
+          }
+          return createCompactJobs(
+            allocated.filter(
+              (bin): bin is [NodeTestShardGroup, ...NodeTestShardGroup[]] => bin.length > 0,
+            ),
+          );
+        }
+      }
+    }
     throw new Error(
       `compact ${options.runnerBackend ?? "blacksmith"} node test plan exceeds ${COMPACT_NODE_TEST_JOB_CAP} jobs (${compactJobs.length} planned)`,
     );
   }
 
-  return compactJobs.toSorted((a, b) => a.checkName.localeCompare(b.checkName));
+  return compactJobs;
 }
