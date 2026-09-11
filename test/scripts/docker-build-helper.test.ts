@@ -8232,132 +8232,163 @@ done
     expect(unitPath.stdout).toContain("/etc/systemd/system");
   });
 
-  it("reports the installed doctor switch unit through the systemd manager", async () => {
-    const home = tempDirs.make("openclaw-doctor-busctl-shim-");
-    const serviceName = "openclaw-gateway.service";
-    const unitPath = join(home, ".config", "systemd", "user", serviceName);
-    mkdirSync(join(home, ".config", "systemd", "user"), { recursive: true });
-    writeFileSync(
-      unitPath,
-      [
-        "[Service]",
-        'ExecStart=/usr/bin/node "/opt/openclaw git/dist/index.js" gateway --port 18789',
-        'WorkingDirectory="/opt/openclaw git"',
-        'Environment="GREETING=hello world" OPENCLAW_PROFILE=fixture',
-        "EnvironmentFile=-%h/.openclaw/gateway.systemd.env",
-        "UnsetEnvironment=STALE_FLAG",
-      ].join("\n"),
-    );
+  it.each(["effective command", "loaded command", "loaded runtime"] as const)(
+    "reports the installed doctor switch unit through the systemd manager (%s)",
+    async (reader) => {
+      const home = tempDirs.make("openclaw-doctor-busctl-shim-");
+      const serviceName = "openclaw-gateway.service";
+      const unitPath = join(home, ".config", "systemd", "user", serviceName);
+      mkdirSync(join(home, ".config", "systemd", "user"), { recursive: true });
+      writeFileSync(
+        unitPath,
+        [
+          "[Service]",
+          'ExecStart=/usr/bin/node "/opt/openclaw git/dist/index.js" gateway --port 18789',
+          'WorkingDirectory="/opt/openclaw git"',
+          'Environment="GREETING=hello world" OPENCLAW_PROFILE=fixture',
+          "EnvironmentFile=-%h/.openclaw/gateway.systemd.env",
+          "UnsetEnvironment=STALE_FLAG",
+        ].join("\n"),
+      );
 
-    const manager = "org.freedesktop.systemd1";
-    const objectPath = "/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice";
-    const programArguments = [
-      "/usr/bin/node",
-      "/opt/openclaw git/dist/index.js",
-      "gateway",
-      "--port",
-      "18789",
-    ];
-    const runBusctl = (args: string[]) => {
-      const result = spawnSync(
+      const manager = "org.freedesktop.systemd1";
+      const objectPath = "/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice";
+      const programArguments = [
+        "/usr/bin/node",
+        "/opt/openclaw git/dist/index.js",
+        "gateway",
+        "--port",
+        "18789",
+      ];
+      const runBusctl = (args: string[]) => {
+        const result = spawnSync(
+          DOCTOR_SWITCH_BUSCTL_SHIM_PATH,
+          ["--user", "--json=short", ...args],
+          {
+            encoding: "utf8",
+            env: { ...process.env, HOME: home },
+          },
+        );
+        expect(result.status, result.stderr).toBe(0);
+        return result.stdout
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+      };
+
+      expect(
+        runBusctl([
+          "call",
+          manager,
+          "/org/freedesktop/systemd1",
+          `${manager}.Manager`,
+          "LoadUnit",
+          "s",
+          serviceName,
+        ]),
+      ).toEqual([{ type: "o", data: [objectPath] }]);
+      expect(
+        runBusctl([
+          "get-property",
+          manager,
+          objectPath,
+          `${manager}.Service`,
+          "ExecStart",
+          "WorkingDirectory",
+          "Environment",
+          "EnvironmentFiles",
+          "UnsetEnvironment",
+        ]),
+      ).toEqual([
+        {
+          type: "a(sasbttttuii)",
+          data: [[programArguments[0], programArguments, false, ...Array(7).fill(0)]],
+        },
+        { type: "s", data: "/opt/openclaw git" },
+        { type: "as", data: ["GREETING=hello world", "OPENCLAW_PROFILE=fixture"] },
+        { type: "a(sb)", data: [[join(home, ".openclaw", "gateway.systemd.env"), true]] },
+        { type: "as", data: ["STALE_FLAG"] },
+      ]);
+      expect(
+        runBusctl([
+          "get-property",
+          manager,
+          objectPath,
+          `${manager}.Unit`,
+          "FragmentPath",
+          "DropInPaths",
+          "NeedDaemonReload",
+          "LoadState",
+        ]),
+      ).toEqual([
+        { type: "s", data: unitPath },
+        { type: "as", data: [] },
+        { type: "b", data: false },
+        { type: "s", data: "loaded" },
+      ]);
+
+      const binDir = join(home, "bin");
+      writeExecutables(binDir, {
+        busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8"),
+        "systemd-exec-start.mjs": readFileSync(DOCTOR_SWITCH_SYSTEMD_EXEC_START_PATH, "utf8"),
+      });
+      const env = {
+        HOME: home,
+        PATH: `${binDir}:${process.env.PATH}`,
+        OPENCLAW_SYSTEMD_UNIT: serviceName,
+      };
+      // The production 5s deadline budgets for native busctl; the Node shim's cold
+      // spawn can exceed its per-call slice under load, so retain the fixture allowance.
+      if (reader === "loaded runtime") {
+        const { readSystemdServiceRuntime } = await import("../../src/daemon/systemd-runtime.js");
+        expect(
+          await readSystemdServiceRuntime(env, { requireLoaded: true, timeoutMs: 30_000 }),
+        ).toMatchObject({
+          status: "stopped",
+          state: "inactive",
+          subState: "dead",
+          pid: undefined,
+          lastExitStatus: 0,
+          systemd: {
+            unit: serviceName,
+            managerUid: process.getuid!(),
+            result: "success",
+            nRestarts: 0,
+            killMode: "control-group",
+            tasksCurrent: 0,
+            memoryCurrent: 0,
+          },
+        });
+      } else {
+        const { readSystemdServiceExecStart } =
+          await import("../../src/daemon/systemd-service-files.js");
+        expect(
+          await readSystemdServiceExecStart(env, {
+            requireEffective: true,
+            requireLoaded: reader === "loaded command",
+            timeoutMs: 30_000,
+          }),
+        ).toMatchObject({
+          programArguments,
+          workingDirectory: "/opt/openclaw git",
+          sourcePath: unitPath,
+          definitionPaths: [unitPath],
+          environment: { GREETING: "hello world", OPENCLAW_PROFILE: "fixture" },
+        });
+      }
+
+      const unexpected = spawnSync(
         DOCTOR_SWITCH_BUSCTL_SHIM_PATH,
-        ["--user", "--json=short", ...args],
+        ["--user", "--json=short", "list"],
         {
           encoding: "utf8",
           env: { ...process.env, HOME: home },
         },
       );
-      expect(result.status, result.stderr).toBe(0);
-      return result.stdout
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
-    };
-
-    expect(
-      runBusctl([
-        "call",
-        manager,
-        "/org/freedesktop/systemd1",
-        `${manager}.Manager`,
-        "LoadUnit",
-        "s",
-        serviceName,
-      ]),
-    ).toEqual([{ type: "o", data: [objectPath] }]);
-    expect(
-      runBusctl([
-        "get-property",
-        manager,
-        objectPath,
-        `${manager}.Service`,
-        "ExecStart",
-        "WorkingDirectory",
-        "Environment",
-        "EnvironmentFiles",
-        "UnsetEnvironment",
-      ]),
-    ).toEqual([
-      {
-        type: "a(sasbttttuii)",
-        data: [[programArguments[0], programArguments, false, ...Array(7).fill(0)]],
-      },
-      { type: "s", data: "/opt/openclaw git" },
-      { type: "as", data: ["GREETING=hello world", "OPENCLAW_PROFILE=fixture"] },
-      { type: "a(sb)", data: [[join(home, ".openclaw", "gateway.systemd.env"), true]] },
-      { type: "as", data: ["STALE_FLAG"] },
-    ]);
-    expect(
-      runBusctl([
-        "get-property",
-        manager,
-        objectPath,
-        `${manager}.Unit`,
-        "FragmentPath",
-        "DropInPaths",
-        "NeedDaemonReload",
-        "LoadState",
-      ]),
-    ).toEqual([
-      { type: "s", data: unitPath },
-      { type: "as", data: [] },
-      { type: "b", data: false },
-      { type: "s", data: "loaded" },
-    ]);
-
-    const binDir = join(home, "bin");
-    writeExecutables(binDir, {
-      busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8"),
-      "systemd-exec-start.mjs": readFileSync(DOCTOR_SWITCH_SYSTEMD_EXEC_START_PATH, "utf8"),
-    });
-    const { readSystemdServiceExecStart } =
-      await import("../../src/daemon/systemd-service-files.js");
-    expect(
-      // The production 5s deadline budgets for native busctl; the Node shim's cold
-      // spawn can exceed its per-call slice under load, so widen it here.
-      await readSystemdServiceExecStart(
-        { HOME: home, PATH: `${binDir}:${process.env.PATH}`, OPENCLAW_SYSTEMD_UNIT: serviceName },
-        { requireEffective: true, timeoutMs: 30_000 },
-      ),
-    ).toMatchObject({
-      programArguments,
-      workingDirectory: "/opt/openclaw git",
-      sourcePath: unitPath,
-      definitionPaths: [unitPath],
-      environment: { GREETING: "hello world", OPENCLAW_PROFILE: "fixture" },
-    });
-
-    const unexpected = spawnSync(
-      DOCTOR_SWITCH_BUSCTL_SHIM_PATH,
-      ["--user", "--json=short", "list"],
-      {
-        encoding: "utf8",
-        env: { ...process.env, HOME: home },
-      },
-    );
-    expect(unexpected.status).toBe(1);
-    expect(unexpected.stderr).toContain("unexpected invocation");
-  });
+      expect(unexpected.status).toBe(1);
+      expect(unexpected.stderr).toContain("unexpected invocation");
+    },
+  );
 
   it("distinguishes a missing named doctor switch unit from failed or unsupported inspection", async () => {
     const home = tempDirs.make("openclaw-doctor-busctl-absence-");
@@ -8379,9 +8410,19 @@ done
     };
     const { readSystemdServiceExecStart } =
       await import("../../src/daemon/systemd-service-files.js");
+    for (const requireLoaded of [false, true]) {
+      expect(
+        await readSystemdServiceExecStart(env, {
+          requireEffective: true,
+          requireLoaded,
+          timeoutMs: 30_000,
+        }),
+      ).toBeNull();
+    }
+    const { readSystemdServiceRuntime } = await import("../../src/daemon/systemd-runtime.js");
     expect(
-      await readSystemdServiceExecStart(env, { requireEffective: true, timeoutMs: 30_000 }),
-    ).toBeNull();
+      await readSystemdServiceRuntime(env, { requireLoaded: true, timeoutMs: 30_000 }),
+    ).toMatchObject({ status: "unknown" });
     const loadArgs = [
       "--user",
       "--json=short",
@@ -8395,13 +8436,45 @@ done
     ];
     const invoke = (args: string[]) =>
       spawnSync(join(binDir, "busctl"), args, { env, encoding: "utf8" });
-    const missing = invoke(loadArgs);
-    expect(missing.status).toBe(1);
-    expect(missing.stderr.trim()).toBe(`Call failed: Unit ${serviceName} not found.`);
+    for (const method of ["LoadUnit", "GetUnit", "GetUnitFileState"]) {
+      const missing = invoke([...loadArgs.slice(0, 6), method, "s", serviceName]);
+      expect(missing.status).toBe(1);
+      expect(missing.stderr.trim()).toBe(
+        method === "GetUnitFileState"
+          ? `Call failed: Unit file ${serviceName} does not exist.`
+          : `Call failed: Unit ${serviceName} not found.`,
+      );
+    }
     for (const args of [
       [...loadArgs, "extra"],
       [...loadArgs.slice(0, -1), "../missing.service"],
       [...loadArgs.slice(0, -1), "unrelated.service"],
+      [...loadArgs.slice(0, 6), "StartUnit", "s", serviceName],
+      [...loadArgs.slice(0, 3), ":999.999", ...loadArgs.slice(4)],
+      [
+        "--user",
+        "--auto-start=no",
+        "--json=short",
+        "call",
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "GetNameOwner",
+        "s",
+        "unrelated.manager",
+      ],
+      [
+        "--user",
+        "--auto-start=no",
+        "--json=short",
+        "call",
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "GetConnectionUnixUser",
+        "s",
+        ":999.999",
+      ],
       ["--user", "--json=short", "list"],
     ]) {
       const unsupported = invoke(args);
@@ -8424,6 +8497,16 @@ done
     const unreadable = invoke(loadArgs);
     expect(unreadable.status).toBe(1);
     expect(unreadable.stderr).not.toContain("not found.");
+    await expect(
+      readSystemdServiceExecStart(env, {
+        requireEffective: true,
+        requireLoaded: true,
+        timeoutMs: 30_000,
+      }),
+    ).rejects.toThrow();
+    expect(
+      await readSystemdServiceRuntime(env, { requireLoaded: true, timeoutMs: 30_000 }),
+    ).toMatchObject({ status: "unknown" });
     const staleObject = invoke([
       "--user",
       "--json=short",

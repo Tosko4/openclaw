@@ -4,6 +4,8 @@ import path from "node:path";
 import { parseSystemdExecStart } from "./systemd-exec-start.mjs";
 
 const manager = "org.freedesktop.systemd1";
+const managerOwner = ":1.42";
+const bus = "org.freedesktop.DBus";
 const rootObjectPath = "/org/freedesktop/systemd1";
 const args = process.argv.slice(2);
 
@@ -20,13 +22,17 @@ function parseWords(value) {
   }
 }
 
-function readUnitContent(unitPath, missingUnitName) {
+function readUnitContent(unitPath, missingUnitName, method) {
   try {
     return fs.readFileSync(unitPath, "utf8");
   } catch (error) {
-    // Only a validated LoadUnit request may confirm absence; other read errors stay unavailable.
-    if (missingUnitName && error.code === "ENOENT") {
-      process.stderr.write(`Call failed: Unit ${missingUnitName} not found.\n`);
+    // Only a validated named-unit request may confirm absence.
+    if (missingUnitName && error.code === "ENOENT" && error.path === unitPath) {
+      process.stderr.write(
+        method === "GetUnitFileState"
+          ? `Call failed: Unit file ${missingUnitName} does not exist.\n`
+          : `Call failed: Unit ${missingUnitName} not found.\n`,
+      );
       process.exit(1);
     }
     return fail();
@@ -45,38 +51,68 @@ function writeProperties(properties) {
   process.stdout.write(properties.map((property) => JSON.stringify(property)).join("\n") + "\n");
 }
 
-if (args[0] !== "--user" || args[1] !== "--json=short") {
+if (args[0] !== "--user") {
   fail();
 }
 
-const invocation = args.slice(2);
+let invocation;
+if (args[1] === "--json=short") {
+  invocation = args.slice(args[2] === "--auto-start=no" ? 3 : 2);
+} else if (args[1] === "--auto-start=no" && args[2] === "--json=short") {
+  invocation = args.slice(3);
+} else {
+  fail();
+}
 const unitName = `${process.env.OPENCLAW_SYSTEMD_UNIT || "openclaw-gateway"}`.replace(
   /(?:\.service)?$/u,
   ".service",
 );
+if (path.basename(unitName) !== unitName) {
+  fail();
+}
 const unitPath = path.join(process.env.HOME, ".config/systemd/user", unitName);
 if (invocation[0] === "call") {
   const [command, destination, objectPath, interfaceName, method, signature, requestedUnit] =
     invocation;
+  if (invocation.length !== 7 || command !== "call" || signature !== "s") {
+    fail();
+  }
+  if (destination === bus && objectPath === "/org/freedesktop/DBus" && interfaceName === bus) {
+    if (method === "GetNameOwner" && requestedUnit === manager) {
+      writeProperties([{ type: "s", data: [managerOwner] }]);
+    } else if (
+      method === "GetConnectionUnixUser" &&
+      requestedUnit === managerOwner &&
+      typeof process.getuid === "function"
+    ) {
+      writeProperties([{ type: "u", data: [process.getuid()] }]);
+    } else {
+      fail();
+    }
+    process.exit(0);
+  }
   if (
-    invocation.length !== 7 ||
-    command !== "call" ||
-    destination !== manager ||
+    (destination !== manager && destination !== managerOwner) ||
     objectPath !== rootObjectPath ||
     interfaceName !== `${manager}.Manager` ||
-    method !== "LoadUnit" ||
-    signature !== "s" ||
-    requestedUnit !== unitName ||
-    path.basename(unitName) !== unitName
+    !["LoadUnit", "GetUnit", "GetUnitFileState"].includes(method) ||
+    requestedUnit !== unitName
   ) {
     fail();
   }
-  readUnitContent(unitPath, unitName);
-  writeProperties([{ type: "o", data: [`${rootObjectPath}/unit/${encodeUnitName(unitName)}`] }]);
+  readUnitContent(unitPath, unitName, method);
+  writeProperties([
+    method === "GetUnitFileState"
+      ? { type: "s", data: ["enabled"] }
+      : { type: "o", data: [`${rootObjectPath}/unit/${encodeUnitName(unitName)}`] },
+  ]);
   process.exit(0);
 }
 
-if (invocation[0] !== "get-property" || invocation[1] !== manager) {
+if (
+  invocation[0] !== "get-property" ||
+  (invocation[1] !== manager && invocation[1] !== managerOwner)
+) {
   fail();
 }
 
@@ -85,6 +121,44 @@ if (invocation[2] !== `${rootObjectPath}/unit/${encodeUnitName(unitName)}`) {
 }
 
 const content = readUnitContent(unitPath);
+// The Doctor switch fixture has an installed, inactive service with no remaining tasks.
+if (
+  invocation[1] === managerOwner &&
+  invocation[3] === `${manager}.Unit` &&
+  invocation.length === 11 &&
+  invocation.slice(4).join(" ") ===
+    "Id LoadState ActiveState SubState StartLimitBurst ActiveEnterTimestampMonotonic InactiveEnterTimestampMonotonic"
+) {
+  writeProperties([
+    { type: "s", data: unitName },
+    { type: "s", data: "loaded" },
+    { type: "s", data: "inactive" },
+    { type: "s", data: "dead" },
+    { type: "u", data: 0 },
+    { type: "t", data: 0 },
+    { type: "t", data: 0 },
+  ]);
+  process.exit(0);
+}
+if (
+  invocation[1] === managerOwner &&
+  invocation[3] === `${manager}.Service` &&
+  invocation.length === 12 &&
+  invocation.slice(4).join(" ") ===
+    "Result NRestarts MainPID ExecMainStatus ExecMainCode KillMode TasksCurrent MemoryCurrent"
+) {
+  writeProperties([
+    { type: "s", data: "success" },
+    { type: "u", data: 0 },
+    { type: "u", data: 0 },
+    { type: "i", data: 0 },
+    { type: "i", data: 0 },
+    { type: "s", data: "control-group" },
+    { type: "t", data: 0 },
+    { type: "t", data: 0 },
+  ]);
+  process.exit(0);
+}
 if (invocation[3] === `${manager}.Unit`) {
   if (
     invocation.length !== 8 ||
