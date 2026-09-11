@@ -9,7 +9,6 @@ import {
 export {
   buildPreparedModelsProviderData,
   formatModelsAvailableHeader,
-  formatModelsAllowListNotice,
   getModelsRuntimeChoices,
   MODEL_PICKER_CHANGED_MESSAGE,
   resolveModelsCommandReply,

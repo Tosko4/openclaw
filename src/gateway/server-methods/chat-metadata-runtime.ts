@@ -187,6 +187,7 @@ function generationFactsMatch(
   });
 }
 
+
 async function defaultBuildCommands(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -266,10 +267,16 @@ export function createGatewayChatMetadataRuntime(params: {
     requesterProfileId?: string,
     assertCurrent?: () => void,
     useRequesterDefaults = false,
+    sessionKey?: string,
   ): Promise<PreparedAgentProjection> => {
     assertOpen();
     assertCurrent?.();
-    const profiles = resolveSessionCatalogProfiles(sessionEntry, agent.owner.config, agent.agentId);
+    const profiles = resolveSessionCatalogProfiles(
+      sessionEntry,
+      agent.owner.config,
+      agent.agentId,
+      sessionKey,
+    );
     const neutral = !hasSessionCatalogContext(profiles);
     // Read links on every draft request so connecting an account takes effect immediately;
     // viewers without personal defaults can reuse the already-published neutral projection.
@@ -307,6 +314,7 @@ export function createGatewayChatMetadataRuntime(params: {
         requesterProfileId,
         assertCurrent,
         useRequesterDefaults,
+        sessionKey,
       );
     }
     const projection = deps
@@ -596,6 +604,7 @@ export function createGatewayChatMetadataRuntime(params: {
         draft?.assertCurrent,
         // Existing sessions use their saved selection, never a viewer's newer default.
         !readParams.sessionKey && !readParams.sessionEntry,
+        readParams.sessionKey,
       );
       return {
         isCurrent: projection.isCurrent,
@@ -612,6 +621,7 @@ export function createGatewayChatMetadataRuntime(params: {
       readParams.sessionEntry,
       deps.getConfig(),
       readParams.agentId,
+      readParams.sessionKey,
     );
     const hasSessionContext = hasSessionCatalogContext(profiles);
     const assemble = (
@@ -642,6 +652,9 @@ export function createGatewayChatMetadataRuntime(params: {
             agent,
             readParams.sessionEntry,
             readParams.requesterProfileId,
+            undefined,
+            false,
+            readParams.sessionKey,
           )
         : readNeutral;
       return {

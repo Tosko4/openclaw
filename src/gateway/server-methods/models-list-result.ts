@@ -291,7 +291,12 @@ export async function prepareModelsListResult(
   const requestConfig = currentConfig();
   const initialConfig = publishedOwner?.config ?? requestConfig;
   const initialAgentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(initialConfig));
-  const profiles = resolveSessionCatalogProfiles(sessionEntry, initialConfig, initialAgentId);
+  const profiles = resolveSessionCatalogProfiles(
+    sessionEntry,
+    initialConfig,
+    initialAgentId,
+    scope?.sessionKey,
+  );
   const view = resolveModelsListView(params.params);
   const refresh = params.params.refresh === true;
   const preloadedCatalog =
@@ -352,6 +357,7 @@ export async function prepareModelsListResult(
     kind: "prepared",
     cfg,
     agentId,
+    sessionKey: scope?.sessionKey,
     agentDir: sourceOwner?.agentDir,
     workspaceDir,
     snapshot,
@@ -442,6 +448,7 @@ export async function prepareModelsListResult(
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel,
     agentId,
+    sessionKey: scope?.sessionKey,
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
     manifestPlugins: metadataSnapshot,
   });
@@ -493,6 +500,7 @@ export async function prepareModelsListResult(
   const configuredEntriesByKey = resolveConfiguredModelEntries({
     cfg,
     agentId,
+    sessionKey: scope?.sessionKey,
     defaultModel,
     canonicalizeRef: (ref) => ({
       ...ref,
@@ -566,7 +574,10 @@ export async function prepareModelsListResult(
     defaultModel,
     agentId,
     selectedModel: scope
-      ? resolveSessionModelRef(cfg, sessionEntry, agentId, { allowPluginNormalization: false })
+      ? resolveSessionModelRef(cfg, sessionEntry, agentId, {
+          allowPluginNormalization: false,
+          sessionKey: scope.sessionKey,
+        })
       : undefined,
     workspaceDir,
     view,
