@@ -182,6 +182,7 @@ internal fun OpenClawWearApp(
   val state by viewModel.state.collectAsState()
   val snapshot = state.toConversationSnapshot()
   val speaking by speaker.isSpeaking.collectAsState()
+  val speechFailed by speaker.failed.collectAsState()
   val view = LocalView.current
   val lifecycleOwner = LocalLifecycleOwner.current
   val activity = LocalActivity.current
@@ -196,8 +197,14 @@ internal fun OpenClawWearApp(
         PackageManager.PERMISSION_GRANTED,
     )
   }
+  var microphoneGranted by remember {
+    mutableStateOf(ContextCompat.checkSelfPermission(view.context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
+  }
+  var microphoneDenied by remember { mutableStateOf(false) }
+  var microphoneSettingsRequired by remember { mutableStateOf(false) }
   var expectedAssistantKey by remember { mutableStateOf<String?>(null) }
   var awaitingReplySessionId by remember { mutableStateOf<String?>(null) }
+  var awaitingReplyRunId by remember { mutableStateOf<String?>(null) }
   var awaitingReply by remember { mutableStateOf(false) }
   var previousRealtimeSnapshot by remember { mutableStateOf(snapshot) }
   var realtimeThinkingTurnId by remember { mutableStateOf<String?>(null) }
@@ -226,12 +233,16 @@ internal fun OpenClawWearApp(
       view.performHapticFeedback(HapticFeedbackConstants.REJECT)
       return
     }
+    if (!viewModel.sendReply(message) { awaitingReplyRunId = it }) {
+      interaction = WearInteractionState.READY
+      view.performHapticFeedback(HapticFeedbackConstants.REJECT)
+      return
+    }
     expectedAssistantKey = snapshot.latestAssistantMessage()?.stableKey()
     awaitingReplySessionId = sessionId
     awaitingReply = true
     interaction = WearInteractionState.SENDING
     speaker.stop()
-    viewModel.sendReply(message)
   }
 
   val speechLauncher =
@@ -298,12 +309,20 @@ internal fun OpenClawWearApp(
 
   fun startRealtimeTalk() {
     speaker.stop()
+    if (!lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
+    microphoneGranted = ContextCompat.checkSelfPermission(view.context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    if (!microphoneGranted) {
+      microphoneDenied = true
+      return
+    }
+    microphoneDenied = false
     viewModel.startRealtimeTalk()
   }
 
   fun leaveConversationContext() {
     awaitingReply = false
     awaitingReplySessionId = null
+    awaitingReplyRunId = null
     expectedAssistantKey = null
     interaction = WearInteractionState.READY
     speaker.stop()
@@ -311,12 +330,12 @@ internal fun OpenClawWearApp(
 
   val audioPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-      if (granted) {
-        startRealtimeTalk()
-      } else {
-        interaction = WearInteractionState.ERROR
-        view.performHapticFeedback(HapticFeedbackConstants.REJECT)
-      }
+      microphoneGranted = granted
+      // Permission availability is not recording intent. A fresh tap starts Talk,
+      // including after Settings or a dialog that outlived its conversation.
+      microphoneDenied = !granted
+      microphoneSettingsRequired = !granted && activity?.shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO) == false
+      if (!granted) view.performHapticFeedback(HapticFeedbackConstants.REJECT)
     }
 
   val notificationPermissionLauncher =
@@ -328,10 +347,26 @@ internal fun OpenClawWearApp(
     val observer =
       LifecycleEventObserver { _, event ->
         if (event == Lifecycle.Event.ON_RESUME) {
+          val wasGranted = microphoneGranted
+          microphoneGranted = ContextCompat.checkSelfPermission(view.context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+          if (microphoneGranted) {
+            microphoneDenied = false
+            microphoneSettingsRequired = false
+          } else if (microphoneDenied || wasGranted) {
+            microphoneDenied = true
+            microphoneSettingsRequired = activity?.shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO) == false
+          }
           notificationsGranted =
             Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             ContextCompat.checkSelfPermission(view.context, Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
+        }
+        if (event == Lifecycle.Event.ON_PAUSE) {
+          viewModel.cancelPendingRealtimeTalkStart()
+        }
+        if (event == Lifecycle.Event.ON_STOP) {
+          speaker.stop()
+          viewModel.suspendRealtimeTalk()
         }
       }
     lifecycleOwner.lifecycle.addObserver(observer)
@@ -355,11 +390,16 @@ internal fun OpenClawWearApp(
     }
   }
 
+  LaunchedEffect(state.phoneNodeId, state.activeAgentId, state.selectedSession?.key, state.connected) {
+    speaker.stop()
+  }
+
   WearReplyCompletionEffect(
     state = state,
     snapshot = snapshot,
     awaitingReply = awaitingReply,
     awaitingReplySessionId = awaitingReplySessionId,
+    awaitingReplyRunId = awaitingReplyRunId,
     expectedAssistantKey = expectedAssistantKey,
   ) { reply ->
     awaitingReply = false
@@ -368,7 +408,7 @@ internal fun OpenClawWearApp(
     interaction = WearInteractionState.READY
     if (reply != null) {
       view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-      if (autoSpeak) speaker.speak(reply.text)
+      if (autoSpeak && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) speaker.speak(reply.text)
     }
   }
 
@@ -401,7 +441,7 @@ internal fun OpenClawWearApp(
       }
   val resolvedInteraction =
     when {
-      state.conversationFailure != null -> WearInteractionState.ERROR
+      state.conversationFailure != null || speechFailed -> WearInteractionState.ERROR
       state.sending -> WearInteractionState.SENDING
       state.activeRunId != null -> WearInteractionState.AGENT_WORKING
       else -> interaction
@@ -415,10 +455,21 @@ internal fun OpenClawWearApp(
         loading = state.loading,
         interaction = resolvedInteraction,
         speaking = speaking,
+        speechFailed = speechFailed,
         realtimeCapturing = state.realtimeCapturing,
         realtimePlaying = state.realtimePlaying,
+        realtimeStopping = state.talkStopping,
         realtimeMouthLevel = state.realtimeMouthLevel,
-        realtimePlaybackFailed = state.realtimePlaybackFailed,
+        realtimePlaybackFailed = state.realtimePlaybackFailed || speechFailed,
+        microphonePermissionRequired = microphoneDenied && !microphoneGranted,
+        microphoneSettingsRequired = microphoneSettingsRequired,
+        onMicrophoneRecovery = {
+          if (microphoneSettingsRequired && activity != null) {
+            activity.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${activity.packageName}".toUri()))
+          } else {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+          }
+        },
         realtimeThinkingOverride = realtimeThinkingTurnId != null,
         actionBusy =
           state.loading ||
@@ -541,7 +592,9 @@ internal fun OpenClawWearApp(
           }
         },
         onSpeakLatest = {
-          snapshot.latestAssistantMessage()?.text?.let(speaker::speak)
+          if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            snapshot.latestAssistantMessage()?.text?.let(speaker::speak)
+          }
         },
         onStopSpeaking = speaker::stop,
       )
@@ -556,6 +609,7 @@ internal fun WearReplyCompletionEffect(
   awaitingReply: Boolean,
   awaitingReplySessionId: String?,
   expectedAssistantKey: String?,
+  awaitingReplyRunId: String? = null,
   onCompleted: (WearChatMessage?) -> Unit,
 ) {
   val complete by rememberUpdatedState(onCompleted)
@@ -563,6 +617,7 @@ internal fun WearReplyCompletionEffect(
     snapshot?.activeSessionId,
     state.messages,
     state.activeRunId,
+    state.streamText,
     state.sending,
     state.failure,
     state.pendingReply,
@@ -570,6 +625,7 @@ internal fun WearReplyCompletionEffect(
     awaitingReply,
     awaitingReplySessionId,
     expectedAssistantKey,
+    awaitingReplyRunId,
   ) {
     if (!awaitingReply) return@LaunchedEffect
     if (
@@ -585,13 +641,18 @@ internal fun WearReplyCompletionEffect(
     // history must reconcile the transcript before choosing text to confirm or speak.
     if (state.replyTerminal != null && state.replyTerminal.history == null) return@LaunchedEffect
     val terminal = state.replyTerminal
+    if (awaitingReplyRunId != null && terminal?.runId != null && terminal.runId != awaitingReplyRunId) {
+      complete(null)
+      return@LaunchedEffect
+    }
+    val confirmationRunId = awaitingReplyRunId ?: terminal?.runId
     val ownedMessage =
-      if (terminal == null) {
+      if (terminal == null && confirmationRunId == null) {
         snapshot.latestAssistantMessage()
       } else {
-        terminal.runId?.let { runId ->
+        confirmationRunId?.let { runId ->
           snapshot.messages.lastOrNull { it.replyOutcomeForRun(runId) != null }
-        } ?: terminal.message?.takeIf { it.role == "assistant" }
+        } ?: terminal?.message?.takeIf { it.role == "assistant" }
       }
     val reply =
       newAssistantReplyForSession(

@@ -808,6 +808,38 @@ class WearChatEventFlowTest {
     }
   }
 
+  @Test
+  fun foreignDeltaCannotConfirmTheWatchesPendingReply() =
+    withFlow { flow ->
+      flow.send()
+      flow.observeReplyCompletion()
+      flow.emit("delta", eventRunId = "foreign-run", text = "Foreign reply")
+      flow.historyMessages = """[{"id":"foreign-message","role":"assistant","content":"Foreign reply","idempotencyKey":"foreign-run"}]"""
+      flow.emit(
+        "final",
+        eventRunId = "foreign-run",
+        message =
+          buildJsonObject {
+            put("id", "foreign-message")
+            put("role", "assistant")
+            put("content", "Foreign reply")
+            put("idempotencyKey", "foreign-run")
+          },
+      )
+      assertTrue("A foreign run must not be confirmed as this Watch reply", flow.completedReplies.all { it == null })
+    }
+
+  @Test
+  fun emptyActiveStreamRejectsALateInputCallback() {
+    for (run in listOf("foreign-run", null)) {
+      withFlow { flow ->
+        flow.emit("delta", eventRunId = run, text = "", complete = true)
+        flow.send()
+        assertEquals("No send during an active empty stream", 0, flow.sendRequests)
+      }
+    }
+  }
+
   private class Flow {
     private val app = RuntimeEnvironment.getApplication() as WearApplication
     private val owner =
@@ -821,6 +853,7 @@ class WearChatEventFlowTest {
     private var sequence = 0L
     var runId = "stream-run"
     var historyRequests = 0
+    var sendRequests = 0
     var historyMessages = "[]"
     var historyRun: JsonObject? = null
     var historyGate: CompletableDeferred<Unit>? = null
@@ -853,6 +886,7 @@ class WearChatEventFlowTest {
 
     fun observeReplyCompletion() {
       val sessionKey = state.selectedSession?.key
+      val expectedRunId = state.pendingReply?.runId ?: state.replyTerminal?.runId
       val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
       replyObserver = controller
       controller.get().setContent {
@@ -864,6 +898,7 @@ class WearChatEventFlowTest {
           awaitingReply = awaiting,
           awaitingReplySessionId = sessionKey,
           expectedAssistantKey = null,
+          awaitingReplyRunId = expectedRunId,
         ) { reply ->
           completedReplies += reply
           awaiting = false
@@ -913,6 +948,7 @@ class WearChatEventFlowTest {
           }
 
           WearRpcMethod.ChatSend -> {
+            sendRequests += 1
             runId =
               request.params
                 .getValue("idempotencyKey")
