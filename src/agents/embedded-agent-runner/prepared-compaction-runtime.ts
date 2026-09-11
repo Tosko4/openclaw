@@ -165,7 +165,8 @@ export async function buildPreparedCompactionRuntime(
       includeCodeModeSkills: false,
     });
     restoreSkillEnv = preparedSkills.restoreSkillEnv;
-    const { skillsSnapshotForRun, skillUsagePaths, skillsPrompt } = preparedSkills;
+    const { skillsSnapshotForRun, skillReadResources, skillUsagePaths, skillsPrompt } =
+      preparedSkills;
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
@@ -333,6 +334,7 @@ export async function buildPreparedCompactionRuntime(
           modelHasVision: effectiveModel.input?.includes("image") ?? false,
           modelCompat: extractModelCompat(effectiveModel),
           skillUsagePaths,
+          skillReadResources,
           skillInstructionDeliveryCache,
           conversationCapabilityProfile: runtimeCapabilityProfile,
           preparedModelRuntime: params.preparedModelRuntime,

@@ -409,6 +409,8 @@ type OpenClawCodingToolsOptions = {
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   /** Runtime-only resolved skill paths that the read tool may load under workspaceOnly. */
   skillsSnapshot?: SkillSnapshot;
+  /** Prepared read resources, independent of the prompt-visible skill projection. */
+  skillReadResources?: SkillSnapshot["resolvedSkills"];
   /** Original identities for sandbox-materialized skill instruction paths. */
   skillUsagePaths?: SkillUsagePath[];
   /** Prepared conversation-scoped facts for callers that already resolved this run context. */
@@ -664,6 +666,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     readOnly,
     sandbox,
     skillsSnapshot: options?.skillsSnapshot,
+    skillReadResources: options?.skillReadResources,
     skillInstructionPaths: options?.skillUsagePaths?.map((entry) => entry.readPath),
     skillInstructionDeliveryCache: options?.skillInstructionDeliveryCache,
     modelContextWindowTokens: options?.modelContextWindowTokens,

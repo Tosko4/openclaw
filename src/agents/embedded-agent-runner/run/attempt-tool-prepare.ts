@@ -71,6 +71,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   runAbortController: AbortController;
   runTrace: DiagnosticTraceContext;
   skillUsagePaths: SkillUsagePaths;
+  skillReadResources?: OpenClawCodingToolsOptions["skillReadResources"];
   skillsSnapshot: EmbeddedRunAttemptParams["skillsSnapshot"];
   codeModeSkills: readonly CodeModeSkill[];
   reviewTranscript?: NonNullable<OpenClawCodingToolsOptions["exec"]>["reviewTranscript"];
@@ -332,6 +333,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             isTurnTainted: attempt.isTurnTainted,
             allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
             skillUsagePaths: params.skillUsagePaths,
+            skillReadResources: params.skillReadResources,
             conversationCapabilityProfile: runtimeCapabilityProfile,
             onYield: params.onYield,
           });
