@@ -28,6 +28,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.DeviceConfigurationOverride
 import androidx.compose.ui.test.FontScale
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -361,7 +362,11 @@ class SettingsScreensContrastTest {
         .config[SemanticsProperties.ContentDescription]
         .single()
     disconnectAndReconnectStatusControl(model, showHeader = true)
-    composeRule.onNodeWithContentDescription(readyDescription).assertIsDisplayed()
+    try {
+      composeRule.onNodeWithContentDescription(readyDescription).assertIsDisplayed()
+    } catch (failure: AssertionError) {
+      throw AssertionError(chatHeaderPostFailureObservation(model, readyDescription), failure)
+    }
 
     composeRule.runOnIdle {
       gateway.healthReady = false
@@ -370,6 +375,57 @@ class SettingsScreensContrastTest {
     awaitConnectedHealthFailure(model)
     composeRule.onNodeWithContentDescription(readyDescription.removeSuffix(ready) + nativeString("Not ready")).assertIsDisplayed()
   }
+
+  private fun chatHeaderPostFailureObservation(
+    model: MainViewModel,
+    readyDescription: String,
+  ): String =
+    try {
+      val states =
+        listOf(
+          "connected" to model.isConnected.value,
+          "displayConnected" to model.gatewayConnectionDisplay.value.isConnected,
+          "healthy" to model.chatHealthOk.value,
+          "historyLoading" to model.chatHistoryLoading.value,
+          "creating" to model.chatSessionCreating.value,
+          "pendingZero" to (model.pendingRunCount.value == 0),
+          "messagesEmpty" to model.chatMessages.value.isEmpty(),
+        ).joinToString(" ") { (name, value) -> "$name=$value" }
+      val suffixes =
+        listOf(
+          "ready" to ", ${nativeString("Ready")}",
+          "not-ready" to ", ${nativeString("Not ready")}",
+          "loading" to ", ${nativeString("Loading")}",
+          "working" to ", ${nativeString("Working")}",
+        )
+      val nodes =
+        composeRule
+          .onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.ContentDescription))
+          .fetchSemanticsNodes()
+      val observations =
+        nodes.map { node ->
+          val descriptions = node.config[SemanticsProperties.ContentDescription]
+          val statuses = suffixes.filter { (_, suffix) -> descriptions.any { it.endsWith(suffix) } }.map { it.first }
+          Triple(node, statuses, readyDescription in descriptions)
+        }
+      val counts = suffixes.joinToString(" ") { (status, _) -> "$status=${observations.count { status in it.second }}" }
+      val exactCount = observations.count { it.third }
+      // These reads happen after failure and are not an atomic view of model and layout state.
+      buildString {
+        append("post-failure observation (non-atomic): $states nodes=${nodes.size} $counts exact=$exactCount")
+        observations.filter { it.second.isNotEmpty() || it.third }.take(3).forEachIndexed { index, (node, statuses, exact) ->
+          val bounds = node.boundsInRoot
+          val coordinates =
+            listOf(bounds.left, bounds.top, bounds.right, bounds.bottom).joinToString(",") {
+              if (it.isFinite()) it.toString() else "non-finite"
+            }
+          append(" node$index status=${statuses.joinToString("+").ifEmpty { "other" }} exact=$exact")
+          append(" placed=${node.layoutInfo.isPlaced} attached=${node.layoutInfo.isAttached} bounds=[$coordinates]")
+        }
+      }.take(2048)
+    } catch (_: Throwable) {
+      "post-failure observation snapshot-unavailable"
+    }
 
   private fun chatHealthStatusValue(value: String) =
     composeRule.onNode(
