@@ -35,10 +35,7 @@ import {
   buildClawHubTrustSkippedOutcome,
   buildDryRunPluginUpdateOutcome,
   buildPluginUpdateVersionOutcome,
-  formatClawHubInstallFailure,
-  formatGitInstallFailure,
-  formatMarketplaceInstallFailure,
-  formatNpmInstallFailure,
+  formatPluginUpdateInstallFailure,
   readClawHubTrustErrorCode,
   runPluginUpdateAttempt,
   shouldSkipClawHubTrustFailureForExistingInstall,
@@ -576,37 +573,15 @@ export async function updateNpmInstalledPlugins(params: {
         );
         continue;
       }
-      const phase = params.dryRun ? "check" : "update";
-      const code = resultSource === "npm" && "code" in result ? result.code : undefined;
-      const message =
-        resultSource === "npm"
-          ? formatNpmInstallFailure({
-              pluginId,
-              spec: effectiveSpec!,
-              phase,
-              result,
-            })
-          : resultSource === "clawhub"
-            ? formatClawHubInstallFailure({
-                pluginId,
-                spec: activeClawHubInstallSpec ?? `clawhub:${record.clawhubPackage!}`,
-                phase,
-                error: result.error,
-              })
-            : record.source === "git"
-              ? formatGitInstallFailure({
-                  pluginId,
-                  spec: effectiveSpec!,
-                  phase,
-                  error: result.error,
-                })
-              : formatMarketplaceInstallFailure({
-                  pluginId,
-                  marketplaceSource: record.marketplaceSource!,
-                  marketplacePlugin: record.marketplacePlugin!,
-                  phase,
-                  error: result.error,
-                });
+      const { message, code } = formatPluginUpdateInstallFailure({
+        pluginId,
+        record,
+        phase: params.dryRun ? "check" : "update",
+        effectiveSpec,
+        activeClawHubInstallSpec,
+        resultSource,
+        result,
+      });
       await recordNpmFailure(message, code);
       continue;
     }
