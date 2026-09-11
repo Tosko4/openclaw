@@ -130,15 +130,17 @@ export async function finishUpdate(
 
   let pendingResult = params.result;
   let pendingNotify = true;
+  const writeRestartSentinel = (result: UpdateRunResult) =>
+    writeControlPlaneUpdateRestartSentinelBestEffort({
+      meta: params.controlPlaneUpdateSentinelMeta,
+      result,
+      jsonMode: Boolean(params.opts.json),
+    });
   const publishFinalResult = async (failure?: unknown): Promise<UpdateRunResult> => {
     const settled = await resolveSettledUpdateCommandResult(params, pendingResult, failure);
     const result = completedResult(settled.result);
     if (pendingNotify) {
-      await writeControlPlaneUpdateRestartSentinelBestEffort({
-        meta: params.controlPlaneUpdateSentinelMeta,
-        result,
-        jsonMode: Boolean(params.opts.json),
-      });
+      await writeRestartSentinel(result);
     }
     return publishUpdateCommandTerminalResult(params, result, {
       rolledBack: rolledBack && !settled.settlementFailed,
@@ -332,11 +334,7 @@ export async function finishUpdate(
     recordNextAction(finalResult);
     if (notify && recoverService) {
       pendingNotify = false;
-      await writeControlPlaneUpdateRestartSentinelBestEffort({
-        meta: params.controlPlaneUpdateSentinelMeta,
-        result: finalResult,
-        jsonMode: Boolean(params.opts.json),
-      });
+      await writeRestartSentinel(finalResult);
     }
     // The recovering Gateway reads this notification at startup. Persist once
     // before restarting; rewriting a consumed sentinel could deliver it twice.
@@ -497,11 +495,7 @@ export async function finishUpdate(
       });
     }
     const notifyRestart = () =>
-      writeControlPlaneUpdateRestartSentinelBestEffort({
-        meta: params.controlPlaneUpdateSentinelMeta,
-        result: buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate),
-        jsonMode: Boolean(params.opts.json),
-      });
+      writeRestartSentinel(buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate));
     if (!params.coreAlreadyCurrent) {
       await notifyRestart();
       await restoreWindowsAutoStart(resultWithPostUpdate);
