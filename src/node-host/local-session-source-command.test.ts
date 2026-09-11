@@ -11,6 +11,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { configureNodeHost } from "./config.js";
 import {
   decideLocalSessionOffer,
+  recordLocalSessionOffer,
   recordLocalSessionPreconsent,
   readLocalSessionConsentState,
 } from "./local-session-consent-store.js";
@@ -202,6 +203,47 @@ describe("local session source node command", () => {
     ).toEqual(["enroll-other", "enroll-2"]);
     fake.close();
     await done;
+  });
+
+  it("starts a reopened channel's session only after the previous session stopped", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", makeTempDir(tempDirs, "local-session-source-"));
+    const order: string[] = [];
+    const definition: LocalSessionSourceDefinition = {
+      id: "codex",
+      command: "codex.localSessions.source.v1",
+      inputModes: ["steer"],
+      start: async () => {
+        order.push("start");
+        return {
+          submitInput: async () => {},
+          unshare: () => {},
+          stop: async () => {
+            // A socket server takes a moment to release its address.
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 150);
+            });
+            order.push("stop");
+          },
+        };
+      },
+    };
+    recordLocalSessionOffer({ sourceId: "codex", enrollment });
+    decideLocalSessionOffer({ enrollmentId: "enroll-1", decision: "accepted" });
+    const command = createLocalSessionSourceNodeCommand(definition);
+    const first = createFakeIo();
+    const firstDone = command.handle(null, first.io);
+    await flush();
+    await first.deliver({ type: "resume", enrollment, cursors: {}, excludedThreadIds: [] });
+    // The Gateway drops the duplex and opens a new one right away.
+    first.close();
+    const second = createFakeIo();
+    const secondDone = command.handle(null, second.io);
+    await flush();
+    await second.deliver({ type: "resume", enrollment, cursors: {}, excludedThreadIds: [] });
+    expect(order).toEqual(["start", "stop", "start"]);
+    await firstDone;
+    second.close();
+    await secondDone;
   });
 
   it("drops an invalid Gateway frame without stopping the source", async () => {

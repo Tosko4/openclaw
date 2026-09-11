@@ -97,6 +97,9 @@ function chunkRecords(records: LocalSessionRecord[]): LocalSessionRecord[][] {
 }
 
 /** Wrap a source definition as the duplex node command the Gateway bridge opens. */
+// Per-source stop in flight across duplex reconnects in this process.
+const sourceStops = new Map<string, Promise<void>>();
+
 export function createLocalSessionSourceNodeCommand(
   definition: LocalSessionSourceDefinition,
 ): OpenClawPluginNodeHostCommand {
@@ -153,6 +156,17 @@ async function runLocalSessionSourceChannel(
   let consentTimer: NodeJS.Timeout | undefined;
 
   const stopSession = async () => {
+    if (!session) {
+      return;
+    }
+    const stopping = stopCurrentSession();
+    sourceStops.set(
+      definition.id,
+      stopping.catch(() => {}),
+    );
+    await stopping;
+  };
+  const stopCurrentSession = async () => {
     const current = session;
     session = undefined;
     sessionAbort?.abort();
@@ -218,7 +232,12 @@ async function runLocalSessionSourceChannel(
     cursors: Record<string, number>;
     excludedThreadIds: string[];
   }) => {
+    // The Gateway may reopen this duplex before the previous channel's session
+    // finished stopping (its socket server, watchers); a source binds one
+    // listener per machine, so the new session waits for that stop first.
+    const previousStop = sourceStops.get(definition.id);
     await stopSession();
+    await previousStop;
     enrollment = options.enrollment;
     const abort = new AbortController();
     const onAbort = () => abort.abort();
