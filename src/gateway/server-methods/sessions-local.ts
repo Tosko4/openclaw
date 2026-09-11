@@ -245,9 +245,14 @@ export const sessionsLocalHandlers: GatewayRequestHandlers = {
       agentId: request.agentId,
     });
     publishEnrollment(context, enrollment);
-    // Replacing another person's share stops it for them: their projections
-    // leave with it, exactly as if they had pressed Stop sharing.
-    if (live && live.ownerProfileId !== profile.profileId) {
+    // Replacing another person's share stops it for them, and moving your own
+    // share to another agent leaves nothing behind in the old agent's store:
+    // the replaced projections leave exactly as if Stop sharing had been pressed.
+    // A same-owner, same-agent re-share keeps its rows; the device re-tags them.
+    if (
+      live &&
+      (live.ownerProfileId !== profile.profileId || live.agentId !== enrollment.agentId)
+    ) {
       const failed = await removeProjectedSessions(options, listProjectedSessionKeys(live));
       if (failed.length > 0) {
         respond(false, undefined, projectionsNotRemovedError(failed));

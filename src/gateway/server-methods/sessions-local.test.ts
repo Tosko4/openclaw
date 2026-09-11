@@ -104,10 +104,14 @@ afterAll(() => {
   cleanupTempDirs(tempDirs);
 });
 
-function enroll(profile: { profileId: string; displayName: string }, scopes: string[]) {
+function enroll(
+  profile: { profileId: string; displayName: string },
+  scopes: string[],
+  agentId = "main",
+) {
   const respond = vi.fn();
   const options = {
-    params: { deviceId: "device-1", sourceId: "codex", agentId: "main" },
+    params: { deviceId: "device-1", sourceId: "codex", agentId },
     respond,
     client: { authenticatedUserProfile: profile, connect: { scopes } },
     context: {
@@ -279,6 +283,14 @@ describe("stopping a share removes what it projected", () => {
     const [again] = await enroll({ profileId: "bob", displayName: "Bob" }, ["operator.write"]);
     expect(again).toBe(true);
     expect(deletedKeys).toEqual([]);
+    // Moving it to another agent leaves nothing behind in the old agent's store.
+    const [moved] = await enroll(
+      { profileId: "bob", displayName: "Bob" },
+      ["operator.write"],
+      "review",
+    );
+    expect(moved).toBe(true);
+    expect(deletedKeys).toEqual(["agent:main:local:codex:device-1:bob:t2"]);
   });
 
   it("unshare tells the device first, then deletes the row", async () => {

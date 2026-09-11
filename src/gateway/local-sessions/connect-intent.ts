@@ -28,9 +28,11 @@ export function activateLocalSessionConnectIntentForDevice(params: {
     return;
   }
   const sources = listRegisteredLocalSessionSources();
-  // Redeeming a link carries no admin authority: it must not take over a
-  // source someone else shares from this device (sessions.local.enroll gates
-  // that), so such a source is left as it is and the person sees it on Profile.
+  // Redeeming a link carries no admin authority and no request context to
+  // remove projections with: it must not take over a source someone else
+  // shares from this device, nor move the person's own share to another agent
+  // (both are sessions.local.enroll's job), so such a source is left as it is
+  // and the person sees it on Profile.
   const liveEnrollments = listLocalSessionEnrollments({ deviceId: params.deviceId }).filter(
     (candidate) => candidate.state === "pending" || candidate.state === "active",
   );
@@ -42,13 +44,15 @@ export function activateLocalSessionConnectIntentForDevice(params: {
       );
       continue;
     }
-    const sharedByOther = liveEnrollments.find(
+    const conflicting = liveEnrollments.find(
       (candidate) =>
-        candidate.sourceId === sourceId && candidate.ownerProfileId !== intent.ownerProfileId,
+        candidate.sourceId === sourceId &&
+        (candidate.ownerProfileId !== intent.ownerProfileId ||
+          candidate.agentId !== intent.agentId),
     );
-    if (sharedByOther) {
+    if (conflicting) {
       log.warn(
-        `connect intent ${intent.setupId}: ${sourceId} on device ${params.deviceId.slice(0, 8)} is already shared by ${sharedByOther.ownerLabel}; left unchanged`,
+        `connect intent ${intent.setupId}: ${sourceId} on device ${params.deviceId.slice(0, 8)} is already shared by ${conflicting.ownerLabel} into agent ${conflicting.agentId}; left unchanged`,
       );
       continue;
     }

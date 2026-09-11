@@ -74,6 +74,30 @@ describe("connect-link activation", () => {
     ).toEqual([[bobs.enrollmentId, "bob", "pending"]]);
   });
 
+  it("does not move the redeeming person's own share to another agent", () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", makeTempDir(tempDirs, "connect-intent-"));
+    openOpenClawStateDatabase();
+    createLocalSessionEnrollment({
+      ownerProfileId: "alice",
+      ownerLabel: "Alice",
+      deviceId: "device-1",
+      pluginId: "codex",
+      sourceId: "codex",
+      agentId: "review",
+    });
+    mintIntent({ ownerProfileId: "alice", ownerLabel: "Alice" }, "setup-alice-3");
+    const broadcast = vi.fn();
+    activateLocalSessionConnectIntentForDevice({
+      setupId: "setup-alice-3",
+      deviceId: "device-1",
+      broadcast,
+    });
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(
+      listLocalSessionEnrollments({ deviceId: "device-1" }).map((row) => [row.agentId, row.state]),
+    ).toEqual([["review", "pending"]]);
+  });
+
   it("replaces the redeeming person's own earlier share", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", makeTempDir(tempDirs, "connect-intent-"));
     openOpenClawStateDatabase();
