@@ -335,7 +335,7 @@ it("keeps failed metadata visible through card refreshes and recovers it with pa
   expect(page.request.mock.calls.filter(([method]) => method === "agents.list")).toHaveLength(1);
 
   metadataAvailable = true;
-  page.container.querySelector<HTMLButtonElement>(".workboard-toolbar__actions button")!.click();
+  page.container.querySelector<HTMLButtonElement>(".workboard-refresh")!.click();
   await vi.waitFor(() =>
     expect(page.container.querySelector(".workboard-board")?.textContent).toContain(
       "Configured operator",
