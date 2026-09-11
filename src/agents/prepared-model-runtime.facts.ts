@@ -82,6 +82,7 @@ import type {
 } from "./prepared-model-runtime.types.js";
 import { resolveProviderAuthAliasMap } from "./provider-auth-aliases.js";
 import { resolveProviderUseAdmission } from "./provider-model-auth-source-plan.js";
+import { getAuthStorageOAuthProviderRegistry } from "./sessions/auth-storage-oauth-registry.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 type PreparedConfiguredRegistryGroup = {
@@ -382,9 +383,13 @@ export async function prepareWorkspaceBuildGroup(
       const credentials = facts.input.skipCredentials
         ? {}
         : { ...ambientCredentials, ...facts.credentials };
+      const templateAuthStorage = AuthStorage.inMemory(credentials);
+      for (const provider of facts.templateAuthStorage.getOAuthProviders()) {
+        getAuthStorageOAuthProviderRegistry(templateAuthStorage).register(provider);
+      }
       Object.assign(facts, {
         credentials,
-        templateAuthStorage: AuthStorage.inMemory(credentials),
+        templateAuthStorage,
         providerIds: options.providerDiscoveryProviderIds
           ? [...options.providerDiscoveryProviderIds]
           : resolvePreparedModelRuntimeProviderIds({

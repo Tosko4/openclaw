@@ -14,7 +14,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import type { ModelProviderConfigInput } from "../config/types.models.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import {
@@ -145,7 +145,12 @@ module.exports = {
           configSchema: { type: "object", additionalProperties: false, properties: {} },
         });
         const ref = { source: "store", provider: "default", id: "WORKER_CONFIG_KEY" } as const;
-        const providers: Record<string, ModelProviderConfigInput> = {
+        const providerConfig: ModelProviderConfig = {
+          baseUrl,
+          api: "openai-completions",
+          models: [],
+        };
+        const providers: Record<string, ModelProviderConfig> = {
           "healthy-fixture": {
             baseUrl: "https://healthy.example/v1",
             api: "openai-completions",
@@ -166,9 +171,7 @@ module.exports = {
             ? {}
             : {
                 [provider]: {
-                  baseUrl,
-                  api: "openai-completions",
-                  models: [],
+                  ...providerConfig,
                   ...(owner === "config" ? { apiKey: loader?.authored ?? ref } : {}),
                 },
               }),
@@ -198,7 +201,7 @@ module.exports = {
             providers: {
               ...source.models.providers,
               [provider]: {
-                ...source.models.providers[provider],
+                ...providerConfig,
                 ...(owner === "config" ? { apiKey: value } : {}),
               },
             },
@@ -299,7 +302,7 @@ module.exports = {
               providers: {
                 ...source.models.providers,
                 [provider]: {
-                  ...source.models.providers[provider],
+                  ...providerConfig,
                   apiKey: loader ? value : { ...ref, id: "OTHER_WORKER_KEY" },
                 },
               },

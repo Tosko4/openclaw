@@ -225,9 +225,10 @@ export async function runPreparedModelCatalogWorkerRequest(
       pluginGeneration: prepared.pluginGeneration,
     });
     replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: value.input.agentDir, store: authStore }]);
-    const ambientCredentials = resolveSyntheticCredentials(
-      request.syntheticAuth.map(({ providerRef }) => providerRef),
-    );
+    const ambientCredentials = resolveSyntheticCredentials([
+      ...value.providerIds,
+      ...request.syntheticAuth.map(({ providerRef }) => providerRef),
+    ]);
     const startupProviderIds = new Set(value.providerIds.map(normalizeProviderId));
     const credentials = {
       ...ambientCredentials,
