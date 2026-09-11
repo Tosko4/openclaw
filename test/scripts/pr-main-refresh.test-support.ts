@@ -433,6 +433,11 @@ if (args[0] === 'pr' && args[1] === 'view') {
       head: { sha: control.metadata.headRefOid, ref: 'topic', repo: { full_name: 'fixture/repo' } },
       base: { sha: baseSha },
     };
+  } else if (/^repos\\/fixture\\/repo\\/commits\\/[0-9a-f]{40}$/.test(endpoint)) {
+    value = {
+      commit: { author: { name: 'OpenClaw Test', email: 'test@example.invalid' } },
+      author: { login: 'fixture', type: 'User' },
+    };
   } else if (endpoint.endsWith('/actions/workflows/ci.yml/runs')) {
     event({ kind: 'ci-watched' });
     value = { workflow_runs: [{ id: 1, conclusion: null }] };
