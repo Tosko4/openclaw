@@ -113,6 +113,7 @@ it("keeps blocked-pin state while accounting for a reply on the configured prima
   context.followupRun.run.blockedModelOverrideRef = "pin-provider/blocked-model";
   context.followupRun.run.blockedModelOverrideUsesPrimary = true;
   context.execution.result.meta.agentMeta = {
+    sessionId: entry.sessionId,
     provider: diagnostic.provider,
     model: diagnostic.model,
     runtimeModelSelection: diagnostic,
