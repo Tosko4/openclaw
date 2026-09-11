@@ -1,4 +1,3 @@
-// Telegram plugin module implements bot message context.body behavior.
 import {
   formatLocationText,
   formatMediaPlaceholderText,
@@ -83,34 +82,6 @@ type TelegramInboundBodyResult = {
   conversationHistory?: ConversationHistoryCapture;
 };
 
-function resolveTelegramMentionFacts(params: {
-  canDetectMention: boolean;
-  effectiveWasMentioned: boolean;
-  explicitlyMentionedBot: boolean;
-  implicitMentionKinds: TelegramMentionFacts["implicitMentionKinds"];
-  requireMention: boolean;
-  shouldBypassMention: boolean;
-}): TelegramMentionFacts {
-  let mentionSource: TelegramMentionFacts["mentionSource"];
-  if (params.explicitlyMentionedBot) {
-    mentionSource = "explicit_bot";
-  } else if (params.implicitMentionKinds && params.implicitMentionKinds.length > 0) {
-    mentionSource = "implicit_thread";
-  } else if (params.shouldBypassMention) {
-    mentionSource = "command_bypass";
-  }
-
-  return {
-    canDetectMention: params.canDetectMention,
-    wasMentioned: params.effectiveWasMentioned,
-    explicitlyMentionedBot: params.explicitlyMentionedBot,
-    mentionSource,
-    implicitMentionKinds: params.implicitMentionKinds,
-    effectiveWasMentioned: params.effectiveWasMentioned,
-    requireMention: params.requireMention,
-  };
-}
-
 async function resolveStickerVisionSupport(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -172,7 +143,6 @@ export async function resolveTelegramInboundBody(params: {
   const botUsername = normalizeOptionalLowercaseString(primaryCtx.me?.username);
   const messageTextParts = getTelegramTextParts(msg);
   const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
-  const useAccessGroups = true;
   const hasControlCommandInMessage = hasControlCommand(messageTextParts.text, cfg, {
     botUsername,
   });
@@ -351,8 +321,7 @@ export async function resolveTelegramInboundBody(params: {
   const disableAudioPreflight =
     (topicConfig?.disableAudioPreflight ??
       (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight) === true;
-  const senderAllowedForAudioPreflight =
-    !useAccessGroups || !allowForCommands.hasEntries || commandAuthorized;
+  const senderAllowedForAudioPreflight = !allowForCommands.hasEntries || commandAuthorized;
 
   let preflightTranscript: string | undefined;
   const needsPreflightTranscription =
@@ -390,40 +359,38 @@ export async function resolveTelegramInboundBody(params: {
     bodyText = formatAudioTranscriptForAgent(preflightTranscript);
   }
 
-  if (isGroup && commandGate.shouldBlockControlCommand) {
-    logInboundDrop({
-      log: logVerbose,
-      channel: "telegram",
-      reason: "control command (unauthorized)",
-      target: senderId ?? "unknown",
-    });
-    return null;
-  }
-
   const implicitMentionKinds = implicitMentionKindWhen(
     "reply_to_bot",
     addressing.includes("reply"),
   );
   const canDetectMention = Boolean(primaryCtx.me?.id || botUsername);
-  const effectiveWasMentioned = wasMentioned;
-  const inboundEventKind = "user_request";
+  const shouldBypassMention = options?.commandSource === "native";
+  let mentionSource: TelegramMentionFacts["mentionSource"];
+  if (explicitlyMentioned) {
+    mentionSource = "explicit_bot";
+  } else if (implicitMentionKinds.length > 0) {
+    mentionSource = "implicit_thread";
+  } else if (shouldBypassMention) {
+    mentionSource = "command_bypass";
+  }
   return {
     bodyText,
     rawBody,
     historyKey,
     commandAuthorized,
-    effectiveWasMentioned,
-    inboundEventKind,
-    mentionFacts: resolveTelegramMentionFacts({
+    effectiveWasMentioned: wasMentioned,
+    inboundEventKind: "user_request",
+    mentionFacts: {
       canDetectMention,
-      effectiveWasMentioned,
+      wasMentioned,
+      effectiveWasMentioned: wasMentioned,
       explicitlyMentionedBot: explicitlyMentioned,
+      mentionSource,
       implicitMentionKinds,
       requireMention: isGroup,
-      shouldBypassMention: options?.commandSource === "native",
-    }),
+    },
     canDetectMention,
-    shouldBypassMention: options?.commandSource === "native",
+    shouldBypassMention,
     conversationHistory,
     hasControlCommand: hasControlCommandInMessage,
     ...(audioTranscribedMediaIndex !== undefined && audioTranscribedMediaIndex >= 0

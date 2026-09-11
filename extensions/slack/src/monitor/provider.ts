@@ -1,4 +1,3 @@
-// Slack provider module implements model/runtime integration.
 import type { RequestListener } from "node:http";
 import { type FetchFunction, type WebClientOptions, WebClient } from "@slack/web-api";
 import {

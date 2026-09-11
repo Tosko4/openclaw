@@ -1,4 +1,3 @@
-// Discord type declarations define plugin contracts.
 import type { InboundEventKind } from "openclaw/plugin-sdk/channel-inbound";
 import type {
   ChannelIngressContextBinding,

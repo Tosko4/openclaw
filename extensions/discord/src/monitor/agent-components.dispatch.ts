@@ -1,4 +1,3 @@
-// Discord plugin module implements agent componentsispatch behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   formatInboundEnvelope,
@@ -73,16 +72,6 @@ function resolveDiscordComponentChatType(interactionCtx: ComponentInteractionCon
     return "group";
   }
   return "channel";
-}
-
-function resolveDiscordComponentOriginatingTo(
-  interactionCtx: Pick<ComponentInteractionContext, "isDirectMessage" | "userId" | "channelId">,
-) {
-  return resolveDiscordConversationIdentity({
-    isDirectMessage: interactionCtx.isDirectMessage,
-    userId: interactionCtx.userId,
-    channelId: interactionCtx.channelId,
-  });
 }
 
 export async function dispatchDiscordComponentEvent(params: {
@@ -185,12 +174,7 @@ export async function dispatchDiscordComponentEvent(params: {
     finalizeInboundContext,
     resolveChunkMode,
     resolveTextChunkLimit,
-  } = await (async () => {
-    const conversationRuntime = await loadConversationRuntime();
-    return {
-      ...conversationRuntime,
-    };
-  })();
+  } = await loadConversationRuntime();
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
@@ -240,7 +224,7 @@ export async function dispatchDiscordComponentEvent(params: {
     Timestamp: timestamp,
     OriginatingChannel: "discord" as const,
     OriginatingTo:
-      resolveDiscordComponentOriginatingTo(interactionCtx) ?? `channel:${interactionCtx.channelId}`,
+      resolveDiscordConversationIdentity(interactionCtx) ?? `channel:${interactionCtx.channelId}`,
   });
 
   if (!interactionCtx.isDirectMessage) {
@@ -331,7 +315,7 @@ export async function dispatchDiscordComponentEvent(params: {
                 sessionKey: inboundLastRouteSessionKey,
                 channel: "discord",
                 to:
-                  resolveDiscordComponentOriginatingTo(interactionCtx) ??
+                  resolveDiscordConversationIdentity(interactionCtx) ??
                   `user:${interactionCtx.userId}`,
                 accountId,
                 mainDmOwnerPin:

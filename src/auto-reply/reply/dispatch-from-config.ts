@@ -154,7 +154,6 @@ async function dispatchReplyFromConfigInner(
       if (isDispatchReplyOperationAbortedError(err)) {
         return finishReplyOperationAbortedDispatch();
       }
-      let inputFailureResult: DispatchFromConfigResult | undefined;
       try {
         if (isAgentHarnessPreflightError(err) && err.userMessage) {
           let queuedFinal = false;
@@ -180,8 +179,9 @@ async function dispatchReplyFromConfigInner(
           }
           const counts = params.dispatcher.getQueuedCounts();
           counts.final += routedFinalCount;
-          inputFailureResult = errorState.attachSourceReplyDeliveryMode({ queuedFinal, counts });
+          return errorState.attachSourceReplyDeliveryMode({ queuedFinal, counts });
         }
+        throw err;
       } finally {
         if (inboundDedupeClaim.status === "claimed") {
           if (errorState.turnAdoptionState?.adopted || errorState.inboundDedupeReplayUnsafe) {
@@ -202,10 +202,6 @@ async function dispatchReplyFromConfigInner(
         }
         failDispatchReplyOperation(err);
       }
-      if (inputFailureResult) {
-        return inputFailureResult;
-      }
-      throw err;
     }
   });
 }

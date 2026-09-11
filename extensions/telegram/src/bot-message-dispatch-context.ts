@@ -1,4 +1,3 @@
-// Telegram plugin module recovers dispatch routing and group-history context.
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -13,10 +12,6 @@ import {
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
-function normalizeTelegramThreadId(value: unknown): number | undefined {
-  return parseStrictPositiveInteger(value);
-}
-
 function resolveTelegramForumThreadScopeFromSessionKey(
   sessionKey: unknown,
 ): { chatId: string; threadId: number } | undefined {
@@ -24,7 +19,7 @@ function resolveTelegramForumThreadScopeFromSessionKey(
     return undefined;
   }
   const match = /:telegram:group:(-?\d+):topic:(\d+)(?::|$)/.exec(sessionKey);
-  const threadId = normalizeTelegramThreadId(match?.[2]);
+  const threadId = parseStrictPositiveInteger(match?.[2]);
   if (!match?.[1] || threadId == null) {
     return undefined;
   }
@@ -46,8 +41,8 @@ function resolveDispatchTelegramThreadSpec(params: {
   const scopedThreadId =
     scopedThread?.chatId === String(params.chatId) ? scopedThread.threadId : undefined;
   const payloadThreadId =
-    normalizeTelegramThreadId(params.ctxPayload.MessageThreadId) ??
-    normalizeTelegramThreadId(params.ctxPayload.TransportThreadId);
+    parseStrictPositiveInteger(params.ctxPayload.MessageThreadId) ??
+    parseStrictPositiveInteger(params.ctxPayload.TransportThreadId);
   // Missing forum IDs are normalized to General; topic-scoped turn facts are more specific.
   const recoveredThreadId = scopedThreadId ?? payloadThreadId;
   return recoveredThreadId == null || recoveredThreadId === params.threadSpec.id
@@ -62,8 +57,8 @@ function normalizeDispatchTelegramThreadPayload(params: {
   if (params.threadSpec.scope !== "forum" || params.threadSpec.id == null) {
     return params.context;
   }
-  const messageThreadId = normalizeTelegramThreadId(params.context.ctxPayload.MessageThreadId);
-  const transportThreadId = normalizeTelegramThreadId(params.context.ctxPayload.TransportThreadId);
+  const messageThreadId = parseStrictPositiveInteger(params.context.ctxPayload.MessageThreadId);
+  const transportThreadId = parseStrictPositiveInteger(params.context.ctxPayload.TransportThreadId);
   if (messageThreadId === params.threadSpec.id && transportThreadId === params.threadSpec.id) {
     return params.context;
   }
@@ -106,19 +101,15 @@ function buildRecoveredTelegramChatActionSender(params: {
 export function resolveDispatchTelegramContext(params: {
   context: TelegramMessageContext;
 }): TelegramMessageContext {
-  if (params.context.ctxPayload.ConversationHistory) {
-    // Captured context belongs to the native room/thread chosen at intake.
-    // A session-key hint cannot move those messages into another conversation.
-    return normalizeDispatchTelegramThreadPayload({
-      context: params.context,
-      threadSpec: params.context.threadSpec,
-    });
-  }
-  const threadSpec = resolveDispatchTelegramThreadSpec({
-    chatId: params.context.chatId,
-    ctxPayload: params.context.ctxPayload,
-    threadSpec: params.context.threadSpec,
-  });
+  // Captured context belongs to the native room/thread chosen at intake.
+  // A session-key hint cannot move those messages into another conversation.
+  const threadSpec = params.context.ctxPayload.ConversationHistory
+    ? params.context.threadSpec
+    : resolveDispatchTelegramThreadSpec({
+        chatId: params.context.chatId,
+        ctxPayload: params.context.ctxPayload,
+        threadSpec: params.context.threadSpec,
+      });
   if (threadSpec === params.context.threadSpec || threadSpec.scope !== "forum") {
     return normalizeDispatchTelegramThreadPayload({ context: params.context, threadSpec });
   }
@@ -126,9 +117,6 @@ export function resolveDispatchTelegramContext(params: {
     params.context.chatId,
     threadSpec,
   );
-  const recoveredFrom = params.context.isGroup
-    ? buildTelegramGroupFrom(params.context.chatId, threadSpec)
-    : params.context.ctxPayload.From;
   const recoveredUpdateLastRoute =
     params.context.turn.record.updateLastRoute && threadSpec.id != null
       ? {
@@ -137,38 +125,37 @@ export function resolveDispatchTelegramContext(params: {
           threadId: String(threadSpec.id),
         }
       : params.context.turn.record.updateLastRoute;
-  const recoveredHistoryKey = params.context.isGroup
-    ? buildTelegramGroupPeerId(params.context.chatId, threadSpec)
-    : params.context.historyKey;
-  const recoveredSendTyping = buildRecoveredTelegramChatActionSender({
-    context: params.context,
-    threadId: threadSpec.id,
-    action: "typing",
-  });
-  const recoveredSendRecordVoice = buildRecoveredTelegramChatActionSender({
-    context: params.context,
-    threadId: threadSpec.id,
-    action: "record_voice",
-  });
   if (threadSpec.id != null) {
     // Keep the admitted payload object intact; replacing it would discard the
     // host-only participant carrier before canonical run admission.
     Object.assign(params.context.ctxPayload, {
-      From: recoveredFrom,
+      From: params.context.isGroup
+        ? buildTelegramGroupFrom(params.context.chatId, threadSpec)
+        : params.context.ctxPayload.From,
       MessageThreadId: threadSpec.id,
       OriginatingTo: recoveredRoutingTarget,
       To: recoveredRoutingTarget,
       TransportThreadId: threadSpec.id,
     });
   }
-  const recovered = {
+  return {
     ...params.context,
-    historyKey: recoveredHistoryKey,
+    historyKey: params.context.isGroup
+      ? buildTelegramGroupPeerId(params.context.chatId, threadSpec)
+      : params.context.historyKey,
     threadSpec,
     resolvedThreadId: threadSpec.id,
     replyThreadId: threadSpec.id,
-    sendTyping: recoveredSendTyping,
-    sendRecordVoice: recoveredSendRecordVoice,
+    sendTyping: buildRecoveredTelegramChatActionSender({
+      context: params.context,
+      threadId: threadSpec.id,
+      action: "typing",
+    }),
+    sendRecordVoice: buildRecoveredTelegramChatActionSender({
+      context: params.context,
+      threadId: threadSpec.id,
+      action: "record_voice",
+    }),
     turn: {
       ...params.context.turn,
       record: {
@@ -176,7 +163,5 @@ export function resolveDispatchTelegramContext(params: {
         updateLastRoute: recoveredUpdateLastRoute,
       },
     },
-    ctxPayload: params.context.ctxPayload,
   };
-  return recovered;
 }

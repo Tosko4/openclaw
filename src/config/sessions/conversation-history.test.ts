@@ -67,7 +67,7 @@ describe("durable conversation history custody", () => {
   });
   const stage = async (
     runId: string,
-    conversationHistory: ConversationHistoryCapture,
+    conversationHistory?: ConversationHistoryCapture,
     prepareMessageAfterIdempotencyCheck?: (
       message: PersistedUserTurnMessage,
     ) => PersistedUserTurnMessage,
@@ -87,6 +87,11 @@ describe("durable conversation history custody", () => {
   };
   const promote = (receipt: SessionPendingInputReceipt) =>
     receipt.run(() => appendTranscriptMessage(sessionScope(), { message: receipt.message }));
+  const resetHistory = (capture: ConversationHistoryCapture) =>
+    runOpenClawAgentWriteTransaction(
+      (db) => resetConversationHistory(db, capture),
+      toDatabaseOptions(resolveSqliteReadScope(scope())),
+    );
 
   beforeEach(async () => {
     await upsertSessionEntryCore(sessionScope(), { sessionId, updatedAt: 1 });
@@ -101,15 +106,7 @@ describe("durable conversation history custody", () => {
   it("keeps existing stores history-free until their first room observation", async () => {
     const db = database().db;
     db.exec("DROP TABLE conversation_history");
-    const receipt = await stageSessionPendingInput(sessionScope(), {
-      runId: "ordinary-input",
-      message: input("ordinary-input"),
-      assertCurrent: () => {},
-    });
-    if (!receipt) {
-      throw new Error("Ordinary input was not admitted");
-    }
-    receipts.push(receipt);
+    await stage("ordinary-input");
     expect(
       db.prepare("SELECT name FROM sqlite_schema WHERE name = 'conversation_history'").get(),
     ).toBeUndefined();
@@ -526,10 +523,7 @@ describe("durable conversation history custody", () => {
     await observe("other-room", { text: "Other room" }, "conv_other");
     const reset = await observe("reset");
     await observe("after-reset");
-    runOpenClawAgentWriteTransaction(
-      (db) => resetConversationHistory(db, reset),
-      toDatabaseOptions(resolveSqliteReadScope(scope())),
-    );
+    resetHistory(reset);
     await enrichConversationObservationCore(background, "before-reset", {
       media: [{ path: "/late.png" }],
     });
@@ -556,10 +550,7 @@ describe("durable conversation history custody", () => {
       message: { text: "/new" },
       isRequest: true,
     });
-    runOpenClawAgentWriteTransaction(
-      (db) => resetConversationHistory(db, reset),
-      toDatabaseOptions(resolveSqliteReadScope(scope())),
-    );
+    resetHistory(reset);
     await promote(await stage("reset", reset));
     const replay = await observe("spooled-source", source);
     expect(replay.throughSequence).toBe(old.throughSequence);
@@ -587,19 +578,14 @@ describe("durable conversation history custody", () => {
       message: { text: "/new" },
       isRequest: true,
     });
-    const resetHistory = () =>
-      runOpenClawAgentWriteTransaction(
-        (db) => resetConversationHistory(db, reset),
-        toDatabaseOptions(resolveSqliteReadScope(scope())),
-      );
-    expect(resetHistory).toThrow("unfinished submission");
+    expect(() => resetHistory(reset)).toThrow("unfinished submission");
     pending.beginSubmission();
     rotateAgentEventLifecycleGeneration();
     closeOpenClawAgentDatabasesForTest();
     const beforeReset = await stage("before-reset", await observe("before-reset"));
     expect(beforeReset.message.content).not.toContain("background");
     beforeReset.finish("cancelled");
-    expect(resetHistory).not.toThrow();
+    expect(() => resetHistory(reset)).not.toThrow();
     closeOpenClawAgentDatabasesForTest();
     expect(listSessionPendingInputs(sessionScope()).items).toEqual(
       expect.arrayContaining([
@@ -655,10 +641,7 @@ describe("durable conversation history custody", () => {
     expect(listSessionPendingInputs(sessionScope()).total).toBe(0);
     expect(await loadTranscriptEvents(sessionScope())).toEqual([]);
     const reset = await observe("reset");
-    runOpenClawAgentWriteTransaction(
-      (db) => resetConversationHistory(db, reset),
-      toDatabaseOptions(resolveSqliteReadScope(scope())),
-    );
+    resetHistory(reset);
     expect((await stage("reset", reset)).message.content).toBe("reset");
   });
 

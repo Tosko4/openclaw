@@ -1,4 +1,3 @@
-// Telegram helper module supports body helpers behavior.
 import type {
   Chat,
   Message,

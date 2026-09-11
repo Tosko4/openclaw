@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { Bot } from "grammy";
 import type { Update } from "grammy/types";
@@ -11,6 +10,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
 import { createTelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
@@ -35,19 +35,17 @@ import { getTelegramSequentialConstraints } from "./sequential-key.js";
 
 type IncomingMessage = NonNullable<Update["message"]>;
 
-const directories: string[] = [];
-afterEach(async () => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  clearRuntimeConfigSnapshot();
-  await Promise.all(
-    directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  );
-});
+const directories = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    clearRuntimeConfigSnapshot();
+    cleanup();
+  }),
+);
 
-async function createOrderingFixture(debounceMs: number) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-observation-order-"));
-  directories.push(directory);
+function createOrderingFixture(debounceMs: number) {
+  const directory = directories.make("telegram-observation-order-");
   const storePath = path.join(directory, "sessions.json");
   const cfg: OpenClawConfig = {
     session: { store: storePath },
@@ -136,7 +134,7 @@ it.each([
 ])(
   "retains background $kind before a later tag captures the conversation",
   async ({ kind, fileName, contentType, native }) => {
-    const { bot, processed, storePath, directory } = await createOrderingFixture(0);
+    const { bot, processed, storePath, directory } = createOrderingFixture(0);
     const mediaPath = path.join(directory, fileName);
     await fs.writeFile(mediaPath, "attachment fixture");
     vi.spyOn(mediaResolver, "resolveMedia").mockImplementation(async ({ ctx }) =>
@@ -217,7 +215,7 @@ it.each([
 );
 
 it("keeps an album together while its next attachment is still downloading", async () => {
-  const { bot, processed, directory } = await createOrderingFixture(0);
+  const { bot, processed, directory } = createOrderingFixture(0);
   const nextDownload = createDeferred<void>();
   const mediaPath = path.join(directory, "album.png");
   await fs.writeFile(mediaPath, "attachment fixture");
@@ -265,7 +263,7 @@ it("keeps an album together while its next attachment is still downloading", asy
 });
 
 it("records a forwarded message before another sender's immediate request crosses the buffer", async () => {
-  const { bot, processed, storePath } = await createOrderingFixture(0);
+  const { bot, processed, storePath } = createOrderingFixture(0);
   const chat = { id: -100123, type: "group" as const, title: "QA" };
   const forwarded: IncomingMessage = {
     chat,
@@ -316,7 +314,7 @@ it("records a forwarded message before another sender's immediate request crosse
 });
 
 it("keeps a same-sender plain text tail unread after an addressed debounce request", async () => {
-  const { bot, processed, storePath } = await createOrderingFixture(50);
+  const { bot, processed, storePath } = createOrderingFixture(50);
   const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
   const target = {
     agentId: "main",

@@ -1,4 +1,3 @@
-// Discord helper module supports message handler.preflight helpers behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
 import { isDiscordThreadChannelType } from "../channel-type.js";

@@ -200,41 +200,30 @@ export function resetConversationHistory(
   }
   const retiredByReset = { sourceIds: capture.requestSourceIds, time: Date.now() };
   for (const row of rows) {
-    if (row.assigned_input_id !== null || row.submission_started !== 0) {
-      // Reset retires uncertainty; it does not claim delivery or erase the prior
-      // input's receipt, source assignment, or submission evidence.
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .updateTable("conversation_history")
-          .set((eb) => ({
-            message_json: eb.fn<string>("json_set", [
-              "message_json",
-              eb.val("$.observationCustody.retiredByReset"),
-              eb.fn<string>("json", [eb.val(JSON.stringify(retiredByReset))]),
-            ]),
-          }))
-          .where("seq", "=", row.seq),
-      );
-    } else {
-      // The ingress spool can replay after reset. Keep its source identity while
-      // clearing the old body, so redelivery cannot recreate unread history.
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .updateTable("conversation_history")
-          .set({
-            message_json: JSON.stringify({
-              observationCustody: {
-                // SAFETY: The reset query selected the stored observationCustody object.
-                ...(JSON.parse(row.custody_json) as StoredObservation["observationCustody"]),
-                retiredByReset,
-              },
-            }),
-          })
-          .where("seq", "=", row.seq),
-      );
-    }
+    // Keep uncertain submissions as evidence; cleared chatter keeps only its
+    // source receipt so replayed ingress cannot recreate the old discussion.
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("conversation_history")
+        .set((eb) => ({
+          message_json:
+            row.assigned_input_id !== null || row.submission_started !== 0
+              ? eb.fn<string>("json_set", [
+                  "message_json",
+                  eb.val("$.observationCustody.retiredByReset"),
+                  eb.fn<string>("json", [eb.val(JSON.stringify(retiredByReset))]),
+                ])
+              : JSON.stringify({
+                  observationCustody: {
+                    // SAFETY: The reset query selected the stored observationCustody object.
+                    ...(JSON.parse(row.custody_json) as StoredObservation["observationCustody"]),
+                    retiredByReset,
+                  },
+                }),
+        }))
+        .where("seq", "=", row.seq),
+    );
   }
 }
 
