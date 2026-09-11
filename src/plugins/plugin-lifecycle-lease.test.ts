@@ -235,6 +235,46 @@ describe("plugin lifecycle lease", () => {
     });
   });
 
+  it("retains the lifecycle lease through cleanup after initiating authority is revoked", async () => {
+    await withOpenClawTestState({ label: "plugin-lifecycle-revoked-cleanup" }, async (state) => {
+      const cleanupEntered = createDeferred();
+      const releaseCleanup = createDeferred();
+      const controller = new AbortController();
+      const refusal = new Error("initiating updater was revoked");
+      const operation = withPluginLifecycleLease(
+        { env: state.env, assertCurrent: () => controller.signal.throwIfAborted() },
+        async (lease) => {
+          const instance = new PluginInstance("revoked-cleanup");
+          instance.lifecycle.onDispose(async () => {
+            cleanupEntered.resolve();
+            await releaseCleanup.promise;
+          });
+          getPluginCache().setupModules.set(instance.pluginId, instance);
+          controller.abort(refusal);
+          lease.assertOwned();
+        },
+      );
+      const completion = Promise.allSettled([operation]);
+      try {
+        await cleanupEntered.promise;
+        await expect(
+          withPluginLifecycleLease({ env: state.env, waitMs: 0 }, async () => "acquired"),
+        ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_TIMEOUT" });
+      } finally {
+        releaseCleanup.resolve();
+        await completion;
+      }
+      const [outcome] = await completion;
+      expect(outcome.status).toBe("rejected");
+      if (outcome.status === "rejected") {
+        expect(outcome.reason).toBe(refusal);
+      }
+      await expect(
+        withPluginLifecycleLease({ env: state.env, waitMs: 0 }, async () => "acquired"),
+      ).resolves.toBe("acquired");
+    });
+  });
+
   it.each([
     ["one state directory", false],
     ["an explicit database path across different state directories", true],
