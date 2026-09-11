@@ -31,12 +31,12 @@ import type {
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
 import { completeConfiguredRuntimeModels } from "./prepared-model-runtime.configured-completion.js";
-import type { PreparedRuntimeCapabilityModel } from "./prepared-model-runtime.configured.js";
 import {
   acquirePreparedMediaCapabilityProviders,
   buildPreparedPluginModelCatalog,
 } from "./prepared-model-runtime.plugin-generation.js";
 import type {
+  PreparedRuntimeCapabilityModel,
   PreparedModelCatalogInventory,
   PreparedModelCatalogRefreshOptions,
   PreparedModelRuntimeCatalogMode,
@@ -363,6 +363,7 @@ export function createPreparedModelRuntimeSnapshot(
             acquirePreparedMediaCapabilityProviders(
               mediaCapabilityProviderSource,
               mediaCapabilityProviders,
+              pluginRegistry ?? mediaCapabilityProviderSource.registry,
             ),
         }
       : {}),

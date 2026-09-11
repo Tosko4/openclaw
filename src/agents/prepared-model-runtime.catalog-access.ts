@@ -36,8 +36,8 @@ import {
   materializePreparedModelCatalog,
   prepareModelCatalogPublication,
 } from "./prepared-model-runtime.full-catalog.js";
+import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import { createCatalogAttemptReporter } from "./prepared-model-runtime.publication-events.js";
-import { retainPreparedModelRuntimeGenerationResources } from "./prepared-model-runtime.resources.js";
 import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
 import type {
   PreparedModelCatalogInventory,
@@ -373,7 +373,6 @@ export function createFullModelCatalogAccess(params: {
       await current.promise;
       return acquireCatalog(options);
     }
-    const resourceClaim = retainPreparedModelRuntimeGenerationResources(params.pluginGeneration);
     if (includeNative && !options.providerIds) {
       nativeCatalogAcquired = false;
     }
@@ -381,6 +380,9 @@ export function createFullModelCatalogAccess(params: {
     // Discovery is read-only. Holding the directory build queue here would block an auth
     // replacement and every picker waiting for its static publication.
     const promise = (async () => {
+      await using _ = {
+        [Symbol.asyncDispose]: retainPreparedPluginGeneration(params.pluginGeneration),
+      };
       const scopes: Array<readonly string[] | undefined> = fullRefresh
         ? [undefined]
         : providers.map((provider) => [provider]);
@@ -583,7 +585,6 @@ export function createFullModelCatalogAccess(params: {
     })()
       .catch(attempt.failed)
       .finally(() => {
-        resourceClaim?.release();
         pending = undefined;
       });
     pending = { providers: fullRefresh ? undefined : providers, nativeProviders, promise };
@@ -601,28 +602,30 @@ export function createFullModelCatalogAccess(params: {
       if (pendingAuth?.key === cacheKey) {
         return pendingAuth.promise;
       }
-      const resourceClaim = retainPreparedModelRuntimeGenerationResources(params.pluginGeneration);
-      const promise = worker
-        .loadAuth({ providerIds, ...(profileIds?.length ? { profileIds } : {}) })
-        .then((refreshed) => {
-          const authModes = {
-            ...resolveUsableAgentCredentialModes(params.agentFacts.credentials),
-          };
-          for (const providerId of [
-            ...providerIds,
-            ...scopeSyntheticAuthProviderRefs(Object.keys(authModes), providerIds),
-          ]) {
-            delete authModes[normalizeProviderId(providerId)];
-          }
-          Object.assign(authModes, refreshed.authModes);
-          return { authStore: refreshed.authStore, authModes: Object.freeze(authModes) };
-        })
-        .finally(() => {
-          resourceClaim?.release();
-          if (pendingAuth?.promise === promise) {
-            pendingAuth = undefined;
-          }
-        });
+      const promise = (async () => {
+        await using _ = {
+          [Symbol.asyncDispose]: retainPreparedPluginGeneration(params.pluginGeneration),
+        };
+        return await worker
+          .loadAuth({ providerIds, ...(profileIds?.length ? { profileIds } : {}) })
+          .then((refreshed) => {
+            const authModes = {
+              ...resolveUsableAgentCredentialModes(params.agentFacts.credentials),
+            };
+            for (const providerId of [
+              ...providerIds,
+              ...scopeSyntheticAuthProviderRefs(Object.keys(authModes), providerIds),
+            ]) {
+              delete authModes[normalizeProviderId(providerId)];
+            }
+            Object.assign(authModes, refreshed.authModes);
+            return { authStore: refreshed.authStore, authModes: Object.freeze(authModes) };
+          });
+      })().finally(() => {
+        if (pendingAuth?.promise === promise) {
+          pendingAuth = undefined;
+        }
+      });
       pendingAuth = { key: cacheKey, promise };
       return promise;
     },

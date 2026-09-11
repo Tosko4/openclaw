@@ -17,15 +17,14 @@ export function renderChatModelCatalogState(
     return nothing;
   }
   const { status } = state;
-  const refreshWarning = status === "ready" && state.refreshFailed;
   const checking = state.pendingProviders?.join(", ");
-  if (status === "ready" && hasSelectableOptions && !refreshWarning && !checking) {
+  if (status === "ready" && hasSelectableOptions && !checking) {
     return nothing;
   }
   const label =
     status === "offline"
       ? t("common.offline")
-      : status === "error" || refreshWarning
+      : status === "error"
         ? hasOptions
           ? t("chat.modelControls.modelsRefreshFailed")
           : errorLabel
@@ -44,7 +43,7 @@ export function renderChatModelCatalogState(
       aria-live="polite"
     >
       <span class="chat-controls__model-catalog-state-label">
-        ${status === "error" || refreshWarning ? icons.alertTriangle : nothing}
+        ${status === "error" ? icons.alertTriangle : nothing}
         <span>${label}</span>
       </span>
       ${
