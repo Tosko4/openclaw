@@ -37,6 +37,7 @@ export type ControlUiAgentPickerProps = {
   placeholder?: string;
   accessibleLabel: string;
   menuLabel?: string;
+  variant?: "default" | "compact";
   disabled?: boolean;
   onSelect: (value: string) => void;
 };

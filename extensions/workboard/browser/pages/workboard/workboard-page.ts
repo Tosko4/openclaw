@@ -251,36 +251,30 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
             heading: html`
               <div class="workboard-heading__identity">
                 <div class="page-title workboard-page-title">
-                  ${
-                    selectedBoard
-                      ? renderWorkboardBoardGlyph(selectedBoard, "workboard-board-glyph--header")
-                      : nothing
-                  }
+                  ${selectedBoard
+                    ? renderWorkboardBoardGlyph(selectedBoard, "workboard-board-glyph--header")
+                    : nothing}
                   <span>${selectedBoard ? workboardBoardName(selectedBoard) : "Workboard"}</span>
-                  ${
-                    selectedBoard && host.connection.canWrite
-                      ? html`
-                          <button
-                            class="btn btn--icon workboard-board-edit"
-                            type="button"
-                            aria-label=${t("workboard.editBoard")}
-                            title=${t("workboard.editBoard")}
-                            @click=${() => {
-                              boardDraft = createBoardDraft(selectedBoard);
-                              requestUpdate();
-                            }}
-                          >
-                            ${icons.penLine}
-                          </button>
-                        `
-                      : nothing
-                  }
+                  ${selectedBoard && host.connection.canWrite
+                    ? html`
+                        <button
+                          class="btn btn--icon workboard-board-edit"
+                          type="button"
+                          aria-label=${t("workboard.editBoard")}
+                          title=${t("workboard.editBoard")}
+                          @click=${() => {
+                            boardDraft = createBoardDraft(selectedBoard);
+                            requestUpdate();
+                          }}
+                        >
+                          ${icons.penLine}
+                        </button>
+                      `
+                    : nothing}
                 </div>
-                ${
-                  selectedBoard?.automationJobId
-                    ? renderBoardAutomationHeading(automations.get(selectedBoard.automationJobId))
-                    : nothing
-                }
+                ${selectedBoard?.automationJobId
+                  ? renderBoardAutomationHeading(automations.get(selectedBoard.automationJobId))
+                  : nothing}
               </div>
             `,
             scopeControl:
@@ -296,13 +290,13 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
                         })),
                       ],
                       value: scope ?? "",
+                      variant: "compact",
                       accessibleLabel: t("workboard.agentFilter"),
                       onSelect: (value) => host.agents.setScope(value || null),
                     },
                     "workboard-scope",
                   )
                 : undefined,
-            onClearAgentScope: () => host.agents.setScope(null),
             pageError,
             overlayOpen: Boolean(boardDraft),
             detailBoardAutomation: detailJobId ? automations.get(detailJobId) : undefined,
@@ -338,35 +332,33 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
               }),
             onRequestUpdate: requestUpdate,
           })}
-          ${
-            boardDraft
-              ? renderBoardModal({
-                  draft: boardDraft,
-                  toastOwner: state,
-                  pageError: workboardErrorMessage(state, pageError),
-                  client: connected ? client : null,
-                  get canWrite() {
-                    const connection = host.connection;
-                    return connection.connected && connection.canWrite;
-                  },
-                  requestUpdate,
-                  onCancel: () => {
-                    boardDraft = null;
-                    requestUpdate();
-                  },
-                  onSaved: () => {
-                    boardDraft = null;
-                    void refreshWorkboard({
-                      host: workboard,
-                      client,
-                      requestUpdate,
-                      source: "manual",
-                    });
-                    requestUpdate();
-                  },
-                })
-              : nothing
-          }
+          ${boardDraft
+            ? renderBoardModal({
+                draft: boardDraft,
+                toastOwner: state,
+                pageError: workboardErrorMessage(state, pageError),
+                client: connected ? client : null,
+                get canWrite() {
+                  const connection = host.connection;
+                  return connection.connected && connection.canWrite;
+                },
+                requestUpdate,
+                onCancel: () => {
+                  boardDraft = null;
+                  requestUpdate();
+                },
+                onSaved: () => {
+                  boardDraft = null;
+                  void refreshWorkboard({
+                    host: workboard,
+                    client,
+                    requestUpdate,
+                    source: "manual",
+                  });
+                  requestUpdate();
+                },
+              })
+            : nothing}
         `,
         container,
       );

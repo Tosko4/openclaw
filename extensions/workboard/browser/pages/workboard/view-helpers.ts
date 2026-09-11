@@ -33,7 +33,6 @@ export type BoardAutomationState = { jobId: string } & (
 export type WorkboardProps = {
   heading?: TemplateResult;
   scopeControl?: TemplateResult;
-  onClearAgentScope?: () => void;
   pageError?: string | null;
   overlayOpen?: boolean;
   detailBoardAutomation?: BoardAutomationState;

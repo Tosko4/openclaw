@@ -183,6 +183,7 @@ export function createControlUiComponents(options: {
           element.placeholder = next.placeholder ?? "";
           element.accessibleLabel = next.accessibleLabel;
           element.menuLabel = next.menuLabel ?? "";
+          element.variant = next.variant ?? "default";
           element.disabled = next.disabled ?? false;
           element.onSelect = (value) => {
             current();

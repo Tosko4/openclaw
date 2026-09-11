@@ -185,7 +185,7 @@ it.each([false, true])(
       return;
     }
     const picker = expectDefined(pickers[0], "global scope picker");
-    expect(picker.closest(".workboard-heading__agent")).not.toBeNull();
+    expect(picker.closest(".workboard-agent-filter")).not.toBeNull();
     expect(picker.options.map((option) => option.value)).toEqual(["", "main", "writer"]);
     picker.onSelect("writer");
     expect(page.fixture.host.agents.setScope).toHaveBeenCalledWith("writer");
@@ -194,14 +194,10 @@ it.each([false, true])(
       expect(page.container.querySelector(".workboard-card")?.textContent).toContain(
         "Writer agent task",
       );
-      expect(page.container.querySelector('button[aria-label="Filters, 1 active"]')).not.toBeNull();
+      expect(page.container.querySelector('button[aria-label="Filters, 1 active"]')).toBeNull();
+      expect(page.container.querySelector(".workboard-filter-chip")).toBeNull();
     });
-    expectDefined(
-      [
-        ...page.container.querySelectorAll<HTMLButtonElement>(".workboard-filter-popover button"),
-      ].find((button) => button.textContent?.trim() === "Clear filters"),
-      "clear scope filter",
-    ).click();
+    picker.onSelect("");
     expect(page.fixture.host.agents.setScope).toHaveBeenLastCalledWith(null);
     await vi.waitFor(() => {
       expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(2);
@@ -210,7 +206,7 @@ it.each([false, true])(
   },
 );
 
-it("removes the named global agent chip without clearing the priority group", async () => {
+it("clears filters without changing the global agent context", async () => {
   const page = mountPage();
   page.agents([
     { id: "main", name: "Molty" },
@@ -254,40 +250,44 @@ it("removes the named global agent chip without clearing the priority group", as
   }
   const picker = expectDefined(
     page.container.querySelector<HTMLElement & ControlUiAgentPickerProps>(
-      ".workboard-heading__agent [data-test-agent-picker]",
+      ".workboard-agent-filter [data-test-agent-picker]",
     ),
     "global agent filter",
   );
   picker.onSelect("main");
   await vi.waitFor(() => {
     expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(1);
-    expect(page.container.querySelector('button[aria-label="Filters, 2 active"]')).not.toBeNull();
-  });
-  const remove = expectDefined(
-    page.container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Remove filter: Agent: Molty"]',
-    ),
-    "remove named agent filter",
-  );
-  remove.click();
-  expect(page.fixture.host.agents.setScope).toHaveBeenLastCalledWith(null);
-  await vi.waitFor(() => {
-    expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(2);
-    expect(page.container.querySelector(".workboard-board")?.textContent).toContain(
-      "Molty high task",
-    );
-    expect(page.container.querySelector(".workboard-board")?.textContent).toContain(
-      "Writer urgent task",
-    );
-    expect(page.container.querySelector(".workboard-board")?.textContent).not.toContain(
-      "Writer low task",
-    );
     expect(page.container.querySelector('button[aria-label="Filters, 1 active"]')).not.toBeNull();
     expect(
       page.container.querySelector('button[aria-label="Remove filter: Agent: Molty"]'),
     ).toBeNull();
   });
-  expect(page.workboard.state.priorityFilter).toEqual(new Set(["high", "urgent"]));
+  expectDefined(
+    page.container.querySelector<HTMLButtonElement>(".workboard-filter-clear"),
+    "clear filters",
+  ).click();
+  expect(page.fixture.host.agents.setScope).toHaveBeenLastCalledWith("main");
+  await vi.waitFor(() => {
+    expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(1);
+    expect(page.container.querySelector(".workboard-board")?.textContent).toContain(
+      "Molty high task",
+    );
+    expect(page.container.querySelector(".workboard-board")?.textContent).not.toContain(
+      "Writer urgent task",
+    );
+    expect(page.container.querySelector(".workboard-board")?.textContent).not.toContain(
+      "Writer low task",
+    );
+    expect(page.container.querySelector('button[aria-label="Filters, 1 active"]')).toBeNull();
+    expect(
+      page.container.querySelector('button[aria-label="Remove filter: Agent: Molty"]'),
+    ).toBeNull();
+  });
+  expect(page.workboard.state.priorityFilter.size).toBe(0);
+  picker.onSelect("");
+  await vi.waitFor(() =>
+    expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(3),
+  );
 });
 
 it.each([

@@ -101,7 +101,7 @@ function filterPicker(container: Element, label: string) {
     [
       ...container.querySelectorAll<HTMLElement & ControlUiSelectPickerProps>(
         label === "Agent"
-          ? ".workboard-heading__agent [data-test-select-picker]"
+          ? ".workboard-agent-filter [data-test-select-picker]"
           : ".workboard-filter-popover [data-test-select-picker]",
       ),
     ].find((picker) => picker.accessibleLabel === label),
@@ -1872,9 +1872,7 @@ describe("renderWorkboard", () => {
     renderView();
 
     expect(container.querySelector(".workboard-card")?.textContent).not.toContain("task linked");
-    expect(
-      container.querySelector('.workboard-card__session-marker[aria-label="Done"]'),
-    ).not.toBeNull();
+    expect(container.querySelector(".workboard-card__session-marker")).toBeNull();
     await vi.waitFor(() =>
       expect(
         container.querySelector(".workboard-session-status__trigger .workboard-session-badge")
@@ -3100,9 +3098,10 @@ describe("renderWorkboard", () => {
           container.querySelector(".workboard-session-status__trigger")?.textContent,
         ).toContain("Stale"),
       );
-      expect(
-        container.querySelector(".workboard-card__session-marker")?.getAttribute("title"),
-      ).toContain("No recent session activity");
+      expect(container.querySelector(".workboard-session-status__detail")?.textContent).toContain(
+        "No recent session activity",
+      );
+      expect(container.querySelector(".workboard-card__session-marker")).toBeNull();
       expect(container.textContent).not.toContain("codex autonomous");
       expect(container.querySelector(".workboard-live")).toBeNull();
       expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();

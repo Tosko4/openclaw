@@ -189,59 +189,51 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
       class="workboard-detail__session-row"
       title=${task && taskIsAuthoritative ? taskDetail(task) : formatted.detail}
     >
-      <span
-        class="workboard-detail__session-state-icon"
-        role="img"
-        aria-label=${sessionStateLabel}
-        title=${sessionStateLabel}
-      >
-        ${sessionEmpty ? icons.bot : renderLifecycleIcon(lifecycle, task)}
-      </span>
+      ${sessionEmpty || !sessionStatus.visible
+        ? html`<span
+            class="workboard-detail__session-state-icon"
+            role="img"
+            aria-label=${sessionStateLabel}
+            title=${sessionStateLabel}
+          >
+            ${sessionEmpty ? icons.bot : renderLifecycleIcon(lifecycle, task)}
+          </span>`
+        : nothing}
       <div class="workboard-detail__session-copy">
         <span
           class="workboard-detail__session-name"
           id=${tab === "overview" ? workboardCardDetailDescriptionId : nothing}
         >
-          ${
-            sessionEmpty
-              ? t("workboard.detailNoSessionYet")
-              : (lifecycle.session?.displayName ??
-                lifecycle.session?.label ??
-                task?.title ??
-                (linkedSessionKey ? t("workboard.fieldSession") : formatted.label))
-          }
+          ${sessionEmpty
+            ? t("workboard.detailNoSessionYet")
+            : (lifecycle.session?.displayName ??
+              lifecycle.session?.label ??
+              task?.title ??
+              (linkedSessionKey ? t("workboard.fieldSession") : formatted.label))}
         </span>
-        ${
-          !sessionEmpty && sessionStatus.detail
-            ? html`<p
-                class="workboard-detail__session-description"
-                .textContent=${sessionStatus.detail}
-              ></p>`
-            : nothing
-        }
-        ${
-          sessionEmpty && showStartControls && !archived
-            ? html`<p class="workboard-detail__session-help">
-                ${t("workboard.detailStartSessionHelp", {
-                  agent: cardAgentLabel(card, props.agentsList),
-                })}
-              </p>`
-            : nothing
-        }
+        ${!sessionEmpty && sessionStatus.detail
+          ? html`<p
+              class="workboard-detail__session-description"
+              .textContent=${sessionStatus.detail}
+            ></p>`
+          : nothing}
+        ${sessionEmpty && showStartControls && !archived
+          ? html`<p class="workboard-detail__session-help">
+              ${t("workboard.detailStartSessionHelp", {
+                agent: cardAgentLabel(card, props.agentsList),
+              })}
+            </p>`
+          : nothing}
       </div>
       ${renderSessionStatusBadge(sessionStatus)}
     </div>
     <div class="workboard-detail__actions">
-      ${
-        tab === "overview" && showStartControls
-          ? renderStartExecutionButton(props, card, null, "autonomous")
-          : nothing
-      }
-      ${
-        tab === "overview" && writable && (linkedSessionKey ? live : activeTask)
-          ? renderStopCardAction(props, card, busy)
-          : nothing
-      }
+      ${tab === "overview" && showStartControls
+        ? renderStartExecutionButton(props, card, null, "autonomous")
+        : nothing}
+      ${tab === "overview" && writable && (linkedSessionKey ? live : activeTask)
+        ? renderStopCardAction(props, card, busy)
+        : nothing}
       ${renderOpenSessionCardAction(props, sessionTarget, { quiet: true })}
     </div>
   </div>`;
@@ -266,40 +258,38 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
         <div class="workboard-detail">
           <header class="workboard-detail__header">
             <h2 id=${workboardCardDetailTitleId}>
-              <span class="sr-only">${t("workboard.detailTitle")}: </span>${
-                writable && !archived ? renderInlineText(props, card, "title", busy) : card.title
-              }
+              <span class="sr-only">${t("workboard.detailTitle")}: </span>${writable && !archived
+                ? renderInlineText(props, card, "title", busy)
+                : card.title}
             </h2>
             <div class="workboard-detail__header-actions">
-              ${
-                writable
-                  ? html`
-                      <button
-                        class="btn btn--icon workboard-detail__icon"
-                        type="button"
-                        popovertarget="workboard-detail-actions"
-                        aria-label=${t("workboard.cardActions")}
-                        aria-haspopup="true"
-                        aria-expanded="false"
-                      >
-                        ${icons.moreHorizontal}
-                      </button>
-                      <div
-                        id="workboard-detail-actions"
-                        class="workboard-detail__menu"
-                        popover="auto"
-                        role="group"
-                        aria-label=${t("workboard.cardActions")}
-                        ${ref(workboardPopoverRef("end"))}
-                        @click=${closeWorkboardPopoverOnAction}
-                      >
-                        ${!archived ? renderEditCardAction(props, card) : nothing}
-                        ${renderArchiveCardAction(props, card, busy, archived)}
-                        ${renderDeleteCardAction(props, card, busy)}
-                      </div>
-                    `
-                  : nothing
-              }
+              ${writable
+                ? html`
+                    <button
+                      class="btn btn--icon workboard-detail__icon"
+                      type="button"
+                      popovertarget="workboard-detail-actions"
+                      aria-label=${t("workboard.cardActions")}
+                      aria-haspopup="true"
+                      aria-expanded="false"
+                    >
+                      ${icons.moreHorizontal}
+                    </button>
+                    <div
+                      id="workboard-detail-actions"
+                      class="workboard-detail__menu"
+                      popover="auto"
+                      role="group"
+                      aria-label=${t("workboard.cardActions")}
+                      ${ref(workboardPopoverRef("end"))}
+                      @click=${closeWorkboardPopoverOnAction}
+                    >
+                      ${!archived ? renderEditCardAction(props, card) : nothing}
+                      ${renderArchiveCardAction(props, card, busy, archived)}
+                      ${renderDeleteCardAction(props, card, busy)}
+                    </div>
+                  `
+                : nothing}
               <button
                 class="btn btn--icon workboard-detail__icon workboard-detail__close"
                 type="button"
@@ -375,155 +365,131 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                 >
                   <div class="workboard-detail__row">
                     <span>${t("workboard.fieldStatus")}</span>
-                    ${
-                      writable && !archived && state.statuses.length > 1
-                        ? renderInlineStatus(props, card, busy)
-                        : html`<strong>${formatStatusLabel(card.status)}</strong>`
-                    }
+                    ${writable && !archived && state.statuses.length > 1
+                      ? renderInlineStatus(props, card, busy)
+                      : html`<strong>${formatStatusLabel(card.status)}</strong>`}
                   </div>
                   <div class="workboard-detail__row">
                     <span>${t("workboard.fieldPriority")}</span>
-                    ${
-                      writable && !archived
-                        ? renderInlinePriority(props, card, busy)
-                        : html`<strong
-                            class="workboard-detail__priority workboard-detail__priority--${card.priority}"
-                          >
-                            ${renderPriorityIcon(card.priority)}${formatPriorityLabel(card.priority)}
-                          </strong>`
-                    }
+                    ${writable && !archived
+                      ? renderInlinePriority(props, card, busy)
+                      : html`<strong
+                          class="workboard-detail__priority workboard-detail__priority--${card.priority}"
+                        >
+                          ${renderPriorityIcon(card.priority)}${formatPriorityLabel(card.priority)}
+                        </strong>`}
                   </div>
                   <div class="workboard-detail__row">
                     <span>${t("workboard.fieldAgent")}</span>
-                    ${
-                      writable && !archived
-                        ? renderInlineAgent(props, card, busy)
-                        : html`<strong class="workboard-detail__agent">
-                            ${renderAgentAvatar({
-                              agentId:
-                                card.agentId?.trim() ||
-                                props.agentsList?.defaultId ||
-                                props.defaultAgentId ||
-                                "",
-                              label: cardAgentLabel(card, props.agentsList),
-                            })}
-                            <span>${cardAgentLabel(card, props.agentsList)}</span>
-                          </strong>`
-                    }
+                    ${writable && !archived
+                      ? renderInlineAgent(props, card, busy)
+                      : html`<strong class="workboard-detail__agent">
+                          ${renderAgentAvatar({
+                            agentId:
+                              card.agentId?.trim() ||
+                              props.agentsList?.defaultId ||
+                              props.defaultAgentId ||
+                              "",
+                            label: cardAgentLabel(card, props.agentsList),
+                          })}
+                          <span>${cardAgentLabel(card, props.agentsList)}</span>
+                        </strong>`}
                   </div>
                   ${renderDetailRow(
                     t("workboard.detailUpdated"),
                     formatUpdatedTime(card.updatedAt),
                   )}
-                  ${
-                    state.boardFilter === WORKBOARD_ALL_BOARDS_FILTER
-                      ? renderDetailRow(
-                          t("workboard.detailBoard"),
-                          workboardBoardName(board ?? { id: boardId }),
-                        )
-                      : nothing
-                  }
-                  ${
-                    (writable && !archived) || card.labels.length
-                      ? html` <div class="workboard-detail__label-group">
-                          <span>${t("workboard.fieldLabels")}</span>
-                          ${
-                            writable && !archived
-                              ? renderInlineText(props, card, "labels", busy)
-                              : html`<div class="workboard-detail__labels">
-                                  ${card.labels.map((label) => html`<span>${label}</span>`)}
-                                </div>`
-                          }
-                        </div>`
-                      : nothing
-                  }
+                  ${state.boardFilter === WORKBOARD_ALL_BOARDS_FILTER
+                    ? renderDetailRow(
+                        t("workboard.detailBoard"),
+                        workboardBoardName(board ?? { id: boardId }),
+                      )
+                    : nothing}
+                  ${(writable && !archived) || card.labels.length
+                    ? html` <div class="workboard-detail__label-group">
+                        <span>${t("workboard.fieldLabels")}</span>
+                        ${writable && !archived
+                          ? renderInlineText(props, card, "labels", busy)
+                          : html`<div class="workboard-detail__labels">
+                              ${card.labels.map((label) => html`<span>${label}</span>`)}
+                            </div>`}
+                      </div>`
+                    : nothing}
                 </aside>
                 <div class="workboard-detail__content">
-                  ${
-                    writable && !archived
-                      ? renderInlineText(props, card, "notes", busy)
-                      : card.notes
-                        ? html`<p class="workboard-detail__description">${card.notes}</p>`
-                        : nothing
-                  }
+                  ${writable && !archived
+                    ? renderInlineText(props, card, "notes", busy)
+                    : card.notes
+                      ? html`<p class="workboard-detail__description">${card.notes}</p>`
+                      : nothing}
                   <section
-                    class="workboard-detail__execution ${
-                      sessionEmpty ? "workboard-detail__execution--empty" : ""
-                    }"
+                    class="workboard-detail__execution ${sessionEmpty
+                      ? "workboard-detail__execution--empty"
+                      : ""}"
                     aria-label=${t("workboard.fieldSession")}
                   >
                     ${renderSessionHeading("overview")}
-                    ${
-                      showStartControls
-                        ? html`
-                            <details
-                              class="workboard-detail__disclosure workboard-detail__engine-options"
-                            >
-                              <summary>
-                                <span
-                                  class="workboard-detail__disclosure-chevron"
-                                  aria-hidden="true"
-                                  >${icons.chevronDown}</span
-                                >
-                                ${t("workboard.detailExecutionOptions")}
-                              </summary>
-                              <div class="workboard-detail__engine-groups">
-                                ${
-                                  props.canModelOverride !== false
-                                    ? html`
-                                        <div class="workboard-detail__engine-group">
-                                          <span>${t("workboard.detailRunAutomatically")}</span>
-                                          <div class="workboard-detail__actions">
-                                            ${renderStartExecutionButton(
-                                              props,
-                                              card,
-                                              "codex",
-                                              "autonomous",
-                                              { engineLabelOnly: true },
-                                            )}
-                                            ${renderStartExecutionButton(
-                                              props,
-                                              card,
-                                              "claude",
-                                              "autonomous",
-                                              { engineLabelOnly: true },
-                                            )}
-                                          </div>
-                                        </div>
-                                      `
-                                    : nothing
-                                }
-                                <div class="workboard-detail__engine-group">
-                                  <span>${t("workboard.detailOpenManually")}</span>
-                                  <div class="workboard-detail__actions">
-                                    ${renderStartExecutionButton(props, card, "codex", "manual", {
-                                      engineLabelOnly: true,
-                                    })}
-                                    ${renderStartExecutionButton(props, card, "claude", "manual", {
-                                      engineLabelOnly: true,
-                                    })}
-                                  </div>
+                    ${showStartControls
+                      ? html`
+                          <details
+                            class="workboard-detail__disclosure workboard-detail__engine-options"
+                          >
+                            <summary>
+                              <span class="workboard-detail__disclosure-chevron" aria-hidden="true"
+                                >${icons.chevronDown}</span
+                              >
+                              ${t("workboard.detailExecutionOptions")}
+                            </summary>
+                            <div class="workboard-detail__engine-groups">
+                              ${props.canModelOverride !== false
+                                ? html`
+                                    <div class="workboard-detail__engine-group">
+                                      <span>${t("workboard.detailRunAutomatically")}</span>
+                                      <div class="workboard-detail__actions">
+                                        ${renderStartExecutionButton(
+                                          props,
+                                          card,
+                                          "codex",
+                                          "autonomous",
+                                          { engineLabelOnly: true },
+                                        )}
+                                        ${renderStartExecutionButton(
+                                          props,
+                                          card,
+                                          "claude",
+                                          "autonomous",
+                                          { engineLabelOnly: true },
+                                        )}
+                                      </div>
+                                    </div>
+                                  `
+                                : nothing}
+                              <div class="workboard-detail__engine-group">
+                                <span>${t("workboard.detailOpenManually")}</span>
+                                <div class="workboard-detail__actions">
+                                  ${renderStartExecutionButton(props, card, "codex", "manual", {
+                                    engineLabelOnly: true,
+                                  })}
+                                  ${renderStartExecutionButton(props, card, "claude", "manual", {
+                                    engineLabelOnly: true,
+                                  })}
                                 </div>
                               </div>
-                            </details>
-                          `
-                        : nothing
-                    }
+                            </div>
+                          </details>
+                        `
+                      : nothing}
                   </section>
                   ${renderBoardAutomation(props.detailBoardAutomation)}
-                  ${
-                    automation?.summary || visibleAutomationFields.length
-                      ? html`<section
-                          class="workboard-detail__section workboard-detail__automation"
-                        >
-                          <h3>${t("workboard.detailCardAutomation")}</h3>
-                          ${automation?.summary ? html`<p>${automation.summary}</p>` : nothing}
-                          ${visibleAutomationFields.map(([label, value]) =>
-                            renderDetailRow(label, value),
-                          )}
-                        </section>`
-                      : nothing
-                  }
+                  ${automation?.summary || visibleAutomationFields.length
+                    ? html`<section class="workboard-detail__section workboard-detail__automation">
+                        <h3>${t("workboard.detailCardAutomation")}</h3>
+                        ${automation?.summary ? html`<p>${automation.summary}</p>` : nothing}
+                        ${visibleAutomationFields.map(([label, value]) =>
+                          renderDetailRow(label, value),
+                        )}
+                      </section>`
+                    : nothing}
                   ${renderDependencyDetailList(dependencies)}
                 </div>
               </div>
@@ -537,148 +503,132 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
               ?hidden=${activeTab !== "activity"}
             >
               <section class="workboard-detail__section workboard-detail__activity">
-                ${
-                  events.length
-                    ? html`
-                        <h3>${t("workboard.eventsLabel")}</h3>
-                        <ol class="workboard-detail__list workboard-detail__events">
-                          ${events.map(
-                            (event) => html`<li>
-                              <span>${formatEventLabel(event)}</span>
-                              <time>${formatUpdatedTime(event.at)}</time>
-                            </li>`,
-                          )}
-                        </ol>
-                      `
-                    : nothing
-                }
-                ${
-                  comments.length
-                    ? html`
-                        <h3>${t("workboard.detailOperatorNotes")}</h3>
-                        <ol class="workboard-detail__list workboard-detail__comments">
-                          ${comments.map(
-                            (comment) => html`<li>
-                              <span>${comment.body}</span>
-                              <time>${formatUpdatedTime(comment.createdAt)}</time>
-                            </li>`,
-                          )}
-                        </ol>
-                      `
-                    : !events.length
-                      ? html`<p class="workboard-detail__empty">${t("workboard.detailNoNotes")}</p>`
-                      : nothing
-                }
-                ${
-                  writable
-                    ? html`
-                        <div class="workboard-detail__comment-compose">
-                          <textarea
-                            class="settings-input workboard-detail__note"
-                            aria-label=${t("workboard.detailOperatorNotes")}
-                            rows="2"
-                            maxlength="2000"
-                            placeholder=${t("workboard.detailNotePlaceholder")}
-                            .value=${state.detailCommentBody}
-                            ?disabled=${busy}
-                            @input=${(event: InputEvent) => {
-                              if (!(event.currentTarget instanceof HTMLTextAreaElement)) {
-                                return;
-                              }
-                              state.detailCommentBody = event.currentTarget.value;
-                              state.detailCommentDrafts.set(card.id, state.detailCommentBody);
-                              props.onRequestUpdate?.();
-                            }}
-                          ></textarea>
-                          <button
-                            class="btn"
-                            type="button"
-                            ?disabled=${busy || !state.detailCommentBody.trim()}
-                            @click=${() =>
-                              addWorkboardCardComment({
-                                host: props.host,
-                                client: props.client,
-                                cardId: card.id,
-                                body: state.detailCommentBody,
-                                requestUpdate: props.onRequestUpdate,
-                              })}
-                          >
-                            ${t("workboard.detailAddNote")}
-                          </button>
-                        </div>
-                      `
-                    : nothing
-                }
+                ${events.length
+                  ? html`
+                      <h3>${t("workboard.eventsLabel")}</h3>
+                      <ol class="workboard-detail__list workboard-detail__events">
+                        ${events.map(
+                          (event) => html`<li>
+                            <span>${formatEventLabel(event)}</span>
+                            <time>${formatUpdatedTime(event.at)}</time>
+                          </li>`,
+                        )}
+                      </ol>
+                    `
+                  : nothing}
+                ${comments.length
+                  ? html`
+                      <h3>${t("workboard.detailOperatorNotes")}</h3>
+                      <ol class="workboard-detail__list workboard-detail__comments">
+                        ${comments.map(
+                          (comment) => html`<li>
+                            <span>${comment.body}</span>
+                            <time>${formatUpdatedTime(comment.createdAt)}</time>
+                          </li>`,
+                        )}
+                      </ol>
+                    `
+                  : !events.length
+                    ? html`<p class="workboard-detail__empty">${t("workboard.detailNoNotes")}</p>`
+                    : nothing}
+                ${writable
+                  ? html`
+                      <div class="workboard-detail__comment-compose">
+                        <textarea
+                          class="settings-input workboard-detail__note"
+                          aria-label=${t("workboard.detailOperatorNotes")}
+                          rows="2"
+                          maxlength="2000"
+                          placeholder=${t("workboard.detailNotePlaceholder")}
+                          .value=${state.detailCommentBody}
+                          ?disabled=${busy}
+                          @input=${(event: InputEvent) => {
+                            if (!(event.currentTarget instanceof HTMLTextAreaElement)) {
+                              return;
+                            }
+                            state.detailCommentBody = event.currentTarget.value;
+                            state.detailCommentDrafts.set(card.id, state.detailCommentBody);
+                            props.onRequestUpdate?.();
+                          }}
+                        ></textarea>
+                        <button
+                          class="btn"
+                          type="button"
+                          ?disabled=${busy || !state.detailCommentBody.trim()}
+                          @click=${() =>
+                            addWorkboardCardComment({
+                              host: props.host,
+                              client: props.client,
+                              cardId: card.id,
+                              body: state.detailCommentBody,
+                              requestUpdate: props.onRequestUpdate,
+                            })}
+                        >
+                          ${t("workboard.detailAddNote")}
+                        </button>
+                      </div>
+                    `
+                  : nothing}
               </section>
             </section>
-            ${
-              hasTechnicalDetails
-                ? html`<section
-                    class="workboard-detail__tabpanel workboard-detail__technical"
-                    id="workboard-detail-panel-details"
-                    role="tabpanel"
-                    aria-labelledby="workboard-detail-tab-details"
-                    tabindex="0"
-                    ?hidden=${activeTab !== "details"}
-                  >
-                    <h3>${t("workboard.detailTechnical")}</h3>
-                    <div class="workboard-detail__technical-properties">
-                      ${renderDetailRow(t("workboard.detailTask"), task?.taskId ?? card.taskId)}
-                      ${renderDetailRow(t("workboard.fieldSession"), linkedSessionKey)}
-                      ${renderDetailRow(
-                        t("workboard.detailRun"),
-                        card.runId ?? card.execution?.runId,
-                      )}
-                      ${renderDetailRow(t("workboard.detailTenant"), automation?.tenant)}
-                      ${metadataFields.map(([label, value]) => renderDetailRow(label, value))}
-                    </div>
-                    ${
-                      task
-                        ? renderDetailList(t("workboard.detailTask"), [
-                            t(`workboard.taskStatus.${task.status}`),
-                            formatUiExternalText(task.progressSummary),
-                            formatUiExternalText(task.terminalSummary),
-                            formatUiExternalText(task.error),
-                          ])
-                        : nothing
-                    }
-                    ${
-                      notifications.length
-                        ? html`<section class="workboard-detail__section">
-                            <h3>${t("workboard.detailNotifications")}</h3>
-                            <ol class="workboard-detail__list">
-                              ${notifications.map(
-                                (notification) =>
-                                  html`<li>${formatUiExternalText(notification.message)}</li>`,
-                              )}
-                            </ol>
-                          </section>`
-                        : nothing
-                    }
-                    ${renderAttemptDetails(attempts)} ${renderProofDetails(proof)}
-                    ${detailSections.map(([title, values]) => renderDetailList(title, values))}
-                  </section>`
-                : nothing
-            }
-            ${
-              sessionTarget
-                ? html`<section
-                    class="workboard-detail__tabpanel workboard-detail__session-panel"
-                    id="workboard-detail-panel-session"
-                    role="tabpanel"
-                    aria-labelledby="workboard-detail-tab-session"
-                    tabindex="0"
-                    ?hidden=${activeTab !== "session"}
-                  >
-                    ${renderSessionHeading("session")}
-                    ${
-                      activeTab === "session"
-                        ? renderSessionSummary({ session: sessionTarget, presented: true })
-                        : nothing
-                    }
-                  </section>`
-                : nothing
-            }
+            ${hasTechnicalDetails
+              ? html`<section
+                  class="workboard-detail__tabpanel workboard-detail__technical"
+                  id="workboard-detail-panel-details"
+                  role="tabpanel"
+                  aria-labelledby="workboard-detail-tab-details"
+                  tabindex="0"
+                  ?hidden=${activeTab !== "details"}
+                >
+                  <h3>${t("workboard.detailTechnical")}</h3>
+                  <div class="workboard-detail__technical-properties">
+                    ${renderDetailRow(t("workboard.detailTask"), task?.taskId ?? card.taskId)}
+                    ${renderDetailRow(t("workboard.fieldSession"), linkedSessionKey)}
+                    ${renderDetailRow(
+                      t("workboard.detailRun"),
+                      card.runId ?? card.execution?.runId,
+                    )}
+                    ${renderDetailRow(t("workboard.detailTenant"), automation?.tenant)}
+                    ${metadataFields.map(([label, value]) => renderDetailRow(label, value))}
+                  </div>
+                  ${task
+                    ? renderDetailList(t("workboard.detailTask"), [
+                        t(`workboard.taskStatus.${task.status}`),
+                        formatUiExternalText(task.progressSummary),
+                        formatUiExternalText(task.terminalSummary),
+                        formatUiExternalText(task.error),
+                      ])
+                    : nothing}
+                  ${notifications.length
+                    ? html`<section class="workboard-detail__section">
+                        <h3>${t("workboard.detailNotifications")}</h3>
+                        <ol class="workboard-detail__list">
+                          ${notifications.map(
+                            (notification) =>
+                              html`<li>${formatUiExternalText(notification.message)}</li>`,
+                          )}
+                        </ol>
+                      </section>`
+                    : nothing}
+                  ${renderAttemptDetails(attempts)} ${renderProofDetails(proof)}
+                  ${detailSections.map(([title, values]) => renderDetailList(title, values))}
+                </section>`
+              : nothing}
+            ${sessionTarget
+              ? html`<section
+                  class="workboard-detail__tabpanel workboard-detail__session-panel"
+                  id="workboard-detail-panel-session"
+                  role="tabpanel"
+                  aria-labelledby="workboard-detail-tab-session"
+                  tabindex="0"
+                  ?hidden=${activeTab !== "session"}
+                >
+                  ${renderSessionHeading("session")}
+                  ${activeTab === "session"
+                    ? renderSessionSummary({ session: sessionTarget, presented: true })
+                    : nothing}
+                </section>`
+              : nothing}
           </div>
         </div>
       </aside>

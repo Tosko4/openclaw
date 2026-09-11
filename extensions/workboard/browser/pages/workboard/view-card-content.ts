@@ -51,10 +51,10 @@ export function renderCardAlert(alerts: CardAlert[], descriptionId: string) {
       class="workboard-card__alert workboard-card__alert--${alert.severity}"
       title=${fullText}
     >
-      <span aria-hidden="true"
+      <span class="workboard-truncate">${alertLabel(alert)}</span>
+      <span class="workboard-card__alert-marker" aria-hidden="true"
         >${alert.severity === "info" ? icons.info : icons.alertTriangle}</span
       >
-      <span class="workboard-truncate">${alertLabel(alert)}</span>
     </div>
     <span id=${descriptionId} hidden>${fullText}</span>`;
 }
@@ -139,26 +139,22 @@ export function renderCardMeta(card: WorkboardCard, archived: boolean) {
     return nothing;
   }
   return html`<div class="workboard-card__meta">
-    ${
-      card.labels.length
-        ? html`<div class="workboard-card__labels" ${ref(labelOverflowRef(card.labels))}>
-            ${card.labels.map(
-              (label) =>
-                html`<span
-                  class="workboard-chip workboard-truncate workboard-card__label"
-                  title=${label}
-                  >${label}</span
-                >`,
-            )}
-            <span class="workboard-chip workboard-card__label-overflow" hidden></span>
-          </div>`
-        : nothing
-    }
-    ${
-      archived
-        ? html`<span class="workboard-card__archived">${t("workboard.archived")}</span>`
-        : nothing
-    }
+    ${card.labels.length
+      ? html`<div class="workboard-card__labels" ${ref(labelOverflowRef(card.labels))}>
+          ${card.labels.map(
+            (label) =>
+              html`<span
+                class="workboard-chip workboard-truncate workboard-card__label"
+                title=${label}
+                >${label}</span
+              >`,
+          )}
+          <span class="workboard-chip workboard-card__label-overflow" hidden></span>
+        </div>`
+      : nothing}
+    ${archived
+      ? html`<span class="workboard-card__archived">${t("workboard.archived")}</span>`
+      : nothing}
   </div>`;
 }
 
@@ -237,28 +233,22 @@ export function renderCardSession(
       t("workboard.fieldSession"))
     : cardAgentLabel(card, props.agentsList);
   return html`<div class="workboard-card__session workboard-card__session--${status.tone}">
-    ${
-      showAgent
-        ? html`<span class="workboard-card__session-identity">
-            ${renderAgentChip(props, card)}
-            ${
-              hasSession
-                ? html`<span
-                    class="workboard-card__session-marker"
-                    role="img"
-                    aria-label=${status.label}
-                    title=${status.detail}
-                  >
-                    ${renderLifecycleIcon(lifecycle, task)}
-                  </span>`
-                : nothing
-            }
-          </span>`
-        : nothing
-    }
+    ${showAgent ? renderAgentChip(props, card) : nothing}
     <span class="workboard-card__session-name workboard-truncate" title=${sessionName}
       >${sessionName}</span
     >
-    ${renderSessionStatus(status, { id: `workboard-card-status-${card.id}`, sessionName })}
+    <span class="workboard-card__session-state">
+      ${hasSession && !status.visible
+        ? html`<span
+            class="workboard-card__session-marker"
+            role="img"
+            aria-label=${status.label}
+            title=${status.detail}
+          >
+            ${renderLifecycleIcon(lifecycle, task)}
+          </span>`
+        : nothing}
+      ${renderSessionStatus(status, { id: `workboard-card-status-${card.id}`, sessionName })}
+    </span>
   </div>`;
 }

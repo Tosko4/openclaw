@@ -3872,6 +3872,44 @@ td.data-table-key-col {
   stroke-linejoin: round;
 }
 
+.agent-select--compact .agent-select__trigger,
+:root[data-theme-mode="light"] .agent-select--compact .agent-select__trigger {
+  width: auto;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.agent-select--compact .agent-select__trigger:hover:not(:disabled),
+.agent-select--compact .agent-select__trigger[aria-expanded="true"] {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.agent-select--compact .agent-select__avatar {
+  width: 16px;
+  height: 16px;
+}
+
+.agent-select--compact .agent-select__label {
+  max-width: min(32vw, 220px);
+}
+
+.agent-select--compact .agent-select__chevron {
+  margin-inline-start: 0;
+}
+
+@media (pointer: coarse) {
+  .agent-select--compact .agent-select__trigger {
+    min-height: 44px;
+  }
+}
+
 .agent-select__avatar {
   display: inline-flex;
   align-items: center;
