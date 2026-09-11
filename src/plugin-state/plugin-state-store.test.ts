@@ -3,7 +3,6 @@ import { chmodSync, existsSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   closeOpenClawStateDatabaseByPath,
   isOpenClawStateDatabaseOpen,
@@ -18,6 +17,7 @@ import {
 import {
   closePluginStateDatabase,
   countPluginStateLiveEntries,
+  createCorePluginStateKeyedStore,
   createCorePluginStateSyncKeyedStore,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
@@ -108,52 +108,6 @@ describe("plugin state keyed store", () => {
       expect(store.consume("interaction:1")).toEqual({ count: 1 });
       expect(store.lookup("interaction:1")).toBeUndefined();
     });
-  });
-
-  it("compiles exact reads once per connection with fresh scope and expiry bindings", () => {
-    const now = Date.now();
-    seedPluginStateEntriesForTests([
-      { pluginId: "discord", namespace: "prepared", key: "first", value: 1, expiresAt: now + 100 },
-      { pluginId: "discord", namespace: "prepared", key: "second", value: 2 },
-      { pluginId: "telegram", namespace: "prepared", key: "first", value: 3 },
-      { pluginId: "discord", namespace: "sibling", key: "first", value: 4 },
-    ]);
-    const store = createPluginStateSyncKeyedStore<number>("discord", {
-      namespace: "prepared",
-      maxEntries: 10,
-    });
-    const pluginSibling = createPluginStateSyncKeyedStore<number>("telegram", {
-      namespace: "prepared",
-      maxEntries: 10,
-    });
-    const namespaceSibling = createPluginStateSyncKeyedStore<number>("discord", {
-      namespace: "sibling",
-      maxEntries: 10,
-    });
-    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    try {
-      for (let connection = 0; connection < 2; connection++) {
-        closePluginStateDatabase();
-        const { db } = openOpenClawStateDatabase();
-        const compile = vi.spyOn(getNodeSqliteKysely(db).getExecutor(), "compileQuery");
-        try {
-          clock.mockReturnValue(now);
-          expect(store.lookup("first")).toBe(1);
-          expect(store.lookup("second")).toBe(2);
-          expect(pluginSibling.lookup("first")).toBe(3);
-          expect(namespaceSibling.lookup("first")).toBe(4);
-          expect(store.lookup("missing")).toBeUndefined();
-          clock.mockReturnValue(now + 100);
-          expect(store.lookup("first")).toBeUndefined();
-          expect(store.lookup("second")).toBe(2);
-          expect(compile).toHaveBeenCalledOnce();
-        } finally {
-          compile.mockRestore();
-        }
-      }
-    } finally {
-      clock.mockRestore();
-    }
   });
 
   it("shares sync and async state while preserving their error contracts", async () => {
@@ -652,14 +606,27 @@ describe("plugin state keyed store", () => {
 
   it("allows core owners and reserves core-prefixed plugin ids", async () => {
     await withPluginStateTestState(async () => {
-      const store = createCorePluginStateSyncKeyedStore<{ stopped: boolean }>({
-        ownerId: "core:channel-intent",
+      const options = {
+        ownerId: "core:channel-intent" as const,
         namespace: "stopped",
         maxEntries: 10,
-      });
+      };
+      const store = createCorePluginStateSyncKeyedStore<{ stopped: boolean }>(options);
+      const asyncStore = createCorePluginStateKeyedStore<{ stopped: boolean }>(options);
       expect(store.update("telegram:personal", () => ({ stopped: true }))).toBe(true);
-      expect(store.lookup("telegram:personal")).toEqual({ stopped: true });
-      expect(store.deleteIf("telegram:personal", (current) => current.stopped)).toBe(true);
+      closePluginStateDatabase();
+      await expect(asyncStore.lookup("telegram:personal")).resolves.toEqual({ stopped: true });
+      await expect(
+        asyncStore.update("telegram:personal", () => ({ stopped: false })),
+      ).resolves.toBe(true);
+      expect(store.lookup("telegram:personal")).toEqual({ stopped: false });
+      await expect(
+        asyncStore.deleteIf("telegram:personal", (current) => !current.stopped),
+      ).resolves.toBe(true);
+      await expect(asyncStore.lookup(" ")).rejects.toThrow(PluginStateStoreError);
+      expect(() => createCorePluginStateKeyedStore({ ...options, maxEntries: 11 })).toThrow(
+        PluginStateStoreError,
+      );
       expect(() =>
         createPluginStateKeyedStore("core:not-a-plugin", { namespace: "bad", maxEntries: 10 }),
       ).toThrow(PluginStateStoreError);

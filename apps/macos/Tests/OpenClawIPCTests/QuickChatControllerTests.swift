@@ -123,7 +123,7 @@ struct QuickChatControllerTests {
             permissionGrantProvider: { _ in [:] },
             connectionGateProvider: { .available },
             modelControlsProvider: { _ in .testFixture },
-            modelPatchProvider: { _, _ in nil })
+            settingsPatchProvider: { _, _ in nil })
         let controller = QuickChatController(
             enableUI: false,
             model: model,
@@ -240,7 +240,7 @@ struct QuickChatControllerTests {
             },
             connectionGateProvider: { .available },
             modelControlsProvider: { _ in .testFixture },
-            modelPatchProvider: { _, _ in nil })
+            settingsPatchProvider: { _, _ in nil })
         let controller = QuickChatController(enableUI: false, model: model, monitoringEnabled: false)
         controller.present()
         guard let id = model.activePresentationID else {
@@ -287,7 +287,7 @@ struct QuickChatControllerTests {
             connectionGateProvider: { .available },
             textContextCaptureProvider: { await latch.wait() },
             modelControlsProvider: { _ in .testFixture },
-            modelPatchProvider: { _, _ in nil })
+            settingsPatchProvider: { _, _ in nil })
         let controller = QuickChatController(enableUI: false, model: model, monitoringEnabled: false)
         controller.present()
         guard let id = model.activePresentationID else {
@@ -346,7 +346,7 @@ struct QuickChatControllerTests {
             permissionGrantProvider: { _ in [:] },
             connectionGateProvider: { .available },
             modelControlsProvider: { _ in .testFixture },
-            modelPatchProvider: { _, _ in nil })
+            settingsPatchProvider: { _, _ in nil })
     }
 }
 

@@ -3,7 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import type { Insertable, Selectable } from "kysely";
+import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -184,7 +184,7 @@ function bindPluginStateEntry(params: {
   valueJson: string;
   createdAt: number;
   expiresAt: number | null;
-}): Insertable<PluginStateEntriesTable> {
+}): PluginStateRow {
   return {
     plugin_id: params.pluginId,
     namespace: params.namespace,
@@ -195,30 +195,56 @@ function bindPluginStateEntry(params: {
   };
 }
 
-function upsertPluginStateEntry(db: DatabaseSync, row: Insertable<PluginStateEntriesTable>): void {
-  executeSqliteQuerySync(
-    db,
-    getPluginStateKysely(db)
-      .insertInto("plugin_state_entries")
-      .values(row)
-      .onConflict((conflict) =>
-        conflict.columns(["plugin_id", "namespace", "entry_key"]).doUpdateSet({
-          value_json: (eb) => eb.ref("excluded.value_json"),
-          created_at: (eb) => eb.ref("excluded.created_at"),
-          expires_at: (eb) => eb.ref("excluded.expires_at"),
-        }),
-      ),
-  );
+type PluginStateWriteQuery = ReturnType<typeof prepareSqliteQuerySync<PluginStateRow>>;
+const pluginStateUpsertQueries = new WeakMap<DatabaseSync, PluginStateWriteQuery>();
+const pluginStateInsertIfAbsentQueries = new WeakMap<DatabaseSync, PluginStateWriteQuery>();
+
+function upsertPluginStateEntry(db: DatabaseSync, row: PluginStateRow): void {
+  let query = pluginStateUpsertQueries.get(db);
+  if (!query) {
+    query = prepareSqliteQuerySync<PluginStateRow>(db, (parameter) =>
+      getPluginStateKysely(db)
+        .insertInto("plugin_state_entries")
+        .values({
+          plugin_id: parameter((value) => value.plugin_id),
+          namespace: parameter((value) => value.namespace),
+          entry_key: parameter((value) => value.entry_key),
+          value_json: parameter((value) => value.value_json),
+          created_at: parameter((value) => value.created_at),
+          expires_at: parameter((value) => value.expires_at),
+        })
+        .onConflict((conflict) =>
+          conflict.columns(["plugin_id", "namespace", "entry_key"]).doUpdateSet({
+            value_json: (eb) => eb.ref("excluded.value_json"),
+            created_at: (eb) => eb.ref("excluded.created_at"),
+            expires_at: (eb) => eb.ref("excluded.expires_at"),
+          }),
+        ),
+    );
+    pluginStateUpsertQueries.set(db, query);
+  }
+  query(row);
 }
 
-function insertPluginStateEntryIfAbsent(
-  db: DatabaseSync,
-  row: Insertable<PluginStateEntriesTable>,
-): boolean {
-  const result = executeSqliteQuerySync(
-    db,
-    getPluginStateKysely(db).insertInto("plugin_state_entries").orIgnore().values(row),
-  );
+function insertPluginStateEntryIfAbsent(db: DatabaseSync, row: PluginStateRow): boolean {
+  let query = pluginStateInsertIfAbsentQueries.get(db);
+  if (!query) {
+    query = prepareSqliteQuerySync<PluginStateRow>(db, (parameter) =>
+      getPluginStateKysely(db)
+        .insertInto("plugin_state_entries")
+        .orIgnore()
+        .values({
+          plugin_id: parameter((value) => value.plugin_id),
+          namespace: parameter((value) => value.namespace),
+          entry_key: parameter((value) => value.entry_key),
+          value_json: parameter((value) => value.value_json),
+          created_at: parameter((value) => value.created_at),
+          expires_at: parameter((value) => value.expires_at),
+        }),
+    );
+    pluginStateInsertIfAbsentQueries.set(db, query);
+  }
+  const result = query(row);
   return Number(result.numAffectedRows ?? 0) > 0;
 }
 
@@ -834,7 +860,11 @@ export function pluginStateRegisterSequencedJournalEntry(params: {
   cursorMaxEntries: number;
   journalNamespace: string;
   journalMaxEntries: number;
-  initialSequence: number;
+  journalKeyRange: {
+    keyStartInclusive: string;
+    keyEndExclusive: string;
+    valueKind?: string;
+  };
   readCursorSequence: (valueJson: string) => number | undefined;
   prepareEntry: (sequence: number) => {
     cursorValueJson: string;
@@ -863,12 +893,52 @@ export function pluginStateRegisterSequencedJournalEntry(params: {
           now,
         });
         const cursorSequence = cursor ? params.readCursorSequence(cursor.value_json) : undefined;
-        const lastSequence = Math.max(params.initialSequence, cursorSequence ?? 0);
+        // Cursor eviction must not let an admitted append reuse a retained sequence.
+        const tail = selectPluginStateEntriesInKeyRange(store.db, {
+          pluginId: params.pluginId,
+          namespace: params.journalNamespace,
+          ...params.journalKeyRange,
+          limit: 1,
+          order: "desc",
+          now,
+        })[0];
+        let retainedSequence = 0;
+        if (tail) {
+          const value = parseStoredJson(tail.value_json, "entries", store.path);
+          if (value === null) {
+            throw new TypeError("Plugin state journal tail must not be null.");
+          }
+          if (
+            typeof value === "object" &&
+            (params.journalKeyRange.valueKind === undefined ||
+              ("kind" in value && value.kind === params.journalKeyRange.valueKind))
+          ) {
+            retainedSequence = Math.max(0, Number("sequence" in value ? (value.sequence ?? 0) : 0));
+            if (!Number.isSafeInteger(retainedSequence)) {
+              throw createPluginStateError({
+                code: "PLUGIN_STATE_INVALID_INPUT",
+                operation: "register",
+                message: "Plugin state journal sequence must be a safe non-negative integer.",
+              });
+            }
+          }
+        }
+        const lastSequence = Math.max(retainedSequence, cursorSequence ?? 0);
         const sequence = lastSequence + 1;
         if (!Number.isSafeInteger(sequence)) {
           throw new RangeError("Plugin state journal sequence exhausted safe integer range");
         }
         const prepared = params.prepareEntry(sequence);
+        if (
+          prepared.journalKey < params.journalKeyRange.keyStartInclusive ||
+          prepared.journalKey >= params.journalKeyRange.keyEndExclusive
+        ) {
+          throw createPluginStateError({
+            code: "PLUGIN_STATE_INVALID_INPUT",
+            operation: "register",
+            message: "Plugin state journal key must be inside its retained key range.",
+          });
+        }
         const existingJournalEntry = selectPluginStateEntry(store.db, {
           pluginId: params.pluginId,
           namespace: params.journalNamespace,

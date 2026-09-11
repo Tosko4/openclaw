@@ -336,7 +336,7 @@ struct QuickChatModelTests {
 
         #expect(model.sessionKey.isEmpty)
         #expect(!model.canSend)
-        #expect(!(await model.send()))
+        #expect(await !(model.send()))
         #expect(sendCount == 0)
 
         results.finish(with: Self.agentsResult(
@@ -426,8 +426,8 @@ struct QuickChatModelTests {
             },
             connectionGateProvider: { .available },
             modelControlsProvider: { _ in .testFixture },
-            modelPatchProvider: { _, _ in nil })
-        await prepare(model)
+            settingsPatchProvider: { _, _ in nil })
+        await self.prepare(model)
         #expect(model.missingPermissions == [.screenRecording])
 
         model.grantMissingPermissions()
@@ -455,8 +455,8 @@ struct QuickChatModelTests {
             },
             connectionGateProvider: { .available },
             modelControlsProvider: { _ in .testFixture },
-            modelPatchProvider: { _, _ in nil })
-        await prepare(model)
+            settingsPatchProvider: { _, _ in nil })
+        await self.prepare(model)
 
         model.grantMissingPermissions()
 
@@ -571,7 +571,7 @@ struct QuickChatModelTests {
         #expect(model.canSelectRecentSession)
         model.text = "hello"
         #expect(!model.canSend)
-        #expect(!(await model.send()))
+        #expect(await !(model.send()))
         #expect(sentRoute == nil)
         let key = "agent:ops:discord:channel:release"
         model.selectSessionOverride(QuickChatSessionTargetOverride(key: key, displayName: "Release"))
@@ -607,7 +607,7 @@ struct QuickChatModelTests {
 
         #expect(model.selectedAgentID == nil)
         #expect(!model.canSend)
-        #expect(!(await model.send()))
+        #expect(await !(model.send()))
         #expect(sendCount == 0)
     }
 
@@ -631,7 +631,7 @@ struct QuickChatModelTests {
 
         #expect(model.selectedAgentID == "work")
         #expect(!model.canSend)
-        #expect(!(await model.send()))
+        #expect(await !(model.send()))
         #expect(sendCount == 0)
     }
 
@@ -941,7 +941,7 @@ struct QuickChatModelTests {
             },
             connectionGateProvider: { gate },
             modelControlsProvider: { _ in .testFixture },
-            modelPatchProvider: { _, _ in nil })
+            settingsPatchProvider: { _, _ in nil })
     }
 
     private static func agentsResult(
