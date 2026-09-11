@@ -7,11 +7,10 @@ import type {
   LocalSessionSourceDescriptor,
 } from "../../../../packages/gateway-protocol/src/schema/sessions-local.js";
 import "../../components/agent-select-registration.ts";
+import { renderCopyButton } from "../../components/copy-button.ts";
 import { renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { showToast } from "../../lib/toast.ts";
 import { resolveConfigAgents } from "./view-shared.ts";
 
 export type { LocalSessionSourceDescriptor };
@@ -82,13 +81,6 @@ function resolveShareAgents(configForm: Record<string, unknown> | null) {
     return [{ id: "main", name: undefined, isDefault: true }];
   }
   return agents;
-}
-
-async function copyAcceptCommand(command: string) {
-  const copied = await copyToClipboard(command);
-  showToast({
-    message: copied ? t("devices.localSessions.commandCopied") : t("common.copyFailed"),
-  });
 }
 
 function endedStateLabel(state: LocalSessionEnrollment["state"]): string | null {
@@ -226,13 +218,7 @@ function renderSource(
         command
           ? html`<div class="device-local-session__command">
               <code class="settings-row__value settings-row__value--mono">${command}</code>
-              <button
-                class="btn btn--sm"
-                aria-label=${t("devices.localSessions.copyCommand")}
-                @click=${() => void copyAcceptCommand(command)}
-              >
-                ${t("devices.localSessions.copyCommand")}
-              </button>
+              ${renderCopyButton(command, t("devices.localSessions.copyCommand"))}
             </div>`
           : nothing
       }

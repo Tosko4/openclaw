@@ -782,7 +782,6 @@ export const en: TranslationMap & {
       profileRequired: "Sign in with a team profile to share sessions.",
       ownerRequired: "Only the sharing person or an admin can stop sharing.",
       copyCommand: "Copy command",
-      commandCopied: "Command copied",
     },
     inventory: {
       title: "Paired devices",

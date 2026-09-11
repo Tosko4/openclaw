@@ -6,8 +6,6 @@ import { renderDevicesContainer } from "../../test-helpers/devices-view.ts";
 import type { LocalSessionSharingProps } from "./view-local-sessions.ts";
 import { resolveLocalSessionEnrollmentView } from "./view-local-sessions.ts";
 
-vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
-
 const codexSource = {
   pluginId: "codex",
   sourceId: "codex",
