@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
+import { readRestartSentinel } from "../../infra/restart-sentinel.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
@@ -165,7 +166,7 @@ async function scenario(kind: Scenario) {
       manifestPath: path.join(base, "capture", "manifest.json"),
       manifestSha256: "a".repeat(64),
     },
-    controlPlaneUpdateSentinelMeta: null,
+    controlPlaneUpdateSentinelMeta: { sessionKey: "agent:main:terminal-component-test" },
     preUpdatePluginInstallRecords: {},
     startedAt: Date.now(),
     packageUpdateNodeRunner: process.execPath,
@@ -261,11 +262,22 @@ async function scenario(kind: Scenario) {
     failure = error;
   }
   const history = getUpdateRun(run.runId, { env: run.env });
+  const sentinel = await readRestartSentinel(run.env);
   expect(rollbackFailedUpdate).toHaveBeenCalledOnce();
   expect(complete).toHaveBeenCalledOnce();
   expect(complete).toHaveBeenCalledWith({ activationVerified: false }, expect.any(Function));
   expect(run.executorFence?.assertCurrent).toThrow();
-  return { output, errors, history, failure, events, publication, completionSnapshots, injected };
+  return {
+    output,
+    errors,
+    history,
+    sentinel,
+    failure,
+    events,
+    publication,
+    completionSnapshots,
+    injected,
+  };
 }
 
 it("defers migrated-parent ledger and print until package completion and outer executor release", async () => {
@@ -306,6 +318,11 @@ it("reports one final failure with package cleanup facts after completion throws
       expect.objectContaining({ step: "global install backup retention", status: "failed" }),
     ]),
   });
+  expect(observed.sentinel?.payload.stats?.recovery).toMatchObject({
+    serviceRestartSafe: true,
+    version: "1.0.0",
+    service: "healthy",
+  });
   expect(observed.output[0]).not.toMatchObject({
     steps: expect.arrayContaining([
       expect.objectContaining({ name: "update executor settlement" }),
@@ -330,6 +347,10 @@ it.each(["release-fails", "revoked"] as const)(
         expect.objectContaining({ name: "update executor settlement", exitCode: 1 }),
       ]),
     });
+    expect(observed.output[0]).not.toHaveProperty("recovery");
+    expect(observed.sentinel?.payload.status).toBe("error");
+    expect(observed.sentinel?.payload.stats?.reason).toBe("update-executor-settlement-failed");
+    expect(observed.sentinel?.payload.stats).not.toHaveProperty("recovery");
     expect(observed.history).toMatchObject({ status: "failed" });
     expect(observed.history?.downtimeMs).toBeNull();
     expect(observed.publication[0]?.executorExited).toBe(true);
