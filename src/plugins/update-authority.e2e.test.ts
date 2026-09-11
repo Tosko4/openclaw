@@ -23,7 +23,9 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   for (const server of servers.splice(0)) {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   }
 });
 
@@ -77,7 +79,7 @@ describe("plugin update publication authority", () => {
                   npmDir: npmRoot,
                 }),
               )
-              .sort();
+              .toSorted();
           const protectedFiles = [
             path.join(projectRoot, "package.json"),
             path.join(projectRoot, "package-lock.json"),
