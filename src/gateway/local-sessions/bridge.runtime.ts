@@ -89,6 +89,8 @@ function enrollmentSummary(enrollment: LocalSessionEnrollment): LocalSessionEnro
 
 export class LocalSessionBridgeRuntime implements LocalSessionBridge {
   private readonly connections = new Map<string, SourceConnection>();
+  /** Channel keys whose open is in flight; cleared once the channel is registered or failed. */
+  private readonly opening = new Set<string>();
   private readonly threadsBySessionKey = new Map<
     string,
     { connection: SourceConnection; thread: LiveThread }
@@ -345,14 +347,21 @@ export class LocalSessionBridgeRuntime implements LocalSessionBridge {
         continue;
       }
       const key = connectionKey(deviceId, enrollment.sourceId);
-      if (this.connections.has(key)) {
+      // Node connect and enrollment activation reconcile concurrently; a second
+      // open for the same channel would start the source twice on the device.
+      if (this.connections.has(key) || this.opening.has(key)) {
         continue;
       }
-      await this.openConnection({ node, source, enrollment }).catch((error: unknown) => {
+      this.opening.add(key);
+      try {
+        await this.openConnection({ node, source, enrollment });
+      } catch (error) {
         log.warn(
           `local session source ${source.sourceId} on ${deviceId} failed to open: ${String(error)}`,
         );
-      });
+      } finally {
+        this.opening.delete(key);
+      }
     }
   }
 
