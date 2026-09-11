@@ -37,6 +37,8 @@ struct ChatProTab: View {
     @Environment(NodeAppModel.self) private var appModel
     @AppStorage("openclaw.webchat.showAssistantTrace")
     private var showsAssistantTrace = true
+    // Routing can suspend capture without clearing intent; keep Stop available during hydration.
+    @AppStorage("talk.enabled") private var isTalkRequested = false
     @State private var viewModel: OpenClawChatViewModel?
     @State private var viewModelOwnerID = ""
     @State private var transcriptShareItem: TranscriptShareItem?
@@ -223,7 +225,7 @@ struct ChatProTab: View {
                 emptyAssistantPrompts: Self.emptyAssistantPrompts,
                 talkControl: Self.shouldExposeCaptureControl(
                     isAttachmentOwnerPinned: viewModel.isAttachmentOwnerPinned,
-                    isCaptureInFlight: self.appModel.talkMode.isEnabled) ? self.talkControl : nil,
+                    isCaptureInFlight: self.isTalkRequested) ? self.talkControl : nil,
                 dictationControl: Self.shouldExposeCaptureControl(
                     isAttachmentOwnerPinned: viewModel.isAttachmentOwnerPinned,
                     isCaptureInFlight: self.appModel.isChatDictationPending || self.appModel.isChatDictationActive)
@@ -446,7 +448,7 @@ struct ChatProTab: View {
     }
 
     private var voiceAvatarAccessibilityLabel: String {
-        let state = self.appModel.talkMode.isEnabled
+        let state = self.isTalkRequested
             ? self.appModel.talkMode.statusText
             : String(localized: "Voice off")
         return "\(self.agentDisplayName), \(state)"
@@ -569,7 +571,7 @@ struct ChatProTab: View {
 
     private var talkControl: OpenClawChatTalkControl {
         OpenClawChatTalkControl(
-            isEnabled: self.appModel.talkMode.isEnabled,
+            isEnabled: self.isTalkRequested,
             isListening: self.appModel.talkMode.isListening,
             isSpeaking: self.appModel.talkMode.isSpeaking,
             isGatewayConnected: self.appModel.talkMode.isGatewayConnected,
@@ -587,7 +589,7 @@ struct ChatProTab: View {
             },
             toggle: { sessionKey in
                 self.appModel.focusChatSession(sessionKey)
-                self.appModel.setTalkEnabled(!self.appModel.talkMode.isEnabled)
+                self.appModel.setTalkEnabled(!self.isTalkRequested)
             })
     }
 
