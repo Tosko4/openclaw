@@ -28,6 +28,7 @@ import {
 import { repairUpdateService } from "./update-command-repair-service.js";
 import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import {
+  describeWindowsTaskRecoveryFailure,
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
@@ -383,15 +384,11 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     if (restoreFailure) {
       // Persist the unsafe outcome before unwinding. Keep both failures for
       // recovery diagnostics, with the failed compensation as the primary cause.
-      const priorDetail = [result.reason, params.failure?.detail].filter(Boolean).join(": ");
-      const detail =
-        `${priorDetail ? `${priorDetail}; ` : ""}Windows Scheduled Task autostart recovery failed: ` +
-        formatErrorMessage(restoreFailure.cause);
-      const cause = params.failure
-        ? new AggregateError([params.failure.cause, restoreFailure.cause], detail, {
-            cause: restoreFailure.cause,
-          })
-        : restoreFailure.cause;
+      const { detail, cause } = describeWindowsTaskRecoveryFailure(
+        result,
+        params.failure,
+        restoreFailure.cause,
+      );
       throw createFailure(
         reportedResult,
         resolveManagedServiceUpdateFailureExitCode(reportedResult),

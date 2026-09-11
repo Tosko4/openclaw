@@ -159,6 +159,21 @@ export class UpdateCommandFinalizedRecoveryFailure extends UpdateCommandFailure 
   }
 }
 
+export function describeWindowsTaskRecoveryFailure(
+  result: UpdateRunResult,
+  failure: FinishUpdateParams["failure"],
+  recoveryCause: unknown,
+): { detail: string; cause: unknown } {
+  const priorDetail = [result.reason, failure?.detail].filter(Boolean).join(": ");
+  const detail =
+    `${priorDetail ? `${priorDetail}; ` : ""}Windows Scheduled Task autostart recovery failed: ` +
+    formatErrorMessage(recoveryCause);
+  const cause = failure
+    ? new AggregateError([failure.cause, recoveryCause], detail, { cause: recoveryCause })
+    : recoveryCause;
+  return { detail, cause };
+}
+
 export function mergeWindowsTaskRecoveryFailure(
   failure: { error: unknown } | undefined,
   recoveryError: unknown,

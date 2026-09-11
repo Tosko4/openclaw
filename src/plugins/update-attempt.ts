@@ -66,7 +66,7 @@ export function formatNpmInstallFailure(params: {
   return `Failed to ${params.phase} ${params.pluginId}: ${params.result.error}`;
 }
 
-export function formatMarketplaceInstallFailure(params: {
+function formatMarketplaceInstallFailure(params: {
   pluginId: string;
   marketplaceSource: string;
   marketplacePlugin: string;
@@ -151,13 +151,46 @@ export function isClawHubTrustSkippedOutcome(outcome: { status: string; code?: s
   );
 }
 
-export function formatGitInstallFailure(params: {
+function formatGitInstallFailure(params: {
   pluginId: string;
   spec: string;
   phase: "check" | "update";
   error: string;
 }): string {
   return `Failed to ${params.phase} ${params.pluginId}: ${params.error} (git ${params.spec}).`;
+}
+
+export function formatPluginUpdateInstallFailure(params: {
+  pluginId: string;
+  record: UpdatablePluginInstallRecord;
+  phase: "check" | "update";
+  effectiveSpec?: string;
+  activeClawHubInstallSpec?: string;
+  resultSource: PluginUpdateAttemptState["resultSource"];
+  result: Extract<PluginUpdateInstallResult, { ok: false }>;
+}): { message: string; code?: string } {
+  const { pluginId, record, phase, effectiveSpec, activeClawHubInstallSpec, resultSource, result } =
+    params;
+  const message =
+    resultSource === "npm"
+      ? formatNpmInstallFailure({ pluginId, spec: effectiveSpec!, phase, result })
+      : resultSource === "clawhub"
+        ? formatClawHubInstallFailure({
+            pluginId,
+            spec: activeClawHubInstallSpec ?? `clawhub:${record.clawhubPackage!}`,
+            phase,
+            error: result.error,
+          })
+        : record.source === "git"
+          ? formatGitInstallFailure({ pluginId, spec: effectiveSpec!, phase, error: result.error })
+          : formatMarketplaceInstallFailure({
+              pluginId,
+              marketplaceSource: record.marketplaceSource!,
+              marketplacePlugin: record.marketplacePlugin!,
+              phase,
+              error: result.error,
+            });
+  return { message, code: resultSource === "npm" && "code" in result ? result.code : undefined };
 }
 
 type InstallIntegrityDrift = {
