@@ -14,6 +14,7 @@ import { isNotFoundPathError } from "../infra/path-guards.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import { isPluginNpmProjectDir, resolvePluginNpmProjectDir } from "./install-paths.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
 import {
@@ -138,10 +139,24 @@ describe("plugin update publication authority", () => {
                 },
               };
               const installDeferred = async (sink: PluginInstallTransaction[]) => {
+                const onCapabilityConsent: PluginCapabilityConsentHandler = async (review) => ({
+                  reviewToken: review.reviewToken,
+                });
                 // The updater lease is the only authority source; no request assertion.
                 const result = await updateNpmInstalledPlugins(
-                  requestDeferredPluginInstall({ config, timeoutMs: 120_000 }, sink),
+                  requestDeferredPluginInstall(
+                    { config, timeoutMs: 120_000, onCapabilityConsent },
+                    sink,
+                  ),
                 );
+                expect(result.outcomes).toEqual([
+                  expect.objectContaining({
+                    pluginId: packageName,
+                    status: "unchanged",
+                    currentVersion: "1.0.0",
+                    nextVersion: "1.0.0",
+                  }),
+                ]);
                 expect(result.config.plugins?.installs?.[packageName]?.installPath).toBe(
                   generation.targetDir,
                 );
