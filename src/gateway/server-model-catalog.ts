@@ -151,6 +151,7 @@ export async function loadPreparedGatewayModelCatalogSnapshot(
     }
     return {
       ...projectGatewayModelCatalogSnapshot(owner),
+      preferredAuthSource: owner.preferredAuthSource,
       authModes: refreshedAuth?.authModes ?? owner.authModes,
       authStore: refreshedAuth?.authStore ?? owner.authStore,
       metadataSnapshot: owner.metadataSnapshot,
@@ -166,6 +167,7 @@ export async function loadGatewayModelCatalogSnapshot(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<GatewayModelCatalogSnapshot> {
   const {
+    preferredAuthSource: _preferredAuthSource,
     authModes: _authModes,
     authStore: _authStore,
     metadataSnapshot: _metadataSnapshot,
@@ -227,6 +229,7 @@ export async function readPreparedGatewayModelCatalogOwnerSnapshot(
   const owner = resolvePublishedModelCatalogOwner(published);
   return {
     ...projectGatewayModelCatalogSnapshot(owner),
+    preferredAuthSource: owner.preferredAuthSource,
     authModes: owner.authModes,
     authStore: owner.authStore,
     metadataSnapshot: owner.metadataSnapshot,
