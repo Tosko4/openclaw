@@ -87,8 +87,9 @@ export async function mountMenu(
       .forkDisabled=${false}
       .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
       .archiveAllowed=${options.archiveAllowed ?? true}
-      .deleteAllowed=${options.deleteAllowed ??
-      (session.archived || (options.archiveAllowed ?? true))}
+      .deleteAllowed=${
+        options.deleteAllowed ?? (session.archived || (options.archiveAllowed ?? true))
+      }
       .cloudWorkerStopAllowed=${options.cloudWorkerStopAllowed ?? false}
       .groups=${options.groups ?? []}
       .currentOwner=${options.currentOwner ?? null}
