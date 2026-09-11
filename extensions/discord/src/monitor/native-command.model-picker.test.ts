@@ -637,7 +637,10 @@ describe("Discord model picker interactions", () => {
       dispatchCommandInteraction: dispatchSpy,
     });
 
-    expect(loadSpy).toHaveBeenCalledWith(runtimeCfg, "main", { sessionEntry: undefined });
+    expect(loadSpy).toHaveBeenCalledWith(runtimeCfg, "main", {
+      sessionEntry: undefined,
+      sessionKey: "agent:main:main",
+    });
     expectDispatchedModelSelection({
       dispatchSpy,
       model: "openai/gpt-4.1",
@@ -1468,6 +1471,7 @@ describe("Discord model picker interactions", () => {
 
     expect(loadSpy).toHaveBeenCalledWith(context.cfg, "worker", {
       sessionEntry: expect.objectContaining(entry),
+      sessionKey: "agent:worker:subagent:bound",
     });
   });
 
@@ -1509,7 +1513,10 @@ describe("Discord model picker interactions", () => {
       safeInteractionCall: async (_label, fn) => await fn(),
     });
 
-    expect(loadSpy).toHaveBeenCalledWith(cfg, "main", { sessionEntry: undefined });
+    expect(loadSpy).toHaveBeenCalledWith(cfg, "main", {
+      sessionEntry: undefined,
+      sessionKey: "agent:main:main",
+    });
     const payload = JSON.stringify(firstMockArg(interaction.reply, "interaction.reply"));
     expect(payload).toContain("openai");
     expect(payload).toContain("gpt-5.5-codex");
