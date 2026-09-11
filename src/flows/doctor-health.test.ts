@@ -765,8 +765,7 @@ describe("runDoctorHealthFlow", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const storePath =
           layout === "configured" ? state.path("custom", "sessions.json") : undefined;
-        const cfg: OpenClawConfig = storePath ? { session: { store: storePath } } : {};
-        mocks.config.mockReturnValue(cfg);
+        mocks.config.mockReturnValue(storePath ? { session: { store: storePath } } : {});
         const configuredPath = storePath
           ? resolveSqliteTargetFromSessionStorePath(storePath, {
               agentId: "main",
@@ -920,7 +919,7 @@ describe("runDoctorHealthFlow", () => {
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const workspaceDir = state.statePath("secondary-workspace");
-        const cfg: OpenClawConfig = {
+        mocks.config.mockReturnValue({
           agents: {
             ownership: "explicit",
             entries: {
@@ -939,8 +938,7 @@ describe("runDoctorHealthFlow", () => {
                     },
             },
           },
-        };
-        mocks.config.mockReturnValue(cfg);
+        });
         const sourcePath = await state.writeJson(
           "secondary-workspace/openclaw-workspace-state.json",
           {

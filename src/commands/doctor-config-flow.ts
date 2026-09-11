@@ -672,11 +672,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
 
   const finalized = await finalizeDoctorConfigFlow({
-    cfg: state.cfg,
-    candidate: state.candidate,
-    pendingChanges: state.pendingChanges,
+    ...state,
     shouldRepair,
-    fixHints: state.fixHints,
     confirm: params.confirm,
     note,
   });
