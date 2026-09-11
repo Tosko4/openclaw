@@ -1,8 +1,15 @@
-# Empty-chat setup action proof
+# Setup-action evidence
 
-- Before: baseline `bc402a14479424cd559d172e977a35d2abbe3427` renders two setup actions.
-- After: the three-file candidate committed as `5e4abe26c1389c29424bcec5f3483831ef31b562` keeps the action beside the composer and preserves the welcome explanation.
-- Captures came from the production-built Control UI and the existing mock-Gateway browser suite, using a schema-valid agent row with no model. The current real Gateway supplies a default model and did not reproduce that sparse state. These images do not establish a current-Gateway defect or an old-server/new-client connection.
-- The after captures preceded the final ancestry-only rebase; the affected chat, New Session, and agent UI directories had no intervening base changes.
-- `after-help.png` shows the persistent action after local help. The browser checks also verify setup navigation, blocked ordinary sends, and New Session recovery.
-- Originals use a 1440 by 900 viewport. These images crop the same rectangle `(440, 0, 1240, 810)` to omit the sidebar and model footer. No rendered controls or text were edited.
+## Post-merge real-product audit
+
+[Real Gateway screenshots and observations](product/README.md) cover no provider, a configured provider with a missing credential, and a working provider. They show 0, 1, and 0 setup buttons respectively. No requested product state showed the duplicate.
+
+**Verdict: not reachable in the product; fixture-only.** PR #145077 removes a duplicate from a renderer state that the current Gateway did not produce. It was already merged when the audit was requested; no revert was made.
+
+## Historical fixture comparison
+
+The root `before.png`, `after.png`, and `after-help.png` images came from the production-built UI with the existing mock Gateway supplying a sparse agent row. They show the renderer change only; they are not product-reachability proof.
+
+- Before source: `bc402a14479424cd559d172e977a35d2abbe3427`.
+- After source: candidate later committed as `5e4abe26c1389c29424bcec5f3483831ef31b562`; the affected UI directories did not change during its ancestry-only rebase.
+- The historical images use the identical crop `(440, 0, 1240, 810)` from a 1440 by 900 viewport. No rendered controls or text were edited.
