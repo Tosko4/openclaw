@@ -150,8 +150,6 @@ export class ChatPane extends ChatPaneLayoutRender {
     const initialPending = initialPresentationManaged && startupPresentation.stage === "pending";
     const initialConnectionRecovery =
       initialPending && state.connected && state.client && !state.client.recoveryScopeReady;
-    const placementStartupPending =
-      placementStartup !== null && placementStartup.phase !== "failed";
     const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({
       catalog: catalogKey !== null,
       listLoading: state.sessionsLoading,
@@ -380,7 +378,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       loading: catalogKey ? this.catalogLoading : state.chatLoading,
       routeLoadingSkeleton: this.routeLoadingSkeleton && initialHistoryUnavailable,
       sending:
-        placementStartupPending ||
+        (placementStartup !== null && placementStartup.phase !== "failed") ||
         state.chatSending ||
         this.recoveringSession ||
         this.sessionSuggestionAddOperation !== undefined,
