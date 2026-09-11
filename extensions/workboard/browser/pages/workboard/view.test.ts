@@ -86,7 +86,11 @@ function buttonByText(container: Element, text: string): HTMLButtonElement | nul
 
 function draftPicker(container: Element, label: string) {
   return expectDefined(
-    [...container.querySelectorAll<HTMLElement & ControlUiSelectPickerProps>(".workboard-draft [data-test-select-picker]")].find((picker) => picker.accessibleLabel === label),
+    [
+      ...container.querySelectorAll<HTMLElement & ControlUiSelectPickerProps>(
+        ".workboard-draft [data-test-select-picker]",
+      ),
+    ].find((picker) => picker.accessibleLabel === label),
     `card ${label} picker`,
   );
 }
@@ -1500,7 +1504,12 @@ describe("renderWorkboard", () => {
     });
     renderView();
 
-    const status = expectDefined(container.querySelector<HTMLElement & { presentation: { label: string; detail: string } }>("openclaw-workboard-session-status"), "completed task status");
+    const status = expectDefined(
+      container.querySelector<HTMLElement & { presentation: { label: string; detail: string } }>(
+        "openclaw-workboard-session-status",
+      ),
+      "completed task status",
+    );
     expect(status.presentation.label).toBe("Done");
     expect(status.presentation.detail).toContain("Ready for operator review.");
     expect(container.querySelector(".workboard-card__session-marker")).toBeNull();
@@ -1526,7 +1535,12 @@ describe("renderWorkboard", () => {
     ];
     renderView();
 
-    const status = expectDefined(container.querySelector<HTMLElement & { presentation: { label: string } }>("openclaw-workboard-session-status"), "queued session status");
+    const status = expectDefined(
+      container.querySelector<HTMLElement & { presentation: { label: string } }>(
+        "openclaw-workboard-session-status",
+      ),
+      "queued session status",
+    );
     expect(status.presentation.label).toBe("Queued");
     expect(container.querySelector(".workboard-card__session-marker")).toBeNull();
     expect(
@@ -2150,7 +2164,9 @@ describe("renderWorkboard", () => {
     renderView();
 
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("Moved to Done");
-    expect(container.querySelector(".workboard-detail")?.textContent).not.toContain("Moved to Backlog");
+    expect(container.querySelector(".workboard-detail")?.textContent).not.toContain(
+      "Moved to Backlog",
+    );
   });
 
   it("renders card metadata badges and hides archived cards", () => {
@@ -2242,11 +2258,11 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-detail")?.textContent).toContain(
       "Worker asked for owner input.",
     );
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Card automation");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Automation");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("ops");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("review, test");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain(
-      "worktree · /tmp/workboard · proof",
+      "Workspace: worktree /tmp/workboard proof",
     );
   });
 
@@ -2918,9 +2934,7 @@ describe("renderWorkboard", () => {
       );
       if (operation === "conflict") {
         expect(alert.textContent).toContain("Your unsaved edits remain in the form.");
-        expect(
-          draftPicker(container, "Priority").value,
-        ).toBe("high");
+        expect(draftPicker(container, "Priority").value).toBe("high");
       }
       if (operation === "comment") {
         expect(
