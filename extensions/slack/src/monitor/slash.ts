@@ -19,7 +19,7 @@ import {
   type ChatCommandDefinition,
   type CommandArgs,
   resolveNativeCommandSessionTargets,
-  resolveTextCommand,
+  maybeResolveTextAlias,
 } from "openclaw/plugin-sdk/command-auth-native";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -881,11 +881,12 @@ export function createSlackCommandHandler(params: {
               NON_PLUGIN_COMMAND_DISPATCH,
           }
         : undefined;
-      const resetCommand = commandDefinition ?? resolveTextCommand(prompt, cfg)?.command;
+      const resetCommandKey =
+        commandDefinition?.key ?? maybeResolveTextAlias(prompt, cfg)?.slice(1);
       if (
         isRoomish &&
         commandAuthorized &&
-        (resetCommand?.key === "new" || resetCommand?.key === "reset")
+        (resetCommandKey === "new" || resetCommandKey === "reset")
       ) {
         const interactionId = command.trigger_id ?? p.eventTs;
         if (!interactionId) {
