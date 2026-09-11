@@ -7,6 +7,7 @@ import {
   verifyUpdateRecoveryBackup,
   writeUpdateRecoveryBackupOutcome,
 } from "../../infra/update-recovery-backup.js";
+import { UpdateRecoveryPublicationUnavailableError } from "../../infra/update-recovery-publication.js";
 import {
   recordUpdateRunRecoveryCapture,
   recordUpdateRunStep,
@@ -84,6 +85,9 @@ export async function restoreUpdateRecoveryState(
   try {
     await restoreUpdateRecoveryBackup(backup, authority);
   } catch (cause) {
+    if (cause instanceof UpdateRecoveryPublicationUnavailableError) {
+      throw cause;
+    }
     throw new Error(
       `State restore failed; capture retained at ${backup.manifestPath}. Keep the Gateway stopped and run npx openclaw@latest doctor --fix. ${formatErrorMessage(cause)}`,
       { cause },

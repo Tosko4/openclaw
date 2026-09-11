@@ -43,7 +43,8 @@ vi.mock("../../infra/update-recovery-backup.js", () => ({
 }));
 // This caller unit models an already-qualified publication owner; production
 // capture/preparation and refusal are exercised by the real recovery API tests.
-vi.mock("../../infra/update-recovery-publication.js", () => ({
+vi.mock("../../infra/update-recovery-publication.js", async (original) => ({
+  ...(await original<typeof import("../../infra/update-recovery-publication.js")>()),
   assertUpdateRecoveryPublicationPrepared: mocks.admit,
 }));
 vi.mock("../../commands/doctor-maintenance.js", () => ({
