@@ -3,7 +3,6 @@ import { existsSync } from "node:fs";
 import type { Writable } from "node:stream";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
-import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type PumpProcess = {
   pid?: number;
@@ -29,33 +28,21 @@ type SpawnFn = (
 ) => PumpProcess;
 
 const CAFFEINATE_COMMAND = "/usr/bin/caffeinate";
-const FRAME_AUDIO = 1;
-const FRAME_DRAIN = 2;
-const FRAME_CLEAR = 3;
-const FRAME_CLOSE_SAFE = 4;
+const CAPTURE_CLOSE_SAFE_FRAME = Buffer.from([4, 0, 0, 0, 4, 0, 0, 0, 0]);
+const FACETIME_AUDIO_SAMPLE_RATE_HZ = 24_000;
+const OUTPUT_LATENCY_BUDGET_MS = 100;
+// The paired device renders 48 kHz float32 stereo. This gives Core Audio about
+// 21 ms of output buffering, enough to survive ordinary scheduler jitter.
+const SOX_COREAUDIO_BUFFER_BYTES = 8 * 1024;
+const SOX_COMMAND =
+  [
+    process.env.HOME ? `${process.env.HOME}/.homebrew/bin/sox` : undefined,
+    "/opt/homebrew/bin/sox",
+    "/usr/local/bin/sox",
+  ].find((path): path is string => Boolean(path && existsSync(path))) ?? "sox";
 export const FACETIME_FEED_DEVICE_NAME = "OpenClaw-Feed";
 export const FACETIME_MIC_DEVICE_NAME = "OpenClaw-Mic";
 const MAX_PLAYBACK_BUFFERED_BYTES = 2 * 1024 * 1024;
-
-type PlaybackControlEvent =
-  | { event: "played"; generation: number; frames: number }
-  | { event: "drained"; generation: number; frames: number }
-  | { event: "overflow"; message: string };
-
-function parsePlaybackControlEvent(value: unknown): PlaybackControlEvent | undefined {
-  const record = asRecord(value);
-  if (record.event === "overflow" && typeof record.message === "string") {
-    return { event: "overflow", message: record.message };
-  }
-  if (
-    (record.event === "played" || record.event === "drained") &&
-    typeof record.generation === "number" &&
-    typeof record.frames === "number"
-  ) {
-    return { event: record.event, generation: record.generation, frames: record.frames };
-  }
-  return undefined;
-}
 
 type FaceTimeAudioPump = {
   suppressionReady(): Promise<void>;
@@ -79,18 +66,68 @@ function sanitizedAudioChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.Pr
   );
 }
 
-function encodeFrame(type: number, payload: Uint8Array = new Uint8Array()): Buffer {
-  const frame = Buffer.allocUnsafe(5 + payload.byteLength);
-  frame.writeUInt8(type, 0);
-  frame.writeUInt32BE(payload.byteLength, 1);
-  frame.set(payload, 5);
-  return frame;
+class PlaybackClock {
+  private generatedFrames = 0;
+  private playedFramesBeforeSegment = 0;
+  private playbackStartsAtMs = 0;
+  private playbackUntilMs = 0;
+
+  append(frames: number, nowMs = Date.now()): void {
+    if (nowMs >= this.playbackUntilMs) {
+      this.playedFramesBeforeSegment = this.generatedFrames;
+      this.playbackStartsAtMs = nowMs + OUTPUT_LATENCY_BUDGET_MS;
+      this.playbackUntilMs = this.playbackStartsAtMs;
+    }
+    this.generatedFrames += frames;
+    this.playbackUntilMs += (frames / FACETIME_AUDIO_SAMPLE_RATE_HZ) * 1000;
+  }
+
+  playedFrames(nowMs = Date.now()): number {
+    if (nowMs <= this.playbackStartsAtMs) {
+      return this.playedFramesBeforeSegment;
+    }
+    const elapsedFrames =
+      ((nowMs - this.playbackStartsAtMs) / 1000) * FACETIME_AUDIO_SAMPLE_RATE_HZ;
+    return Math.min(this.generatedFrames, this.playedFramesBeforeSegment + elapsedFrames);
+  }
+
+  queuedFrames(nowMs = Date.now()): number {
+    return Math.max(0, this.generatedFrames - this.playedFrames(nowMs));
+  }
+
+  millisecondsUntilDrained(nowMs = Date.now()): number {
+    return Math.max(0, this.playbackUntilMs - nowMs);
+  }
+
+  reset(): void {
+    this.generatedFrames = 0;
+    this.playedFramesBeforeSegment = 0;
+    this.playbackStartsAtMs = 0;
+    this.playbackUntilMs = 0;
+  }
 }
 
-function encodeGenerationFrame(type: number, generation: number): Buffer {
-  const payload = Buffer.allocUnsafe(4);
-  payload.writeUInt32BE(generation, 0);
-  return encodeFrame(type, payload);
+function buildSoxOutputArguments(): string[] {
+  return [
+    "-q",
+    "--buffer",
+    String(SOX_COREAUDIO_BUFFER_BYTES),
+    "-t",
+    "raw",
+    "-r",
+    String(FACETIME_AUDIO_SAMPLE_RATE_HZ),
+    "-c",
+    "1",
+    "-e",
+    "signed-integer",
+    "-b",
+    "16",
+    "-L",
+    "-",
+    "-t",
+    "coreaudio",
+    FACETIME_FEED_DEVICE_NAME,
+  ];
 }
 
 async function terminateProcess(proc: PumpProcess, signal: NodeJS.Signals = "SIGTERM") {
@@ -144,6 +181,10 @@ export function startFaceTimeAudioPump(params: {
   const spawnFn: SpawnFn =
     params.spawn ?? ((command, args, options) => spawn(command, args, options));
   const childEnv = sanitizedAudioChildEnv();
+  const playbackClock = new PlaybackClock();
+  let playbackGeneration = 1;
+  let drainTimer: NodeJS.Timeout | undefined;
+  let outputProcess: PumpProcess;
   const captureProcess = spawnFn(params.captureBinary, [], {
     env: childEnv,
     stdio: ["pipe", "pipe", "pipe"],
@@ -152,9 +193,6 @@ export function startFaceTimeAudioPump(params: {
   let mediaSuspended = false;
   let captureSuppressionActive = false;
   let captureFailureReported = false;
-  let playbackGeneration = 1;
-  let generatedFrames = 0;
-  let playedFrames = 0;
   let captureReadySettled = false;
   let routeReadySettled = false;
   let routeReadyTimer: NodeJS.Timeout | undefined;
@@ -218,6 +256,42 @@ export function startFaceTimeAudioPump(params: {
       }
     });
   };
+  const cancelDrainTimer = () => {
+    if (drainTimer) {
+      clearTimeout(drainTimer);
+      drainTimer = undefined;
+    }
+  };
+  const spawnOutput = () => {
+    // Playback stays out of the capture helper: an in-process AVAudioEngine can
+    // rebind OpenClaw-Feed after FaceTime claims it and tear down the carrier.
+    const proc = spawnFn(SOX_COMMAND, buildSoxOutputArguments(), {
+      env: childEnv,
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    proc.on("error", (error) => {
+      if (!stopped && !mediaSuspended && proc === outputProcess) {
+        reportFailure(error, false);
+      }
+    });
+    proc.stdin?.on("error", (error) => {
+      if (!stopped && !mediaSuspended && proc === outputProcess) {
+        reportFailure(error, false);
+      }
+    });
+    proc.on("exit", (code, signal) => {
+      if (!stopped && !mediaSuspended && proc === outputProcess) {
+        reportFailure(new Error(`SoX playback exited (${code ?? signal ?? "done"})`), false);
+      }
+    });
+    proc.stderr?.on("data", (chunk) => {
+      if (proc === outputProcess) {
+        params.logger.debug?.(`[facetime] SoX playback: ${String(chunk).trim()}`);
+      }
+    });
+    return proc;
+  };
+  outputProcess = spawnOutput();
   const captureReadyTimer = setTimeout(() => {
     reportFailure(new Error("FaceTime process tap was not ready within 10 seconds"), true);
   }, 10_000);
@@ -231,18 +305,16 @@ export function startFaceTimeAudioPump(params: {
     }, 15_000);
     routeReadyTimer.unref?.();
   };
-
-  const sendFrame = (frame: Buffer) => {
-    if (stopped || !captureProcess.stdin) {
+  const clearPlayback = () => {
+    if (stopped || mediaSuspended) {
       return;
     }
-    captureProcess.stdin.write(frame);
-  };
-  const clearPlayback = () => {
+    const previous = outputProcess;
+    outputProcess = spawnOutput();
     playbackGeneration += 1;
-    generatedFrames = 0;
-    playedFrames = 0;
-    sendFrame(encodeGenerationFrame(FRAME_CLEAR, playbackGeneration));
+    cancelDrainTimer();
+    playbackClock.reset();
+    void terminateProcess(previous, "SIGKILL");
   };
   const stop = async () => {
     if (stopped) {
@@ -252,8 +324,9 @@ export function startFaceTimeAudioPump(params: {
     captureSuppressionActive = false;
     settleCaptureReady(new Error("FaceTime native audio bridge stopped before readiness"));
     settleRouteReady(new Error("FaceTime input route stopped before verification"));
+    cancelDrainTimer();
     try {
-      sendFrame(encodeGenerationFrame(FRAME_CLOSE_SAFE, playbackGeneration));
+      captureProcess.stdin?.write(CAPTURE_CLOSE_SAFE_FRAME);
       captureProcess.stdin?.end();
     } catch {
       // Process exit below remains joined.
@@ -261,6 +334,7 @@ export function startFaceTimeAudioPump(params: {
     stopped = true;
     await Promise.all([
       terminateProcess(captureProcess),
+      terminateProcess(outputProcess, "SIGKILL"),
       wakeProcess ? terminateProcess(wakeProcess) : Promise.resolve(),
     ]);
   };
@@ -270,6 +344,8 @@ export function startFaceTimeAudioPump(params: {
     }
     mediaSuspended = true;
     stopped = true;
+    cancelDrainTimer();
+    playbackClock.reset();
     try {
       // No close-safe frame: EOF is the native watchdog's fail-closed signal.
       captureProcess.stdin?.end();
@@ -283,6 +359,10 @@ export function startFaceTimeAudioPump(params: {
         resolve();
       });
     });
+    // Stop queued model speech before waiting for the carrier watchdog. The
+    // native capture process retains hardware suppression during that wait.
+    const outputStopped = terminateProcess(outputProcess, "SIGKILL");
+    const wakeStopped = wakeProcess ? terminateProcess(wakeProcess) : Promise.resolve();
     await Promise.race([
       exitedPromise,
       new Promise<void>((resolve) => {
@@ -290,12 +370,11 @@ export function startFaceTimeAudioPump(params: {
         timer.unref?.();
       }),
     ]);
-    if (!exited) {
-      await terminateProcess(captureProcess);
-    }
-    if (wakeProcess) {
-      await terminateProcess(wakeProcess);
-    }
+    await Promise.all([
+      exited ? Promise.resolve() : terminateProcess(captureProcess),
+      outputStopped,
+      wakeStopped,
+    ]);
     captureSuppressionActive = false;
   };
 
@@ -318,30 +397,6 @@ export function startFaceTimeAudioPump(params: {
     const message = String(chunk);
     captureStderr = `${captureStderr}${message}`.slice(-8192);
     for (const line of captureStderr.split(/\r?\n/u).slice(0, -1)) {
-      if (line.startsWith("facetime-control:")) {
-        try {
-          const parsed: unknown = JSON.parse(line.slice("facetime-control:".length));
-          const event = parsePlaybackControlEvent(parsed);
-          if (!event) {
-            throw new Error("invalid control event shape");
-          }
-          if (event.event === "overflow") {
-            reportFailure(new Error(event.message), false);
-          } else if (event.generation !== playbackGeneration) {
-            continue;
-          } else if (event.event === "played") {
-            playedFrames = Math.max(playedFrames, event.frames);
-          } else if (event.event === "drained") {
-            playedFrames = Math.max(playedFrames, event.frames);
-            params.onPlaybackDrained?.({ generation: event.generation, playedFrames });
-          }
-        } catch (error) {
-          reportFailure(
-            new Error(`invalid native audio control event: ${formatErrorMessage(error)}`),
-            false,
-          );
-        }
-      }
       if (line.includes("started FaceTime process tap")) {
         captureSuppressionActive = true;
         settleCaptureReady();
@@ -379,26 +434,56 @@ export function startFaceTimeAudioPump(params: {
       if (stopped || mediaSuspended || audio.byteLength === 0) {
         return;
       }
-      const bufferedBytes = captureProcess.stdin?.writableLength ?? 0;
+      const bufferedBytes = outputProcess.stdin?.writableLength ?? 0;
       if (bufferedBytes + audio.byteLength > MAX_PLAYBACK_BUFFERED_BYTES) {
-        reportFailure(new Error("native playback queue exceeded 2 MiB"), false);
+        reportFailure(new Error("SoX playback queue exceeded 2 MiB"), false);
         return;
       }
-      generatedFrames += audio.byteLength / 2;
-      sendFrame(encodeFrame(FRAME_AUDIO, audio));
-    },
-    finishOutputAudio() {
-      if (!stopped && !mediaSuspended) {
-        sendFrame(encodeGenerationFrame(FRAME_DRAIN, playbackGeneration));
+      if (!outputProcess.stdin) {
+        reportFailure(new Error("SoX playback stdin is unavailable"), false);
+        return;
+      }
+      try {
+        cancelDrainTimer();
+        outputProcess.stdin.write(audio);
+        playbackClock.append(audio.byteLength / 2);
+      } catch (error) {
+        reportFailure(error instanceof Error ? error : new Error(formatErrorMessage(error)), false);
       }
     },
+    finishOutputAudio() {
+      if (stopped || mediaSuspended || playbackClock.queuedFrames() <= 0) {
+        return;
+      }
+      cancelDrainTimer();
+      const generation = playbackGeneration;
+      const notifyWhenDrained = () => {
+        if (stopped || mediaSuspended || generation !== playbackGeneration) {
+          return;
+        }
+        const delayMs = Math.ceil(playbackClock.millisecondsUntilDrained());
+        if (delayMs > 0) {
+          drainTimer = setTimeout(notifyWhenDrained, Math.max(1, delayMs));
+          drainTimer.unref?.();
+          return;
+        }
+        drainTimer = undefined;
+        params.onPlaybackDrained?.({
+          generation,
+          playedFrames: Math.floor(playbackClock.playedFrames()),
+        });
+      };
+      notifyWhenDrained();
+    },
     clearOutputAudio: clearPlayback,
-    playedAudioFrames: () => playedFrames,
-    queuedAudioFrames: () => Math.max(0, generatedFrames - playedFrames),
+    playedAudioFrames: () => Math.floor(playbackClock.playedFrames()),
+    queuedAudioFrames: () => Math.ceil(playbackClock.queuedFrames()),
     async suspendMedia() {
       if (!stopped && !mediaSuspended) {
         mediaSuspended = true;
-        clearPlayback();
+        cancelDrainTimer();
+        playbackClock.reset();
+        await terminateProcess(outputProcess, "SIGKILL");
       }
     },
     failClosed,

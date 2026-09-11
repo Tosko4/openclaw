@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { ensureCaptureBinary, ensureHelperArtifacts } from "../src/plugin-paths.js";
+import {
+  ensureCaptureBinary,
+  ensureHelperArtifacts,
+  inspectFaceTimeNativePackage,
+} from "../src/plugin-paths.js";
 
 const homebrewDir = "/opt/homebrew/opt/openclaw-facetime/libexec";
 
@@ -28,6 +32,21 @@ describe("plugin paths", () => {
         readFile: installedReadFile() as any,
       }),
     ).resolves.toBe(`${homebrewDir}/facetime-audio-capture`);
+  });
+
+  it("inspects native package readiness without staging runtime artifacts", async () => {
+    await expect(
+      inspectFaceTimeNativePackage({
+        access: installedAccess() as any,
+        readFile: installedReadFile() as any,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      inspectFaceTimeNativePackage({
+        access: vi.fn().mockRejectedValue(new Error("missing")) as any,
+        readFile: installedReadFile() as any,
+      }),
+    ).resolves.toBe(false);
   });
 
   it("fails with the install command when no compatible package exists", async () => {

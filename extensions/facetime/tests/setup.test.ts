@@ -97,6 +97,7 @@ describe("FaceTime guided setup", () => {
   it("reports a statically ready machine and leaves live call proof explicit", async () => {
     const report = await runFaceTimeSetup({
       config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
+      nativePackageReady: true,
       pluginRoot: "/plugin",
       runCommandWithTimeout: readyCommandRunner() as any,
       runtimeStatus: readyRuntime,
@@ -115,6 +116,7 @@ describe("FaceTime guided setup", () => {
       ["developer-tools-access", "ready"],
       ["system-integrity-protection", "ready"],
       ["owner-handles", "ready"],
+      ["native-package", "ready"],
       ["runtime", "ready"],
       ["helper-facetime", "ready"],
       ["helper-phone", "ready"],
@@ -138,6 +140,7 @@ describe("FaceTime guided setup", () => {
     });
     const setup = runFaceTimeSetup({
       config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
+      nativePackageReady: true,
       pluginRoot: "/plugin",
       runCommandWithTimeout: readyCommandRunner() as any,
       runtimeStatus,
@@ -181,6 +184,7 @@ describe("FaceTime guided setup", () => {
 
     const report = await runFaceTimeSetup({
       config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
+      nativePackageReady: true,
       pluginRoot: "/plugin",
       runCommandWithTimeout: runCommandWithTimeout as any,
       runtimeError: "listen EADDRINUSE: address already in use 127.0.0.1:45670",
@@ -260,6 +264,7 @@ describe("FaceTime guided setup", () => {
 
     const report = await runFaceTimeSetup({
       config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
+      nativePackageReady: true,
       pluginRoot: "/plugin",
       runCommandWithTimeout: runCommandWithTimeout as any,
       runtimeStatus: readyRuntime,
@@ -280,6 +285,7 @@ describe("FaceTime guided setup", () => {
   it("shows automatic helper repair without declaring the machine ready", async () => {
     const report = await runFaceTimeSetup({
       config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
+      nativePackageReady: true,
       pluginRoot: "/plugin",
       runCommandWithTimeout: readyCommandRunner() as any,
       runtimeStatus: {
@@ -317,6 +323,7 @@ describe("FaceTime guided setup", () => {
   it("allows manual Focus verification when macOS state cannot be read", async () => {
     const report = await runFaceTimeSetup({
       config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
+      nativePackageReady: true,
       pluginRoot: "/plugin",
       runCommandWithTimeout: readyCommandRunner() as any,
       runtimeStatus: readyRuntime,
@@ -343,6 +350,7 @@ describe("FaceTime guided setup", () => {
   it("requires a real app restart after stale helper detection", async () => {
     const report = await runFaceTimeSetup({
       config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
+      nativePackageReady: true,
       pluginRoot: "/plugin",
       runCommandWithTimeout: readyCommandRunner() as any,
       runtimeStatus: {
@@ -373,6 +381,7 @@ describe("FaceTime guided setup", () => {
   it("preserves the aggregate helper failure when no target can be supervised", async () => {
     const report = await runFaceTimeSetup({
       config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
+      nativePackageReady: true,
       pluginRoot: "/plugin",
       runCommandWithTimeout: readyCommandRunner() as any,
       runtimeStatus: {
@@ -399,5 +408,46 @@ describe("FaceTime guided setup", () => {
       required: true,
       message: "no helper connected",
     });
+  });
+
+  it("requires Homebrew native repair before runtime activation or driver setup", async () => {
+    const runCommandWithTimeout = readyCommandRunner();
+    const report = await runFaceTimeSetup({
+      config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
+      nativePackageReady: false,
+      pluginRoot: "/plugin",
+      runCommandWithTimeout: runCommandWithTimeout as any,
+      runtimeError:
+        "Compatible FaceTime native helpers are not installed. Run: brew install openclaw/tap/openclaw-facetime",
+      readAssertionsFile: async () => JSON.stringify({ data: [] }),
+    });
+
+    expect(report.readyForTest).toBe(false);
+    expect(report.checks.find((check) => check.id === "native-package")).toMatchObject({
+      status: "action-required",
+      actionId: "install-native-package",
+    });
+    expect(report.checks.find((check) => check.id === "runtime")).toMatchObject({
+      status: "action-required",
+      actionId: "install-native-package",
+    });
+    expect(report.checks.find((check) => check.id === "audio-driver")).toMatchObject({
+      status: "action-required",
+      actionId: "install-native-package",
+    });
+    expect(report.actions).toContainEqual(
+      expect.objectContaining({
+        id: "install-native-package",
+        kind: "command",
+        command:
+          "if brew list --versions openclaw-facetime >/dev/null 2>&1; then brew reinstall openclaw/tap/openclaw-facetime; else brew install openclaw/tap/openclaw-facetime; fi",
+      }),
+    );
+    expect(report.actions.map((action) => action.id)).not.toContain("restart-gateway");
+    expect(report.actions.map((action) => action.id)).not.toContain("install-driver");
+    expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
+      ["/bin/sh", "/plugin/scripts/install-driver.sh", "--status"],
+      expect.anything(),
+    );
   });
 });

@@ -7,7 +7,7 @@ title: "FaceTime plugin"
 sidebarTitle: "FaceTime (experimental)"
 ---
 
-The FaceTime plugin is an experimental bundled plugin for an Apple Silicon Mac.
+The FaceTime plugin is an experimental external plugin for an Apple Silicon Mac.
 It can answer configured owner handles, place an explicitly
 approved outgoing call, bridge call audio to a realtime provider, consult the
 configured OpenClaw agent, and request carrier hangup.
@@ -23,18 +23,20 @@ or System Settings automatically.
 ## Requirements
 
 - Apple Silicon and macOS 14.4 or later
-- OpenClaw 2026.8.1 or later
+- OpenClaw 2026.9.4 or later
 - signed native helpers from `openclaw/openclaw-facetime`
 - full Xcode at `/Applications/Xcode.app`
 - FaceTime signed in for the logged-in user
 - a configured realtime voice provider
 - consent from everyone whose audio will be processed
 
-Install the signed and notarized native helpers, then enable the bundled plugin:
+Install the plugin and its signed and notarized native helpers, then restart the
+Gateway:
 
 ```bash
+openclaw plugins install @openclaw/facetime
 brew install openclaw/tap/openclaw-facetime
-openclaw plugins enable facetime
+openclaw gateway restart
 ```
 
 The plugin requires native protocol version 1. Before staging the injected
@@ -84,6 +86,11 @@ Outgoing targets must match `ownerHandles` and require one-shot approval.
 A matching phone number is never sufficient to grant owner authority: the
 native helper and plugin both require a provider-classified FaceTime transport
 and reject cellular, baseband, Wi-Fi Calling/PSTN, emergency, and unknown calls.
+
+Prototype builds used `whitelistHandles`, `helperHost`, `helperPort`, and
+`realtime.brain`. Run `openclaw doctor --fix` once after upgrading. Doctor moves
+the old caller list to `ownerHandles` and removes the retired helper and brain
+keys before strict plugin validation.
 
 ## Prepare the Mac
 
@@ -175,5 +182,5 @@ openclaw gateway call facetime.uninstall --json
 - one managed call at a time
 - FaceTime video and Phone-owned FaceTime Audio require separate live proof
 - private numeric call statuses use one versioned mapping; unknown states fail closed
-- internal playback drain proves native `OpenClaw-Feed` consumption, not remote delivery
+- playback drain is a host-side timing estimate after PCM reaches SoX; it does not prove Core Audio consumption or remote delivery
 - no FaceTime-specific realtime-model fallback; the selected provider owns its defaults

@@ -570,6 +570,7 @@ export async function createFaceTimeRuntime(params: {
       );
       return await runFaceTimeSetup({
         config,
+        nativePackageReady: true,
         pluginRoot: params.pluginRoot,
         runCommandWithTimeout: params.runtime.system.runCommandWithTimeout,
         runtimeStatus,

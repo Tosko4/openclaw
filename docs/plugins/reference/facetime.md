@@ -1,22 +1,26 @@
 ---
-summary: "Experimental private FaceTime realtime voice carrier for OpenClaw agents."
+summary: "Experimental FaceTime realtime voice carrier for OpenClaw agents."
 read_when:
   - You are installing, configuring, or auditing the facetime plugin
-title: "Facetime plugin"
+title: "Facetime plugin reference"
 ---
 
-# Facetime plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
-Experimental private FaceTime realtime voice carrier for OpenClaw agents.
+Experimental FaceTime realtime voice carrier for OpenClaw agents.
 
 ## Distribution
 
 - Package: `@openclaw/facetime`
-- Install route: source checkout only
+- Install route: npm or ClawHub: `clawhub:@openclaw/facetime`
 
 ## Surface
 
-contracts: `tools`; skills
+- Contracts: `tools`
+- Skills
 
 ## Related docs
 

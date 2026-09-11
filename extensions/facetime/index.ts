@@ -15,6 +15,7 @@ import {
   type FaceTimeConfig,
 } from "./src/config.js";
 import { inspectFaceTimeDriver, uninstallFaceTimeDriver } from "./src/driver-setup.js";
+import { inspectFaceTimeNativePackage } from "./src/plugin-paths.js";
 import { stopRetainedRuntime } from "./src/runtime-lifecycle.js";
 import { runFaceTimeSetup } from "./src/setup.js";
 import { inspectFaceTimeStaticStatus } from "./src/static-status.js";
@@ -133,12 +134,22 @@ const faceTimePlugin: OpenClawPluginDefinition = definePluginEntry({
 
     registerGateway("facetime.status", "operator.read", getStatus);
     registerGateway("facetime.setup", "operator.admin", async () => {
+      const nativePackageReady = await inspectFaceTimeNativePackage();
+      if (!nativePackageReady) {
+        return await runFaceTimeSetup({
+          config,
+          nativePackageReady,
+          pluginRoot,
+          runCommandWithTimeout: api.runtime.system.runCommandWithTimeout,
+        });
+      }
       let runtime: import("./runtime-api.js").FaceTimeRuntime;
       try {
         runtime = await ensureRuntime();
       } catch (runtimeError) {
         return await runFaceTimeSetup({
           config,
+          nativePackageReady: await inspectFaceTimeNativePackage(),
           pluginRoot,
           runCommandWithTimeout: api.runtime.system.runCommandWithTimeout,
           runtimeError: formatErrorMessage(runtimeError),

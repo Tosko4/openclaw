@@ -34,23 +34,33 @@ describe("FaceTime plugin manifest", () => {
     expect(packageManifest.files).toContain("scripts/stage-helper.sh");
     expect(packageManifest.files).toContain("scripts/verify-native-helper.sh");
     expect(packageManifest.files).not.toContain("dist/");
-    expect(packageManifest.files).not.toContain("doctor-contract-api.ts");
+    expect(packageManifest.files).toContain("doctor-contract-api.ts");
     expect(packageManifest.files).toContain("LICENSE");
     expect(packageManifest.files).toContain("THIRD_PARTY_NOTICES.md");
     expect(packageManifest.files).toContain("skills/facetime/SKILL.md");
     expect(packageManifest.devDependencies.openclaw).toBe("workspace:*");
-    expect(packageManifest.private).toBe(true);
-    expect(packageManifest.peerDependencies.openclaw).toBe(">=2026.8.1");
-    expect(packageManifest.openclaw.install).toBeUndefined();
-    expect(packageManifest.openclaw.compat.pluginApi).toBe(">=2026.8.1");
+    expect(packageManifest.private).toBeUndefined();
+    expect(packageManifest.peerDependencies.openclaw).toBe(">=2026.9.4");
+    expect(packageManifest.openclaw.install).toEqual({
+      clawhubSpec: "clawhub:@openclaw/facetime",
+      npmSpec: "@openclaw/facetime",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.9.4",
+      allowInvalidConfigRecovery: true,
+    });
+    expect(packageManifest.openclaw.compat.pluginApi).toBe(">=2026.9.4");
     expect(packageManifest.openclaw.build).toEqual({
       bundledDist: false,
-      openclawVersion: "2026.8.1",
+      openclawVersion: "2026.9.4",
     });
-    expect(packageManifest.openclaw.release).toBeUndefined();
+    expect(packageManifest.openclaw.release).toEqual({
+      publishToClawHub: true,
+      publishToNpm: true,
+    });
     expect(pluginManifest.enabledByDefault).toBe(false);
     expect(pluginManifest.skills).toEqual(["./skills"]);
     expect(pluginManifest.contracts.tools).toEqual(["facetime_call"]);
+    expect(pluginManifest.doctorContract).toEqual({ configRepair: true });
     expect(pluginManifest.configSchema.properties.helperPort).toBeUndefined();
     expect(pluginManifest.configSchema.properties.helperHost).toBeUndefined();
     expect(pluginManifest.configSchema.properties.realtime.properties.toolPolicy.enum).toEqual([

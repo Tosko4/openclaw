@@ -6,11 +6,13 @@ Mac. The public setup, security, operation, and removal guides are:
 - <https://docs.openclaw.ai/plugins/facetime>
 - <https://docs.openclaw.ai/plugins/facetime-recovery>
 
-The plugin is bundled with OpenClaw. Its signed and notarized native helpers are
-released separately from `openclaw/openclaw-facetime` and installed with:
+Install the plugin from npm. Its signed and notarized native helpers are released
+separately from `openclaw/openclaw-facetime`:
 
 ```bash
+openclaw plugins install @openclaw/facetime
 brew install openclaw/tap/openclaw-facetime
+openclaw gateway restart
 ```
 
 ## Ownership boundaries
@@ -24,7 +26,8 @@ brew install openclaw/tap/openclaw-facetime
   postcondition projection.
 - `src/helper-supervisor.ts` owns generation-bound LLDB injection and joins
   in-flight work on stop.
-- `src/audio-pump.ts` owns the bounded framed parent/native media protocol.
+- `src/audio-pump.ts` owns bounded native capture, SoX playback, and child
+  teardown.
 - `openclaw/openclaw-facetime` owns the native process tap and injected helper.
   This plugin validates native protocol version 1, the exact OpenClaw
   Foundation Developer ID identity, and Apple notarization before activation.

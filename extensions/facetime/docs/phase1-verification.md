@@ -15,8 +15,9 @@ protocol compatibility, driver rollback, and uninstall inventory. Package
 inspection must show no native source, generated driver, dylib, `.build`, or
 BlackHole artifact.
 
-The native `.dataPlayedBack` callback proves consumption by the configured
-`OpenClaw-Feed` output device. It does not prove remote audibility.
+The playback-drain signal estimates when PCM handed to the separate SoX process
+should have reached `OpenClaw-Feed`. It does not prove Core Audio consumption or
+remote audibility.
 
 ## Live proof gap
 

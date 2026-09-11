@@ -43,11 +43,26 @@ function captureProcesses(processes: FakeProcess[]) {
   });
 }
 
-function control(event: object): string {
-  return `facetime-control:${JSON.stringify(event)}\n`;
-}
-
 describe("FaceTime native audio bridge", () => {
+  it("routes model audio through the separate SoX playback process", () => {
+    const processes: FakeProcess[] = [];
+    const spawn = captureProcesses(processes);
+    const pump = startFaceTimeAudioPump({
+      captureBinary: "/capture",
+      logger: console,
+      onInputAudio() {},
+      spawn,
+    });
+
+    const outputIndex = spawn.mock.calls.findIndex((call) => call[0].endsWith("sox"));
+    const captureIndex = spawn.mock.calls.findIndex((call) => call[0] === "/capture");
+    expect(outputIndex).toBeGreaterThanOrEqual(0);
+    expect(spawn.mock.calls[outputIndex]?.[1]).toContain("OpenClaw-Feed");
+    pump.writeOutputAudio(Buffer.from([4, 5, 6]));
+    expect(processes[outputIndex]?.stdin.writes).toEqual([Buffer.from([4, 5, 6])]);
+    expect(processes[captureIndex]?.stdin.writes).toEqual([]);
+  });
+
   it("publishes suppression and route readiness from assembled native lines", async () => {
     const processes: FakeProcess[] = [];
     const spawn = captureProcesses(processes);
@@ -97,44 +112,63 @@ describe("FaceTime native audio bridge", () => {
     );
   });
 
-  it("uses native played-frame and drain events instead of elapsed time", async () => {
-    const processes: FakeProcess[] = [];
-    const onPlaybackDrained = vi.fn();
-    const pump = startFaceTimeAudioPump({
-      captureBinary: "/capture",
-      logger: console,
-      onInputAudio() {},
-      onPlaybackDrained,
-      spawn: captureProcesses(processes),
-    });
+  it("reports playback drain after the separate output process should be audible", async () => {
+    vi.useFakeTimers();
+    try {
+      const processes: FakeProcess[] = [];
+      const onPlaybackDrained = vi.fn();
+      const pump = startFaceTimeAudioPump({
+        captureBinary: "/capture",
+        logger: console,
+        onInputAudio() {},
+        onPlaybackDrained,
+        spawn: captureProcesses(processes),
+      });
 
-    pump.writeOutputAudio(Buffer.alloc(4_800));
-    pump.finishOutputAudio();
-    expect(pump.playedAudioFrames()).toBe(0);
-    expect(pump.queuedAudioFrames()).toBe(2_400);
-    processes[0]?.stderr.emit("data", control({ event: "played", generation: 1, frames: 1_200 }));
-    expect(pump.playedAudioFrames()).toBe(1_200);
-    expect(onPlaybackDrained).not.toHaveBeenCalled();
-    processes[0]?.stderr.emit("data", control({ event: "drained", generation: 1, frames: 2_400 }));
-    expect(pump.queuedAudioFrames()).toBe(0);
-    expect(onPlaybackDrained).toHaveBeenCalledWith({ generation: 1, playedFrames: 2_400 });
+      pump.writeOutputAudio(Buffer.alloc(4_800));
+      pump.finishOutputAudio();
+      expect(pump.playedAudioFrames()).toBe(0);
+      expect(pump.queuedAudioFrames()).toBe(2_400);
+      await vi.advanceTimersByTimeAsync(199);
+      expect(onPlaybackDrained).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(pump.playedAudioFrames()).toBe(2_400);
+      expect(pump.queuedAudioFrames()).toBe(0);
+      expect(onPlaybackDrained).toHaveBeenCalledWith({
+        generation: 1,
+        playedFrames: 2_400,
+      });
+      await pump.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it("invalidates stale drain callbacks when barge-in clears playback", () => {
-    const processes: FakeProcess[] = [];
-    const onPlaybackDrained = vi.fn();
-    const pump = startFaceTimeAudioPump({
-      captureBinary: "/capture",
-      logger: console,
-      onInputAudio() {},
-      onPlaybackDrained,
-      spawn: captureProcesses(processes),
-    });
-    pump.writeOutputAudio(Buffer.alloc(480));
-    pump.clearOutputAudio();
-    processes[0]?.stderr.emit("data", control({ event: "drained", generation: 1, frames: 240 }));
-    expect(onPlaybackDrained).not.toHaveBeenCalled();
-    expect(pump.queuedAudioFrames()).toBe(0);
+  it("invalidates stale drain callbacks when barge-in clears playback", async () => {
+    vi.useFakeTimers();
+    try {
+      const processes: FakeProcess[] = [];
+      const onPlaybackDrained = vi.fn();
+      const pump = startFaceTimeAudioPump({
+        captureBinary: "/capture",
+        logger: console,
+        onInputAudio() {},
+        onPlaybackDrained,
+        spawn: captureProcesses(processes),
+      });
+      pump.writeOutputAudio(Buffer.alloc(480));
+      pump.finishOutputAudio();
+      pump.clearOutputAudio();
+      expect(processes[0]?.kills).toEqual([]);
+      expect(processes[1]?.kills).toEqual(["SIGKILL"]);
+      expect(processes).toHaveLength(4);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(onPlaybackDrained).not.toHaveBeenCalled();
+      expect(pump.queuedAudioFrames()).toBe(0);
+      await pump.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reports capture-process death as immediate suppression loss", () => {
@@ -166,8 +200,29 @@ describe("FaceTime native audio bridge", () => {
     const failClosed = pump.failClosed();
     expect(processes[0]?.stdin.writableEnded).toBe(true);
     expect(processes[0]?.stdin.writes).toEqual([]);
+    expect(processes[1]?.kills).toEqual(["SIGKILL"]);
+    expect(processes[2]?.kills).toEqual(["SIGTERM"]);
     processes[0]?.emit("exit", 0, null);
     await failClosed;
+  });
+
+  it("does not report intentional media suspension as a playback failure", async () => {
+    const processes: FakeProcess[] = [];
+    const onError = vi.fn(async () => false);
+    const pump = startFaceTimeAudioPump({
+      captureBinary: "/capture",
+      logger: console,
+      onInputAudio() {},
+      onError,
+      spawn: captureProcesses(processes),
+    });
+
+    await pump.suspendMedia();
+
+    expect(processes[1]?.kills).toEqual(["SIGKILL"]);
+    expect(onError).not.toHaveBeenCalled();
+    expect(processes[0]?.kills).toEqual([]);
+    await pump.stop();
   });
 
   it("strips credential-shaped environment variables from native children", async () => {
@@ -181,9 +236,17 @@ describe("FaceTime native audio bridge", () => {
         spawn,
       });
 
-      expect(spawn.mock.calls[0]?.[2]?.env).not.toHaveProperty("OPENAI_API_KEY");
-      expect(spawn.mock.calls[0]?.[2]?.env).toHaveProperty("SAFE_VALUE", "yes");
+      for (const call of spawn.mock.calls) {
+        expect(call[2].env).not.toHaveProperty("OPENAI_API_KEY");
+        expect(call[2].env).toHaveProperty("SAFE_VALUE", "yes");
+      }
       await pump.stop();
+      const captureIndex = spawn.mock.calls.findIndex((call) => call[0] === "/capture");
+      const outputIndex = spawn.mock.calls.findIndex((call) => call[0].endsWith("sox"));
+      expect(processes[captureIndex]?.stdin.writes).toEqual([
+        Buffer.from([4, 0, 0, 0, 4, 0, 0, 0, 0]),
+      ]);
+      expect(processes[outputIndex]?.kills).toEqual(["SIGKILL"]);
     });
   });
 });

@@ -46,6 +46,7 @@ export type FaceTimeSetupReport = {
 
 type SetupParams = {
   config: FaceTimeConfig;
+  nativePackageReady: boolean;
   pluginRoot: string;
   runCommandWithTimeout: RunCommandWithTimeout;
   runtimeStatus?: FaceTimeRuntimeStatus | Promise<FaceTimeRuntimeStatus>;
@@ -57,16 +58,24 @@ type SetupParams = {
 const XCODE_APP = "/Applications/Xcode.app";
 const XCODE_CLANG = `${XCODE_APP}/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang`;
 const XCODE_MACOS_SDK = `${XCODE_APP}/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk`;
+const NATIVE_PACKAGE_COMMAND =
+  "if brew list --versions openclaw-facetime >/dev/null 2>&1; then brew reinstall openclaw/tap/openclaw-facetime; else brew install openclaw/tap/openclaw-facetime; fi";
+const NATIVE_PACKAGE_ACTION = {
+  id: "install-native-package",
+  kind: "command",
+  label: "Install or reinstall the FaceTime native package with Homebrew",
+  command: NATIVE_PACKAGE_COMMAND,
+} as const satisfies FaceTimeSetupAction;
 
 const PRECHECK_ACTIONS: Record<
   string,
   Pick<FaceTimeSetupAction, "id" | "kind" | "label" | "command" | "gatewayMethod" | "settingsPath">
 > = {
   "capture-binary": {
-    id: "repair-plugin-artifacts",
+    id: NATIVE_PACKAGE_ACTION.id,
     kind: "command",
-    label: "Rebuild the FaceTime plugin artifacts",
-    command: "openclaw gateway restart",
+    label: NATIVE_PACKAGE_ACTION.label,
+    command: NATIVE_PACKAGE_ACTION.command,
   },
   "paired-driver-mic": {
     id: "install-driver",
@@ -371,10 +380,25 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
     });
   }
 
+  checks.push({
+    id: "native-package",
+    label: "FaceTime native package",
+    status: params.nativePackageReady ? "ready" : "action-required",
+    required: true,
+    message: params.nativePackageReady
+      ? "Compatible FaceTime capture and helper artifacts are installed"
+      : "Compatible FaceTime native helpers are not installed",
+    ...(!params.nativePackageReady ? { actionId: NATIVE_PACKAGE_ACTION.id } : {}),
+  });
+  if (!params.nativePackageReady) {
+    addAction(actions, NATIVE_PACKAGE_ACTION);
+  }
+
   // The runtime can finish asynchronous helper injection while the static
   // checks above run. Resolve its status only when composing the live checks
   // so the final report does not preserve a stale "repairing" snapshot.
-  const runtimeStatus = params.runtimeStatus ? await params.runtimeStatus : undefined;
+  const runtimeStatus =
+    params.nativePackageReady && params.runtimeStatus ? await params.runtimeStatus : undefined;
   checks.push({
     id: "runtime",
     label: "FaceTime plugin runtime",
@@ -383,9 +407,13 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
     message: runtimeStatus
       ? "Runtime activated on the local UID-derived helper endpoint"
       : (params.runtimeError ?? "FaceTime runtime is not running"),
-    ...(!runtimeStatus ? { actionId: "restart-gateway" } : {}),
+    ...(!runtimeStatus
+      ? {
+          actionId: params.nativePackageReady ? "restart-gateway" : NATIVE_PACKAGE_ACTION.id,
+        }
+      : {}),
   });
-  if (!runtimeStatus) {
+  if (!runtimeStatus && params.nativePackageReady) {
     addAction(actions, {
       id: "restart-gateway",
       kind: "command",
@@ -439,7 +467,7 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
     }
   }
 
-  const driver = await inspectDriver(params);
+  const driver = params.nativePackageReady ? await inspectDriver(params) : {};
   const driverReady = driver.status === "current";
   checks.push({
     id: "audio-driver",
@@ -448,12 +476,18 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
     required: true,
     message: driverReady
       ? "OpenClaw-Mic and OpenClaw-Feed driver is current"
-      : driver.error
-        ? `Could not inspect driver: ${driver.error}`
-        : `Driver status: ${driver.status ?? "unknown"}`,
-    ...(!driverReady ? { actionId: "install-driver" } : {}),
+      : !params.nativePackageReady
+        ? "Install the FaceTime native package before setting up the audio driver"
+        : driver.error
+          ? `Could not inspect driver: ${driver.error}`
+          : `Driver status: ${driver.status ?? "unknown"}`,
+    ...(!driverReady
+      ? {
+          actionId: params.nativePackageReady ? "install-driver" : NATIVE_PACKAGE_ACTION.id,
+        }
+      : {}),
   });
-  if (!driverReady) {
+  if (!driverReady && params.nativePackageReady) {
     addAction(actions, {
       id: "install-driver",
       kind: "gateway",
@@ -523,7 +557,7 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
     status: internalMediaStage ? "ready" : "verify-on-call",
     required: false,
     message: internalMediaStage
-      ? "Process capture, model session, native playback, and local suppression reached their internal ready states; remote audibility is not proven"
+      ? "Process capture, model session, SoX playback, and local suppression reached the internal media stage; remote audibility is not proven"
       : "Internal media stages require an active call; remote audibility still needs a separate live check",
     ...(!internalMediaStage ? { actionId: "live-audio-test" } : {}),
   });

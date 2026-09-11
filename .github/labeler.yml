@@ -91,12 +91,6 @@
           - "docs/plugins/google-meet.md"
           - "docs/plugins/google-meet/**"
           - "docs/plugins/reference/google-meet.md"
-"plugin: logbook":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/logbook/**"
-          - "docs/plugins/logbook.md"
-          - "docs/plugins/reference/logbook.md"
 "plugin: teams-meetings":
   - changed-files:
       - any-glob-to-any-file:

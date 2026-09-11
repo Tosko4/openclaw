@@ -1,7 +1,7 @@
 {
   "id": "facetime",
   "name": "FaceTime",
-  "description": "Experimental private FaceTime realtime voice carrier for OpenClaw agents",
+  "description": "Experimental FaceTime realtime voice carrier for OpenClaw agents",
   "enabledByDefault": false,
   "activation": {
     "onStartup": true
@@ -9,6 +9,9 @@
   "skills": ["./skills"],
   "contracts": {
     "tools": ["facetime_call"]
+  },
+  "doctorContract": {
+    "configRepair": true
   },
   "configSchema": {
     "type": "object",

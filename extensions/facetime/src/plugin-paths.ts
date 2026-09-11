@@ -78,6 +78,18 @@ async function resolveNativeInstall(params: {
   throw new Error(`Compatible FaceTime native helpers are not installed. Run: ${INSTALL_COMMAND}`);
 }
 
+export async function inspectFaceTimeNativePackage(
+  params: {
+    access?: typeof access;
+    readFile?: typeof readFile;
+  } = {},
+): Promise<boolean> {
+  return await resolveNativeInstall(params).then(
+    () => true,
+    () => false,
+  );
+}
+
 export async function inspectFaceTimeArtifacts(params: {
   access?: typeof access;
   readFile?: typeof readFile;
@@ -118,10 +130,7 @@ export async function inspectFaceTimeArtifacts(params: {
     stagedHelperDylibs,
     cachedDriver,
   ] = await Promise.all([
-    resolveNativeInstall(params).then(
-      () => true,
-      () => false,
-    ),
+    inspectFaceTimeNativePackage(params),
     readable(resolveHelperDylib(), constants.R_OK),
     readable(resolveHelperIpcKey(), constants.R_OK),
     readable(resolveHelperBuildStamp(), constants.R_OK),
