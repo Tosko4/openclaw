@@ -27,7 +27,7 @@ import {
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { createOpenClawCodingTools } from "../agent-tools.js";
+import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "../agent-tools.js";
 import { createInitialSubagentSession } from "../subagents/spawn/subagent-spawn-session-patch.js";
 import { getTextContent } from "../test-helpers/agent-tools-fs-helpers.js";
 import { prepareEmbeddedSkills } from "./skill-runtime.js";
@@ -153,14 +153,18 @@ describe("manual library resources through embedded normal read", () => {
         expect(prepared.skillsPrompt).not.toContain(saved.entry.name);
         expect(prepared.codeModeSkills.map((skill) => skill.name)).not.toContain(saved.entry.name);
         expect(prepared.codeModeSkills.map((skill) => skill.name)).toContain("visible");
-        const tools = createOpenClawCodingTools({
-          ...prepared,
-          workspaceDir,
-          config,
-          modelProvider: "openai",
-          modelId: "test-model",
-          skillsSnapshot: prepared.skillsSnapshotForRun,
-        });
+        const tools = createOpenClawCodingToolsInternal(
+          {
+            codeModeSkills: prepared.codeModeSkills,
+            skillUsagePaths: prepared.skillUsagePaths,
+            workspaceDir,
+            config,
+            modelProvider: "openai",
+            modelId: "test-model",
+            skillsSnapshot: prepared.skillsSnapshotForRun,
+          },
+          prepared.skillReadResources,
+        );
         const read = tools.find((tool) => tool.name === "read")!;
         expect(read).toBeDefined();
         // Real publication -> exact session pin -> snapshot -> preparation -> registered read.
@@ -246,12 +250,16 @@ describe("manual library resources through embedded normal read", () => {
             includeCodeModeSkills: true,
           });
           try {
-            const filteredRead = createOpenClawCodingTools({
-              ...filteredPrepared,
-              workspaceDir,
-              config,
-              skillsSnapshot: filteredPrepared.skillsSnapshotForRun,
-            }).find((tool) => tool.name === "read")!;
+            const filteredRead = createOpenClawCodingToolsInternal(
+              {
+                codeModeSkills: filteredPrepared.codeModeSkills,
+                skillUsagePaths: filteredPrepared.skillUsagePaths,
+                workspaceDir,
+                config,
+                skillsSnapshot: filteredPrepared.skillsSnapshotForRun,
+              },
+              filteredPrepared.skillReadResources,
+            ).find((tool) => tool.name === "read")!;
             await expect(
               filteredRead.execute("filtered", { path: instructionPath }),
             ).rejects.toThrow(/Path escapes sandbox root/i);
@@ -307,12 +315,16 @@ describe("manual library resources through embedded normal read", () => {
           includeCodeModeSkills: true,
         });
         try {
-          const childRead = createOpenClawCodingTools({
-            ...childPrepared,
-            workspaceDir,
-            config,
-            skillsSnapshot: childPrepared.skillsSnapshotForRun,
-          }).find((tool) => tool.name === "read")!;
+          const childRead = createOpenClawCodingToolsInternal(
+            {
+              codeModeSkills: childPrepared.codeModeSkills,
+              skillUsagePaths: childPrepared.skillUsagePaths,
+              workspaceDir,
+              config,
+              skillsSnapshot: childPrepared.skillsSnapshotForRun,
+            },
+            childPrepared.skillReadResources,
+          ).find((tool) => tool.name === "read")!;
           expect(
             getTextContent(
               await childRead.execute("child-pinned-read", { path: instructionPath, limit: 1 }),
