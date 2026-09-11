@@ -633,7 +633,16 @@ export async function withNativeActionGateway(
           }
           case "approval-allowed": {
             assert(approvalProxy && approvalPhase === "pending");
-            const events = approvalProxy.snapshot().events;
+            const events = await waitFor("native allowed approval resolve response", () => {
+              // The requester can observe its decision before the resolver's response arrives.
+              const observedEvents = approvalProxy!.snapshot().events;
+              return observedEvents.filter(
+                (event: { kind: string; method?: string }) =>
+                  event.kind === "rpc-response" && event.method === "exec.approval.resolve",
+              ).length >= 1
+                ? observedEvents
+                : undefined;
+            });
             const resolved = events.filter(
               (event: { kind: string; method?: string }) =>
                 event.kind === "rpc-response" && event.method === "exec.approval.resolve",
@@ -676,7 +685,15 @@ export async function withNativeActionGateway(
           }
           case "approval-complete": {
             assert(approvalProxy && approvals && approvalPhase === "retired");
-            const events = approvalProxy.snapshot().events;
+            const events = await waitFor("native control approval resolve response", () => {
+              const observedEvents = approvalProxy!.snapshot().events;
+              return observedEvents.filter(
+                (event: { kind: string; method?: string }) =>
+                  event.kind === "rpc-response" && event.method === "exec.approval.resolve",
+              ).length >= 2
+                ? observedEvents
+                : undefined;
+            });
             for (const [method, count] of [
               ["exec.approval.request", 4],
               ["exec.approval.waitDecision", 4],
