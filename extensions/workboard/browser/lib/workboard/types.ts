@@ -56,27 +56,13 @@ export type WorkboardDispatchSummary = {
 
 export type WorkboardRefreshSource = "initial" | "manual" | "live";
 
-export type WorkboardViewPresetId =
-  | "all"
-  | "default_agent"
-  | "ready"
+export type WorkboardHealthKey =
   | "running"
   | "blocked"
-  | "review"
   | "stale"
-  | "missing_proof"
-  | "recently_done";
-
-export type WorkboardHealthSummary = {
-  running: number;
-  blocked: number;
-  stale: number;
-  readyUnassigned: number;
-  missingProof: number;
-  failedAttempts: number;
-};
-
-export type WorkboardHealthKey = keyof WorkboardHealthSummary;
+  | "readyUnassigned"
+  | "missingProof"
+  | "failedAttempts";
 
 export type WorkboardUiState = {
   loading: boolean;
@@ -99,7 +85,6 @@ export type WorkboardUiState = {
   donePeriod: "all" | "week";
   agentFilter: string;
   boardFilter: string;
-  viewPreset: WorkboardViewPresetId;
   activeHealthHighlight: WorkboardHealthKey | null;
   showArchived: boolean;
   layout: "comfortable" | "compact";

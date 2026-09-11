@@ -8,8 +8,6 @@ export {
   type WorkboardEvent,
   type WorkboardExecutionEngine,
   type WorkboardExecutionMode,
-  type WorkboardHealthKey,
-  type WorkboardHealthSummary,
   type WorkboardLifecycle,
   type WorkboardPriority,
   type WorkboardStatus,
@@ -19,8 +17,6 @@ export {
 } from "./types.ts";
 export {
   filterWorkboardCards,
-  filterWorkboardCardsForPreset,
-  summarizeWorkboardHealth,
   workboardCardMatchesHealthKey,
 } from "./derived.ts";
 export { getWorkboardDependencyState, resetDraftState } from "./card-state.ts";
