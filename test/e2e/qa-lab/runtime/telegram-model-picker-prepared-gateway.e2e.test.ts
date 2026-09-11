@@ -17,7 +17,7 @@ import type { ModelDefinitionConfig } from "../../../../src/config/types.models.
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../../../../src/infra/kysely-sync.js";
 import { openExistingOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db.js";
-import { withTestTimeout } from "../../../helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 type JsonObject = Record<string, unknown>;
@@ -728,6 +728,7 @@ test("keeps native model choices through Telegram browsing, refresh, and restart
   const boundRef = "anthropic/claude-sonnet-4-6";
   const accountProvider = "catalog-account-fixture";
   const faultProvider = "catalog-fault-fixture";
+  const faultCatalogResponse = createDeferred<void>();
   let rejectCatalog = true;
   let rejectedCatalogRequests = 0;
   let catalogRequests = 0;
@@ -737,6 +738,7 @@ test("keeps native model choices through Telegram browsing, refresh, and restart
     const pathname = url.pathname;
     if (pathname === "/fault-models") {
       if (rejectCatalog && url.searchParams.get("agent") === "broken") {
+        await faultCatalogResponse.promise;
         rejectedCatalogRequests += 1;
         res.writeHead(200, { "content-type": "application/json" });
         res.end("{");
@@ -882,6 +884,7 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
               TELEGRAM_BOT_TOKEN: undefined,
               OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: undefined,
               OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+              OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
             },
             mutateConfig: (cfg) => ({
               ...cfg,
@@ -924,6 +927,15 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
             }),
           });
 
+          const waitForCatalogPass = async (mark: ReturnType<typeof gateway.markLogs>) => {
+            await expect
+              .poll(() => gateway.readLogsSince(mark), { timeout: 30_000 })
+              .toContain("startup trace: sidecars.model-catalog ");
+          };
+          const startupLogMark = gateway.markLogs();
+          expect(rejectedCatalogRequests).toBe(0);
+          faultCatalogResponse.resolve();
+          await waitForCatalogPass(startupLogMark);
           expect(rejectedCatalogRequests).toBeGreaterThan(0);
           const degraded = await gateway.call("models.list", {
             agentId: "broken",
@@ -935,14 +947,29 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
               expect.objectContaining({
                 provider: "anthropic",
                 id: "claude-haiku-4-5",
+                agentRuntime: expect.objectContaining({ id: "claude-cli" }),
+              }),
+              expect.objectContaining({
+                provider: faultProvider,
+                id: "fault-model",
                 available: true,
               }),
             ]),
           });
+          const healthy = await gateway.call("models.list", { agentId: "qa", preparedOnly: true });
+          const nativeAvailable = expect.objectContaining({
+            provider: "anthropic",
+            id: "claude-haiku-4-5",
+            available: true,
+            agentRuntime: expect.objectContaining({ id: "claude-cli" }),
+          });
+          expect(healthy).toMatchObject({ models: expect.arrayContaining([nativeAvailable]) });
+          expect(healthy).not.toHaveProperty("refreshFailed", true);
           rejectCatalog = false;
           const recovered = await gateway.call("models.list", { agentId: "broken", refresh: true });
           expect(recovered).toMatchObject({
             models: expect.arrayContaining([
+              nativeAvailable,
               expect.objectContaining({
                 provider: faultProvider,
                 id: "fault-model",
@@ -951,12 +978,49 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
             ]),
           });
           expect(recovered).not.toHaveProperty("refreshFailed", true);
+          const firstFailureRequests = rejectedCatalogRequests;
+          rejectCatalog = true;
+          let retainedRefreshError: unknown;
+          await expect(
+            gateway
+              .call("models.list", { agentId: "broken", refresh: true })
+              .catch((error: unknown) => {
+                retainedRefreshError = error;
+                throw error;
+              }),
+          ).rejects.toThrow();
+          expect(rejectedCatalogRequests).toBe(firstFailureRequests + 1);
+          const retained = await gateway.call("models.list", {
+            agentId: "broken",
+            preparedOnly: true,
+          });
+          expect(retained).toMatchObject({
+            refreshFailed: true,
+            models: expect.arrayContaining([nativeAvailable]),
+          });
+          rejectCatalog = false;
+          const recoveredAgain = await gateway.call("models.list", {
+            agentId: "broken",
+            refresh: true,
+          });
+          expect(recoveredAgain).toMatchObject({
+            models: expect.arrayContaining([nativeAvailable]),
+          });
+          expect(recoveredAgain).not.toHaveProperty("refreshFailed", true);
           console.info(
             "STARTUP_CATALOG_FAILURE_PROOF",
             JSON.stringify({
               rejectedCatalogRequests,
+              firstFailureRequests,
               degraded,
+              healthy,
               recovered,
+              retainedRefreshError:
+                retainedRefreshError instanceof Error
+                  ? { name: retainedRefreshError.name, message: retainedRefreshError.message }
+                  : retainedRefreshError,
+              retained,
+              recoveredAgain,
             }),
           );
 
@@ -1044,7 +1108,9 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
             refresh: true,
           })) as ModelsListResult;
           expect(catalogChoices(refreshedModels)).toEqual(startupChoices);
+          const restartLogMark = gateway.markLogs();
           await gateway.restartAfterStateMutation(async () => {});
+          await waitForCatalogPass(restartLogMark);
           const restartedModels = (await gateway.call("models.list", {
             view: "default",
             preparedOnly: true,
@@ -1103,7 +1169,9 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
             startupChoices,
           );
           expect(catalogRequests).toBeGreaterThan(0);
+          const accountRestartLogMark = gateway.markLogs();
           await gateway.restartAfterStateMutation(async () => {});
+          await waitForCatalogPass(accountRestartLogMark);
           for (const view of ["default", "configured"] as const) {
             const result = await gateway.call("models.list", { view, preparedOnly: true });
             // SAFETY: the real Gateway validates models.list replies against ModelsListResult.
@@ -1120,6 +1188,7 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
           ).toBe(true);
           expect(providerRequests).toBe(0);
         } finally {
+          faultCatalogResponse.resolve();
           await stopQaGatewayFixture(gatewayOwner);
         }
       },

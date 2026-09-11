@@ -52,6 +52,7 @@ const mocks = vi.hoisted(() => {
     metadataSnapshot,
     resolvePluginMetadataSnapshot: vi.fn(() => metadataSnapshot),
     resolveAmbientCredentials: vi.fn((..._args: unknown[]) => ({})),
+    prepareAmbientCredentials: vi.fn(async (..._args: unknown[]) => ({})),
     discoverAuthStorage: vi.fn((_agentDir?: string, _options?: unknown) => authStorage),
     discoverModels: vi.fn((_authStorage: AuthStorage, _options?: unknown) => modelRegistry),
     ensureOpenClawModelsJson: vi.fn(
@@ -126,7 +127,8 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
 }));
 
 vi.mock("./agent-auth-discovery.js", () => ({
-  prepareAmbientAgentCredentialsForDiscovery: mocks.resolveAmbientCredentials,
+  resolveAmbientAgentCredentialsForDiscovery: mocks.resolveAmbientCredentials,
+  prepareAmbientAgentCredentialsForDiscovery: mocks.prepareAmbientCredentials,
 }));
 
 vi.mock("../plugins/provider-public-artifacts.js", () => ({
@@ -637,20 +639,10 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(mocks.resolveAmbientCredentials).toHaveBeenCalledWith(
       expect.objectContaining({
         syntheticAuthProviderRefs: ["openai"],
-        resolveSyntheticAuth: expect.any(Function),
       }),
     );
-    const ambientOptions = mocks.resolveAmbientCredentials.mock.calls[0]?.[0] as
-      | { resolveSyntheticAuth?: (provider: string) => Promise<{ apiKey?: string } | undefined> }
-      | undefined;
-    expect(await ambientOptions?.resolveSyntheticAuth?.("openai")).toMatchObject({
-      apiKey: "synthetic-openai-key",
-    });
-    expect(mocks.resolveSyntheticAuth).toHaveBeenCalledWith({
-      config,
-      provider: "openai",
-      providerConfig: undefined,
-    });
+    expect(mocks.prepareAmbientCredentials).not.toHaveBeenCalled();
+    expect(mocks.resolveSyntheticAuth).not.toHaveBeenCalled();
     const catalogAuthStorage = mocks.discoverModels.mock.lastCall?.[0];
     expect(catalogAuthStorage?.getAll()).toEqual({
       openai: { type: "api_key", key: "test-openai-key" },
@@ -872,7 +864,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledWith(
       expect.objectContaining({
         providerDiscoveryProviderIds: [provider, "openai", "provider-only", "registry-only"],
-        staticCatalogProviderIds: [provider, "openai", "registry-only"],
+        staticCatalogProviderIds: [provider, "openai", "provider-only", "registry-only"],
       }),
     );
     expect(mocks.discoverModels).toHaveBeenCalledOnce();
@@ -882,7 +874,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
   });
 
-  it("does not request a static provider hook when manifest facts resolve the configured model", async () => {
+  it("prepares admitted static rows when manifest facts already resolve the selected model", async () => {
     mocks.resolveStaticCatalogModel.mockReturnValue({
       id: "gpt-5.5",
       name: "GPT-5.5",
@@ -911,7 +903,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledWith(
       expect.objectContaining({
         providerDiscoveryProviderIds: ["openai"],
-        staticCatalogProviderIds: [],
+        staticCatalogProviderIds: ["openai"],
       }),
     );
     const snapshot = getPreparedModelRuntimeSnapshot({

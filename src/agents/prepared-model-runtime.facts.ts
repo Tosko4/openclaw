@@ -20,7 +20,10 @@ import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.j
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import { resolveProviderBindingEnvVarCandidates } from "../secrets/provider-env-vars.js";
-import { prepareAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
+import {
+  prepareAmbientAgentCredentialsForDiscovery,
+  resolveAmbientAgentCredentialsForDiscovery,
+} from "./agent-auth-discovery.js";
 import {
   discoverAuthStorageFacts,
   discoverModelsFromCapturedSources,
@@ -69,7 +72,6 @@ import { createPreparedPluginGeneration } from "./prepared-model-runtime.plugin-
 import type { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
 import {
   listPreparedSyntheticAuthProviderRefs,
-  prepareSyntheticAuth,
   scopeSyntheticAuthProviderRefs,
 } from "./prepared-model-runtime.synthetic-auth.js";
 import type {
@@ -142,6 +144,7 @@ function prepareAgentFacts(
     config: input.config,
     // External CLI hydration belongs to startup/control-plane producers, never auth-store reads.
     readOnly: true,
+    skipExternalAuthProfiles: true,
     ambientCredentials: {},
     ...(preparedStore ? { preparedStore } : {}),
     ...(input.skipCredentials ? { skipCredentials: true } : {}),
@@ -292,14 +295,12 @@ export async function prepareWorkspaceBuildGroup(
     const authStoreMs = performance.now() - authStoreStartedAt;
     const configuredProviderIds =
       options.providerDiscoveryProviderIds ??
-      [
-        ...new Set([
-          ...agentBaseFacts.flatMap((facts) => facts.providerIds),
-          ...pluginMetadataSnapshot.owners.cliBackends.keys(),
-        ]),
-      ].toSorted((left, right) => left.localeCompare(right));
+      [...new Set(agentBaseFacts.flatMap((facts) => facts.providerIds))].toSorted((left, right) =>
+        left.localeCompare(right),
+      );
     const staticCatalogProviderIds = [
       ...new Set([
+        ...configuredProviderIds,
         ...collectConfiguredProviderIdsNeedingStaticCatalog({
           config: input.config,
           matchesStaticModelId,
@@ -351,7 +352,11 @@ export async function prepareWorkspaceBuildGroup(
     // Static Gateway publication consumes discovery entrypoints; the run owns activation.
     const ambientCredentialsStartedAt = performance.now();
     reportStage("ambient credentials");
-    const ambientCredentials = await prepareAmbientAgentCredentialsForDiscovery({
+    const resolveAmbientCredentials =
+      catalogMode === "static"
+        ? resolveAmbientAgentCredentialsForDiscovery
+        : prepareAmbientAgentCredentialsForDiscovery;
+    const ambientCredentials = await resolveAmbientCredentials({
       config: input.config,
       env,
       authoritativeSyntheticAuthProviderRefs: pluginMetadataSnapshot.owners.cliBackends.keys(),
@@ -368,18 +373,6 @@ export async function prepareWorkspaceBuildGroup(
               }),
               configuredProviderIds,
             ),
-      ...(catalogMode === "static"
-        ? {
-            resolveSyntheticAuth: (provider: string) =>
-              prepareSyntheticAuth({
-                config: input.config,
-                env,
-                workspaceDir: input.workspaceDir,
-                provider,
-                providers: preparedSyntheticAuthProviders,
-              }),
-          }
-        : {}),
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     });
     const ambientCredentialsMs = performance.now() - ambientCredentialsStartedAt;
@@ -411,6 +404,7 @@ export async function prepareWorkspaceBuildGroup(
         : await loadBundledProviderStaticCatalogContextModels({
             cfg: input.config,
             env,
+            providerIds: [...new Set(agentBaseFacts.flatMap(({ providerIds }) => providerIds))],
             metadataSnapshot: pluginMetadataSnapshot,
             registeredProviders: runtimePluginRegistry?.providers,
             ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
@@ -622,6 +616,7 @@ function groupConfiguredRegistrySources(
       config: facts.input.config,
       sourceModels: projectConfigOntoRuntimeSourceSnapshot(facts.input.config).models,
       credentials: facts.credentials,
+      providerIds: [...new Set(facts.providerIds.map(normalizeProviderId))].toSorted(),
       modelsJsonContents,
       pluginCatalogs,
     });
@@ -661,6 +656,7 @@ export function prepareConfiguredRuntimeFactsBatch(params: {
     if (!representative) {
       continue;
     }
+    const admittedProviders = new Set(representative.providerIds.map(normalizeProviderId));
     // Parse identical catalog/auth sources once, then fork request auth.
     const templateModelRegistry = discoverModelsFromCapturedSources(
       representative.templateAuthStorage,
@@ -669,7 +665,11 @@ export function prepareConfiguredRuntimeFactsBatch(params: {
         includePluginCatalogs: true,
         modelsJsonContents: group.modelsJsonContents,
         pluginCatalogs: group.pluginCatalogs,
-        staticProviderConfigs,
+        staticProviderConfigs: Object.fromEntries(
+          Object.entries(staticProviderConfigs).filter(([provider]) =>
+            admittedProviders.has(normalizeProviderId(provider)),
+          ),
+        ),
         pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
         ...(representative.input.workspaceDir
           ? { workspaceDir: representative.input.workspaceDir }

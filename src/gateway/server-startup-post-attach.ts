@@ -296,6 +296,7 @@ type StartupExternalAuthHydrationDeps = {
 
 async function hydrateConfiguredExternalCliAuth(params: {
   getConfig: () => OpenClawConfig;
+  isCurrent?: () => boolean;
   log: { warn: (msg: string) => void };
   deps?: StartupExternalAuthHydrationDeps | Promise<StartupExternalAuthHydrationDeps>;
 }): Promise<OpenClawConfig> {
@@ -327,6 +328,9 @@ async function hydrateConfiguredExternalCliAuth(params: {
   const cfg = params.getConfig();
   const hydratedDirs = new Set<string>();
   for (const agentId of deps.listAgentIds(cfg)) {
+    if (params.isCurrent?.() === false) {
+      break;
+    }
     const providers = deps.collectConfiguredRefs(cfg, agentId).flatMap(({ value }) => {
       const separator = value.indexOf("/");
       return separator > 0 ? [value.slice(0, separator)] : [];
@@ -361,87 +365,103 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
   if (params.isCurrent?.() === false) {
     return;
   }
-  let config = params.cfg;
-  const getConfig = params.getConfig;
-  await refreshPreparedModelRuntimeSnapshots(
-    getConfig ? async () => (config = await getConfig()) : config,
-    {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-      allowGatewaySubagentBinding: true,
-      ...(params.isCurrent ? { isPublicationCurrent: params.isCurrent } : {}),
-      ...(params.pluginMetadataSnapshot
-        ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
-        : {}),
-      ...(params.workspaceDir ? { defaultWorkspaceDir: params.workspaceDir } : {}),
-      ...(params.startupTrace
-        ? {
-            onBuildStats: (stats) =>
-              params.startupTrace?.detail("sidecars.model-runtime-build", [
-                ["agentCount", stats.agentCount],
-                ["workspaceGroupCount", stats.workspaceGroupCount],
-                ["configuredFactsGroupCount", stats.configuredFactsGroupCount],
-                ["catalogSourceCount", stats.catalogSourceCount],
-                ["credentialGroupCount", stats.credentialGroupCount],
-                ["catalogGroupCount", stats.catalogGroupCount],
-                ["runtimeRegistryCount", stats.runtimeRegistryCount],
-                ["configuredRuntimeModelCount", stats.configuredRuntimeModelCount],
-                ["generatedCatalogPluginCount", stats.generatedCatalogPluginCount],
-                ["generatedCatalogReadCount", stats.generatedCatalogReadCount],
-                ["workspaceFactsMs", stats.workspaceFactsMs],
-                ["runtimePluginMs", stats.runtimePluginMs],
-                ["pluginMetadataMs", stats.pluginMetadataMs],
-                ["staticProviderCatalogMs", stats.staticProviderCatalogMs],
-                ["ambientCredentialsMs", stats.ambientCredentialsMs],
-                ["agentFactsMs", stats.agentFactsMs],
-                ["configuredProjectionMs", stats.configuredProjectionMs],
-                ["catalogSourceMs", stats.catalogSourceMs],
-                ["registryMs", stats.registryMs],
-                ["sourceConcurrencyLimitCount", stats.sourceConcurrencyLimit],
-                ["fullCatalogConcurrencyLimitCount", stats.fullCatalogConcurrencyLimit],
-              ]),
-          }
-        : {}),
-    },
-  );
-  const [
-    { listAgentIds },
-    { loadPreparedModelCatalogSnapshot, getPublishedPreparedModelCatalogOwnerSnapshot },
-    { PreparedModelRuntimeOwnerNotPublishedError },
-    { PreparedModelCatalogConfigReplacedError },
-    { isAbortError },
-  ] = await Promise.all([
-    import("../agents/agent-scope.js"),
-    import("../agents/prepared-model-catalog.js"),
-    import("../agents/prepared-model-runtime.errors.js"),
-    import("../agents/prepared-model-catalog.errors.js"),
-    import("../infra/abort-signal.js"),
-  ]);
-  for (const agentId of listAgentIds(config)) {
-    if (params.isCurrent?.() === false) {
-      return;
-    }
-    const owner = getPublishedPreparedModelCatalogOwnerSnapshot({ config, agentId });
-    try {
-      await loadPreparedModelCatalogSnapshot({
-        config,
-        agentId,
-        readOnly: false,
-        refreshFullCatalog: true,
+  await refreshPreparedModelRuntimeSnapshots(params.getConfig ?? params.cfg, {
+    gatewayLifecycle: true,
+    catalogMode: "static",
+    allowGatewaySubagentBinding: true,
+    ...(params.isCurrent ? { isPublicationCurrent: params.isCurrent } : {}),
+    ...(params.pluginMetadataSnapshot
+      ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+      : {}),
+    ...(params.workspaceDir ? { defaultWorkspaceDir: params.workspaceDir } : {}),
+    ...(params.startupTrace
+      ? {
+          onBuildStats: (stats) =>
+            params.startupTrace?.detail("sidecars.model-runtime-build", [
+              ["agentCount", stats.agentCount],
+              ["workspaceGroupCount", stats.workspaceGroupCount],
+              ["configuredFactsGroupCount", stats.configuredFactsGroupCount],
+              ["catalogSourceCount", stats.catalogSourceCount],
+              ["credentialGroupCount", stats.credentialGroupCount],
+              ["catalogGroupCount", stats.catalogGroupCount],
+              ["runtimeRegistryCount", stats.runtimeRegistryCount],
+              ["configuredRuntimeModelCount", stats.configuredRuntimeModelCount],
+              ["generatedCatalogPluginCount", stats.generatedCatalogPluginCount],
+              ["generatedCatalogReadCount", stats.generatedCatalogReadCount],
+              ["workspaceFactsMs", stats.workspaceFactsMs],
+              ["runtimePluginMs", stats.runtimePluginMs],
+              ["pluginMetadataMs", stats.pluginMetadataMs],
+              ["staticProviderCatalogMs", stats.staticProviderCatalogMs],
+              ["ambientCredentialsMs", stats.ambientCredentialsMs],
+              ["agentFactsMs", stats.agentFactsMs],
+              ["configuredProjectionMs", stats.configuredProjectionMs],
+              ["catalogSourceMs", stats.catalogSourceMs],
+              ["registryMs", stats.registryMs],
+              ["sourceConcurrencyLimitCount", stats.sourceConcurrencyLimit],
+              ["fullCatalogConcurrencyLimitCount", stats.fullCatalogConcurrencyLimit],
+            ]),
+        }
+      : {}),
+  });
+}
+
+function scheduleStartupModelCatalogs(params: {
+  getConfig: () => OpenClawConfig;
+  isCurrent: () => boolean;
+  waitForPostReadyWork?: () => Promise<void>;
+  startupTrace?: GatewayStartupTrace;
+  log: { warn: (msg: string) => void };
+}): GatewayPostReadySidecarHandle {
+  return schedulePostReadySidecarTask({
+    ...params,
+    name: "sidecars.model-catalog",
+    shouldRun: params.isCurrent,
+    run: async (isStopped) => {
+      const config = await hydrateConfiguredExternalCliAuth({
+        getConfig: params.getConfig,
+        isCurrent: () => !isStopped(),
+        log: params.log,
       });
-    } catch (error) {
-      if (
-        params.isCurrent?.() === false ||
-        !owner?.isCurrent() ||
-        error instanceof PreparedModelRuntimeOwnerNotPublishedError ||
-        error instanceof PreparedModelCatalogConfigReplacedError ||
-        isAbortError(error)
-      ) {
-        throw error;
+      const [
+        { listAgentIds },
+        { loadPreparedModelCatalogSnapshot, getPublishedPreparedModelCatalogOwnerSnapshot },
+        { PreparedModelRuntimeOwnerNotPublishedError },
+        { PreparedModelCatalogConfigReplacedError },
+        { isAbortError },
+      ] = await Promise.all([
+        import("../agents/agent-scope.js"),
+        import("../agents/prepared-model-catalog.js"),
+        import("../agents/prepared-model-runtime.errors.js"),
+        import("../agents/prepared-model-catalog.errors.js"),
+        import("../infra/abort-signal.js"),
+      ]);
+      for (const agentId of listAgentIds(config)) {
+        if (isStopped()) {
+          return;
+        }
+        const owner = getPublishedPreparedModelCatalogOwnerSnapshot({ config, agentId });
+        try {
+          await loadPreparedModelCatalogSnapshot({
+            config,
+            agentId,
+            readOnly: false,
+            refreshFullCatalog: true,
+          });
+        } catch (error) {
+          if (
+            isStopped() ||
+            !owner?.isCurrent() ||
+            error instanceof PreparedModelRuntimeOwnerNotPublishedError ||
+            error instanceof PreparedModelCatalogConfigReplacedError ||
+            isAbortError(error)
+          ) {
+            throw error;
+          }
+          params.log.warn(`Model catalog acquisition failed for ${agentId}: ${String(error)}`);
+        }
       }
-      params.log.warn(`Model catalog acquisition failed for ${agentId}: ${String(error)}`);
-    }
-  }
+    },
+  });
 }
 
 async function publishStartupModelRuntime(
@@ -567,20 +587,14 @@ export async function startGatewaySidecars(params: {
     }
   });
   const getModelRuntimeConfig = params.getModelRuntimeConfig ?? (() => params.cfg);
-  // Initialize the same complete catalog used by explicit refresh before accepting agent work.
+  // Readiness publishes captured static facts; catalog acquisition runs after the ready barrier.
   if ((await params.pluginRuntimeClaim?.waitForUnblocked()) !== false) {
     await measureStartup(params.startupTrace, "sidecars.model-runtime", () =>
       withPluginRuntimeRegistryScope(params.pluginRegistry, () =>
         publishStartupModelRuntime(
           {
             cfg: params.cfg,
-            getConfig: async () =>
-              await measureStartup(params.startupTrace, "sidecars.model-auth", () =>
-                hydrateConfiguredExternalCliAuth({
-                  getConfig: getModelRuntimeConfig,
-                  log: params.log,
-                }),
-              ),
+            getConfig: getModelRuntimeConfig,
             isCurrent: params.pluginRuntimeClaim?.isCurrent,
             ...(params.pluginMetadataSnapshot
               ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
@@ -1458,6 +1472,14 @@ export async function startGatewayPostAttachRuntime(
           }
           const postReadySidecars = [...result.postReadySidecars];
           const newGatewayLifetimeSidecars = [
+            scheduleStartupModelCatalogs({
+              getConfig: params.getConfig,
+              isCurrent: () =>
+                params.isClosing?.() !== true && params.pluginRuntimeClaim?.isCurrent() !== false,
+              waitForPostReadyWork: params.waitForPostReadyWork,
+              startupTrace: params.startupTrace,
+              log: params.log,
+            }),
             scheduleContextCachePrewarm(params),
             scheduleGatewayHandlerPrewarm(params),
             ...(mainSessionRecoverySidecar ? [mainSessionRecoverySidecar] : []),

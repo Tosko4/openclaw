@@ -11,7 +11,6 @@ import {
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 import { openAIModelCatalogRoutePolicy } from "./openai-model-routes.js";
-import { resolveProviderUseAdmission } from "./provider-model-auth-source-plan.js";
 
 describe("resolveLogicalVisibleModelCatalog", () => {
   it.each(["all", "configured", "default"] as const)(
@@ -400,33 +399,4 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       ]);
     },
   );
-});
-
-describe("provider use admission", () => {
-  it.each([
-    {
-      name: "a MiniMax key shared by its declared routes",
-      env: { MINIMAX_API_KEY: "fixture-minimax-key" },
-      expected: ["minimax", "minimax-portal"],
-    },
-    {
-      name: "a generic shared key",
-      env: { MODEL_API_KEY: "fixture-generic-key", GH_TOKEN: "fixture-github-token" },
-      expected: [],
-    },
-  ])("derives discovery scope from $name", ({ env, expected }) => {
-    expect(
-      [
-        ...resolveProviderUseAdmission({
-          env,
-          providerEnvVars: {
-            minimax: ["MINIMAX_API_KEY"],
-            "minimax-portal": ["MINIMAX_API_KEY"],
-            "generic-a": ["MODEL_API_KEY", "GH_TOKEN"],
-            "generic-b": ["MODEL_API_KEY", "GH_TOKEN"],
-          },
-        }).keys(),
-      ].toSorted(),
-    ).toEqual(expected);
-  });
 });
