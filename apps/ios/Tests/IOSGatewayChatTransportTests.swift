@@ -163,6 +163,7 @@ struct IOSGatewayChatTransportTests {
         sendPayload: String = #"{"runId":"submitted-run","status":"started"}"#,
         activityOwner: String? = nil,
         retireOnRequest: String? = nil,
+        isolation: isolated (any Actor)? = #isolation,
         _ run: (IOSGatewayChatTransport, RequestRecorder) async throws -> Void) async throws
     {
         let recorder = RequestRecorder()
