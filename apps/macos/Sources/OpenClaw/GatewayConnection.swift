@@ -935,10 +935,6 @@ extension GatewayConnection {
         return try OpenClawChatGatewayPayloadCodec.decodeSessionRoutingIdentity(data)
     }
 
-    func configuredGatewayURL() -> URL? {
-        self.configuredConnection?.endpoint.config.url
-    }
-
     func configuredTLSFingerprintSHA256() -> String? {
         self.configuredConnection?.tlsMetadataProvider?.effectiveTLSFingerprintSHA256
     }
