@@ -33,6 +33,7 @@ import {
 import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js";
 import { resolveDefaultModelForAgent } from "../model-selection-config.js";
 import { resolveOpenAIModelRoutes, selectOpenAIModelRouteAuth } from "../openai-model-routes.js";
+import { resolveProviderAuthAliasMap } from "../provider-auth-aliases.js";
 import {
   buildProviderModelAuthDirectSource,
   buildProviderModelAuthSourcePlan,
@@ -227,14 +228,16 @@ function resolvePreparedProviderEntryApiKeyProfileReference(
 export function prepareAgentRuntimeAuth(
   input: PrepareAgentRuntimeAuthPlanParams,
 ): PreparedAgentRuntimeAuth {
+  const params = { ...input, config: resolveModelProviderAuthConfig(input) };
   // Route projection may add a provider entry; only authored config grants use.
   const providerUseAdmission = resolveProviderUseAdmission({
     config: input.config,
     env: input.env,
     providerEnvVars: resolveProviderBindingEnvVarCandidates(input),
     profiles: input.authProfileStore?.profiles,
+    requestedProviders: [input.provider],
+    storedCredentialAuthAliases: resolveProviderAuthAliasMap({ ...params, storedCredential: true }),
   });
-  const params = { ...input, config: resolveModelProviderAuthConfig(input) };
   const requestedProfileId = params.sessionAuthProfileId?.trim() || undefined;
   const userPinnedProfileId =
     params.sessionAuthProfileSource === "user" || params.sessionAuthProfileSource === "user-link"
@@ -360,7 +363,9 @@ export function prepareAgentRuntimeAuth(
           includePendingOAuthRefresh: true,
         });
   const automaticOrderResolution = prependAuthProfilePin(
-    providerUseBinding?.kind === "profile"
+    providerUseBinding?.kind === "profile" &&
+      normalizeProviderId(store?.profiles[providerUseBinding.profileId]?.provider ?? "") ===
+        normalizeProviderId(authProfileSelectionProvider)
       ? {
           ...resolvedAutomaticOrder,
           profileIds: resolvedAutomaticOrder.profileIds.filter(

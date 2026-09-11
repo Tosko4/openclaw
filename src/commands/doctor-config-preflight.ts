@@ -44,6 +44,7 @@ import {
   assertDoctorPreflightMigrationsComplete,
   readStartupMigrationSnapshot,
   completeStartupMigrationPreflight,
+  commitStartupConfigRepairs,
   noteStateMigrationResult,
   prepareStartupMigrationPlugins,
 } from "./doctor-config-preflight-startup.js";
@@ -52,11 +53,8 @@ import { maybeRepairPluginOpenClawHostLinks } from "./doctor-plugin-host-links.j
 import { throwStartupMigrationGuardRejected } from "./doctor-startup-migration-refusal.js";
 import { noteStaleUpdateRuns } from "./doctor-update-run.js";
 import type { CronCodexRuntimePolicyTarget } from "./doctor/cron/store-migration.js";
-import {
-  commitAutomaticConfigRepair,
-  planAutomaticConfigRepair,
-} from "./doctor/shared/automatic-startup-config-repair.js";
 import type { DoctorConfigPreflightResult } from "./doctor/shared/config-migration-result.js";
+import { planAutomaticConfigRepair } from "./doctor/shared/automatic-startup-config-repair.js";
 import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
 import { createDoctorPluginMetadataSnapshotScope } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 
@@ -631,39 +629,35 @@ export async function runDoctorConfigPreflight(
         ),
       );
     }
-    // State migrations must consume retired locators before the config write removes them.
-    // Unsafe migration failures throw; advisory findings must not strand repairable config.
-    if (automaticConfigRepair && stateMigrationsAllowed && freshConfigGuardAllowed) {
-      if (gatewayStartupCheckpointRequired && !startupMigrationLease) {
-        throw new Error("Automatic startup config repair requires the startup migration lease.");
+    if (stateMigrationsAllowed && freshConfigGuardAllowed) {
+      if (automaticConfigRepair) {
+        modelBillingRouteMigrationSource ??=
+          snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
       }
-      // No snapshot argument: the guard re-reads the config from disk, so an external
-      // edit made while state migrations ran refuses the stale planned write here.
-      const configRepairAllowed =
-        options.beforeStateMigrations === undefined ||
-        (await measurePreflightStep("startup-config-repair-guard", () =>
-          options.beforeStateMigrations?.(),
-        ));
-      if (!configRepairAllowed) {
-        throwStartupMigrationGuardRejected();
-      }
-      modelBillingRouteMigrationSource ??=
-        snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
-      startupMigrationLease?.heartbeat();
-      await measurePreflightStep("automatic-config-repair", () =>
-        runWithPluginMetadataSnapshot({ config: automaticConfigRepair.config }, () =>
-          commitAutomaticConfigRepair(automaticConfigRepair, snapshot),
-        ),
-      );
-      note(
-        `Migrated legacy config keys${activeConfigRepair ? " in the active openclaw.json" : " at startup"}:\n${automaticConfigRepair.changes.map((entry) => `- ${entry}`).join("\n")}`,
-        "Doctor changes",
-      );
-      configSnapshotRead = await readConfigSnapshotForPreflight(false);
-      snapshot = configSnapshotRead.snapshot;
-      baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
-      if (migrationCheckpoint) {
-        refreshMigrationCheckpoint(migrationCheckpoint, configSnapshotRead);
+      const repaired = await commitStartupConfigRepairs({
+        snapshotRead: configSnapshotRead,
+        automaticConfigRepair,
+        activeConfigRepair: Boolean(activeConfigRepair),
+        gatewayStartupCheckpointRequired,
+        migrateProviderBindings:
+          gatewayStartupCheckpointRequired &&
+          shouldRecordStartupCheckpoint &&
+          !shouldSkipPluginValidationForDoctorConfigPreflight(),
+        env: startupMigrationEnv,
+        lease: startupMigrationLease,
+        measure: options.measure,
+        beforeStateMigrations: options.beforeStateMigrations,
+        readSnapshot: () => readConfigSnapshotForPreflight(false),
+        runWithPluginMetadataSnapshot,
+        report: noteStartupStateMigrationResult,
+      });
+      if (repaired !== configSnapshotRead) {
+        configSnapshotRead = repaired;
+        snapshot = repaired.snapshot;
+        baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
+        if (migrationCheckpoint) {
+          refreshMigrationCheckpoint(migrationCheckpoint, configSnapshotRead);
+        }
       }
     }
     if (

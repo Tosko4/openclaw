@@ -36,7 +36,11 @@ import {
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { createWorkspaceAliasMigrationRepair } from "./doctor-workspace-alias.js";
 import { cronCodexRuntimePolicyTargetKey } from "./doctor/cron/store-migration.js";
-import { emitDoctorNotes, sanitizeDoctorNote } from "./doctor/emit-notes.js";
+import {
+  createDoctorChangesPanelSink,
+  emitDoctorNotes,
+  sanitizeDoctorNote,
+} from "./doctor/emit-notes.js";
 import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
 import {
   applyLegacyCompatibilityStep,
@@ -72,34 +76,6 @@ function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): strin
     ({ hookKey, unsupportedKeys }) =>
       `- hooks.internal.entries.${hookKey}: unsupported loader key${unsupportedKeys.length === 1 ? "" : "s"} ${unsupportedKeys.join(", ")} will not load hook modules. Use bootstrap-extra-files for session bootstrap content, or create a managed/workspace hook directory with HOOK.md + handler.js. Doctor cannot rewrite this automatically because per-hook entry keys are open-ended hook configuration.`,
   );
-}
-
-// Repair-mode "Doctor changes" panels queue until the final candidate passes the
-// same validation the atomic writer enforces: printing "Doctor changes" and then
-// refusing the write would report repairs that never reached disk. Preview
-// panels print immediately — they promise nothing.
-type DoctorChangesPanelSink = {
-  emit: (changeLines: ReadonlyArray<string>, options?: { sanitize?: boolean }) => void;
-  drain: () => string[];
-};
-
-function createDoctorChangesPanelSink(shouldRepair: boolean): DoctorChangesPanelSink {
-  const pending: string[] = [];
-  return {
-    emit: (changeLines, options = {}) => {
-      if (changeLines.length === 0) {
-        return;
-      }
-      const body = changeLines.join("\n");
-      const message = options.sanitize ? sanitizeDoctorNote(body) : body;
-      if (shouldRepair) {
-        pending.push(message);
-        return;
-      }
-      note(message, "Doctor changes preview");
-    },
-    drain: () => pending.splice(0),
-  };
 }
 
 async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
@@ -220,12 +196,19 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let modelRetirementRepairRan = false;
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
-  const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
+  const changesPanelSink = createDoctorChangesPanelSink(shouldRepair, note);
   const applyConfigMutation = (
     mutation: DoctorConfigMutationResult & { warnings?: string[] },
-    options: { fixHint: string; sanitize?: boolean; emitWarnings?: boolean },
+    options: {
+      fixHint: string;
+      sanitize?: boolean;
+      emitWarnings?: boolean;
+      recheckBeforeWrite?: boolean;
+    },
   ): void => {
-    changesPanelSink.emit(mutation.changes, options.sanitize ? { sanitize: true } : {});
+    if (!shouldRepair || !options.recheckBeforeWrite) {
+      changesPanelSink.emit(mutation.changes, options.sanitize ? { sanitize: true } : {});
+    }
     if (options.emitWarnings && mutation.warnings?.length) {
       emitDoctorNotes({ note, warningNotes: mutation.warnings });
     }
@@ -411,7 +394,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     emitWarnings: true,
   });
 
-  const { prepareProviderUseBindingMigration } =
+  const { prepareProviderUseBindingMigration, resolveProviderUseBindingWriteMetadata } =
     await import("./doctor/shared/provider-use-binding-migration.js");
   const providerUseBindingMigration = await runWithCurrentPluginMetadata(state.candidate, () =>
     prepareProviderUseBindingMigration({
@@ -423,6 +406,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   applyConfigMutation(providerUseBindingMigration, {
     fixHint: `Run "${doctorFixCommand}" to preserve selected shared-key providers.`,
     emitWarnings: true,
+    recheckBeforeWrite: true,
   });
 
   const { repairUnownedChannelAccountBindings } =
@@ -712,11 +696,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   return {
     ...finalized,
     sourceConfigForWrite: snapshot.sourceConfig,
-    ...(providerUseBindingMigration.pending &&
-    legacyStep.blocksWrite !== true &&
-    (shouldWriteConfig || (shouldRepair && providerUseBindingMigration.changes.length === 0))
-      ? { providerUseBindingMigrationPending: true }
-      : {}),
+    ...resolveProviderUseBindingWriteMetadata(providerUseBindingMigration, {
+      shouldWriteConfig,
+      shouldRepair,
+      blocksWrite: legacyStep.blocksWrite,
+    }),
     ...(pluginInstallConfigImport ? { pluginInstallConfigImport } : {}),
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig,
@@ -724,9 +708,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     sourceConfigValid: snapshot.valid,
     ...(legacyStep.partiallyValid === true ? { skipPluginValidationOnWrite: true } : {}),
     ...(shouldWriteConfig && explicitSetPaths.length > 0 ? { explicitSetPaths } : {}),
-    ...(shouldWriteConfig && providerUseBindingMigration.unsetPaths
-      ? { unsetPaths: providerUseBindingMigration.unsetPaths }
-      : {}),
     ...(shouldWriteConfig && persistCanonicalAgentRoster
       ? { persistCanonicalAgentRoster: true }
       : {}),
