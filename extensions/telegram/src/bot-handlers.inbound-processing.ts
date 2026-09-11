@@ -292,6 +292,7 @@ export function createTelegramInboundProcessing({
             conversationHistory,
             String(msg.message_id),
             allMedia,
+            authorizationCfg,
           );
         }
         if (recordAlbumMedia(allMedia)) {

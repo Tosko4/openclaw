@@ -2,6 +2,10 @@
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readRemoteMediaBufferSpy, telegramBotDepsForTest } from "./bot.media.e2e.test-harness.js";
 import {
@@ -282,6 +286,118 @@ describe("telegram text fragments", () => {
   });
 
   const TEXT_FRAGMENT_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
+  it.each([false, true])(
+    "keeps a buffered tag reserved when another sender tags before it flushes (continuation: %s)",
+    async (withContinuation) => {
+      const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+      const { handler, replySpy, runtimeError } = await createBotHandlerWithOptions({});
+      const originalReply = expectDefined(
+        replySpy.getMockImplementation(),
+        "Telegram reply fixture",
+      );
+      const submitted: Array<{ request: string; content: unknown }> = [];
+      const recorders: ReturnType<typeof createRecorder>[] = [];
+      replySpy.mockImplementation(async (ctx: MsgContext) => {
+        const capture = ctx.ConversationHistory;
+        if (!capture || !ctx.SessionKey || !ctx.MessageSid || typeof ctx.RawBody !== "string") {
+          throw new Error("Expected an addressed Telegram request with its observation capture");
+        }
+        const target = {
+          agentId: capture.owner.agentId,
+          storePath: capture.owner.databasePath,
+          sessionKey: ctx.SessionKey,
+          sessionId: "buffered-tag-session",
+          sessionEntry: undefined,
+        };
+        await upsertSessionEntry({
+          ...target,
+          entry: { sessionId: target.sessionId, updatedAt: 1 },
+        });
+        const recorder = createRecorder({
+          input: { text: ctx.RawBody, idempotencyKey: ctx.MessageSid },
+          target,
+          conversationHistory: capture,
+        });
+        recorders.push(recorder);
+        await recorder.stageApproved!({ runId: ctx.MessageSid, assertCurrent: () => {} });
+        submitted.push({ request: ctx.RawBody, content: recorder.message?.content });
+      });
+      const firstText = `@openclaw_bot Alice's request ${"a".repeat(4000)}`;
+      const continuation = " Alice's final instruction";
+      const secondText = "@openclaw_bot Bob's request";
+      const message = (messageId: number, senderId: number, text: string) => ({
+        message: {
+          chat: { id: -10042, type: "supergroup", title: "Friends" },
+          from: { id: senderId, is_bot: false, first_name: String(senderId) },
+          message_id: messageId,
+          date: 1736380800 + messageId,
+          text,
+          entities: [{ type: "mention", offset: 0, length: 13 }],
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+      const timer = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.textFragmentGapMs);
+      const clearTimer = vi.spyOn(globalThis, "clearTimeout");
+      try {
+        await handler(message(10, 777, firstText));
+        if (withContinuation) {
+          const fragment = message(11, 777, continuation);
+          fragment.message.entities = [];
+          await handler(fragment);
+        }
+        await handler(message(withContinuation ? 12 : 11, 888, secondText));
+        expect(submitted.map((input) => input.request)).toEqual([secondText]);
+        expect(JSON.stringify(submitted[0].content)).not.toContain("Alice's request");
+        expect(JSON.stringify(submitted[0].content)).not.toContain("Alice's final instruction");
+        await flushScheduledTimerForDelay(
+          timer,
+          clearTimer,
+          TELEGRAM_TEST_TIMINGS.textFragmentGapMs,
+        );
+        await vi.waitFor(() =>
+          expect(submitted.map((input) => input.request)).toEqual([
+            secondText,
+            withContinuation ? firstText + continuation : firstText,
+          ]),
+        );
+        expect(runtimeError).not.toHaveBeenCalled();
+      } finally {
+        for (const recorder of recorders) {
+          recorder.finishPendingInput?.("cancelled");
+        }
+        replySpy.mockImplementation(originalReply);
+        timer.mockRestore();
+        clearTimer.mockRestore();
+      }
+    },
+    TEXT_FRAGMENT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "allows native tags in an open group when DM senders are restricted",
+    async () => {
+      telegramBotDepsForTest.getRuntimeConfig = () => ({
+        channels: { telegram: { dmPolicy: "allowlist", allowFrom: ["999"], groupPolicy: "open" } },
+      });
+      const { handler, replySpy } = await createBotHandlerWithOptions({});
+      await handler({
+        message: {
+          chat: { id: -10043, type: "supergroup", title: "Open group" },
+          from: { id: 777, is_bot: false, first_name: "Alice" },
+          message_id: 20,
+          date: 1736380800,
+          text: "@openclaw_bot hello",
+          entities: [{ type: "mention", offset: 0, length: 13 }],
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+      expect(replySpy).toHaveBeenCalledOnce();
+    },
+    TEXT_FRAGMENT_TEST_TIMEOUT_MS,
+  );
+
   const buildNearLimitMessage = (params: {
     messageId: number;
     prefix?: string;
@@ -489,6 +605,7 @@ describe("telegram text fragments", () => {
             is_topic_message: true,
             date: 1736380800,
             text: `@openclaw_bot topic-one ${"A".repeat(4050)}`,
+            entities: [{ type: "mention", offset: 0, length: 13 }],
           },
           me: { username: "openclaw_bot" },
           getFile: async () => ({}),
@@ -503,6 +620,7 @@ describe("telegram text fragments", () => {
             is_topic_message: true,
             date: 1736380801,
             text: `@openclaw_bot topic-two ${"B".repeat(4050)}`,
+            entities: [{ type: "mention", offset: 0, length: 13 }],
           },
           me: { username: "openclaw_bot" },
           getFile: async () => ({}),

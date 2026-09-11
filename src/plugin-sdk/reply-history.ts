@@ -5,9 +5,10 @@
  * `createChannelHistoryWindow`; the lower-level map helpers are deprecated compatibility exports.
  */
 import type {
-  enrichConversationObservationMediaCore,
+  combineConversationHistoryCapturesCore,
+  enrichConversationObservationCore,
   recordConversationObservationCore,
-} from "../config/sessions/conversation-history.js";
+} from "../config/sessions/conversation-history-observation.js";
 export type { HistoryEntry, HistoryMediaEntry } from "../auto-reply/reply/history.types.js";
 export type {
   ConversationHistoryCapture,
@@ -17,13 +18,19 @@ export type {
 export const recordConversationObservation: typeof recordConversationObservationCore = async (
   ...args
 ) => {
-  const history = await import("../config/sessions/conversation-history.js");
+  const history = await import("../config/sessions/conversation-history-observation.js");
   return history.recordConversationObservationCore(...args);
 };
-export const enrichConversationObservationMedia: typeof enrichConversationObservationMediaCore =
+export const enrichConversationObservation: typeof enrichConversationObservationCore = async (
+  ...args
+) => {
+  const history = await import("../config/sessions/conversation-history-observation.js");
+  return history.enrichConversationObservationCore(...args);
+};
+export const combineConversationHistoryCaptures: typeof combineConversationHistoryCapturesCore =
   async (...args) => {
-    const history = await import("../config/sessions/conversation-history.js");
-    return history.enrichConversationObservationMediaCore(...args);
+    const history = await import("../config/sessions/conversation-history-observation.js");
+    return history.combineConversationHistoryCapturesCore(...args);
   };
 export {
   createChannelHistoryWindow,

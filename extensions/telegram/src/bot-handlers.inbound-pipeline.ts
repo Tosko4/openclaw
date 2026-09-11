@@ -18,6 +18,10 @@ import {
 } from "./bot-processing-outcome.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import {
+  hasLeadingBotCommandAddressedToOtherBot,
+  resolveTelegramMessageAddress,
+} from "./bot/body-helpers.js";
+import {
   resolveTelegramBotHasTopicsEnabled,
   resolveTelegramForumFlag,
   withResolvedTelegramForumFlag,
@@ -25,6 +29,7 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
 import { recordTelegramConversationMessages } from "./conversation-observation.js";
+import { isTelegramGroupSenderAuthorized } from "./group-access.js";
 import { emitTelegramLiveLocationMessageHook } from "./location-message-hook.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
@@ -169,6 +174,7 @@ function createTelegramInboundHandlers(
       await recordTelegramConversationMessages({
         agentId: session.agentId,
         storePath: session.storePath,
+        config: gate.context.cfg,
         accountId,
         chatId: normalizedMsg.chat.id,
         threadSpec: gate.context.threadSpec,
@@ -241,11 +247,28 @@ function createTelegramInboundHandlers(
         ? await recordTelegramConversationMessages({
             agentId: sessionState.agentId,
             storePath: sessionState.storePath,
+            config: gate.context.cfg,
             accountId,
             chatId: event.chatId,
             threadSpec,
             messages: [event.msg],
             updateIds: [event.ctx.update?.update_id],
+            isRequest:
+              resolveTelegramMessageAddress(event.msg, { ...event.ctx.me, id: event.botUserId }) !==
+                undefined &&
+              !(
+                event.ctx.me?.username &&
+                hasLeadingBotCommandAddressedToOtherBot(event.msg, event.ctx.me.username)
+              ) &&
+              isTelegramGroupSenderAuthorized({
+                cfg: gate.context.cfg,
+                accountId,
+                groupConfig,
+                topicConfig,
+                effectiveGroupAllow,
+                senderId: event.senderId,
+                senderUsername: event.senderUsername,
+              }),
           })
         : undefined;
       await recordMessageForReplyChain(event.msg, gate.context.threadSpec, event.botUserId);

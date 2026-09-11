@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { ChannelType } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import {
   createTestRegistry,
   loadUserTurnTranscriptRecorderFactoryForTest,
@@ -23,6 +25,13 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { discordPlugin } from "../channel.js";
 import type { CommandInteraction } from "../internal/discord.js";
+import { preflightDiscordMessage } from "./message-handler.preflight.js";
+import {
+  createDiscordMessage,
+  createDiscordPreflightArgs,
+  createGuildEvent,
+  createGuildTextClient,
+} from "./message-handler.preflight.test-helpers.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 import { nativeCommandRuntime } from "./native-command.runtime.js";
 import { createMockCommandInteraction } from "./native-command.test-helpers.js";
@@ -31,6 +40,8 @@ import { createNoopThreadBindingManager } from "./thread-bindings.manager.js";
 const directories: string[] = [];
 const userId = "100000000000000003";
 const sessionId = "existing-channel-session";
+
+vi.mock("openclaw/plugin-sdk/media-runtime", { spy: true });
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -41,7 +52,12 @@ afterEach(async () => {
   );
 });
 
-async function runReset(commandName: "new" | "reset", allowFrom: string[], withHistory = false) {
+async function runReset(
+  commandName: "new" | "reset",
+  allowFrom: string[],
+  withHistory = false,
+  holdAttachment = false,
+) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "discord-native-reset-"));
   directories.push(home);
   const channelId = "100000000000000001";
@@ -118,7 +134,56 @@ async function runReset(commandName: "new" | "reset", allowFrom: string[], withH
     ephemeralDefault: true,
     threadBindings: createNoopThreadBindingManager("default"),
   });
-  await command.run(interaction as unknown as CommandInteraction);
+  const downloadStarted = createDeferred<void>();
+  const downloadFinished = createDeferred<Awaited<ReturnType<typeof saveRemoteMedia>>>();
+  let earlierMessage: ReturnType<typeof preflightDiscordMessage> | undefined;
+  if (holdAttachment) {
+    vi.mocked(saveRemoteMedia).mockImplementation(async () => {
+      downloadStarted.resolve();
+      return await downloadFinished.promise;
+    });
+    const message = createDiscordMessage({
+      id: "earlier-attachment",
+      channelId,
+      content: "Old attachment discussion must stay cleared.",
+      author: { id: userId, username: "Owner", bot: false },
+      attachments: [
+        {
+          id: "file-before-reset",
+          filename: "earlier.txt",
+          content_type: "text/plain",
+          url: "https://cdn.discordapp.com/attachments/room/earlier.txt",
+        },
+      ],
+    });
+    earlierMessage = preflightDiscordMessage(
+      createDiscordPreflightArgs({
+        cfg,
+        discordConfig: cfg.channels!.discord!,
+        client: createGuildTextClient(channelId),
+        data: createGuildEvent({ channelId, guildId, message, author: message.author }),
+      }),
+    );
+  }
+  try {
+    if (earlierMessage) {
+      await Promise.race([
+        downloadStarted.promise,
+        earlierMessage.then(() => {
+          throw new Error("Earlier attachment did not reach its download");
+        }),
+      ]);
+    }
+    await command.run(interaction as unknown as CommandInteraction);
+  } finally {
+    downloadFinished.resolve({
+      id: "file-before-reset",
+      path: path.join(home, "earlier.txt"),
+      size: 5,
+      contentType: "text/plain",
+    });
+    await earlierMessage;
+  }
   const pendingText: string[] = [];
   if (withHistory) {
     const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
@@ -154,6 +219,15 @@ async function runReset(commandName: "new" | "reset", allowFrom: string[], withH
 describe.each(["new", "reset"] as const)(
   "Discord native /%s through the reply pipeline",
   (name) => {
+    it("keeps an earlier attachment cleared when its download finishes after native reset", async () => {
+      const result = await runReset(name, [userId], true, true);
+      expect(result.pendingText[0]).not.toContain("Old attachment discussion must stay cleared.");
+      expect(result.pendingText[0]).toContain("after-native-reset-boundary");
+      expect(result.pendingText[1]).toContain("other-conversation-message");
+      expect(result.replies).toEqual([
+        name === "new" ? "✅ New session started." : "✅ Session reset.",
+      ]);
+    });
     it("clears only unread conversation through the native reset boundary", async () => {
       const result = await runReset(name, [userId], true);
       expect(result.pendingText[0]).not.toContain("before-native-reset");

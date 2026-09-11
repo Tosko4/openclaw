@@ -217,6 +217,46 @@ async function notifyConsumed(harness: StartedHarness, clientId: string, turnId 
 }
 
 describe("Codex active-run steering media", () => {
+  it("discovers implicit steering images only in the current request", async () => {
+    const fixture = await createMediaFixture("offloaded");
+    fixture.params.config = { ...fixture.params.config, tools: { fs: { workspaceOnly: true } } };
+    const greenPath = path.join(fixture.params.workspaceDir, "green.png");
+    const background = `Earlier discussion named ${greenPath}`;
+    const harness = createStartedThreadHarness();
+    await withActiveMediaTurn(fixture, harness, async () => {
+      const requests = [
+        { currentText: "Continue the discussion", images: [] },
+        { currentText: `Inspect ${greenPath}`, images: [fixture.expectedImages[1]] },
+        {
+          currentText: `Inspect ${path.join(fixture.params.workspaceDir, "blue.png")}`,
+          images: [fixture.expectedImages[0]],
+        },
+      ];
+      for (const [index, { currentText, images }] of requests.entries()) {
+        const accepted = vi.fn();
+        expect(
+          queueAgentHarnessMessage(fixture.params.sessionId, currentText, {
+            ...fixture.options,
+            images: [],
+            media: [],
+            imageOrder: [],
+            currentInboundContext: { text: background },
+            onQueueAccepted: accepted,
+          }),
+        ).toBe(true);
+        await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(true), fastWait);
+        const steers = harness.requests.filter((entry) => entry.method === "turn/steer");
+        expect(steers).toHaveLength(index + 1);
+        const steer = steers[index].params as SteerRequest;
+        expect(steer.input).toEqual([
+          { type: "text", text: `${background}\n\n${currentText}`, text_elements: [] },
+          ...images,
+        ]);
+        await notifyConsumed(harness, steer.clientUserMessageId);
+      }
+    });
+  });
+
   it("keeps consumed question answers accepted when their host closes during the response", async () => {
     const fixture = await createMediaFixture("offloaded");
     const onAttemptTimeout = vi.fn();

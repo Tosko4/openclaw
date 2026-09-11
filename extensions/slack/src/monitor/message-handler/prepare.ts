@@ -14,7 +14,10 @@ import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { ConversationHistoryCapture } from "openclaw/plugin-sdk/reply-history";
+import {
+  enrichConversationObservation,
+  type ConversationHistoryCapture,
+} from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -882,37 +885,44 @@ export async function prepareSlackMessage(params: {
     preparedSources.set(source, content);
     return content;
   };
-  const observations: Parameters<typeof recordSlackConversationSources>[0]["sources"][number][] =
-    [];
+  let conversationHistory: ConversationHistoryCapture | undefined;
   if (isRoomish) {
-    // Preserve expiring attachments through the media owner before yielding this ingress lane.
-    // Model inference and transcription belong to the addressed turn, never observation.
-    for (const source of sourceMessages) {
-      const content = await resolveSourceContent(source.message);
-      observations.push({
+    const observations = await recordSlackConversationSources({
+      agentId: route.agentId,
+      storePath,
+      config: cfg,
+      accountId: route.accountId,
+      teamId: opts.eventScope?.teamId ?? ctx.teamId,
+      channelId: message.channel,
+      kind: isGroupDm ? "group" : "channel",
+      threadTs: isThreadReply ? threadTs : undefined,
+      senderName: await resolveSenderName(),
+      threadStarter: observationThreadStarter,
+      sources: sourceMessages.map((source) => ({
         message: source.message,
-        isRequest: requestSources.includes(source),
-        text: content?.rawBody,
-        media: await toInboundMediaFactsWithMetadata(content?.effectiveDirectMedia, {
-          messageId: source.message.ts ?? source.message.event_ts,
-        }),
-      });
+        isRequest:
+          requestSources.includes(source) &&
+          senderGate?.allowed !== false &&
+          !messageIngress.commandAccess.shouldBlockControlCommand,
+      })),
+    });
+    conversationHistory = observations.requestCapture;
+    // Reserve every source before slow hydration; late completion cannot cross a native reset.
+    for (const [source, capture] of observations.sourceCaptures) {
+      const content = await resolveSourceContent(source);
+      await enrichConversationObservation(
+        capture,
+        capture.requestSourceIds[0]!,
+        {
+          text: content?.rawBody,
+          media: await toInboundMediaFactsWithMetadata(content?.effectiveDirectMedia, {
+            messageId: source.ts ?? source.event_ts,
+          }),
+        },
+        { config: cfg },
+      );
     }
   }
-  const conversationHistory = isRoomish
-    ? await recordSlackConversationSources({
-        agentId: route.agentId,
-        storePath,
-        accountId: route.accountId,
-        teamId: opts.eventScope?.teamId ?? ctx.teamId,
-        channelId: message.channel,
-        kind: isGroupDm ? "group" : "channel",
-        threadTs: isThreadReply ? threadTs : undefined,
-        senderName: await resolveSenderName(),
-        threadStarter: observationThreadStarter,
-        sources: observations,
-      })
-    : undefined;
   if (isRoomish && senderGate?.allowed === false) {
     return drop("unauthorized-sender");
   }

@@ -217,22 +217,6 @@ export async function resolveTelegramInboundBody(params: {
     return null;
   }
 
-  const conversationHistory =
-    options?.conversationHistory ??
-    (isGroup && routeAgentId && params.storePath
-      ? await recordTelegramConversationMessages({
-          agentId: routeAgentId,
-          storePath: params.storePath,
-          accountId: accountId ?? "default",
-          chatId,
-          threadSpec,
-          messages: options?.bufferedMessages?.length ? options.bufferedMessages : [msg],
-          media: allMedia,
-          updateIds: options?.bufferedUpdateIds ?? [primaryCtx.update?.update_id],
-          interactionId: options?.forceWasMentioned ? options.messageIdOverride : undefined,
-        })
-      : undefined);
-
   const nativeMessages = options?.bufferedMessages?.length ? options.bufferedMessages : [msg];
   const addressing = nativeMessages.map((message) =>
     resolveTelegramMessageAddress(message, primaryCtx.me ?? {}),
@@ -244,12 +228,35 @@ export async function resolveTelegramInboundBody(params: {
   const senderAuthorized =
     !isGroup ||
     isTelegramGroupSenderAuthorized({
+      cfg,
+      accountId,
       groupConfig,
       topicConfig,
       effectiveGroupAllow,
       senderId,
       senderUsername,
     });
+  const conversationHistory =
+    options?.conversationHistory ??
+    (isGroup && routeAgentId && params.storePath
+      ? await recordTelegramConversationMessages({
+          agentId: routeAgentId,
+          storePath: params.storePath,
+          config: cfg,
+          accountId: accountId ?? "default",
+          chatId,
+          threadSpec,
+          messages: nativeMessages,
+          media: allMedia,
+          updateIds: options?.bufferedUpdateIds ?? [primaryCtx.update?.update_id],
+          interactionId: options?.forceWasMentioned ? options.messageIdOverride : undefined,
+          isRequest:
+            wasMentioned &&
+            !foreignCommand &&
+            senderAuthorized &&
+            !commandGate.shouldBlockControlCommand,
+        })
+      : undefined);
   if (foreignCommand || (isGroup && !wasMentioned && options?.commandSource !== "native")) {
     logger.info(
       { chatId, reason: "not-addressed" },

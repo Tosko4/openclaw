@@ -365,7 +365,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: canonical runtime-context classifier for native history projection.
       // +5: observed-room capture/message contracts, intake, media enrichment, and canonical identity.
       // +1: shared quoted-context selection escaping for native and ACP harnesses.
-      4453,
+      // +1: shared reservation of buffered conversation sources before admission.
+      4454,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -499,7 +500,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: canonical runtime-context classifier for native history projection.
       // +3: observed-room intake, media enrichment, and existing canonical conversation identity.
       // +1: shared quoted-context selection escaping for native and ACP harnesses.
-      2633,
+      // +1: shared reservation of buffered conversation sources before admission.
+      2634,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

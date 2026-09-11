@@ -555,7 +555,10 @@ describe("resolveTelegramInboundBody", () => {
       patterns: BOT_PATTERN,
       allowFrom: ["999"],
       message: voiceMessage("voice-1", 1, { reply_to_message: replyToBot }),
-      overrides: { allMedia: [media("/tmp/voice.ogg", "audio")] },
+      overrides: {
+        groupConfig: { allowFrom: ["999"] },
+        allMedia: [media("/tmp/voice.ogg", "audio")],
+      },
     });
 
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();

@@ -11,9 +11,11 @@ import {
   TELEGRAM_TEST_TIMINGS,
   createBotHandler,
   createBotHandlerWithOptions,
+  flushActiveScheduledTimersForDelay,
   holdTelegramMediaTimeouts,
   mockTelegramFileDownload,
   mockTelegramPngDownload,
+  resolveActiveScheduledTimersForDelay,
   watchTelegramFetch,
 } from "./bot.media.test-utils.js";
 
@@ -75,53 +77,6 @@ function downloadRequest(
     throw new Error(`expected download request ${index}`);
   }
   return request as { filePathHint?: string; url?: string };
-}
-
-type ScheduledTimer = {
-  callback: () => unknown;
-  handle: ReturnType<typeof setTimeout>;
-};
-
-function resolveActiveScheduledTimersForDelay(
-  setTimeoutSpy: ReturnType<typeof vi.spyOn>,
-  clearTimeoutSpy: ReturnType<typeof vi.spyOn>,
-  delayMs: number,
-): ScheduledTimer[] {
-  const clearedHandles = new Set(
-    (clearTimeoutSpy.mock.calls as Array<Parameters<typeof clearTimeout>>).map(
-      ([handle]) => handle,
-    ),
-  );
-  return (setTimeoutSpy.mock.calls as Array<Parameters<typeof setTimeout>>).flatMap(
-    (call, index) => {
-      if (call[1] !== delayMs) {
-        return [];
-      }
-      const handle = setTimeoutSpy.mock.results[index]?.value as ReturnType<typeof setTimeout>;
-      if (clearedHandles.has(handle) || typeof call[0] !== "function") {
-        return [];
-      }
-      return [{ callback: call[0] as () => unknown, handle }];
-    },
-  );
-}
-
-async function flushActiveScheduledTimersForDelay(params: {
-  setTimeoutSpy: ReturnType<typeof vi.spyOn>;
-  clearTimeoutSpy: ReturnType<typeof vi.spyOn>;
-  delayMs: number;
-  expectedCount: number;
-}) {
-  const timers = resolveActiveScheduledTimersForDelay(
-    params.setTimeoutSpy,
-    params.clearTimeoutSpy,
-    params.delayMs,
-  );
-  expect(timers).toHaveLength(params.expectedCount);
-  for (const timer of timers) {
-    clearTimeout(timer.handle);
-    await timer.callback();
-  }
 }
 
 describe("telegram inbound media", () => {
@@ -368,8 +323,8 @@ describe("telegram media groups", () => {
 
   it.each([
     ["@openclaw_bot second album details", "mention"],
-    ["/status", "bot_command"],
-    ["/stop", "bot_command"],
+    ["/status@openclaw_bot", "bot_command"],
+    ["/stop@openclaw_bot", "bot_command"],
   ] as const)(
     "preserves captions and later %s from every message in a forum album",
     async (laterCaption, entityType) => {
@@ -482,7 +437,10 @@ describe("telegram media groups", () => {
             message_id: 401,
             message_thread_id: threadId,
             is_topic_message: true,
-            caption: "Forum album",
+            caption: chat.type === "supergroup" ? "@openclaw_bot Forum album" : "Forum album",
+            ...(chat.type === "supergroup"
+              ? { caption_entities: [{ type: "mention", offset: 0, length: 13 }] }
+              : {}),
             date: 1736380800,
             media_group_id: "album-warning-topic",
             photo: [{ file_id: "album-warning" }],
@@ -921,6 +879,7 @@ describe("telegram media groups", () => {
               message_thread_id: 101,
               is_topic_message: true,
               caption: "@openclaw_bot Topic one album",
+              caption_entities: [{ type: "mention", offset: 0, length: 13 }],
               date: 1736380800,
               media_group_id: "album-shared-by-telegram",
               photo: [{ file_id: "topic1photo" }],
@@ -936,6 +895,7 @@ describe("telegram media groups", () => {
               message_thread_id: 202,
               is_topic_message: true,
               caption: "@openclaw_bot Topic two album",
+              caption_entities: [{ type: "mention", offset: 0, length: 13 }],
               date: 1736380801,
               media_group_id: "album-shared-by-telegram",
               photo: [{ file_id: "topic2photo" }],

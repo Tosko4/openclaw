@@ -1,7 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   recordConversationObservation,
   type ConversationHistoryCapture,
-  type ConversationHistoryMessage,
 } from "openclaw/plugin-sdk/reply-history";
 import { buildConversationIdentity } from "openclaw/plugin-sdk/session-store-runtime";
 import { formatSlackFileReference } from "../file-reference.js";
@@ -20,6 +20,7 @@ export type SlackMessageSource = {
 export async function recordSlackConversationSources(params: {
   agentId: string;
   storePath: string;
+  config: OpenClawConfig;
   accountId: string;
   teamId: string;
   channelId: string;
@@ -30,11 +31,12 @@ export async function recordSlackConversationSources(params: {
     message: SlackMessageEvent;
     isRequest: boolean;
     sourceId?: string;
-    text?: string;
-    media?: ConversationHistoryMessage["media"];
   }[];
   threadStarter?: SlackThreadStarter | null;
-}): Promise<ConversationHistoryCapture | undefined> {
+}): Promise<{
+  sourceCaptures: Map<SlackMessageEvent, ConversationHistoryCapture>;
+  requestCapture: ConversationHistoryCapture | undefined;
+}> {
   const target = formatSlackTarget({
     teamId: params.teamId,
     kind: "channel",
@@ -55,6 +57,7 @@ export async function recordSlackConversationSources(params: {
   }
   let requestCapture: ConversationHistoryCapture | undefined;
   const requestSourceIds: string[] = [];
+  const sourceCaptures = new Map<SlackMessageEvent, ConversationHistoryCapture>();
   for (const source of params.sources) {
     const { message } = source;
     const sourceId = source.sourceId ?? message.ts ?? message.event_ts;
@@ -74,13 +77,13 @@ export async function recordSlackConversationSources(params: {
       .join("\n");
     const starter = params.threadStarter;
     const capture = await recordConversationObservation(
-      { agentId: params.agentId, storePath: params.storePath },
+      { agentId: params.agentId, storePath: params.storePath, config: params.config },
       {
         conversationRef: identity.conversationRef,
         sourceId,
+        isRequest: source.isRequest,
         message: {
-          text: source.text ?? text,
-          media: source.media,
+          text,
           timestamp: resolveSlackTimestampMs(message.ts ?? message.event_ts),
           sender: { id: message.user ?? message.bot_id, name: params.senderName },
           replyTo: starter?.text
@@ -101,11 +104,15 @@ export async function recordSlackConversationSources(params: {
         },
       },
     );
+    sourceCaptures.set(message, capture);
     // Later chatter in the same buffer stays beyond the addressed request's boundary.
     if (source.isRequest) {
       requestCapture = capture;
       requestSourceIds.push(sourceId);
     }
   }
-  return requestCapture ? { ...requestCapture, requestSourceIds } : undefined;
+  return {
+    sourceCaptures,
+    requestCapture: requestCapture ? { ...requestCapture, requestSourceIds } : undefined,
+  };
 }

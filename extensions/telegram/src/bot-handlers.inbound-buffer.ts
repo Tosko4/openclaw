@@ -7,6 +7,7 @@ import {
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { ConversationHistoryCapture } from "openclaw/plugin-sdk/reply-history";
+import { combineConversationHistoryCaptures } from "openclaw/plugin-sdk/reply-history";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
@@ -22,7 +23,6 @@ import {
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
-import { mergeTelegramConversationCaptures } from "./conversation-observation.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
 type TelegramDebounceLane = "default" | "forward";
@@ -216,7 +216,7 @@ export function createTelegramInboundBuffers({
             allMedia: combinedMedia,
             storeAllowFrom: first.storeAllowFrom,
             options: {
-              conversationHistory: mergeTelegramConversationCaptures(
+              conversationHistory: await combineConversationHistoryCaptures(
                 requestEntries.map((entry) => entry.conversationHistory),
               ),
               ...(last.msg.message_id ? { messageIdOverride: String(last.msg.message_id) } : {}),
@@ -386,6 +386,16 @@ export function createTelegramInboundBuffers({
             0,
           ) + text.length;
         if (canAppend && existing.messages.length < 12 && nextTotalChars <= 50_000) {
+          clearTimeout(existing.timer);
+          let conversationHistory: ConversationHistoryCapture | undefined;
+          try {
+            conversationHistory = await combineConversationHistoryCaptures([
+              existing.conversationHistory,
+              params.conversationHistory,
+            ]);
+          } finally {
+            scheduleTextFlush(existing);
+          }
           const participant = createSpooledReplayParticipantForBufferedWork(
             `text-fragment:${key}:${params.msg.message_id}`,
           );
@@ -393,10 +403,7 @@ export function createTelegramInboundBuffers({
             existing.spooledReplayParticipants.push(participant);
           }
           existing.messages.push({ msg: params.msg, ctx: params.ctx, receivedAtMs: nowMs });
-          existing.conversationHistory = mergeTelegramConversationCaptures([
-            existing.conversationHistory,
-            params.conversationHistory,
-          ]);
+          existing.conversationHistory = conversationHistory;
           existing.promptContextMinTimestampMs = latestPromptContextMinTimestampMs(
             existing.promptContextMinTimestampMs,
             params.promptContextMinTimestampMs,
@@ -406,7 +413,6 @@ export function createTelegramInboundBuffers({
             params.dispatchDedupeClaims,
           );
           existing.channelIngressResolvers.push(params.channelIngressResolver);
-          scheduleTextFlush(existing);
           return true;
         }
         clearTimeout(existing.timer);

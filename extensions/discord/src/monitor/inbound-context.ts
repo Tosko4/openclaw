@@ -1,6 +1,10 @@
 // Discord plugin module implements inbound context behavior.
 import { resolveInboundSupplementalSenderAllowed } from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
+import type { ConversationHistoryCapture } from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolveDiscordMemberAllowed,
   resolveDiscordOwnerAllowFrom,
@@ -47,6 +51,40 @@ export function buildDiscordGroupSystemPrompt(
   channelConfig?: DiscordChannelConfigResolved | null,
 ): string | undefined {
   return channelConfig?.systemPrompt?.trim() || undefined;
+}
+
+export function resolveDiscordConversationHistoryCapture(params: {
+  capture: ConversationHistoryCapture | undefined;
+  cfg: OpenClawConfig;
+  accountId: string;
+  channelConfig?: DiscordChannelConfigResolved | null;
+  guildInfo?: DiscordGuildEntryResolved | null;
+  allowNameMatching?: boolean;
+  isGuild: boolean;
+}): ConversationHistoryCapture | undefined {
+  if (!params.capture) {
+    return undefined;
+  }
+  const mode = resolveChannelContextVisibilityMode({
+    cfg: params.cfg,
+    channel: "discord",
+    accountId: params.accountId,
+  });
+  const isSenderAllowed = createDiscordSupplementalContextAccessChecker(params);
+  return {
+    ...params.capture,
+    includeMessage: (observed, kind = "history") =>
+      evaluateSupplementalContextVisibility({
+        mode,
+        kind,
+        senderAllowed: isSenderAllowed({
+          id: observed.sender?.id ?? undefined,
+          name: observed.sender?.name ?? undefined,
+          tag: observed.sender?.username ?? undefined,
+          memberRoleIds: observed.senderRoles,
+        }),
+      }).include,
+  };
 }
 
 function buildDiscordChannelStructuredContext(params: {

@@ -1,9 +1,6 @@
 import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  recordConversationObservationCore,
-  type ConversationHistoryCapture,
-} from "../../config/sessions/conversation-history.js";
+import { recordConversationObservationCore } from "../../config/sessions/conversation-history-observation.js";
 import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
@@ -12,6 +9,7 @@ import { listSessionPendingInputs } from "../../config/sessions/session-accessor
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import { readPersistedMediaFacts, readRuntimePromptMediaFacts } from "../../media/media-facts.js";
 import { saveMediaBuffer } from "../../media/store.js";
+import type { ConversationHistoryCapture } from "../../sessions/user-turn-input.types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTestFollowupRun, createTestQueueSettings } from "./agent-runner.test-fixtures.js";

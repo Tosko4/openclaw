@@ -6,7 +6,10 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import type { ConversationHistoryCapture } from "openclaw/plugin-sdk/reply-history";
+import {
+  combineConversationHistoryCaptures,
+  type ConversationHistoryCapture,
+} from "openclaw/plugin-sdk/reply-history";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { NormalizedAllowFrom } from "./bot-access.js";
@@ -29,7 +32,6 @@ import {
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
-import { mergeTelegramConversationCaptures } from "./conversation-observation.js";
 import { isTelegramGroupSenderAuthorized } from "./group-access.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
@@ -115,7 +117,7 @@ export function createTelegramInboundMedia({
     }
     const botUsername = input.ctx.me?.username;
     if (
-      !isTelegramGroupSenderAuthorized(input) ||
+      !isTelegramGroupSenderAuthorized({ ...input, cfg: input.authorizationCfg, accountId }) ||
       (botUsername && hasLeadingBotCommandAddressedToOtherBot(input.msg, botUsername))
     ) {
       return false;
@@ -299,10 +301,6 @@ export function createTelegramInboundMedia({
       clearTimeout(existing.timer);
       existing.receiving++;
       existing.messages.push(member);
-      existing.conversationHistory = mergeTelegramConversationCaptures([
-        existing.conversationHistory,
-        input.conversationHistory,
-      ]);
       existing.promptContextMinTimestampMs = latestPromptContextMinTimestampMs(
         existing.promptContextMinTimestampMs,
         input.promptContextMinTimestampMs,
@@ -340,6 +338,10 @@ export function createTelegramInboundMedia({
       return await queue.enqueue(key, async (): Promise<TelegramInboundDisposition> => {
         if (!entry.failure) {
           try {
+            entry.conversationHistory = await combineConversationHistoryCaptures([
+              entry.conversationHistory,
+              input.conversationHistory,
+            ]);
             return await receive((media) => {
               member.allMedia = media;
               return true;

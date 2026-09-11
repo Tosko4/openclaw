@@ -1,6 +1,6 @@
 // Discord tests cover monitor plugin behavior.
 import { ChannelType } from "discord-api-types/v10";
-import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildPluginBindingApprovalCustomId,
   registerSessionBindingAdapter,
@@ -12,7 +12,7 @@ import { registerPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-run
 import { getActivePluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearDiscordComponentEntriesForTest } from "../components-registry.test-support.js";
-import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
+import type { DiscordModalEntry } from "../components.js";
 import type { DiscordInteractiveHandlerContext } from "../interactive-dispatch.js";
 import type {
   ButtonInteraction,
@@ -20,7 +20,16 @@ import type {
   ModalInteraction,
   StringSelectMenuInteraction,
 } from "../internal/discord.js";
-import { createDiscordSendReceipt } from "../send.receipt.js";
+import {
+  createCfg,
+  createDiscordConfig,
+  createComponentContext,
+  createComponentInteractionBase,
+  createComponentButtonInteraction,
+  createButtonEntry,
+  createGuildPluginButtonInteraction,
+  discordTestSendResult,
+} from "../test-support/component-fixtures.js";
 import {
   dispatchPluginInteractiveHandlerMock,
   dispatchReplyMock,
@@ -78,13 +87,6 @@ function mockCallArg(mock: MockWithCalls, index: number, label: string): unknown
   return mockCall(mock, index, label)[0];
 }
 
-function getLastRecordedCtx(): Record<string, unknown> | undefined {
-  const params = mockCallArg(recordInboundSessionMock, -1, "recordInboundSession") as {
-    ctx?: Record<string, unknown>;
-  };
-  return params?.ctx;
-}
-
 function getLastPluginDispatchCtx(): Record<string, unknown> | undefined {
   const params = mockCallArg(
     dispatchPluginInteractiveHandlerMock,
@@ -102,74 +104,9 @@ function firstMockArg(mock: MockWithCalls, label: string) {
   return firstMockCall(mock, label)[0];
 }
 
-function discordTestSendResult(messageId: string, channelId = "dm-channel") {
-  return {
-    messageId,
-    channelId,
-    receipt: createDiscordSendReceipt({ platformMessageIds: [messageId], channelId, kind: "card" }),
-  };
-}
-
 describe("discord component interactions", () => {
   let editDiscordComponentMessageMock: ReturnType<typeof vi.spyOn>;
-  const createCfg = (): OpenClawConfig =>
-    ({
-      channels: {
-        discord: {
-          replyToMode: "first",
-        },
-      },
-    }) as OpenClawConfig;
-
-  const createDiscordConfig = (overrides?: Partial<DiscordAccountConfig>): DiscordAccountConfig =>
-    ({
-      replyToMode: "first",
-      ...overrides,
-    }) as DiscordAccountConfig;
-
   type DispatchParams = Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0];
-
-  type ComponentContext = Parameters<CreateDiscordComponentButton>[0];
-
-  const createComponentContext = (overrides?: Partial<ComponentContext>) =>
-    ({
-      cfg: createCfg(),
-      accountId: "default",
-      dmPolicy: "allowlist",
-      allowFrom: ["123456789"],
-      discordConfig: createDiscordConfig(),
-      token: "token",
-      ...overrides,
-    }) as ComponentContext;
-
-  const createComponentInteractionBase = () => {
-    const reply = vi.fn().mockResolvedValue(undefined);
-    const defer = vi.fn().mockResolvedValue(undefined);
-    const rest = {
-      get: vi.fn().mockResolvedValue({ type: ChannelType.DM }),
-      post: vi.fn().mockResolvedValue({}),
-      patch: vi.fn().mockResolvedValue({}),
-      delete: vi.fn().mockResolvedValue(undefined),
-    };
-    return {
-      reply,
-      defer,
-      client: { rest },
-      user: { id: "123456789", username: "AgentUser", discriminator: "0001" },
-      message: { id: "msg-1" },
-    };
-  };
-
-  const createComponentButtonInteraction = (overrides: Partial<ButtonInteraction> = {}) => {
-    const base = createComponentInteractionBase();
-    const interaction = {
-      rawData: { channel_id: "dm-channel", id: "interaction-1" },
-      customId: "occomp:cid=btn_1",
-      ...base,
-      ...overrides,
-    } as unknown as ButtonInteraction;
-    return { interaction, defer: base.defer, reply: base.reply };
-  };
 
   const createComponentSelectInteraction = (
     overrides: Partial<StringSelectMenuInteraction> = {},
@@ -213,19 +150,6 @@ describe("discord component interactions", () => {
     return { interaction, acknowledge, reply };
   };
 
-  const createButtonEntry = (
-    overrides: Partial<DiscordComponentEntry> = {},
-  ): DiscordComponentEntry => ({
-    id: "btn_1",
-    kind: "button",
-    label: "Approve",
-    messageId: "msg-1",
-    sessionKey: "session-1",
-    agentId: "agent-1",
-    accountId: "default",
-    ...overrides,
-  });
-
   const createModalEntry = (overrides: Partial<DiscordModalEntry> = {}): DiscordModalEntry => ({
     id: "mdl_1",
     title: "Details",
@@ -248,17 +172,6 @@ describe("discord component interactions", () => {
     createComponentContext({ cfg: createCfg(), allowFrom });
   const createGuildPluginButton = (allowFrom: string[]) =>
     createDiscordComponentButton(createGuildComponentContext(allowFrom));
-
-  const createGuildPluginButtonInteraction = (interactionId: string) =>
-    createComponentButtonInteraction({
-      rawData: {
-        channel_id: "guild-channel",
-        guild_id: "guild-1",
-        id: interactionId,
-        member: { roles: [] },
-      } as unknown as ButtonInteraction["rawData"],
-      guild: { id: "guild-1", name: "Test Guild" } as unknown as ButtonInteraction["guild"],
-    });
 
   async function expectPluginGuildInteractionAuth(isAuthorizedSender: boolean) {
     const pluginId = "qa-discord-interactive-binding";
@@ -423,36 +336,6 @@ describe("discord component interactions", () => {
     expect(typeof dispatchParams?.dispatcherOptions.responsePrefixContextProvider).toBe("function");
     expect(typeof dispatchParams?.replyOptions?.onModelSelected).toBe("function");
     await expect(resolveDiscordComponentEntryWithPersistence({ id: "btn_1" })).resolves.toBeNull();
-  });
-
-  it("records DM component interactions with user originating targets", async () => {
-    registerDiscordComponentEntries({
-      entries: [createButtonEntry()],
-      modals: [],
-    });
-
-    const button = createDiscordComponentButton(createComponentContext());
-    const { interaction } = createComponentButtonInteraction();
-
-    await button.run(interaction, { cid: "btn_1" } as ComponentData);
-
-    expect(lastDispatchCtx?.OriginatingTo).toBe("user:123456789");
-    expect(lastDispatchCtx?.To).toBe("channel:dm-channel");
-    expect(getLastRecordedCtx()?.OriginatingTo).toBe("user:123456789");
-    expect(getLastRecordedCtx()?.To).toBe("channel:dm-channel");
-    const recordParams = mockCallArg(recordInboundSessionMock, -1, "recordInboundSession") as {
-      updateLastRoute?: {
-        channel?: string;
-        mainDmOwnerPin?: unknown;
-        sessionKey?: string;
-        to?: string;
-      };
-    };
-    expect(recordParams.updateLastRoute?.sessionKey).toBe("session-1");
-    expect(recordParams.updateLastRoute?.sessionKey).not.toBe("agent:agent-1:main");
-    expect(recordParams.updateLastRoute?.channel).toBe("discord");
-    expect(recordParams.updateLastRoute?.to).toBe("user:123456789");
-    expect(recordParams.updateLastRoute?.mainDmOwnerPin).toBeUndefined();
   });
 
   it("uses raw callbackData for built-in fallback when no plugin handler matches", async () => {

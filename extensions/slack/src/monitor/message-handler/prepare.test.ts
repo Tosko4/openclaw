@@ -12,17 +12,31 @@ import {
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { recordConversationObservation } from "openclaw/plugin-sdk/reply-history";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  createTestRegistry,
+  getActivePluginRegistry,
+  loadUserTurnTranscriptRecorderFactoryForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  enrichConversationObservation,
+  recordConversationObservation,
+} from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { compileSafeRegexDetailed } from "openclaw/plugin-sdk/security-runtime";
 import {
   getSessionEntry,
   upsertSessionEntry,
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { slackPlugin } from "../../channel.js";
 import { registerSlackInstallationState } from "../../installation-identity-state.js";
@@ -34,6 +48,7 @@ import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
 import { createSlackMessageHandler } from "../message-handler.js";
+import { createSlackCommandHandler } from "../slash.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
 import { prepareSlackMessage } from "./prepare.js";
 import {
@@ -68,7 +83,11 @@ const dispatchObservedMessage = vi.hoisted(() =>
 
 vi.mock("openclaw/plugin-sdk/reply-history", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-history")>();
-  return { ...actual, recordConversationObservation: vi.fn(actual.recordConversationObservation) };
+  return {
+    ...actual,
+    recordConversationObservation: vi.fn(actual.recordConversationObservation),
+    enrichConversationObservation: vi.fn(actual.enrichConversationObservation),
+  };
 });
 
 vi.mock("./dispatch.js", () => ({ dispatchPreparedSlackMessage: dispatchObservedMessage }));
@@ -136,6 +155,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
   beforeEach(() => {
     vi.mocked(recordConversationObservation).mockClear();
+    vi.mocked(enrichConversationObservation).mockClear();
     clearSlackThreadParticipationCache();
     enqueueSystemEventMock.mockClear();
     logVerboseMock.mockClear();
@@ -2633,14 +2653,15 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared).toBeNull();
     const entries = observedMessages();
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.media).toHaveLength(1);
-    expect(entries[0]?.media?.[0]).toMatchObject({
+    const media = vi.mocked(enrichConversationObservation).mock.lastCall?.[2].media;
+    expect(media).toHaveLength(1);
+    expect(media?.[0]).toMatchObject({
       contentType: "image/png",
       kind: "image",
       fileName: "diagram.png",
       messageId: "500.000",
     });
-    const imagePath = expectDefined(entries[0]?.media?.[0]?.path, "observed image path");
+    const imagePath = expectDefined(media?.[0]?.path, "observed image path");
     const resumedCtx = createInboundSlackCtx({ cfg });
     resumedCtx.resolveUserName = async () => ({ name: "Alice" });
     const request = await prepareMessageWith(
@@ -2725,8 +2746,9 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared).toBeNull();
     const entries = observedMessages();
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.media).toHaveLength(1);
-    expect(entries[0]?.media?.[0]).toMatchObject({
+    const media = vi.mocked(enrichConversationObservation).mock.lastCall?.[2].media;
+    expect(media).toHaveLength(1);
+    expect(media?.[0]).toMatchObject({
       contentType: "image/png",
       kind: "image",
       messageId: "501.000",
@@ -2791,7 +2813,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     const entries = observedMessages();
     expect(entries).toHaveLength(1);
     expect(entries[0]?.text).toBe("[Slack file: parent.png (image/png, fileId: F-parent)]");
-    expect(entries[0]?.media).toEqual([]);
+    expect(vi.mocked(enrichConversationObservation).mock.lastCall?.[2].media).toEqual([]);
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
@@ -4837,6 +4859,206 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     return slackCtx;
   }
 
+  it("keeps an earlier Slack attachment cleared after its download crosses native reset", async () => {
+    const { dir, storePath } = storeFixture.makeTmpStorePath();
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: dir } },
+      session: { store: storePath },
+      commands: { allowFrom: { slack: ["U1"] } },
+      channels: { slack: { enabled: true, replyToMode: "off", groupPolicy: "open" } },
+    };
+    const previousConfig = getRuntimeConfigSnapshot();
+    setRuntimeConfigSnapshot(cfg);
+    onTestFinished(() =>
+      previousConfig ? setRuntimeConfigSnapshot(previousConfig) : clearRuntimeConfigSnapshot(),
+    );
+    const ctx = createInboundSlackCtx({ cfg });
+    ctx.dispatchReplyFromConfig = undefined;
+    ctx.resolveUserName = async () => ({ name: "Alice" });
+    ctx.resolveChannelName = async () => ({ name: "room", type: "channel" });
+    const channelId = "C001RESET";
+    const otherChannelId = "C002OTHER";
+    const sessionKey = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: "default",
+      teamId: "T1",
+      peer: { kind: "channel", id: channelId },
+    }).sessionKey;
+    const scope = { agentId: "main", storePath, sessionKey };
+    const sessionId = "slack-held-attachment";
+    await upsertSessionEntry({ ...scope, entry: { sessionId, updatedAt: Date.now() } });
+    const previousRegistry = getActivePluginRegistry();
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", plugin: slackPlugin, source: "test" }]),
+    );
+    const downloadStarted = createDeferred<void>();
+    const downloadFinished = createDeferred<Response>();
+    mediaFetchMock.mockImplementation(async () => {
+      downloadStarted.resolve();
+      return await downloadFinished.promise;
+    });
+    const olderMessage = prepareMessageWith(
+      ctx,
+      defaultAccount,
+      createSlackMessage({
+        channel: channelId,
+        channel_type: "channel",
+        ts: "990.001",
+        text: "Old Slack attachment discussion must stay cleared.",
+        files: [
+          {
+            id: "FRESET",
+            name: "earlier.txt",
+            mimetype: "text/plain",
+            url_private_download: "https://files.slack.com/files-pri/T1-FRESET/earlier.txt",
+          },
+        ],
+      }),
+    );
+    try {
+      await Promise.race([
+        downloadStarted.promise,
+        olderMessage.then(() => {
+          throw new Error("Earlier Slack attachment did not reach its download");
+        }),
+      ]);
+      expect(
+        await prepareMessageWith(
+          ctx,
+          defaultAccount,
+          createSlackMessage({
+            channel: otherChannelId,
+            channel_type: "channel",
+            ts: "990.001",
+            text: "Other Slack room discussion remains available.",
+          }),
+        ),
+      ).toBeNull();
+      const respond = vi.fn().mockResolvedValue(undefined);
+      const handled = await createSlackCommandHandler({ ctx, account: defaultAccount })({
+        command: {
+          user_id: "U1",
+          user_name: "Alice",
+          channel_id: channelId,
+          channel_name: "room",
+          trigger_id: "reset-during-download",
+        },
+        ack: vi.fn().mockResolvedValue(undefined),
+        respond,
+        prompt: "/new",
+      });
+      expect(handled).toBe(true);
+      expect(respond).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "✅ New session started." }),
+      );
+      const observations = vi.mocked(recordConversationObservation).mock.results;
+      expect(observations).toHaveLength(3);
+      const earlierCapture = expectDefined(
+        await observations[0]?.value,
+        "earlier attachment capture",
+      );
+      const resetCapture = expectDefined(await observations[2]?.value, "native reset capture");
+      expect(resetCapture.owner).toEqual(earlierCapture.owner);
+      expect(resetCapture.conversationRef).toBe(earlierCapture.conversationRef);
+      expect(resetCapture.throughSequence).toBeGreaterThan(earlierCapture.throughSequence);
+    } finally {
+      downloadFinished.resolve(
+        new Response("old attachment", { headers: { "content-type": "text/plain" } }),
+      );
+      await olderMessage;
+      setActivePluginRegistry(previousRegistry ?? createTestRegistry());
+    }
+    expect(
+      await prepareMessageWith(
+        ctx,
+        defaultAccount,
+        createSlackMessage({
+          channel: channelId,
+          channel_type: "channel",
+          ts: "990.002",
+          text: "Later Slack discussion arrived after reset.",
+        }),
+      ),
+    ).toBeNull();
+    const prepared = await prepareMessageWith(
+      ctx,
+      defaultAccount,
+      createSlackMessage({
+        channel: channelId,
+        channel_type: "channel",
+        ts: "990.003",
+        text: "<@B1> Continue after reset.",
+      }),
+    );
+    assertPrepared(prepared);
+    const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+    const recorder = createRecorder({
+      input: { text: "Continue after reset.", idempotencyKey: "slack-after-reset" },
+      target: { ...scope, sessionId, sessionEntry: getSessionEntry(scope) },
+    });
+    await recorder.stageApproved!({
+      runId: "slack-after-reset",
+      conversationHistory: prepared.ctxPayload.ConversationHistory,
+      assertCurrent: () => {},
+    });
+    try {
+      expect(recorder.message?.content).not.toContain(
+        "Old Slack attachment discussion must stay cleared.",
+      );
+      expect(recorder.message?.content).toContain("Later Slack discussion arrived after reset.");
+      expect(recorder.message?.content).not.toContain(
+        "Other Slack room discussion remains available.",
+      );
+    } finally {
+      recorder.finishPendingInput?.("cancelled");
+    }
+    const otherPrepared = await prepareMessageWith(
+      ctx,
+      defaultAccount,
+      createSlackMessage({
+        channel: otherChannelId,
+        channel_type: "channel",
+        ts: "990.004",
+        text: "<@B1> Continue the other room.",
+      }),
+    );
+    assertPrepared(otherPrepared);
+    const otherScope = {
+      agentId: "main",
+      storePath,
+      sessionKey: expectDefined(otherPrepared.ctxPayload.SessionKey, "other room session"),
+    };
+    const otherSessionId = "slack-unaffected-room";
+    await upsertSessionEntry({
+      ...otherScope,
+      entry: { sessionId: otherSessionId, updatedAt: Date.now() },
+    });
+    const otherRecorder = createRecorder({
+      input: { text: "Continue the other room.", idempotencyKey: "slack-other-room" },
+      target: {
+        ...otherScope,
+        sessionId: otherSessionId,
+        sessionEntry: getSessionEntry(otherScope),
+      },
+    });
+    await otherRecorder.stageApproved!({
+      runId: "slack-other-room",
+      conversationHistory: otherPrepared.ctxPayload.ConversationHistory,
+      assertCurrent: () => {},
+    });
+    try {
+      expect(otherRecorder.message?.content).toContain(
+        "Other Slack room discussion remains available.",
+      );
+      expect(otherRecorder.message?.content).not.toContain(
+        "Later Slack discussion arrived after reset.",
+      );
+    } finally {
+      otherRecorder.finishPendingInput?.("cancelled");
+    }
+  });
+
   it.each([
     { name: "enabled audio understanding", audioEnabled: true, channelUsers: undefined },
     { name: "disabled audio understanding", audioEnabled: false, channelUsers: undefined },
@@ -4867,13 +5089,16 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
       expect(sendTranscriptEchoMock).not.toHaveBeenCalled();
       expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-      const observation = expectDefined(observedMessages()[0], "retained source");
-      expect(observation.media).toHaveLength(2);
+      const media = expectDefined(
+        vi.mocked(enrichConversationObservation).mock.lastCall?.[2].media,
+        "retained media",
+      );
+      expect(media).toHaveLength(2);
       const fetchedUrls = mediaFetchMock.mock.calls.map(([input]) => resolveFetchInputUrl(input));
       expect(fetchedUrls.filter((url) => url.includes("FVOICE"))).toHaveLength(1);
       expect(fetchedUrls.filter((url) => url.includes("FPDF"))).toHaveLength(1);
-      for (const media of observation.media ?? []) {
-        const mediaPath = expectDefined(media.path, "retained attachment path");
+      for (const item of media) {
+        const mediaPath = expectDefined(item.path, "retained attachment path");
         expect((await fs.stat(mediaPath)).size).toBeGreaterThan(0);
         await fs.rm(mediaPath);
       }

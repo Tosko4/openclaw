@@ -26,7 +26,9 @@ For Slack, the app needs the message-event subscriptions and history scopes for 
 
 - Permitted unmentioned messages are saved as unread context without a model request.
 - Native addressing captures unread context through that request. Later messages remain unread.
+- Buffered requests remain separate from other users' requests, including their continuation fragments and album attachments.
 - The existing queue and steering settings handle addressed requests while a turn is active.
+- Conversational commands and bot-owned interactions receive the same unread context. Status and configuration commands do not consume it.
 - Context is marked consumed when the turn's input enters the transcript.
 - Unread context survives a Gateway restart.
 - Direct messages keep their existing behavior.
@@ -56,9 +58,13 @@ Changing visible reply mode does not enable ambient turns.
 
 The shared per-agent `conversation_history` table owns unread messages and their assignment to turns. It is created on first use without a schema-version bump. Existing session transcripts remain in place.
 
+Observation text, quotes, and attachment metadata use the same persistence redaction policy as transcripts. Request reservations and reset receipts use this existing table.
+
 Group `historyLimit` settings do not clip or disable this context on Discord, Slack, or Telegram. Slack's initial room-thread history window is also replaced by durable observation. No historical backfill is performed when this feature is first enabled by an upgrade.
 
 Saved attachments follow the existing media lifetime. Context contains file references; unavailable or expired files produce a notice. The agent can inspect an available file when needed.
+
+Reset uses message arrival order, so a download that finishes after `/new` cannot restore earlier discussion. Cleared passive messages retain small receipts so replayed platform events stay cleared. An authorized reset can also retire an inactive request whose delivery became uncertain after a crash. Its evidence remains for inspection, and the request is not replayed. A request that is still active must finish or be canceled before resetting its history.
 
 Consumed originals remain while their session has a live transcript or retained archive. Keeping their full bodies for this period is a storage tradeoff; it is not needed merely to recognize duplicate message IDs. See [Observed group history](/reference/database-schemas/layout#observed-group-history).
 

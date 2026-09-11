@@ -32,6 +32,53 @@ export function holdTelegramMediaTimeouts(delayMs: number) {
   });
 }
 
+type ScheduledTimer = {
+  callback: () => unknown;
+  handle: ReturnType<typeof setTimeout>;
+};
+
+export function resolveActiveScheduledTimersForDelay(
+  setTimeoutSpy: ReturnType<typeof vi.spyOn>,
+  clearTimeoutSpy: ReturnType<typeof vi.spyOn>,
+  delayMs: number,
+): ScheduledTimer[] {
+  const clearedHandles = new Set(
+    (clearTimeoutSpy.mock.calls as Array<Parameters<typeof clearTimeout>>).map(
+      ([handle]) => handle,
+    ),
+  );
+  return (setTimeoutSpy.mock.calls as Array<Parameters<typeof setTimeout>>).flatMap(
+    (call, index) => {
+      if (call[1] !== delayMs) {
+        return [];
+      }
+      const handle = setTimeoutSpy.mock.results[index]?.value as ReturnType<typeof setTimeout>;
+      if (clearedHandles.has(handle) || typeof call[0] !== "function") {
+        return [];
+      }
+      return [{ callback: call[0] as () => unknown, handle }];
+    },
+  );
+}
+
+export async function flushActiveScheduledTimersForDelay(params: {
+  setTimeoutSpy: ReturnType<typeof vi.spyOn>;
+  clearTimeoutSpy: ReturnType<typeof vi.spyOn>;
+  delayMs: number;
+  expectedCount: number;
+}) {
+  const timers = resolveActiveScheduledTimersForDelay(
+    params.setTimeoutSpy,
+    params.clearTimeoutSpy,
+    params.delayMs,
+  );
+  expect(timers).toHaveLength(params.expectedCount);
+  for (const timer of timers) {
+    clearTimeout(timer.handle);
+    await timer.callback();
+  }
+}
+
 let createTelegramBotRef: typeof import("./bot.js").createTelegramBot;
 let replySpyRef: ReturnType<typeof vi.fn>;
 let onSpyRef: Mock;

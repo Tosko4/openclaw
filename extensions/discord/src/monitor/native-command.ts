@@ -50,6 +50,7 @@ import {
 import { resolveDiscordChannelTopicSafe } from "./channel-access.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
+import { resolveDiscordConversationHistoryCapture } from "./inbound-context.js";
 import { readDiscordInteractionPolicy } from "./live-policy-interaction.js";
 import { createDiscordLivePolicyReader, type DiscordLivePolicyReader } from "./live-policy.js";
 import { dispatchDiscordNativeAgentReply } from "./native-command-agent-reply.js";
@@ -754,7 +755,7 @@ async function dispatchDiscordCommandInteraction(params: {
     },
     sender: { id: sender.id, name: sender.name, tag: sender.tag },
   });
-  if (!isDirectMessage && commandAuthorized && (commandName === "new" || commandName === "reset")) {
+  if (!isDirectMessage && commandAuthorized) {
     const conversation = buildConversationIdentity({
       channel: "discord",
       accountId: effectiveRoute.accountId,
@@ -765,19 +766,35 @@ async function dispatchDiscordCommandInteraction(params: {
       nativeChannelId: channelId,
     });
     if (!conversation) {
-      throw new Error("Discord native reset is missing its conversation identity");
+      throw new Error("Discord native command is missing its conversation identity");
     }
-    ctxPayload.ConversationHistory = await recordConversationObservation(
+    const capture = await recordConversationObservation(
       {
         agentId: effectiveRoute.agentId,
         storePath: resolveStorePath(cfg.session?.store, { agentId: effectiveRoute.agentId }),
+        config: cfg,
       },
       {
         conversationRef: conversation.conversationRef,
         sourceId: `interaction:${interactionId}`,
-        message: { text: prompt, timestamp: ctxPayload.Timestamp },
+        isRequest: true,
+        message: {
+          text: prompt,
+          timestamp: ctxPayload.Timestamp,
+          sender: { id: user.id, name: sender.name, username: sender.tag },
+          senderRoles: memberRoleIds,
+        },
       },
     );
+    ctxPayload.ConversationHistory = resolveDiscordConversationHistoryCapture({
+      capture,
+      cfg,
+      accountId: effectiveRoute.accountId,
+      channelConfig,
+      guildInfo,
+      allowNameMatching,
+      isGuild,
+    });
   }
 
   const directStatusResult = await maybeDeliverDiscordDirectStatus({

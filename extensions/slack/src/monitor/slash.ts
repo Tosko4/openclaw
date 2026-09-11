@@ -19,8 +19,8 @@ import {
   type ChatCommandDefinition,
   type CommandArgs,
   resolveNativeCommandSessionTargets,
-  maybeResolveTextAlias,
 } from "openclaw/plugin-sdk/command-auth-native";
+import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -40,6 +40,7 @@ import type {
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -881,20 +882,15 @@ export function createSlackCommandHandler(params: {
               NON_PLUGIN_COMMAND_DISPATCH,
           }
         : undefined;
-      const resetCommandKey =
-        commandDefinition?.key ?? maybeResolveTextAlias(prompt, cfg)?.slice(1);
-      if (
-        isRoomish &&
-        commandAuthorized &&
-        (resetCommandKey === "new" || resetCommandKey === "reset")
-      ) {
+      if (isRoomish && commandAuthorized) {
         const interactionId = command.trigger_id ?? p.eventTs;
         if (!interactionId) {
-          throw new Error("Slack native reset requires an interaction identity");
+          throw new Error("Slack native command requires an interaction identity");
         }
-        ctxPayload.ConversationHistory = await recordSlackConversationSources({
+        const observations = await recordSlackConversationSources({
           agentId: route.agentId,
           storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
+          config: cfg,
           accountId: route.accountId,
           teamId: eventScope?.teamId ?? ctx.teamId,
           channelId: command.channel_id,
@@ -917,6 +913,41 @@ export function createSlackCommandHandler(params: {
             },
           ],
         });
+        const capture = observations.requestCapture;
+        if (!capture) {
+          throw new Error("Slack native command requires its conversation capture");
+        }
+        const mode = resolveChannelContextVisibilityMode({
+          cfg,
+          channel: "slack",
+          accountId: route.accountId,
+        });
+        ctxPayload.ConversationHistory = {
+          ...capture,
+          includeMessage: async (observed, kind = "history") => {
+            const senderId = observed.sender?.id;
+            let senderAllowed = Boolean(
+              senderId && (senderId === ctx.botUserId || senderId === ctx.botId),
+            );
+            if (senderId && !senderAllowed) {
+              const access = await resolveSlackCommandIngress({
+                ctx,
+                teamId: eventScope?.teamId ?? ctx.teamId,
+                senderId,
+                senderName: observed.sender?.name ?? undefined,
+                channelType: channelType ?? "channel",
+                channelId: command.channel_id,
+                threadId: p.threadTs,
+                ownerAllowFromLower: effectiveAllowFromLower,
+                channelUsers: isRoom ? channelConfig?.users : undefined,
+                allowTextCommands: false,
+                hasControlCommand: false,
+              });
+              senderAllowed = access.senderAccess.gate?.allowed !== false;
+            }
+            return evaluateSupplementalContextVisibility({ mode, kind, senderAllowed }).include;
+          },
+        };
       }
       if (commandAuthorized) {
         if (isCurrentSession?.() === false || p.onAdmitted?.() === false) {

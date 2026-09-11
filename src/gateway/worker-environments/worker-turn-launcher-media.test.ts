@@ -11,7 +11,7 @@ import {
   readObservedReplyInputOwner,
   withObservedReplyInputOwner,
 } from "../../auto-reply/reply/observed-reply-input.js";
-import { recordConversationObservationCore } from "../../config/sessions/conversation-history.js";
+import { recordConversationObservationCore } from "../../config/sessions/conversation-history-observation.js";
 import {
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,

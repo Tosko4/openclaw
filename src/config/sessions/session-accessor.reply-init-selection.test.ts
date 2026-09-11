@@ -2,7 +2,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { recordConversationObservationCore } from "./conversation-history.js";
+import { recordConversationObservationCore } from "./conversation-history-observation.js";
 import {
   applySessionEntryLifecycleMutation,
   commitReplySessionInitialization,

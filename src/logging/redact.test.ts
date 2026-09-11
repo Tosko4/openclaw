@@ -2010,6 +2010,9 @@ describe("redactSensitiveText", () => {
       expect(redactSecrets({ detail: "ticket internal-12345 should hide" })).toEqual({
         detail: "ticket *** should hide",
       });
+      expect(
+        redactSecrets({ detail: "ticket internal-12345 should hide" }, { level: "warn" }),
+      ).toEqual({ detail: "ticket *** should hide" });
     });
   });
 

@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { ChatCommandDefinition } from "openclaw/plugin-sdk/command-auth-native";
 // Slack tests cover slash plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -12,13 +13,18 @@ import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/
 import {
   createEmptyPluginRegistry,
   getActivePluginRegistry,
+  loadUserTurnTranscriptRecorderFactoryForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { recordSlackConversationSources } from "./conversation-observation.js";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.js";
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
@@ -1583,7 +1589,7 @@ function createPolicyHarness(overrides?: {
     },
   };
 
-  const channelId = overrides?.channelId ?? "C_UNLISTED";
+  const channelId = overrides?.channelId ?? "C00000001";
   const channelName = overrides?.channelName ?? "unlisted";
 
   const ctx = {
@@ -1702,6 +1708,77 @@ function expectChannelBlockedResponse(respond: ReturnType<typeof vi.fn>) {
   });
 }
 
+it.each(["/steer use the updated plan", "Summarize the updated plan"])(
+  "keeps unread context through status and supplies it to native %s",
+  async (prompt) => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      const scope = { agentId: "main", storePath, sessionKey: "session:1" };
+      const sessionId = "slack-native-conversation";
+      const harness = createPolicyHarness({ channelId: "C12345678", useAccessGroups: false });
+      const cfg: OpenClawConfig = { session: { store: storePath }, commands: { native: false } };
+      setRuntimeConfigSnapshot(cfg);
+      await upsertSessionEntry({ ...scope, entry: { sessionId, updatedAt: Date.now() } });
+      await recordSlackConversationSources({
+        ...scope,
+        config: cfg,
+        accountId: "acct",
+        teamId: "T1",
+        channelId: harness.channelId,
+        kind: "channel",
+        senderName: "Ada",
+        sources: [
+          {
+            isRequest: false,
+            message: {
+              type: "message",
+              channel: harness.channelId,
+              user: "U1",
+              ts: "100.001",
+              text: "The updated plan uses the east entrance.",
+            },
+          },
+        ],
+      });
+      const contexts: FinalizedMsgContext[] = [];
+      dispatchMock.mockImplementation(async ({ ctx }: { ctx: FinalizedMsgContext }) => {
+        contexts.push(ctx);
+        return { counts: { final: 0, tool: 0, block: 0 } };
+      });
+      await registerCommands(harness.ctx, harness.account);
+      for (const [index, text] of ["/status", prompt].entries()) {
+        await runSlashHandler({
+          commands: harness.commands,
+          command: {
+            channel_id: harness.channelId,
+            channel_name: harness.channelName,
+            text,
+            trigger_id: `native-${index}`,
+          },
+        });
+      }
+      expect(contexts).toHaveLength(2);
+      const request = contexts[1]!;
+      expect(request.ConversationHistory?.requestSourceIds).toEqual(["interaction:native-1"]);
+      const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+      const recorder = createRecorder({
+        input: { text: prompt, idempotencyKey: "native-conversation" },
+        target: { ...scope, sessionId, sessionEntry: getSessionEntry(scope) },
+      });
+      await recorder.stageApproved!({
+        runId: "native-conversation",
+        conversationHistory: request.ConversationHistory,
+        assertCurrent: () => {},
+      });
+      try {
+        expect(recorder.message?.content).toContain("The updated plan uses the east entrance.");
+      } finally {
+        recorder.finishPendingInput?.("cancelled");
+      }
+    });
+  },
+);
+
 function expectUnauthorizedResponse(respond: ReturnType<typeof vi.fn>) {
   expect(dispatchMock).not.toHaveBeenCalled();
   expect(respond).toHaveBeenCalledWith({
@@ -1767,8 +1844,8 @@ describe("slack slash commands channel policy", () => {
       name: "allows unlisted channels when groupPolicy is open",
       policy: {
         groupPolicy: "open",
-        channelsConfig: { C_LISTED: { requireMention: true } },
-        channelId: "C_UNLISTED",
+        channelsConfig: { C00000002: { requireMention: true } },
+        channelId: "C00000001",
         channelName: "unlisted",
       },
       blocked: false,
@@ -1777,8 +1854,8 @@ describe("slack slash commands channel policy", () => {
       name: "blocks explicitly denied channels when groupPolicy is open",
       policy: {
         groupPolicy: "open",
-        channelsConfig: { C_DENIED: { enabled: false } },
-        channelId: "C_DENIED",
+        channelsConfig: { C00000003: { enabled: false } },
+        channelId: "C00000003",
         channelName: "denied",
       },
       blocked: true,
@@ -1787,8 +1864,8 @@ describe("slack slash commands channel policy", () => {
       name: "blocks unlisted channels when groupPolicy is allowlist",
       policy: {
         groupPolicy: "allowlist",
-        channelsConfig: { C_LISTED: { requireMention: true } },
-        channelId: "C_UNLISTED",
+        channelsConfig: { C00000002: { requireMention: true } },
+        channelId: "C00000001",
         channelName: "unlisted",
       },
       blocked: true,
@@ -1810,7 +1887,7 @@ describe("slack slash commands access groups", () => {
   it("fails closed when channel type lookup returns empty for channels", async () => {
     const harness = createPolicyHarness({
       allowFrom: [],
-      channelId: "C_UNKNOWN",
+      channelId: "C00000004",
       channelName: "unknown",
       resolveChannelName: async () => ({}),
     });
@@ -1852,7 +1929,7 @@ describe("slack slash commands access groups", () => {
     await registerAndRunPolicySlash({
       harness,
       command: {
-        user_id: "U_ATTACKER",
+        user_id: "U00000002",
         user_name: "Mallory",
         channel_id: "D999",
         channel_name: "directmessage",
@@ -1868,7 +1945,7 @@ describe("slack slash commands access groups", () => {
 
   it("classifies MPIM slash commands as group chat context", async () => {
     const harness = createPolicyHarness({
-      channelId: "G_MPIM",
+      channelId: "G00000001",
       channelName: "group-dm",
       resolveChannelName: async () => ({ name: "group-dm", type: "mpim" }),
     });
@@ -1879,24 +1956,24 @@ describe("slack slash commands access groups", () => {
       ctx?: { ChatType?: string; From?: string };
     };
     expect(dispatchArg?.ctx?.ChatType).toBe("group");
-    expect(dispatchArg?.ctx?.From).toBe("slack:group:G_MPIM");
+    expect(dispatchArg?.ctx?.From).toBe("slack:group:G00000001");
   });
 
   it.each([
     {
       name: "blocks MPIM slash commands from senders outside the configured allowFrom",
-      userId: "U_ATTACKER",
+      userId: "U00000002",
       allowed: false,
     },
     {
       name: "allows MPIM slash commands from senders in the configured allowFrom",
-      userId: "U_OWNER",
+      userId: "U00000001",
       allowed: true,
     },
   ])("$name", async ({ userId, allowed }) => {
     const harness = createPolicyHarness({
-      allowFrom: ["U_OWNER"],
-      channelId: "G_MPIM",
+      allowFrom: ["U00000001"],
+      channelId: "G00000001",
       channelName: "group-dm",
       resolveChannelName: async () => ({ name: "group-dm", type: "mpim" }),
       ...(!allowed ? { useAccessGroups: false } : {}),

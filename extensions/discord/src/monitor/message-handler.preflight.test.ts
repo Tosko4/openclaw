@@ -1,7 +1,10 @@
 // Discord tests cover message handler.preflight plugin behavior.
 import { ComponentType, MessageReferenceType } from "discord-api-types/v10";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { recordConversationObservation } from "openclaw/plugin-sdk/reply-history";
+import {
+  enrichConversationObservation,
+  recordConversationObservation,
+} from "openclaw/plugin-sdk/reply-history";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as discordMessagesApi from "../internal/api.messages.js";
@@ -75,6 +78,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.mocked(recordConversationObservation).mockClear();
+  vi.mocked(enrichConversationObservation).mockClear();
   fetchPluralKitMessageInfoMock.mockReset();
   saveRemoteMediaMock.mockReset();
   saveRemoteMediaMock.mockImplementation(
@@ -2667,6 +2671,8 @@ describe("preflightDiscordMessage", () => {
         sender: { name: "Alice" },
         text: `<media:${kind}>`,
         transport: { messageId: "background-image" },
+      });
+      expect(vi.mocked(enrichConversationObservation).mock.lastCall?.[2]).toMatchObject({
         media: [
           expect.objectContaining({
             path: `/tmp/openclaw-discord-test/${fileName}`,

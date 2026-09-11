@@ -1117,8 +1117,13 @@ function redactSecretsWithOptions<T>(value: T, options: RedactOptions): T {
   return redactStructuredSecretValue("", value, new WeakSet<object>(), options) as T;
 }
 
-export function redactSecrets<T>(value: T): T {
-  return redactSecretsWithOptions(value, resolveToolPayloadRedaction());
+export function redactSecrets<T>(value: T, loggingConfig?: LoggingConfig): T {
+  return redactSecretsWithOptions(
+    value,
+    resolveToolPayloadRedaction({
+      redactPatterns: loggingConfig?.redactPatterns ?? readLoggingConfig()?.redactPatterns,
+    }),
+  );
 }
 
 export function redactModelVisibleSecrets<T>(value: T): T {

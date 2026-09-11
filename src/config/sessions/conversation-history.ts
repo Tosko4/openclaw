@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
-import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import { setImmediate } from "node:timers/promises";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { buildHistoryContext } from "../../auto-reply/reply/history.js";
+import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   executeSqliteQuerySync,
@@ -13,26 +13,18 @@ import type {
   ConversationHistoryMessage,
   PersistedUserTurnMessage,
 } from "../../sessions/user-turn-input.types.js";
-import {
-  ensureConversationHistorySchema,
-  hasConversationHistorySchema,
-} from "../../state/openclaw-agent-conversation-history-schema.js";
+import { hasConversationHistorySchema } from "../../state/openclaw-agent-conversation-history-schema.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { chunkItems } from "../../utils/chunk-items.js";
+import type { StoredObservation } from "./conversation-history-observation.js";
 import {
   readSessionPendingInputOwnerIds,
   runWithSessionPendingInput,
   type SessionPendingInputOwner,
 } from "./session-accessor.sqlite-pending-inputs.js";
-import {
-  getSessionKysely,
-  resolveSqliteReadScope,
-  toDatabaseOptions,
-  withSqliteSessionDatabase,
-} from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 
 export type {
   ConversationHistoryCapture,
@@ -41,10 +33,16 @@ export type {
 
 type HistoryDatabase = Pick<OpenClawAgentDatabase, "db" | "path">;
 type ConversationHistorySelection = {
-  availableSequences: readonly number[];
-  selectedSequences: readonly number[];
+  rows: readonly { seq: number; source_id: string; message_json: string }[];
+  references: readonly { seq: number; custody_json: string }[];
   recoveredInputIds: readonly string[];
 };
+export function throwPendingInputTooLarge(): never {
+  const userMessage =
+    `This request and its unread conversation exceed the ${MAX_PAYLOAD_BYTES / (1024 * 1024)} MiB input limit. ` +
+    "Nothing was sent. Use /new to start fresh without unread conversation; in a group, send it as a reply to this message. Then send a shorter request.";
+  throw new AgentHarnessPreflightError(userMessage, { userMessage });
+}
 const submissionAttempts = new WeakMap<SessionPendingInputOwner, object>();
 
 /** Persist uncertainty before handoff; only this exact live attempt may undo a definitive rejection. */
@@ -138,107 +136,6 @@ export function beginConversationHistorySubmission(owner: SessionPendingInputOwn
   };
 }
 
-/** Room observation owns no session generation and never admits an agent turn. */
-export async function recordConversationObservationCore(
-  scope: { agentId: string; storePath?: string },
-  observation: { conversationRef: string; sourceId: string; message: ConversationHistoryMessage },
-): Promise<ConversationHistoryCapture> {
-  const resolved = resolveSqliteReadScope(scope);
-  const databaseOptions = toDatabaseOptions(resolved);
-  const messageJson = JSON.stringify(observation.message);
-  return withSqliteSessionDatabase(databaseOptions, (database) => {
-    ensureConversationHistorySchema(database.db);
-    return runOpenClawAgentWriteTransaction((current) => {
-      const db = getSessionKysely(current.db);
-      executeSqliteQuerySync(
-        current.db,
-        db
-          .insertInto("conversation_history")
-          .values({
-            agent_id: resolved.agentId,
-            conversation_ref: observation.conversationRef,
-            source_id: observation.sourceId,
-            message_json: messageJson,
-            submission_started: 0,
-          })
-          .onConflict((conflict) =>
-            conflict.columns(["agent_id", "conversation_ref", "source_id"]).doNothing(),
-          ),
-      );
-      const row = executeSqliteQueryTakeFirstSync(
-        current.db,
-        db
-          .selectFrom("conversation_history")
-          .select("seq")
-          .where("agent_id", "=", resolved.agentId)
-          .where("conversation_ref", "=", observation.conversationRef)
-          .where("source_id", "=", observation.sourceId),
-      );
-      if (!row) {
-        throw new Error("Conversation observation was not recorded");
-      }
-      return {
-        owner: { agentId: resolved.agentId, databasePath: database.path },
-        conversationRef: observation.conversationRef,
-        throughSequence: row.seq,
-        requestSourceIds: [observation.sourceId],
-      };
-    }, databaseOptions);
-  });
-}
-
-/** Download completion enriches only its original observation, never a captured or reset input. */
-export async function enrichConversationObservationMediaCore(
-  capture: ConversationHistoryCapture,
-  sourceId: string,
-  media: NonNullable<ConversationHistoryMessage["media"]>,
-): Promise<void> {
-  if (!capture.requestSourceIds.includes(sourceId)) {
-    throw new Error("Attachment source does not belong to this conversation observation");
-  }
-  const options = toDatabaseOptions(
-    resolveSqliteReadScope({
-      agentId: capture.owner.agentId,
-      storePath: capture.owner.databasePath,
-    }),
-  );
-  await withSqliteSessionDatabase(options, () =>
-    runOpenClawAgentWriteTransaction((current) => {
-      const query = getSessionKysely(current.db)
-        .selectFrom("conversation_history")
-        .selectAll()
-        .where("agent_id", "=", capture.owner.agentId)
-        .where("conversation_ref", "=", capture.conversationRef)
-        .where("source_id", "=", sourceId)
-        .where("seq", "<=", capture.throughSequence);
-      const row = executeSqliteQueryTakeFirstSync(current.db, query);
-      // Native redelivery must reuse the already admitted bytes. A reset must
-      // not resurrect an observation whose download was still in flight.
-      if (
-        !row ||
-        row.assigned_input_id !== null ||
-        row.consumed_session_id !== null ||
-        row.submission_started !== 0
-      ) {
-        return;
-      }
-      // SAFETY: Observation intake owns this JSON; enrichment preserves its source fields.
-      const original = JSON.parse(row.message_json) as ConversationHistoryMessage;
-      if (original.media?.some((entry) => entry.path || entry.url)) {
-        // Redelivery may download another copy; keep the first source fingerprint stable.
-        return;
-      }
-      executeSqliteQuerySync(
-        current.db,
-        getSessionKysely(current.db)
-          .updateTable("conversation_history")
-          .set({ message_json: JSON.stringify({ ...original, media }) })
-          .where("seq", "=", row.seq),
-      );
-    }, options),
-  );
-}
-
 /** Session reset and unread retirement commit together; active submissions keep their evidence. */
 export function resetConversationHistory(
   database: HistoryDatabase,
@@ -257,68 +154,88 @@ export function resetConversationHistory(
     .where("conversation_ref", "=", capture.conversationRef)
     .where("seq", "<=", capture.throughSequence)
     .where("consumed_session_id", "is", null);
-  const claimed = executeSqliteQueryTakeFirstSync(
-    database.db,
-    unread
-      .select("seq")
-      .where((eb) =>
-        eb.or([
-          eb("assigned_input_id", "is not", null),
-          eb("submission_started", "!=", 0),
-          eb("submission_started", "is", null),
-        ]),
-      ),
-  );
-  if (claimed) {
-    throw new AgentHarnessPreflightError("Conversation history has an unfinished submission", {
-      userMessage:
-        "A previous request still owns some conversation history. Wait for or cancel an active request; if delivery is uncertain, inspect that request before resetting. Its history has been kept.",
-    });
-  }
-  executeSqliteQuerySync(
-    database.db,
-    db
-      .deleteFrom("conversation_history")
-      .where("agent_id", "=", capture.owner.agentId)
-      .where("conversation_ref", "=", capture.conversationRef)
-      .where("seq", "<=", capture.throughSequence)
-      .where("source_id", "not in", [...capture.requestSourceIds])
-      .where("consumed_session_id", "is", null),
-  );
-}
-
-/** Bind replay to the complete native request, not its later model-prompt projection. */
-export function fingerprintConversationHistoryRequest(
-  database: HistoryDatabase,
-  capture: ConversationHistoryCapture,
-): string {
-  const sourceIds = [...new Set(capture.requestSourceIds)];
   const rows = executeSqliteQuerySync(
     database.db,
-    getSessionKysely(database.db)
-      .selectFrom("conversation_history")
-      .select(["source_id", "message_json"])
-      .where("agent_id", "=", capture.owner.agentId)
-      .where("conversation_ref", "=", capture.conversationRef)
-      .where("source_id", "in", sourceIds)
-      .where("seq", "<=", capture.throughSequence)
-      .orderBy("seq", "asc"),
-  ).rows;
-  if (!sourceIds.length || rows.length !== sourceIds.length) {
-    throw new Error("Native request source is unavailable for durable admission");
+    unread
+      .select(["seq", "source_id", "assigned_input_id", "submission_started"])
+      .select((eb) =>
+        eb
+          .fn<string>("json_extract", ["message_json", eb.val("$.observationCustody")])
+          .as("custody_json"),
+      ),
+  ).rows.filter(
+    (row) =>
+      // SAFETY: custody_json projects the typed intake owner's observationCustody.
+      !(JSON.parse(row.custody_json) as StoredObservation["observationCustody"]).retiredByReset &&
+      !capture.requestSourceIds.includes(row.source_id),
+  );
+  const inputIds = [
+    ...new Set(rows.flatMap((row) => (row.assigned_input_id ? [row.assigned_input_id] : []))),
+  ];
+  const pending = inputIds.flatMap(
+    (inputId) =>
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_pending_inputs")
+          .select(["input_id", "session_id", "session_key", "lifecycle_generation"])
+          .where("input_id", "=", inputId),
+      ).rows,
+  );
+  if (readSessionPendingInputOwnerIds(database, pending).size) {
+    throw new AgentHarnessPreflightError("Conversation history has an unfinished submission", {
+      userMessage:
+        "A previous request still owns some conversation history. Wait for or cancel the active request, then reset again. Its history has been kept.",
+    });
   }
-  return createHash("sha256")
-    .update(
-      stableStringify({
-        agentId: capture.owner.agentId,
-        conversationRef: capture.conversationRef,
-        sources: rows.map((row) => ({
-          sourceId: row.source_id,
-          message: JSON.parse(row.message_json),
-        })),
-      }),
-    )
-    .digest("hex");
+  for (const inputId of inputIds) {
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("session_pending_inputs")
+        .set({ state: "cancelled" })
+        .where("input_id", "=", inputId)
+        .where("consumed_event_id", "is", null),
+    );
+  }
+  const retiredByReset = { sourceIds: capture.requestSourceIds, time: Date.now() };
+  for (const row of rows) {
+    if (row.assigned_input_id !== null || row.submission_started !== 0) {
+      // Reset retires uncertainty; it does not claim delivery or erase the prior
+      // input's receipt, source assignment, or submission evidence.
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("conversation_history")
+          .set((eb) => ({
+            message_json: eb.fn<string>("json_set", [
+              "message_json",
+              eb.val("$.observationCustody.retiredByReset"),
+              eb.fn<string>("json", [eb.val(JSON.stringify(retiredByReset))]),
+            ]),
+          }))
+          .where("seq", "=", row.seq),
+      );
+    } else {
+      // The ingress spool can replay after reset. Keep its source identity while
+      // clearing the old body, so redelivery cannot recreate unread history.
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("conversation_history")
+          .set({
+            message_json: JSON.stringify({
+              observationCustody: {
+                // SAFETY: The reset query selected the stored observationCustody object.
+                ...(JSON.parse(row.custody_json) as StoredObservation["observationCustody"]),
+                retiredByReset,
+              },
+            }),
+          })
+          .where("seq", "=", row.seq),
+      );
+    }
+  }
 }
 
 export function isConversationHistoryInputUnsubmitted(
@@ -345,7 +262,7 @@ function recoverableHistoryInputIds(
     database.db,
     db
       .selectFrom("session_pending_inputs")
-      .selectAll()
+      .select(["input_id", "session_id", "session_key", "lifecycle_generation"])
       .where((eb) =>
         eb.exists(
           eb
@@ -404,40 +321,138 @@ export async function prepareConversationHistoryInput(
   backgroundMedia: NonNullable<ConversationHistoryMessage["media"]>;
   selection: ConversationHistorySelection;
 }> {
-  const recoveredInputIds = recoverableHistoryInputIds(database, capture);
-  const rows = executeSqliteQuerySync(
+  const requestSources = executeSqliteQuerySync(
     database.db,
-    unreadHistory(database, capture, recoveredInputIds).selectAll().orderBy("seq", "asc"),
-  ).rows;
-  const sourceIds = new Set(rows.map((row) => row.source_id));
+    getSessionKysely(database.db)
+      .selectFrom("conversation_history")
+      .select([
+        "seq",
+        "source_id",
+        "assigned_input_id",
+        "consumed_session_id",
+        "submission_started",
+      ])
+      .select((eb) =>
+        eb
+          .fn<string>("json_extract", ["message_json", eb.val("$.observationCustody")])
+          .as("custody_json"),
+      )
+      .where("agent_id", "=", capture.owner.agentId)
+      .where("conversation_ref", "=", capture.conversationRef)
+      .where("source_id", "in", [...capture.requestSourceIds])
+      .where("seq", "<=", capture.throughSequence),
+  ).rows.map((row) => ({
+    row,
+    // SAFETY: The source query extracts typed intake's observationCustody object.
+    custody: JSON.parse(row.custody_json) as StoredObservation["observationCustody"],
+  }));
+  const references = requestSources.filter(
+    ({ row, custody }) =>
+      !custody.request &&
+      !custody.retiredByReset &&
+      (row.assigned_input_id !== null || row.consumed_session_id !== null),
+  );
   if (
-    capture.requestSourceIds.length === 0 ||
-    capture.requestSourceIds.some((sourceId) => !sourceIds.has(sourceId))
+    references.length &&
+    !requestSources.some(
+      ({ row, custody }) =>
+        custody.request === "reserved" &&
+        !custody.retiredByReset &&
+        row.assigned_input_id === null &&
+        row.consumed_session_id === null &&
+        row.submission_started === 0,
+    )
   ) {
+    throw new Error("Conversation request requires a fresh addressed source");
+  }
+  // A later caption can reference a photo already used as passive context.
+  // The fresh addressed anchor owns this request; the prior owner keeps its sources.
+  const referenceSequences = new Set(references.map(({ row }) => row.seq));
+  const referenceInputIds = new Set(references.map(({ row }) => row.assigned_input_id));
+  const recoveredInputIds = recoverableHistoryInputIds(database, capture).filter(
+    (id) => !referenceInputIds.has(id),
+  );
+  const requestIds = new Set(capture.requestSourceIds);
+  const sourceIds = new Set(references.map(({ row }) => row.source_id));
+  const selectedRows: { seq: number; source_id: string; message_json: string }[] = [];
+  const background: ConversationHistoryMessage[] = [];
+  let sequence = 0;
+  let selectedBytes = 0;
+  let projectedTextBytes = 0;
+  while (true) {
+    const query = unreadHistory(database, capture, recoveredInputIds)
+      .where("seq", ">", sequence)
+      .orderBy("seq", "asc")
+      .limit(1);
+    // 2026-09-11: escaped backlog exceeded 1 GiB RSS before rejection. Read
+    // byte metadata first and retain at most the existing input byte budget.
+    const metadata = executeSqliteQueryTakeFirstSync(
+      database.db,
+      query
+        .select(["seq", "source_id"])
+        .select((eb) =>
+          eb
+            .fn<string>("json_extract", ["message_json", eb.val("$.observationCustody")])
+            .as("custody_json"),
+        )
+        .select((eb) => eb.fn<number>("octet_length", ["message_json"]).as("bytes")),
+    );
+    if (!metadata) {
+      break;
+    }
+    sequence = metadata.seq;
+    // SAFETY: The bounded query projects observationCustody from intake-owned JSON.
+    const custody = JSON.parse(metadata.custody_json) as StoredObservation["observationCustody"];
+    const isRequest = requestIds.has(metadata.source_id);
+    if (
+      referenceSequences.has(metadata.seq) ||
+      custody.retiredByReset ||
+      (!isRequest && custody.request === "reserved")
+    ) {
+      await setImmediate();
+      continue;
+    }
+    if (metadata.bytes > MAX_PAYLOAD_BYTES) {
+      throwPendingInputTooLarge();
+    }
+    const row = executeSqliteQueryTakeFirstSync(database.db, query.selectAll());
+    if (!row) {
+      throw new Error("Conversation observation changed during preparation");
+    }
+    sequence = row.seq;
+    const { observationCustody: _custody, ...input } = JSON.parse(
+      row.message_json,
+    ) as StoredObservation; // SAFETY: Intake and custody writers preserve this shape.
+    if (isRequest || !capture.includeMessage || (await capture.includeMessage(input))) {
+      selectedBytes += metadata.bytes;
+      if (!isRequest) {
+        // Both framed content and observedInput.context carry this escaped text.
+        projectedTextBytes += 2 * Buffer.byteLength(JSON.stringify(input.text ?? ""), "utf8");
+      }
+      if (selectedBytes > MAX_PAYLOAD_BYTES || projectedTextBytes > MAX_PAYLOAD_BYTES) {
+        throwPendingInputTooLarge();
+      }
+      selectedRows.push({ seq: row.seq, source_id: row.source_id, message_json: row.message_json });
+      sourceIds.add(row.source_id);
+      if (!isRequest) {
+        background.push(input);
+      }
+    }
+    await setImmediate();
+  }
+  if (!requestIds.size || capture.requestSourceIds.some((sourceId) => !sourceIds.has(sourceId))) {
     throw new Error("Conversation request was already captured or its source is unavailable");
   }
-  const requestIds = new Set(capture.requestSourceIds);
-  const selectedSequences: number[] = [];
-  const background: ConversationHistoryMessage[] = [];
-  for (const row of rows) {
-    // SAFETY: Only typed observation intake writes this JSON; native facts remain data, never authority.
-    const input = JSON.parse(row.message_json) as ConversationHistoryMessage;
-    if (requestIds.has(row.source_id)) {
-      selectedSequences.push(row.seq);
-    } else if (!capture.includeMessage || (await capture.includeMessage(input))) {
-      selectedSequences.push(row.seq);
-      background.push(input);
-    }
-  }
   const selection = {
-    availableSequences: rows.map((row) => row.seq),
-    selectedSequences,
+    rows: selectedRows,
+    references: references.map(({ row: { seq, custody_json } }) => ({ seq, custody_json })),
     recoveredInputIds,
   };
   const visibleMessageIds = new Set(
     background.flatMap((input) => (input.transport?.messageId ? [input.transport.messageId] : [])),
   );
   const historyLines: string[] = [];
+  let renderedBytes = 0;
   for (const input of background) {
     const sender = input.sender?.name ?? input.sender?.username ?? input.sender?.id;
     const native = [
@@ -469,7 +484,12 @@ export async function prepareConversationHistoryInput(
           : `[Attachment: ${attachment}; unavailable; ask the sender to resend it]`,
       );
     }
-    historyLines.push(lines.join("\n"));
+    const line = lines.join("\n");
+    renderedBytes += 2 * Buffer.byteLength(JSON.stringify(line), "utf8");
+    if (renderedBytes > MAX_PAYLOAD_BYTES) {
+      throwPendingInputTooLarge();
+    }
+    historyLines.push(line);
   }
   const historyText = historyLines.join("\n");
   const backgroundMedia = background.flatMap((input) => input.media ?? []);
@@ -522,6 +542,33 @@ export function assignConversationHistoryInput(
   selection: ConversationHistorySelection,
   inputId: string,
 ): void {
+  for (const reference of selection.references) {
+    const current = executeSqliteQueryTakeFirstSync(
+      database.db,
+      getSessionKysely(database.db)
+        .selectFrom("conversation_history")
+        .select("seq")
+        .where("seq", "=", reference.seq)
+        .where("agent_id", "=", capture.owner.agentId)
+        .where("conversation_ref", "=", capture.conversationRef)
+        .where((eb) =>
+          eb(
+            eb.fn<string>("json_extract", ["message_json", eb.val("$.observationCustody")]),
+            "=",
+            reference.custody_json,
+          ),
+        )
+        .where((eb) =>
+          eb.or([
+            eb("assigned_input_id", "is not", null),
+            eb("consumed_session_id", "is not", null),
+          ]),
+        ),
+    );
+    if (!current) {
+      throw new Error("Referenced conversation source changed before input admission");
+    }
+  }
   if (selection.recoveredInputIds.length) {
     const recoverable = new Set(recoverableHistoryInputIds(database, capture));
     if (selection.recoveredInputIds.some((id) => !recoverable.has(id))) {
@@ -540,32 +587,35 @@ export function assignConversationHistoryInput(
       releaseCancelledConversationHistoryInput(database, recoveredInputId);
     }
   }
-  const current = executeSqliteQuerySync(
-    database.db,
-    unreadHistory(database, capture).select("seq").orderBy("seq", "asc"),
-  ).rows;
-  if (
-    current.length !== selection.availableSequences.length ||
-    current.some((row, index) => row.seq !== selection.availableSequences[index])
-  ) {
-    throw new Error(
-      "Conversation history changed before input admission; submit the request again",
-    );
-  }
-  // Match transcript lookups' 500-key batches below SQLite's 999-variable floor.
-  // Every batch remains in the pending-input transaction; none commits alone.
-  for (const sequences of chunkItems(selection.selectedSequences, 500)) {
-    executeSqliteQuerySync(
+  for (const row of selection.rows) {
+    const result = executeSqliteQuerySync(
       database.db,
       getSessionKysely(database.db)
         .updateTable("conversation_history")
-        .set({ assigned_input_id: inputId, submission_started: 0 })
+        .set((eb) => ({
+          assigned_input_id: inputId,
+          submission_started: 0,
+          message_json: capture.requestSourceIds.includes(row.source_id)
+            ? eb.fn<string>("json_set", [
+                "message_json",
+                eb.val("$.observationCustody.request"),
+                eb.val("admitted"),
+              ])
+            : row.message_json,
+        }))
         .where("agent_id", "=", capture.owner.agentId)
         .where("conversation_ref", "=", capture.conversationRef)
-        .where("seq", "in", sequences)
+        .where("seq", "=", row.seq)
+        .where("message_json", "=", row.message_json)
+        .where("submission_started", "=", 0)
         .where("assigned_input_id", "is", null)
         .where("consumed_session_id", "is", null),
     );
+    if (result.numAffectedRows !== 1n) {
+      throw new Error(
+        "Conversation history changed before input admission; submit the request again",
+      );
+    }
   }
 }
 

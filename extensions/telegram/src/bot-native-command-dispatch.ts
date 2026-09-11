@@ -42,7 +42,7 @@ import {
   resolveTelegramMessageThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramGetChat } from "./bot/types.js";
-import { recordTelegramNativeReset } from "./conversation-observation.js";
+import { recordTelegramNativeCommand } from "./conversation-observation.js";
 import {
   buildTelegramConversationRouteContext,
   resolveTelegramConversationRoute,
@@ -528,7 +528,7 @@ export async function dispatchTelegramBuiltinTurn(params: {
       : `group:${dispatch.chatId}`
     : (buildSenderName(dispatch.msg) ?? String(dispatch.senderId || dispatch.chatId));
   const ctxPayload = dispatch.nativeCommandRuntime.finalizeInboundContext({
-    ConversationHistory: await recordTelegramNativeReset(dispatch, params.commandName),
+    ConversationHistory: await recordTelegramNativeCommand(dispatch),
     Body: params.prompt,
     BodyForAgent: params.prompt,
     RawBody: params.prompt,

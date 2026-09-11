@@ -10,7 +10,9 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { recordConversationObservation } from "openclaw/plugin-sdk/reply-history";
 import { createNonExitingRuntime, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { buildConversationIdentity } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
@@ -33,6 +35,7 @@ import { formatDiscordUserTag } from "./format.js";
 import {
   buildDiscordGroupSystemPrompt,
   buildDiscordInboundAccessContext,
+  resolveDiscordConversationHistoryCapture,
 } from "./inbound-context.js";
 import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
@@ -239,6 +242,44 @@ export async function dispatchDiscordComponentEvent(params: {
     OriginatingTo:
       resolveDiscordComponentOriginatingTo(interactionCtx) ?? `channel:${interactionCtx.channelId}`,
   });
+
+  if (!interactionCtx.isDirectMessage) {
+    const conversation = buildConversationIdentity({
+      channel: "discord",
+      accountId,
+      kind: interactionCtx.isGroupDm ? "group" : "channel",
+      peerId: interactionCtx.channelId,
+      deliveryTarget: `channel:${interactionCtx.channelId}`,
+      threadId: channelCtx.isThread ? interactionCtx.channelId : undefined,
+      nativeChannelId: interactionCtx.channelId,
+    });
+    if (!conversation) {
+      throw new Error("Discord component is missing its conversation identity");
+    }
+    const capture = await recordConversationObservation(
+      { agentId, storePath, config: ctx.cfg },
+      {
+        conversationRef: conversation.conversationRef,
+        sourceId: `interaction:${interaction.rawData.id}`,
+        isRequest: true,
+        message: {
+          text: eventText,
+          timestamp,
+          sender: { id: interactionCtx.userId, name: senderName, username: senderTag },
+          senderRoles: interactionCtx.memberRoleIds,
+        },
+      },
+    );
+    ctxPayload.ConversationHistory = resolveDiscordConversationHistoryCapture({
+      capture,
+      cfg: ctx.cfg,
+      accountId,
+      channelConfig,
+      guildInfo,
+      allowNameMatching,
+      isGuild: !interactionCtx.isGroupDm,
+    });
+  }
 
   const deliverTarget = `channel:${interactionCtx.channelId}`;
   const typingChannelId = interactionCtx.channelId;

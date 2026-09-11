@@ -11,7 +11,6 @@ import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
-import type { ConversationHistoryMessage } from "openclaw/plugin-sdk/reply-history";
 import { buildAgentSessionKey, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
@@ -24,6 +23,7 @@ import { resolveTimestampMs } from "./format.js";
 import {
   buildDiscordInboundAccessContext,
   createDiscordSupplementalContextAccessChecker,
+  resolveDiscordConversationHistoryCapture,
 } from "./inbound-context.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 import { resolveReferencedReplyMediaList } from "./message-media.js";
@@ -449,25 +449,15 @@ export async function buildDiscordMessageProcessContext(params: {
       groupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
     },
     extra: {
-      ConversationHistory: ctx.conversationHistory
-        ? {
-            ...ctx.conversationHistory,
-            includeMessage: (
-              observed: ConversationHistoryMessage,
-              kind: "history" | "quote" = "history",
-            ) =>
-              evaluateSupplementalContextVisibility({
-                mode: contextVisibilityMode,
-                kind,
-                senderAllowed: isSupplementalContextSenderAllowed({
-                  id: observed.sender?.id ?? undefined,
-                  name: observed.sender?.name ?? undefined,
-                  tag: observed.sender?.username ?? undefined,
-                  memberRoleIds: observed.senderRoles,
-                }),
-              }).include,
-          }
-        : undefined,
+      ConversationHistory: resolveDiscordConversationHistoryCapture({
+        capture: ctx.conversationHistory,
+        cfg,
+        accountId,
+        channelConfig,
+        guildInfo,
+        allowNameMatching,
+        isGuild: isGuildMessage,
+      }),
       ...(preflightAudioTranscript !== undefined ? { Transcript: preflightAudioTranscript } : {}),
       GroupSubject: isDirectMessage ? undefined : groupChannel,
       GroupChannel: groupChannel,

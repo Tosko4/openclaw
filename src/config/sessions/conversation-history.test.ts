@@ -1,20 +1,25 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { readPersistedMediaFacts } from "../../media/media-facts.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   recordConversationObservationCore,
-  enrichConversationObservationMediaCore,
+  combineConversationHistoryCapturesCore,
+  enrichConversationObservationCore,
+} from "./conversation-history-observation.js";
+import {
   resetConversationHistory,
   type ConversationHistoryCapture,
   type ConversationHistoryMessage,
@@ -140,6 +145,259 @@ describe("durable conversation history custody", () => {
     );
   });
 
+  it("reserves an earlier buffered addressed source from another sender's capture", async () => {
+    const alice = await recordConversationObservationCore(scope(), {
+      conversationRef,
+      sourceId: "alice-buffered",
+      message: { text: "Alice's addressed request", sender: { id: "alice" } },
+      isRequest: true,
+    });
+    const bob = await recordConversationObservationCore(scope(), {
+      conversationRef,
+      sourceId: "bob-immediate",
+      message: { text: "Bob's addressed request", sender: { id: "bob" } },
+      isRequest: true,
+    });
+    const first = await stage("bob-immediate", bob);
+    expect(first.message.content).not.toContain("Alice's addressed request");
+    await promote(first);
+    const delayed = await stage("alice-buffered", alice);
+    await promote(delayed);
+    const events = await loadTranscriptEvents(sessionScope());
+    expect(events.filter((event) => event.type === "message")).toHaveLength(2);
+    expect(JSON.stringify(events)).toContain("alice-buffered");
+    expect(JSON.stringify(events)).toContain("bob-immediate");
+  });
+
+  it("redacts observation, quote and enriched media metadata before restart and consumption", async () => {
+    const marker = "CONFIDENTIAL_CANARY";
+    const secret = "sk-abcdef1234567890xyz";
+    const config: OpenClawConfig = { logging: { redactPatterns: [marker] } };
+    const recordSensitiveSource = () =>
+      recordConversationObservationCore(
+        { ...scope(), config },
+        {
+          conversationRef,
+          sourceId: "sensitive-background",
+          message: {
+            text: `Visible text ${secret} ${marker}`,
+            replyTo: { text: `Quoted text ${secret} ${marker}`, sender: { name: marker } },
+          },
+        },
+      );
+    const observed = await recordSensitiveSource();
+    await enrichConversationObservationCore(
+      observed,
+      "sensitive-background",
+      { media: [{ path: "/media/inbound/safe.png", fileName: `${secret} ${marker}.png` }] },
+      { config },
+    );
+    const persistedBefore = JSON.stringify(
+      database().db.prepare("SELECT message_json FROM conversation_history").all(),
+    );
+    expect(persistedBefore).not.toContain(secret);
+    expect(persistedBefore).not.toContain(marker);
+    closeOpenClawAgentDatabasesForTest();
+    expect(await recordSensitiveSource()).toEqual(observed);
+    expect(
+      JSON.stringify(database().db.prepare("SELECT message_json FROM conversation_history").all()),
+    ).toBe(persistedBefore);
+    const request = await stage("redacted-request", await observe("redacted-request"));
+    await promote(request);
+    const persistedAfter = JSON.stringify({
+      observations: database().db.prepare("SELECT message_json FROM conversation_history").all(),
+      transcript: await loadTranscriptEvents(sessionScope()),
+    });
+    expect(persistedAfter).not.toContain(secret);
+    expect(persistedAfter).not.toContain(marker);
+    expect(persistedAfter).toContain("Visible text");
+    expect(persistedAfter).toContain("Quoted text");
+    expect(persistedAfter).toContain("/media/inbound/safe.png");
+  });
+
+  it("reserves passive buffered siblings with their addressed request before another sender runs", async () => {
+    const addressed = await recordConversationObservationCore(scope(), {
+      conversationRef,
+      sourceId: "alice-first",
+      message: { text: "Alice first" },
+      isRequest: true,
+    });
+    const continuation = await observe("alice-continuation", { text: "Alice continuation" });
+    const capture = expectDefined(
+      await combineConversationHistoryCapturesCore([undefined, addressed, continuation]),
+      "combined Alice request",
+    );
+    const bob = await stage("bob", await observe("bob"));
+    expect(bob.message.content).not.toContain("Alice");
+    await promote(bob);
+    const alice = await stage("alice", capture);
+    await promote(alice);
+    expect(
+      database()
+        .db.prepare(
+          "SELECT source_id FROM conversation_history WHERE consumed_session_id = ? ORDER BY seq",
+        )
+        .all(sessionId),
+    ).toEqual([
+      { source_id: "alice-first" },
+      { source_id: "alice-continuation" },
+      { source_id: "bob" },
+    ]);
+  });
+
+  it("admits a late addressed buffered sibling without reclaiming an earlier passive source", async () => {
+    const photo = await observe("alice-passive-photo", { text: "Alice's initial photo" });
+    const bob = await stage("bob", await observe("bob"));
+    const bobPromotion = expectDefined(await promote(bob), "Bob's transcript promotion");
+    const readPhotoReceipt = () =>
+      database()
+        .db.prepare(
+          "SELECT assigned_input_id, consumed_session_id, submission_started, message_json FROM conversation_history WHERE source_id = ?",
+        )
+        .get("alice-passive-photo");
+    const originalReceipt = expectDefined(readPhotoReceipt(), "consumed photo receipt");
+    expect(originalReceipt).toMatchObject({ consumed_session_id: sessionId });
+    const originalTranscript = await loadTranscriptEvents(sessionScope());
+    expect(originalTranscript).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "message", id: bobPromotion.messageId }),
+      ]),
+    );
+    const addressed = await recordConversationObservationCore(scope(), {
+      conversationRef,
+      sourceId: "alice-caption",
+      message: { text: "Alice asks about both photos" },
+      isRequest: true,
+    });
+    const combined = expectDefined(
+      await combineConversationHistoryCapturesCore([photo, addressed]),
+      "late addressed album",
+    );
+    const alice = await stage("alice-album", combined);
+    expect(alice.message.content).toBe("alice-album");
+    expect(
+      database()
+        .db.prepare("SELECT assigned_input_id FROM conversation_history WHERE source_id = ?")
+        .get("alice-caption"),
+    ).toEqual({ assigned_input_id: alice.inputId });
+    await promote(alice);
+    expect(readPhotoReceipt()).toEqual(originalReceipt);
+    expect(await loadTranscriptEvents(sessionScope())).toEqual([
+      ...originalTranscript,
+      expect.objectContaining({ type: "message", id: alice.inputId }),
+    ]);
+    expect(
+      database()
+        .db.prepare("SELECT consumed_session_id FROM conversation_history WHERE source_id = ?")
+        .get("alice-caption"),
+    ).toEqual({ consumed_session_id: sessionId });
+  });
+
+  it("keeps unrelated session writes responsive while visibility awaits outside capture admission", async () => {
+    await observe("background");
+    const capture = await observe("request");
+    const entered = createDeferredCore<void>();
+    const release = createDeferredCore<void>();
+    const admission = stage("request", {
+      ...capture,
+      includeMessage: async () => {
+        entered.resolve();
+        await release.promise;
+        return true;
+      },
+    });
+    await entered.promise;
+    let written = false;
+    const unrelated = upsertSessionEntryCore(
+      { ...scope(), sessionKey: "agent:main:unrelated" },
+      {
+        sessionId: "unrelated-session",
+        updatedAt: 2,
+      },
+    ).then(() => {
+      written = true;
+    });
+    try {
+      await vi.waitFor(() => expect(written).toBe(true));
+    } finally {
+      release.resolve();
+      await Promise.all([admission, unrelated]);
+    }
+  });
+
+  it("reuses a transcript receipt committed while visibility waits without invoking the write hook", async () => {
+    await observe("background");
+    const capture = await observe("request");
+    const entered = createDeferredCore<void>();
+    const release = createDeferredCore<void>();
+    const prepare = vi.fn((message: PersistedUserTurnMessage) => message);
+    const admission = stage(
+      "request",
+      {
+        ...capture,
+        includeMessage: async () => {
+          entered.resolve();
+          await release.promise;
+          return true;
+        },
+      },
+      prepare,
+    );
+    await entered.promise;
+    try {
+      await appendTranscriptMessage(sessionScope(), { message: input("request") });
+    } finally {
+      release.resolve();
+    }
+    const receipt = await admission;
+    expect(prepare).not.toHaveBeenCalled();
+    expect(receipt.message).toEqual(input("request"));
+    expect(listSessionPendingInputs(sessionScope()).total).toBe(0);
+    expect(
+      (await loadTranscriptEvents(sessionScope())).filter((event) => event.type === "message"),
+    ).toHaveLength(1);
+  });
+
+  it("rejects escaped multi-message backlog before visiting the complete backlog", async () => {
+    const messages = 12;
+    const text = '"'.repeat(Math.floor(MAX_PAYLOAD_BYTES / 8));
+    for (let index = 0; index < messages; index += 1) {
+      await observe(`large-${index}`, { text });
+    }
+    const readBacklogReceipt = () => ({
+      totals: expectDefined(
+        database()
+          .db.prepare(
+            "SELECT count(*) AS source_count, sum(octet_length(message_json)) AS serialized_bytes FROM conversation_history WHERE conversation_ref = ? AND source_id != ?",
+          )
+          .get(conversationRef, "large-request"),
+        "persisted backlog totals",
+      ),
+      sources: database()
+        .db.prepare(
+          "SELECT source_id, json_extract(message_json, '$.observationCustody.sourceFingerprint') AS fingerprint, assigned_input_id, consumed_session_id, submission_started FROM conversation_history WHERE conversation_ref = ? AND source_id != ? ORDER BY seq",
+        )
+        .all(conversationRef, "large-request"),
+    });
+    const originalBacklog = readBacklogReceipt();
+    expect(originalBacklog.totals.source_count).toBe(messages);
+    expect(originalBacklog.totals.serialized_bytes).toBeGreaterThan(MAX_PAYLOAD_BYTES);
+    let visited = 0;
+    await expect(
+      stage("large-request", {
+        ...(await observe("large-request")),
+        includeMessage: async () => {
+          visited += 1;
+          return true;
+        },
+      }),
+    ).rejects.toMatchObject({ name: "AgentHarnessPreflightError" });
+    expect(visited).toBeLessThan(messages);
+    closeOpenClawAgentDatabasesForTest();
+    expect(readBacklogReceipt()).toEqual(originalBacklog);
+    expect(listSessionPendingInputs(sessionScope()).total).toBe(0);
+  });
+
   it("awaits speaker visibility and assigns all current request sources only once", async () => {
     await observe("allowed", { text: "visible", senderRoles: ["reader"] });
     await observe("restricted", { text: "restricted", senderRoles: ["private"] });
@@ -223,9 +481,11 @@ describe("durable conversation history custody", () => {
       contentType: "image/png",
       fileName: "kitchen.png",
     };
-    await enrichConversationObservationMediaCore(capture, "photo", [photo]);
+    await enrichConversationObservationCore(capture, "photo", { media: [photo] });
     closeOpenClawAgentDatabasesForTest();
-    await enrichConversationObservationMediaCore(capture, "photo", [{ path: "/retry/copy.png" }]);
+    await enrichConversationObservationCore(capture, "photo", {
+      media: [{ path: "/retry/copy.png" }],
+    });
     const request = await stage("suggest a colour", await observe("request"));
     expect(request.message.content).toContain("[2023-11-14T22:13:20.000Z] Alice: Which colour?");
     expect(request.message.content).toContain("reference: /media/inbound/kitchen.png");
@@ -233,9 +493,9 @@ describe("durable conversation history custody", () => {
       { ...photo, hydrationSuppressed: true, contextOnly: true },
     ]);
     await promote(request);
-    await enrichConversationObservationMediaCore(capture, "photo", [
-      { path: "/late/replacement.png" },
-    ]);
+    await enrichConversationObservationCore(capture, "photo", {
+      media: [{ path: "/late/replacement.png" }],
+    });
     const events = await loadTranscriptEvents(sessionScope());
     expect(JSON.stringify(events)).toContain("kitchen.png");
     expect(JSON.stringify(events)).not.toContain("replacement.png");
@@ -270,9 +530,9 @@ describe("durable conversation history custody", () => {
       (db) => resetConversationHistory(db, reset),
       toDatabaseOptions(resolveSqliteReadScope(scope())),
     );
-    await enrichConversationObservationMediaCore(background, "before-reset", [
-      { path: "/late.png" },
-    ]);
+    await enrichConversationObservationCore(background, "before-reset", {
+      media: [{ path: "/late.png" }],
+    });
     const request = await stage("reset", reset);
     expect(request.message.content).toBe("reset");
     await promote(request);
@@ -287,10 +547,46 @@ describe("durable conversation history custody", () => {
     expect(other.message.content).toContain("Other room");
   });
 
-  it("refuses reset without discarding live or uncertain request history", async () => {
+  it("keeps a cleared passive source retired when its durable ingress event is replayed", async () => {
+    const source = { text: "spooled before reset", media: [{ path: "/before-reset.png" }] };
+    const old = await observe("spooled-source", source);
+    const reset = await recordConversationObservationCore(scope(), {
+      conversationRef,
+      sourceId: "reset",
+      message: { text: "/new" },
+      isRequest: true,
+    });
+    runOpenClawAgentWriteTransaction(
+      (db) => resetConversationHistory(db, reset),
+      toDatabaseOptions(resolveSqliteReadScope(scope())),
+    );
+    await promote(await stage("reset", reset));
+    const replay = await observe("spooled-source", source);
+    expect(replay.throughSequence).toBe(old.throughSequence);
+    const retained = database()
+      .db.prepare("SELECT message_json FROM conversation_history WHERE source_id = ?")
+      .get("spooled-source");
+    expect(JSON.stringify(retained)).not.toContain("spooled before reset");
+    expect(JSON.stringify(retained)).not.toContain("/before-reset.png");
+    const fresh = await stage("fresh", await observe("fresh"));
+    expect(fresh.message.content).toBe("fresh");
+    await expect(stage("spooled-source", replay)).rejects.toMatchObject({
+      name: "AgentHarnessPreflightError",
+      userMessage:
+        "This request was cleared by a conversation reset. Send a new message to continue.",
+    });
+  });
+
+  it("refuses live reset but retires inactive uncertain history without replay or receipt loss", async () => {
     await observe("background");
-    const pending = await stage("active", await observe("active"));
-    const reset = await observe("reset");
+    const activeCapture = await observe("active");
+    const pending = await stage("active", activeCapture);
+    const reset = await recordConversationObservationCore(scope(), {
+      conversationRef,
+      sourceId: "reset",
+      message: { text: "/new" },
+      isRequest: true,
+    });
     const resetHistory = () =>
       runOpenClawAgentWriteTransaction(
         (db) => resetConversationHistory(db, reset),
@@ -298,9 +594,53 @@ describe("durable conversation history custody", () => {
       );
     expect(resetHistory).toThrow("unfinished submission");
     pending.beginSubmission();
-    pending.finish("interrupted");
-    expect(resetHistory).toThrow("unfinished submission");
-    expect(pending.message.content).toContain("background");
+    rotateAgentEventLifecycleGeneration();
+    closeOpenClawAgentDatabasesForTest();
+    const beforeReset = await stage("before-reset", await observe("before-reset"));
+    expect(beforeReset.message.content).not.toContain("background");
+    beforeReset.finish("cancelled");
+    expect(resetHistory).not.toThrow();
+    closeOpenClawAgentDatabasesForTest();
+    expect(listSessionPendingInputs(sessionScope()).items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: pending.inputId, state: "cancelled" }),
+      ]),
+    );
+    expect(
+      database()
+        .db.prepare(
+          "SELECT source_id, assigned_input_id, submission_started, json_extract(message_json, '$.text') AS source_text FROM conversation_history WHERE assigned_input_id = ? ORDER BY seq",
+        )
+        .all(pending.inputId),
+    ).toEqual([
+      {
+        source_id: "background",
+        assigned_input_id: pending.inputId,
+        submission_started: 1,
+        source_text: "background",
+      },
+      {
+        source_id: "active",
+        assigned_input_id: pending.inputId,
+        submission_started: 1,
+        source_text: "active",
+      },
+    ]);
+    expect(
+      database()
+        .db.prepare(
+          "SELECT state, json_extract(message_json, '$.content') AS message_content FROM session_pending_inputs WHERE input_id = ?",
+        )
+        .get(pending.inputId),
+    ).toEqual({
+      state: "cancelled",
+      message_content:
+        "[Earlier chat messages - for context]\nAlice: background\n\n[Current message - respond to this]\nactive",
+    });
+    await expect(stage("active", activeCapture)).rejects.toThrow("cleared by a conversation reset");
+    const fresh = await stage("fresh", await observe("fresh"));
+    expect(fresh.message.content).not.toContain("background");
+    expect(fresh.message.content).not.toContain("Alice: active");
   });
 
   it("rejects an oversized backlog without taking custody and permits a fresh request after reset", async () => {

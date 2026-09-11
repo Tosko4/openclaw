@@ -17,6 +17,7 @@ import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logDebug } from "openclaw/plugin-sdk/logging-core";
 import {
+  enrichConversationObservation,
   recordConversationObservation,
   type ConversationHistoryCapture,
 } from "openclaw/plugin-sdk/reply-history";
@@ -686,24 +687,16 @@ export async function preflightDiscordMessage(
     const scope = {
       agentId: effectiveRoute.agentId,
       storePath: resolveStorePath(params.cfg.session?.store, { agentId: effectiveRoute.agentId }),
+      config: params.cfg,
     };
     const sourceIds: string[] = [];
+    const observations = new Map<
+      (typeof hydratedSources)[number]["message"],
+      ConversationHistoryCapture
+    >();
     for (const { message: source } of hydratedSources) {
-      const media = await resolveMediaList(source, params.mediaMaxBytes, mediaResolveOptions);
-      if (params.abortSignal?.aborted || params.isPolicyCurrent?.() === false) {
-        return null;
-      }
-      media.push(
-        ...(await resolveForwardedMediaList(source, params.mediaMaxBytes, mediaResolveOptions)),
-      );
-      if (params.abortSignal?.aborted || params.isPolicyCurrent?.() === false) {
-        return null;
-      }
       const sourceId =
         source.id === message.id ? pluralkitInfo?.original?.trim() || source.id : source.id;
-      if (shouldProcessRequest) {
-        preparedMedia.push(...media);
-      }
       sourceIds.push(sourceId);
       const reply = resolveDiscordReferencedReplyMessage(source)
         ? resolveReplyContext(source, resolveDiscordMessageHistoryText)
@@ -711,12 +704,12 @@ export async function preflightDiscordMessage(
       conversationHistory = await recordConversationObservation(scope, {
         conversationRef: conversation.conversationRef,
         sourceId,
+        isRequest: shouldProcessRequest,
         message: {
           text: resolveDiscordMessageHistoryText(source, { includeForwarded: true }),
           timestamp: resolveTimestampMs(source.timestamp),
           sender: { id: sender.id, name: sender.name ?? sender.label, username: sender.tag },
           senderRoles: memberRoleIds,
-          media: toInboundMediaFacts(media, { messageId: sourceId }),
           replyTo: reply?.body
             ? {
                 text: reply.body,
@@ -739,6 +732,31 @@ export async function preflightDiscordMessage(
           },
         },
       });
+      observations.set(source, conversationHistory);
+    }
+    // Allocate the whole batch before downloads so independent native resets retain their order.
+    for (const [source, capture] of observations) {
+      const media = await resolveMediaList(source, params.mediaMaxBytes, mediaResolveOptions);
+      if (params.abortSignal?.aborted || params.isPolicyCurrent?.() === false) {
+        return null;
+      }
+      media.push(
+        ...(await resolveForwardedMediaList(source, params.mediaMaxBytes, mediaResolveOptions)),
+      );
+      if (params.abortSignal?.aborted || params.isPolicyCurrent?.() === false) {
+        return null;
+      }
+      await enrichConversationObservation(
+        capture,
+        capture.requestSourceIds[0]!,
+        {
+          media: toInboundMediaFacts(media, { messageId: capture.requestSourceIds[0] }),
+        },
+        { config: params.cfg },
+      );
+      if (shouldProcessRequest) {
+        preparedMedia.push(...media);
+      }
     }
     if (conversationHistory) {
       conversationHistory = { ...conversationHistory, requestSourceIds: sourceIds };

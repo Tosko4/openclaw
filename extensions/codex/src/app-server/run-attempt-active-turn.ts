@@ -347,7 +347,7 @@ export function activateCodexAttemptTurn(
       });
       const result = await detectAndLoadAgentHarnessPromptImages({
         ...imageContext,
-        prompt: preparedPrompt,
+        prompt: text,
         existingImages: options.images,
         imageOrder: options.imageOrder,
         media: options.media,

@@ -154,7 +154,10 @@ export function withSessionPendingInputRelocation<T>(
 /** Registration owns disposition; execution and promotion check the private operational predicates. */
 export function readSessionPendingInputOwnerIds(
   database: PendingInputDatabase,
-  rows: readonly SessionPendingInputRow[],
+  rows: readonly Pick<
+    SessionPendingInputRow,
+    "input_id" | "session_id" | "session_key" | "lifecycle_generation"
+  >[],
 ): Set<string> {
   const candidates = rows.filter((row) => {
     const owner = owners.live.get(row.input_id);

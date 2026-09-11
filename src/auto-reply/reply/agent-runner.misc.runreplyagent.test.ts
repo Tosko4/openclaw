@@ -29,7 +29,7 @@ import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { recordConversationObservationCore } from "../../config/sessions/conversation-history.js";
+import { recordConversationObservationCore } from "../../config/sessions/conversation-history-observation.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../../config/sessions/session-accessor.pending-inputs.js";
 import {

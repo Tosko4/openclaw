@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { sql } from "kysely";
-import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
@@ -22,14 +21,15 @@ import {
   hasSessionPendingInputsSchema,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { fingerprintConversationHistoryRequest } from "./conversation-history-observation.js";
 import {
   assignConversationHistoryInput,
   beginConversationHistorySubmission,
-  fingerprintConversationHistoryRequest,
   isConversationHistoryInputUnsubmitted,
   prepareConversationHistoryInput,
   projectConversationHistoryInput,
   releaseCancelledConversationHistoryInput,
+  throwPendingInputTooLarge,
   type ConversationHistoryCapture,
 } from "./conversation-history.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
@@ -76,13 +76,6 @@ export type SessionPendingInputReceipt = {
   beginSubmission: () => { rejectSubmission: () => void };
 };
 const receiptOwners = new WeakMap<SessionPendingInputReceipt, SessionPendingInputOwner>();
-
-function throwPendingInputTooLarge(): never {
-  const userMessage =
-    `This request and its unread conversation exceed the ${MAX_PAYLOAD_BYTES / (1024 * 1024)} MiB input limit. ` +
-    "Nothing was sent. Use /new to start fresh without unread conversation; in a group, send it as a reply to this message. Then send a shorter request.";
-  throw new AgentHarnessPreflightError(userMessage, { userMessage });
-}
 
 function ownerReceipt(owner: SessionPendingInputOwner): SessionPendingInputReceipt {
   const receipt: SessionPendingInputReceipt = {
@@ -197,101 +190,128 @@ export async function stageSessionPendingInput(
   if (Buffer.byteLength(JSON.stringify(stableMessage), "utf8") > MAX_PAYLOAD_BYTES) {
     throwPendingInputTooLarge();
   }
+  options.assertCurrent();
+  const database = openOpenClawAgentDatabase(databaseOptions);
+  if (readSessionEntryRow(database, resolved.sessionKey)?.entry.sessionId !== scope.sessionId) {
+    return undefined;
+  }
+  if (options.conversationHistory) {
+    if (
+      options.conversationHistory.owner.agentId !== resolved.agentId ||
+      options.conversationHistory.owner.databasePath !== database.path
+    ) {
+      throw new Error("Conversation observation owner changed before input admission");
+    }
+    ensureConversationHistorySchema(database.db);
+  }
+  const requestFingerprint = options.conversationHistory
+    ? fingerprintConversationHistoryRequest(database, options.conversationHistory)
+    : options.requestFingerprint;
+  const requestHash = requestFingerprint
+    ? `request:${requestFingerprint}`
+    : createHash("sha256").update(stableStringify(stableMessage)).digest("hex");
+  const existing = readSessionPendingInputByKey(database, resolved, idempotencyKey);
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  if (existing) {
+    // Older collectors retain consumed receipts with the original message hash.
+    // Preserve their idempotent reply, without adopting pre-upgrade input custody.
+    const matchesRequest =
+      existing.request_hash === requestHash ||
+      (existing.consumed_event_id != null &&
+        existing.request_hash ===
+          createHash("sha256").update(stableStringify(stableMessage)).digest("hex"));
+    if (!matchesRequest || existing.run_id !== options.runId) {
+      throw new Error("Pending input idempotency key conflicts with the accepted input");
+    }
+    if (existing.consumed_event_id != null) {
+      return {
+        state: "consumed",
+        inputId: existing.input_id,
+        message: parseSessionPendingInputMessage(existing.message_json),
+        run: () => {
+          throw new Error("Pending input has already been consumed");
+        },
+        finish: () => {},
+        beginSubmission: () => {
+          throw new Error("Pending input has already been consumed");
+        },
+      };
+    }
+    const hasOwner = readSessionPendingInputOwnerIds(database, [existing]).has(existing.input_id);
+    if (hasOwner) {
+      throw new Error("Pending input is already admitted; wait for its current turn");
+    }
+    const nativeUnsubmitted =
+      options.conversationHistory &&
+      isConversationHistoryInputUnsubmitted(database, existing.input_id);
+    if (
+      !requestFingerprint ||
+      (existing.state !== "queued" && existing.state !== "interrupted") ||
+      (existing.lifecycle_generation === lifecycleGeneration && !nativeUnsubmitted)
+    ) {
+      throw new Error("Pending input ownership ended; submit a new turn to continue");
+    }
+    if (options.conversationHistory && !nativeUnsubmitted) {
+      throw new Error(
+        "Pending input delivery is uncertain; inspect its previous turn before retrying",
+      );
+    }
+  }
+  const readCommittedReceipt = (): SessionPendingInputReceipt | undefined => {
+    const committed = readTranscriptMessageByScopedIdempotencyKey(
+      database,
+      resolved,
+      idempotencyKey,
+      "scan",
+    );
+    if (!committed) {
+      return undefined;
+    }
+    // Committed transcript replay keeps its existing contract and never creates new custody.
+    return {
+      state: "queued",
+      inputId: committed.messageId,
+      message: parseSessionPendingInputMessage(JSON.stringify(committed.message)),
+      run: (operation) => operation(),
+      finish: () => {},
+      beginSubmission: () => ({ rejectSubmission: () => {} }),
+    };
+  };
+  const committed = readCommittedReceipt();
+  if (committed) {
+    return committed;
+  }
+  const historyInput =
+    !existing && options.conversationHistory
+      ? await prepareConversationHistoryInput(database, options.conversationHistory)
+      : undefined;
   return runExclusiveSqliteSessionWrite(
     resolved,
     async () => {
-      options.assertCurrent();
-      const database = openOpenClawAgentDatabase(databaseOptions);
-      if (readSessionEntryRow(database, resolved.sessionKey)?.entry.sessionId !== scope.sessionId) {
-        return undefined;
-      }
-      if (options.conversationHistory) {
-        if (
-          options.conversationHistory.owner.agentId !== resolved.agentId ||
-          options.conversationHistory.owner.databasePath !== database.path
-        ) {
-          throw new Error("Conversation observation owner changed before input admission");
-        }
-        ensureConversationHistorySchema(database.db);
-      }
-      const requestFingerprint = options.conversationHistory
-        ? fingerprintConversationHistoryRequest(database, options.conversationHistory)
-        : options.requestFingerprint;
-      const requestHash = requestFingerprint
-        ? `request:${requestFingerprint}`
-        : createHash("sha256").update(stableStringify(stableMessage)).digest("hex");
-      const existing = readSessionPendingInputByKey(database, resolved, idempotencyKey);
-      const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      if (existing) {
-        // Older collectors retain consumed receipts with the original message hash.
-        // Preserve their idempotent reply, without adopting pre-upgrade input custody.
-        const matchesRequest =
-          existing.request_hash === requestHash ||
-          (existing.consumed_event_id != null &&
-            existing.request_hash ===
-              createHash("sha256").update(stableStringify(stableMessage)).digest("hex"));
-        if (!matchesRequest || existing.run_id !== options.runId) {
-          throw new Error("Pending input idempotency key conflicts with the accepted input");
-        }
-        if (existing.consumed_event_id != null) {
-          return {
-            state: "consumed",
-            inputId: existing.input_id,
-            message: parseSessionPendingInputMessage(existing.message_json),
-            run: () => {
-              throw new Error("Pending input has already been consumed");
-            },
-            finish: () => {},
-            beginSubmission: () => {
-              throw new Error("Pending input has already been consumed");
-            },
-          };
-        }
-        const hasOwner = readSessionPendingInputOwnerIds(database, [existing]).has(
-          existing.input_id,
-        );
-        if (hasOwner) {
-          throw new Error("Pending input is already admitted; wait for its current turn");
-        }
-        const nativeUnsubmitted =
-          options.conversationHistory &&
-          isConversationHistoryInputUnsubmitted(database, existing.input_id);
-        if (
-          !requestFingerprint ||
-          (existing.state !== "queued" && existing.state !== "interrupted") ||
-          (existing.lifecycle_generation === lifecycleGeneration && !nativeUnsubmitted)
-        ) {
-          throw new Error("Pending input ownership ended; submit a new turn to continue");
-        }
-        if (options.conversationHistory && !nativeUnsubmitted) {
-          throw new Error(
-            "Pending input delivery is uncertain; inspect its previous turn before retrying",
-          );
-        }
-      }
-      const committed = readTranscriptMessageByScopedIdempotencyKey(
-        database,
-        resolved,
-        idempotencyKey,
-        "scan",
-      );
-      if (committed) {
-        // Committed transcript replay keeps its existing contract and never creates new custody.
-        return {
-          state: "queued",
-          inputId: committed.messageId,
-          message: parseSessionPendingInputMessage(JSON.stringify(committed.message)),
-          run: (operation) => operation(),
-          finish: () => {},
-          beginSubmission: () => ({ rejectSubmission: () => {} }),
-        };
-      }
-      const historyInput =
-        !existing && options.conversationHistory
-          ? await prepareConversationHistoryInput(database, options.conversationHistory)
-          : undefined;
       // Visibility may await a membership lookup; a closed admission must not reach hooks.
       options.assertCurrent();
+      if (options.conversationHistory) {
+        fingerprintConversationHistoryRequest(database, options.conversationHistory);
+      }
+      const currentInput = readSessionPendingInputByKey(database, resolved, idempotencyKey);
+      if (
+        getAgentEventLifecycleGeneration() !== lifecycleGeneration ||
+        readSessionEntryRow(database, resolved.sessionKey)?.entry.sessionId !== scope.sessionId ||
+        currentInput?.input_id !== existing?.input_id ||
+        currentInput?.state !== existing?.state ||
+        currentInput?.lifecycle_generation !== existing?.lifecycle_generation ||
+        currentInput?.message_json !== existing?.message_json ||
+        currentInput?.consumed_event_id !== existing?.consumed_event_id ||
+        (currentInput && readSessionPendingInputOwnerIds(database, [currentInput]).size)
+      ) {
+        throw new Error(
+          "Pending input custody changed during preparation; submit the request again",
+        );
+      }
+      const committedDuringPreparation = readCommittedReceipt();
+      if (committedDuringPreparation) {
+        return committedDuringPreparation;
+      }
       const preparedRequest = existing
         ? parseSessionPendingInputMessage(existing.message_json)
         : options.prepareMessageAfterIdempotencyCheck

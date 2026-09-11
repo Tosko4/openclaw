@@ -4,8 +4,9 @@ import {
   formatMediaPlaceholderText,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import {
-  enrichConversationObservationMedia,
+  enrichConversationObservation,
   recordConversationObservation,
   type ConversationHistoryCapture,
 } from "openclaw/plugin-sdk/reply-history";
@@ -13,7 +14,9 @@ import {
   buildConversationIdentity,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { createTelegramSupplementalContextChecker } from "./access-groups.js";
 import type { TelegramMediaRef } from "./bot-message-context.types.js";
+import type { TelegramCommandDispatch } from "./bot-native-command-dispatch.js";
 import {
   buildSenderName,
   extractTelegramLocation,
@@ -26,28 +29,28 @@ import { buildTelegramInboundOriginTarget, type TelegramThreadSpec } from "./bot
 import { renderTelegramTextEntities } from "./bot/inbound-text-entities.js";
 import { buildTelegramConversationId } from "./topic-conversation.js";
 
-/** Native reset commands share the same conversation sequence as ordinary group messages. */
-export async function recordTelegramNativeReset(
-  dispatch: {
-    isGroup: boolean;
-    commandAuthorized: boolean;
-    runtimeCfg: OpenClawConfig;
-    route: { agentId: string; accountId: string };
-    chatId: number;
-    threadSpec: TelegramThreadSpec;
-    msg: Message;
-  },
-  commandName: string,
+/** Native commands carry context; only commands that start a turn consume it. */
+export async function recordTelegramNativeCommand(
+  dispatch: Pick<
+    TelegramCommandDispatch,
+    | "isGroup"
+    | "commandAuthorized"
+    | "runtimeCfg"
+    | "route"
+    | "chatId"
+    | "threadSpec"
+    | "msg"
+    | "groupConfig"
+    | "topicConfig"
+    | "turnSettings"
+  >,
 ): Promise<ConversationHistoryCapture | undefined> {
-  if (
-    !dispatch.isGroup ||
-    !dispatch.commandAuthorized ||
-    (commandName !== "new" && commandName !== "reset")
-  ) {
+  if (!dispatch.isGroup || !dispatch.commandAuthorized) {
     return undefined;
   }
-  return await recordTelegramConversationMessages({
+  const capture = await recordTelegramConversationMessages({
     agentId: dispatch.route.agentId,
+    config: dispatch.runtimeCfg,
     storePath: resolveStorePath(dispatch.runtimeCfg.session?.store, {
       agentId: dispatch.route.agentId,
     }),
@@ -55,7 +58,31 @@ export async function recordTelegramNativeReset(
     chatId: dispatch.chatId,
     threadSpec: dispatch.threadSpec,
     messages: [dispatch.msg],
+    isRequest: true,
   });
+  const includeSpeaker = createTelegramSupplementalContextChecker({
+    cfg: dispatch.runtimeCfg,
+    accountId: dispatch.route.accountId,
+    isGroup: true,
+    allowFrom:
+      dispatch.topicConfig?.allowFrom ??
+      dispatch.groupConfig?.allowFrom ??
+      dispatch.turnSettings.groupAllowFrom,
+    mode: resolveChannelContextVisibilityMode({
+      cfg: dispatch.runtimeCfg,
+      channel: "telegram",
+      accountId: dispatch.route.accountId,
+    }),
+  });
+  return {
+    ...capture,
+    includeMessage: (message, kind = "history") =>
+      includeSpeaker({
+        kind,
+        senderId: message.sender?.id ?? undefined,
+        senderUsername: message.sender?.username ?? undefined,
+      }),
+  };
 }
 
 function conversationMessageText(message: Message): string {
@@ -90,50 +117,26 @@ export async function recordTelegramConversationMedia(
   capture: ConversationHistoryCapture,
   messageId: string,
   media: readonly TelegramMediaRef[],
+  config: OpenClawConfig,
 ): Promise<void> {
   const sourceId = capture.requestSourceIds[0];
   if (capture.requestSourceIds.length !== 1 || !sourceId) {
     throw new Error("Telegram media enrichment requires its original source capture");
   }
-  await enrichConversationObservationMedia(
+  await enrichConversationObservation(
     capture,
     sourceId,
-    toConversationMedia(media, messageId),
+    { media: toConversationMedia(media, messageId) },
+    { config },
   );
-}
-
-/** Existing buffers assemble source requests without changing their intake sequence. */
-export function mergeTelegramConversationCaptures(
-  captures: readonly (ConversationHistoryCapture | undefined)[],
-): ConversationHistoryCapture | undefined {
-  let merged: ConversationHistoryCapture | undefined;
-  for (const capture of captures) {
-    if (!capture) {
-      continue;
-    }
-    if (
-      merged &&
-      (merged.conversationRef !== capture.conversationRef ||
-        merged.owner.agentId !== capture.owner.agentId ||
-        merged.owner.databasePath !== capture.owner.databasePath)
-    ) {
-      throw new Error("Telegram cannot combine inputs from different conversations");
-    }
-    merged = merged
-      ? {
-          ...merged,
-          throughSequence: Math.max(merged.throughSequence, capture.throughSequence),
-          requestSourceIds: [...merged.requestSourceIds, ...capture.requestSourceIds],
-        }
-      : capture;
-  }
-  return merged;
 }
 
 /** Normalize Telegram source events once before core assigns their durable sequence. */
 export async function recordTelegramConversationMessages(params: {
   agentId: string;
   storePath: string;
+  config?: OpenClawConfig;
+  isRequest?: boolean;
   accountId: string;
   chatId: string | number;
   threadSpec: TelegramThreadSpec;
@@ -175,10 +178,11 @@ export async function recordTelegramConversationMessages(params: {
         : String(message.message_id);
     requestSourceIds.push(sourceId);
     capture = await recordConversationObservation(
-      { agentId: params.agentId, storePath: params.storePath },
+      { agentId: params.agentId, storePath: params.storePath, config: params.config },
       {
         conversationRef: identity.conversationRef,
         sourceId,
+        isRequest: params.isRequest,
         message: {
           text: message.edit_date
             ? `[Edited Telegram message ${message.message_id}]\n${text}`

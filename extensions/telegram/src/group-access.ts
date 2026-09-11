@@ -8,6 +8,8 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+import { mergeTelegramAccountConfig } from "./account-config.js";
+import { resolveDefaultTelegramAccountSelection } from "./account-selection.js";
 import { isSenderAllowed, type NormalizedAllowFrom, firstDefined } from "./bot-access.js";
 
 type TelegramGroupBaseBlockReason =
@@ -92,13 +94,23 @@ export const evaluateTelegramGroupBaseAccess = (params: {
 
 /** Shared sender gate for invocation and configured ingestion after room observation. */
 export function isTelegramGroupSenderAuthorized(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   effectiveGroupAllow: NormalizedAllowFrom;
   senderId: string;
   senderUsername?: string;
 }): boolean {
+  const groupPolicy = resolveTelegramEffectiveGroupPolicy({
+    ...params,
+    telegramCfg: mergeTelegramAccountConfig(
+      params.cfg,
+      params.accountId ?? resolveDefaultTelegramAccountSelection(params.cfg).accountId,
+    ),
+  });
   return (
+    groupPolicy !== "disabled" &&
     evaluateTelegramGroupBaseAccess({
       ...params,
       isGroup: true,
@@ -107,7 +119,8 @@ export function isTelegramGroupSenderAuthorized(params: {
       enforceAllowOverride: true,
       requireSenderForAllowOverride: false,
     }).allowed &&
-    (!params.effectiveGroupAllow.hasEntries ||
+    (groupPolicy === "open" ||
+      !params.effectiveGroupAllow.hasEntries ||
       isSenderAllowed({
         allow: params.effectiveGroupAllow,
         senderId: params.senderId,

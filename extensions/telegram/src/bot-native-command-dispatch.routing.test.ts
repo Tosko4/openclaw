@@ -32,7 +32,7 @@ const { persistentBindingMocks, replyMocks, sessionBindingMocks, sessionMocks } 
 describe("Telegram native command dispatch routing", () => {
   beforeEach(resetSessionMetaMocks);
 
-  it.each(["new", "reset"])(
+  it.each(["new", "reset", "steer"])(
     "captures the topic boundary for authorized native /%s",
     async (commandName) => {
       await withTempHome(async (home) => {
@@ -47,7 +47,10 @@ describe("Telegram native command dispatch routing", () => {
         sessionMocks.resolveStorePath.mockReturnValue(storePath);
         const { handler } = registerAndResolveCommandHandler({
           commandName,
-          cfg: { session: { store: storePath } },
+          cfg: {
+            session: { store: storePath },
+            channels: { telegram: { contextVisibility: "allowlist" } },
+          },
           allowFrom: ["200"],
           groupAllowFrom: ["200"],
         });
@@ -72,6 +75,12 @@ describe("Telegram native command dispatch routing", () => {
           requestSourceIds: [String(ctx.message.message_id)],
         });
         expect(capture!.throughSequence).toBeGreaterThan(before.throughSequence);
+        expect(await capture!.includeMessage!({ sender: { id: "200" }, text: "visible" })).toBe(
+          true,
+        );
+        expect(await capture!.includeMessage!({ sender: { id: "300" }, text: "restricted" })).toBe(
+          false,
+        );
         const later = await observe(3);
         expect(later.throughSequence).toBeGreaterThan(capture!.throughSequence);
       });
