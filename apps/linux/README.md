@@ -12,6 +12,9 @@ Debian 12 meet that ABI floor. RHEL 9 and Rocky Linux 9 ship glibc 2.34, so
 they cannot run the published AppImage. Extraction does not bypass this
 requirement.
 
+See [Desktop compatibility](https://docs.openclaw.ai/platforms/linux#desktop-compatibility)
+for package updates, desktop limitations, and native-app distinctions.
+
 ## Linux prerequisites
 
 Debian and Ubuntu development packages:
@@ -94,6 +97,14 @@ to loopback when possible. See the
 [remote access guide](https://docs.openclaw.ai/gateway/remote) for Gateway
 authentication and network requirements.
 
+Use **Connection Settings** in the native tray menu to edit a remote connection.
+Opening settings reads only the saved address and transport settings; it does not
+resolve credentials, and token and password fields stay empty. **Retry** reconnects
+to the saved remote Gateway with freshly resolved credentials without rewriting
+configuration or installing or starting a local service. Opening the remote
+dashboard does not prove Gateway availability or successful authentication; check
+the dashboard for HTTP errors, authentication prompts, and Gateway readiness.
+
 After connecting, Model Setup discovers AI access available to the selected
 Gateway and shows it as a choice. Discovery never imports or copies an account,
 and the companion never selects, tests, installs, or saves a provider until you
@@ -132,11 +143,25 @@ the additional sign-in options.
 
 ## Updates
 
-The companion checks the latest GitHub release shortly after launch and from **Check for Updates** in the tray menu. AppImage installs download and verify the signed update in place, then wait for **Restart to update**. Package-managed installs such as `.deb` stay owned by the system package manager and link to the release download page instead of replacing installed files. The macOS and Windows test builds use a separate opt-in desktop-test update channel; macOS self-updates like the AppImage build, while Windows downloads the update first and runs its installer only after **Restart to update**.
+The Linux updater targets
+`https://github.com/openclaw/openclaw/releases/download/linux-stable/latest.json`
+shortly after launch and from **Check for Updates** in the tray menu. This
+channel follows the latest published Linux companion independently of core
+releases. AppImage installs download and verify the signed update in place,
+then wait for **Restart to update**.
+
+Package-managed installs such as `.deb` stay owned by the system package manager
+and link to the [Linux download page](https://github.com/openclaw/openclaw/releases/tag/linux-stable)
+instead of replacing installed files. The macOS and Windows test builds use a
+separate opt-in desktop-test update channel; macOS self-updates like the
+AppImage build, while Windows downloads the update first and runs its installer
+only after **Restart to update**.
 
 ## Quick Chat widgets
 
 Quick Chat advertises the Gateway `inline-widgets` capability and renders hosted `show_widget` results in isolated child WebViews. The parent Quick Chat WebView is the only one granted Tauri commands; widget WebViews match no capability and therefore have no IPC access. Quick Chat accepts only assistant-message widget previews under the capability-scoped `/__openclaw__/canvas/documents/` route, blocks navigation away from the original document, uses nonpersistent WebViews, and keeps stable widget instances while switching among multiple previews. Connections that require a custom Gateway TLS leaf pin remain text-only because the platform WebView cannot bind that pin. Like the other native clients, Quick Chat does not expose the Control UI `sendPrompt` bridge.
+
+Retrying an unchanged Quick Chat draft after a connection error reuses its original idempotency key while the Gateway and agent remain unchanged. If the Gateway confirms the turn already completed, Quick Chat attempts to recover the matching reply from bounded session history instead of resending it. Unavailable or incomplete history produces an error; further retries of that unchanged draft on the same configured Gateway only retry recovery. Widget previews can refresh access after reconnecting to the same configured Gateway, but switching Gateways prevents old previews from using the new connection's access, even after switching back to the original URL.
 
 ## Installer resource
 
@@ -206,6 +231,11 @@ validation does not publish a release.
 
 ## Releases
 
+Linux bundle publication is independent of core releases. A stable core tag
+does not by itself guarantee Linux release assets. The
+[latest published Linux companion](https://github.com/openclaw/openclaw/releases/tag/linux-stable)
+links to the bundles on their versioned release.
+
 Manually dispatch `Linux App Release Request` from `main`. Provide the existing
 stable release tag in `tag`; prerelease tags are rejected because their semver
 suffix breaks Debian upgrade ordering. Enable the optional
@@ -217,3 +247,20 @@ the validated release tag SHA and attaches the bundles to that tag's GitHub
 release with a `SHA256SUMS.linux-app.txt` checksum file. The tag commit must be
 reachable from `main` or its matching `release/YYYY.M.PATCH` branch; numeric
 correction tags use the base version's release branch.
+
+Publication verifies signed, publicly available assets and preserves the exact
+`OpenClaw-<version>-linux.json` manifest bytes, including source, tooling, and
+channel SHAs and asset identities. The `linux-stable` control release advances
+the canonical `latest.json` without moving versioned bundles or relabeling old
+binaries as a new core release.
+
+Older installed companions use `/releases/latest/download/latest.json`.
+Maintain an exact-byte compatibility mirror on the actual latest core release
+until explicit retirement. After core GitHub finalization, core makes a bounded
+detached mirror-only dispatch to the existing Linux release workflow; dispatch
+acceptance is not mirror success. Dispatch or mirror failures are visibly
+degraded and need reconciliation, but do not block core publication. Restoring
+metadata does not migrate an installed binary to the new endpoint; that requires a separately
+approved signed upgrade. See the
+[Linux publication policy](https://docs.openclaw.ai/reference/RELEASING#linux-companion-publication)
+for rollout and verification requirements.
