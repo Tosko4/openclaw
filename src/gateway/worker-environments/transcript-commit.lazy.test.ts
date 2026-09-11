@@ -42,17 +42,21 @@ function createRequest(): WorkerTranscriptCommitParams {
 
 async function createFixture() {
   // Every stateful fixture API must share the freshly imported owner's module generation.
-  const [sessions, accessor, state, ledger, config, owner] = await Promise.all([
-    import("../../agents/sessions/session-manager.js"),
-    import("../../config/sessions/session-accessor.js"),
-    import("../../state/openclaw-state-db.js"),
-    import("./transcript-commit-store.js"),
-    import("../../config/io.js"),
-    import("./transcript-commit.js"),
-  ]);
+  const [sessions, accessor, state, ledger, config, owner, agentState, reconcile] =
+    await Promise.all([
+      import("../../agents/sessions/session-manager.js"),
+      import("../../config/sessions/session-accessor.js"),
+      import("../../state/openclaw-state-db.js"),
+      import("./transcript-commit-store.js"),
+      import("../../config/io.js"),
+      import("./transcript-commit.js"),
+      import("../../state/openclaw-agent-db.js"),
+      import("../../config/sessions/session-transcript-reconcile.js"),
+    ]);
   const root = await fs.mkdtemp(
     path.join(await fs.realpath(os.tmpdir()), "openclaw-transcript-load-"),
   );
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
   const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
   const cfg: OpenClawConfig = {
     agents: { list: [{ id: "main", default: true }] },
@@ -68,9 +72,7 @@ async function createFixture() {
     sessionKey: SESSION_KEY,
     storePath,
   });
-  const database = state.openOpenClawStateDatabase({
-    env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
-  });
+  const database = state.openOpenClawStateDatabase();
   const store = ledger.createWorkerTranscriptCommitStore({ database });
   return {
     store,
@@ -78,7 +80,9 @@ async function createFixture() {
     readEntries: () => sessions.SessionManager.open(target).getEntries(),
     async cleanup() {
       config.clearRuntimeConfigSnapshot();
-      state.closeOpenClawStateDatabaseForTest();
+      await reconcile.waitForSessionTranscriptIndexReconcilesInStateDir(root);
+      await agentState.closeOpenClawAgentDatabasesAsync(root);
+      state.closeOpenClawStateDatabaseByPath(database.path);
       await fs.rm(root, { recursive: true, force: true });
     },
   };
@@ -93,9 +97,13 @@ describe("worker transcript runtime loading", () => {
   });
 
   afterEach(async () => {
-    vi.doUnmock("./transcript-commit.runtime.js");
-    vi.restoreAllMocks();
-    await fixture.cleanup();
+    try {
+      vi.doUnmock("./transcript-commit.runtime.js");
+      vi.restoreAllMocks();
+      await fixture.cleanup();
+    } finally {
+      vi.unstubAllEnvs();
+    }
     vi.resetModules();
   });
 
