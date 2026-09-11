@@ -142,6 +142,9 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
       const boardId =
         context.props.boardId || context.props.boardFilter || WORKBOARD_ALL_BOARDS_FILTER;
       const scope = host.agents.scopeId;
+      const selectableAgents = agents.filter((agent) => agent.kind !== "system");
+      const missingScope =
+        scope && !selectableAgents.some((agent) => agent.id === scope) ? scope : null;
       if (observedScope !== scope) {
         observedScope = scope;
         state.agentFilter = "all";
@@ -248,18 +251,19 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
               </div>
             `,
             scopeControl:
-              agents.filter((agent) => agent.kind !== "system").length > 1
+              selectableAgents.length > 1 || missingScope
                 ? renderAgentPicker(
                     {
                       options: [
                         { value: "", label: t("workboard.allAgents"), icon: "users" },
-                        ...agents
-                          .filter((agent) => agent.kind !== "system")
-                          .map((agent) => ({
-                            value: agent.id,
-                            label: agent.name ?? agent.identity?.name ?? agent.id,
-                            agent,
-                          })),
+                        ...selectableAgents.map((agent) => ({
+                          value: agent.id,
+                          label: agent.name ?? agent.identity?.name ?? agent.id,
+                          agent,
+                        })),
+                        ...(missingScope
+                          ? [{ value: missingScope, label: missingScope, agent: { id: missingScope } }]
+                          : []),
                       ],
                       value: scope ?? "",
                       variant: "compact",
