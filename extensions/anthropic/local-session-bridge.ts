@@ -8,7 +8,10 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  readNonEmptyStringPreservingWhitespace,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const CLAUDE_CHANNEL_SOCKET_NAME = "claude-channel.sock";
 /** Claude Code waits for hooks; a channel that never acks must not stall the Gateway input path. */
@@ -66,8 +69,10 @@ function writeLine(socket: net.Socket, frame: Record<string, unknown>): void {
   }
 }
 
-function readString(value: unknown, max = 4096): string | undefined {
-  return typeof value === "string" && value.length > 0 && value.length <= max ? value : undefined;
+/** Frame fields are untrusted socket input: keep them non-empty and bounded, whitespace intact (paths). */
+function readBoundedFrameText(value: unknown, max = 4096): string | undefined {
+  const text = readNonEmptyStringPreservingWhitespace(value);
+  return text !== undefined && text.length <= max ? text : undefined;
 }
 
 function readPidList(value: unknown): number[] {
@@ -99,7 +104,18 @@ export async function createClaudeChannelBridge(params: {
   const bySession = new Map<string, ChannelConnection>();
   const pendingStarts: PendingSessionStart[] = [];
 
+  // A start that already paired (or ended) must not pair a later channel: a
+  // retained cwd-only entry would hand the next hello in that directory an
+  // unrelated session, routing team input into the wrong Claude process.
+  const forgetStart = (sessionId: string) => {
+    const index = pendingStarts.findIndex((entry) => entry.sessionId === sessionId);
+    if (index >= 0) {
+      pendingStarts.splice(index, 1);
+    }
+  };
+
   const pair = (connection: ChannelConnection, sessionId: string) => {
+    forgetStart(sessionId);
     if (connection.sessionId === sessionId) {
       return;
     }
@@ -169,13 +185,14 @@ export async function createClaudeChannelBridge(params: {
 
   const handleHook = (frame: Record<string, unknown>) => {
     const name = frame.event;
-    const sessionId = readString(frame.sessionId, 256);
-    const cwd = readString(frame.cwd);
+    const sessionId = readBoundedFrameText(frame.sessionId, 256);
+    const cwd = readBoundedFrameText(frame.cwd);
     const ancestorPids = readPidList(frame.ancestorPids);
     if (!isHookEvent(name) || !sessionId) {
       return;
     }
     if (name === "SessionEnd") {
+      forgetStart(sessionId);
       const connection = bySession.get(sessionId);
       if (connection) {
         unpair(connection);
@@ -187,7 +204,7 @@ export async function createClaudeChannelBridge(params: {
   };
 
   const handleHello = (connection: ChannelConnection, frame: Record<string, unknown>) => {
-    connection.cwd = readString(frame.cwd);
+    connection.cwd = readBoundedFrameText(frame.cwd);
     connection.ppid = readPid(frame.ppid);
     if (!connection.cwd) {
       return;
@@ -208,11 +225,9 @@ export async function createClaudeChannelBridge(params: {
         : [],
     );
     const index = byProcess >= 0 ? byProcess : byCwd.length === 1 ? byCwd[0]! : -1;
-    if (index >= 0) {
-      const [start] = pendingStarts.splice(index, 1);
-      if (start) {
-        pair(connection, start.sessionId);
-      }
+    const start = index >= 0 ? pendingStarts[index] : undefined;
+    if (start) {
+      pair(connection, start.sessionId);
     }
   };
 
@@ -227,14 +242,17 @@ export async function createClaudeChannelBridge(params: {
         return;
       case "delivered":
       case "failed": {
-        const inputId = readString(frame.inputId, 256);
+        const inputId = readBoundedFrameText(frame.inputId, 256);
         const resolve = inputId ? connection.pendingAcks.get(inputId) : undefined;
         if (inputId && resolve) {
           connection.pendingAcks.delete(inputId);
           resolve(
             frame.type === "delivered"
               ? { ok: true }
-              : { ok: false, reason: readString(frame.reason, 512) ?? "channel delivery failed" },
+              : {
+                  ok: false,
+                  reason: readBoundedFrameText(frame.reason, 512) ?? "channel delivery failed",
+                },
           );
         }
         break;
