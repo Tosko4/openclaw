@@ -1,13 +1,8 @@
 // Picker reads consume the Gateway publication; only an explicit retry starts discovery.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationGateway } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import {
-  loadModelCatalog,
-  modelCatalogRefreshError,
-  subscribeModelCatalogChanges,
-} from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
 import type { ModelProvidersData } from "./load.ts";
 
 type DiscoveryGateway = {
@@ -18,16 +13,14 @@ type DiscoveryGateway = {
 };
 
 export type CatalogDiscoveryController = {
-  subscribe: (gateway: ApplicationGateway) => () => void;
-  flushPublication: () => void;
   /** Whether a discovery request is currently in flight. */
   readonly discovering: boolean;
   /** A user-facing retry hint when discovery failed; null while clean. */
   readonly error: string | null;
   /** Retries a failed discovery. */
   retry: () => void;
-  /** Resets request history and pending/error state when core data or its owner changes. */
-  reset: (params?: { preservePublication?: boolean }) => void;
+  /** Retires pending results and errors when core data or its owner changes. */
+  reset: () => void;
 };
 
 type CreateOptions = {
@@ -38,8 +31,7 @@ type CreateOptions = {
   setData: (data: ModelProvidersData) => void;
   requestUpdate: () => void;
   cancelCoreRefresh: () => void;
-  isCoreLoading: () => boolean;
-  readPublished: () => Promise<void>;
+  onSettled: () => void;
 };
 
 export function createCatalogDiscoveryController(
@@ -47,26 +39,8 @@ export function createCatalogDiscoveryController(
 ): CatalogDiscoveryController {
   let pending: AbortController | null = null;
   let error: string | null = null;
-  let publicationPending = false;
-
-  const flushPublication = () => {
-    // Core Task callbacks run before that Task completes its own settlement.
-    queueMicrotask(() => {
-      if (!publicationPending || pending || options.isCoreLoading()) {
-        return;
-      }
-      publicationPending = false;
-      void options.readPublished();
-    });
-  };
 
   const controller: CatalogDiscoveryController = {
-    subscribe: (gateway) =>
-      subscribeModelCatalogChanges(gateway, () => {
-        publicationPending = true;
-        flushPublication();
-      }),
-    flushPublication,
     get discovering() {
       return pending !== null;
     },
@@ -76,10 +50,7 @@ export function createCatalogDiscoveryController(
     retry() {
       void discover();
     },
-    reset({ preservePublication = false } = {}) {
-      if (!preservePublication) {
-        publicationPending = false;
-      }
+    reset() {
       const retired = pending;
       pending = null;
       error = null;
@@ -137,7 +108,7 @@ export function createCatalogDiscoveryController(
       if (pending === request) {
         pending = null;
         options.requestUpdate();
-        flushPublication();
+        options.onSettled();
       }
     }
   }

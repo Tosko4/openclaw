@@ -35,7 +35,7 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   profileOrders: Record<string, string[]>;
   probe: (cardId: string, providers: string[]) => Promise<void>;
   probeResults: Record<string, ModelsProbeResult>;
-  refresh: (opts: { force: boolean }) => Promise<void>;
+  refresh: (reason: "forced") => Promise<void>;
   routeData: ModelProvidersRouteData | undefined;
   requestUpdate: () => void;
   saveDefaults: () => Promise<void>;
@@ -249,10 +249,10 @@ export function createHarness(initialScopeId: string) {
     deferNextAuthStatus,
     notifySelection: () => selectionListener?.(),
     notifyRuntimeConfig: () => runtimeConfigListener?.(),
+    publishEvent: gatewaySource.publishEvent,
     request,
     runtimeConfig,
     snapshot,
-    publishEvent: gatewaySource.publishEvent,
     publishPhase: (phase: ApplicationGatewaySnapshot["phase"]) => {
       snapshot.phase = phase;
       gatewaySource.publish({ ...snapshot });

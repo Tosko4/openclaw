@@ -1,5 +1,4 @@
 import { consume } from "@lit/context";
-import { initialState, Task } from "@lit/task";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
@@ -11,6 +10,7 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { subscribeModelCatalogChanges } from "../../lib/model-catalog-store.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -33,6 +33,7 @@ import {
   type ModelProviderConfigMutationResult,
   type ModelProviderRowMessage,
 } from "./config-mutation.ts";
+import { ModelProviderCoreLoader, type ModelProviderRefreshReason } from "./core-load.ts";
 import {
   buildModelProviderCards,
   buildSelectableDefaultModels,
@@ -43,7 +44,6 @@ import {
 } from "./data.ts";
 import {
   EMPTY_MODEL_PROVIDERS_DATA,
-  loadModelProvidersData,
   MODEL_PROVIDERS_COST_DAYS,
   type ModelProvidersData,
 } from "./load.ts";
@@ -80,34 +80,34 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   @state() private selectedAgentId = "";
   /** Client the current data was loaded from; a new client means stale data. */
   private dataClient: GatewayBrowserClient | null = null;
-  // Null Task runs supersede stale work without counting as a real load.
-  private loadClient: GatewayBrowserClient | null = null;
   private routeDataObserved = false;
   // Global config writes survive agent switches; their card state does not.
   private agentEpoch = 0;
   private probeEpochs = new Map<string, number>();
-  private readonly refreshTask = new Task(this, {
-    autoRun: false,
-    task: ([client, agentId, force]: [GatewayBrowserClient | null, string, boolean], { signal }) =>
-      client && agentId
-        ? loadModelProvidersData(client, {
-            agentId,
-            ...(force ? { refresh: true } : {}),
-            signal,
-          }).then((data) => ({ client, data }))
-        : initialState,
+  private readonly core = new ModelProviderCoreLoader(this, {
+    onStart: (reason) => {
+      if (reason !== "publication") {
+        this.catalogDiscovery.reset();
+      }
+      this.supplemental.beginCoreRefresh(reason === "forced");
+      if (reason === "forced") {
+        this.querySelectorAll<ModelAccountUsage>("openclaw-model-account-usage").forEach(
+          (account) => account.refreshUsage(),
+        );
+      }
+    },
     onComplete: ({ client, data }) => {
-      this.loadClient = null;
-      this.catalogDiscovery.reset({ preservePublication: true });
+      this.catalogDiscovery.reset();
       this.supplemental.adoptCoreData(client, data);
     },
-    onError: () => (this.loadClient = null),
+    isCatalogLoading: () => this.catalogDiscovery.discovering,
+    refreshPublication: () => void this.refresh("publication"),
   });
   private readonly refreshPolicy = new UsageRefreshPolicy({
     isLoading: () =>
       this.loaderPending ||
       !this.routeDataObserved ||
-      this.loadClient !== null ||
+      this.core.loading ||
       this.supplemental.usageLoading,
     // Usage convergence must not restart the independent local-cost request.
     reload: () => this.supplemental.loadUsage(),
@@ -130,8 +130,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     setData: (data) => (this.data = data),
     requestUpdate: () => this.requestUpdate(),
     cancelCoreRefresh: () => this.cancelCoreRefresh(),
-    isCoreLoading: () => this.loadClient !== null,
-    readPublished: () => this.refresh({ force: false, publication: true }),
+    onSettled: () => this.core.flushPublication(),
   });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -151,7 +150,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         this.routeDataObserved &&
         !this.loaderPending
       ) {
-        void this.refresh({ force: false });
+        void this.refresh("replacement");
       }
     },
     onPageActivation: () => this.refreshPolicy.request("focus"),
@@ -169,7 +168,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     clearMessage: (cardId) => this.setMessage(cardId, null),
     canMutate: () => this.canMutate(),
     cancelRefresh: () => this.cancelCoreRefresh(),
-    refresh: () => this.refresh({ force: true }),
+    refresh: () => this.refresh("forced"),
     isCurrentClient: (client, epoch) => this.gateway.isCurrent({ client, epoch }),
     isBusy: (key) => Boolean(this.busy[key]),
     setBusy: (key, value) => this.setBusy(key, value),
@@ -181,10 +180,13 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     getScope: () => ({ context: this.context, agentId: this.selectedAgentId, data: this.data }),
     canStart: () => this.canMutate(),
     canContinue: () => this.mutationBlockedReason() === null,
-    refresh: () => this.refresh({ force: false }),
+    refresh: () => this.refresh("replacement"),
   });
   private readonly subscriptions = new SubscriptionsController(this)
-    .effect(() => this.context?.gateway, this.catalogDiscovery.subscribe)
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => subscribeModelCatalogChanges(gateway, () => void this.refresh("publication")),
+    )
     .watch(
       () => this.context?.runtimeConfig,
       (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
@@ -224,7 +226,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       (changed.has("routeData") || changed.has("loaderPending")) &&
       this.routeData !== undefined
     ) {
-      this.catalogDiscovery.reset();
+      this.cancelCoreRefresh();
       this.routeDataObserved = true;
       this.setSelectedAgent(this.resolveSelectedAgentId());
       if (
@@ -257,18 +259,17 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       !this.gateway.connected ||
       !client ||
       !this.selectedAgentId ||
-      this.loadClient !== null ||
+      this.core.loading ||
       (this.data !== null && this.data.updatedAt !== null && client === this.dataClient)
     ) {
       return;
     }
-    void this.refresh({ force: false });
+    void this.refresh("replacement");
   }
 
   private cancelCoreRefresh() {
     this.catalogDiscovery.reset();
-    this.loadClient = null;
-    void this.refreshTask.run([null, this.selectedAgentId, false]);
+    this.core.invalidate();
   }
 
   private invalidateRequests() {
@@ -300,7 +301,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.addProviderOpen = false;
     this.addProviderId = "";
     this.addProviderKey = "";
-    this.catalogDiscovery.reset();
   }
 
   private resolveSelectedAgentId(): string {
@@ -333,7 +333,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.ensureInitialData();
   }
 
-  private refresh(opts: { force: boolean; publication?: boolean }): Promise<void> {
+  private refresh(reason: ModelProviderRefreshReason): Promise<void> {
     if (!this.selectedAgentId) {
       return Promise.resolve();
     }
@@ -342,20 +342,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       this.refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
-    // Core replacement retires picker and supplemental work even on the same client and agent.
-    if (!opts.publication) {
-      this.catalogDiscovery.reset();
-    }
-    this.supplemental.beginCoreRefresh(opts.force);
-    if (opts.force) {
-      this.querySelectorAll<ModelAccountUsage>("openclaw-model-account-usage").forEach((account) =>
-        account.refreshUsage(),
-      );
-    }
-    this.loadClient = client;
-    return this.refreshTask
-      .run([client, this.selectedAgentId, opts.force])
-      .then(() => this.catalogDiscovery.flushPublication());
+    return this.core.refresh(client, this.selectedAgentId, reason);
   }
 
   private mutationBlockedReason(): string | null {
@@ -403,11 +390,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private async patchConfig(
     params: ModelProviderConfigMutation,
   ): Promise<ModelProviderConfigMutationResult> {
-    if (!this.canMutate() || this.busy[params.key]) {
-      return { ok: false };
-    }
     const client = this.context.gateway.snapshot.client;
-    if (!client) {
+    if (!client || !this.canMutate() || this.busy[params.key]) {
       return { ok: false };
     }
     const clientEpoch = this.gateway.epoch;
@@ -418,7 +402,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         agentEpoch,
         isCurrentClient: () => this.gateway.isCurrent({ client, epoch: clientEpoch }),
         isCurrentAgent: () => this.agentEpoch === agentEpoch,
-        refreshProviders: () => this.refresh({ force: true }),
+        refreshProviders: () => this.refresh("forced"),
         setBusy: (busy) => this.setBusy(params.key, busy),
         setMessage: (message) => this.setMessage(params.key, message),
       },
@@ -462,7 +446,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         canMutate: () => this.canMutate(),
         refreshProviders: async () => {
           const previous = this.data;
-          await this.refresh({ force: false });
+          await this.refresh("replacement");
           if (isCurrent() && this.data?.error) {
             const warning = this.data.error;
             this.data = previous;
@@ -653,8 +637,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       usageAgentId: this.selectedAgentId,
       connected: gatewaySnapshot.phase === "connected",
       loading: gatewaySnapshot.phase === "connected" && this.data === null && !rosterError,
-      refreshing: this.loadClient !== null,
-      error: rosterError ?? data.error ?? data.catalogError,
+      refreshing: this.core.loading,
+      error: rosterError ?? data.error,
       providerUsageFailed: data.providerUsage?.ok === false,
       supplementalLoading: this.loaderPending || this.supplemental.loading,
       updatedAt: data.updatedAt,
@@ -693,7 +677,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       addProviderId: this.addProviderId,
       addProviderKey: this.addProviderKey,
       onRefresh: () =>
-        void (rosterError ? this.context.agents.refreshList() : this.refresh({ force: true })),
+        void (rosterError ? this.context.agents.refreshList() : this.refresh("forced")),
       onOpenKeyEditor: (provider) => this.openKeyEditor(provider),
       onCloseKeyEditor: () => this.closeKeyEditor(),
       onKeyDraftChange: (value) => (this.keyDraft = value),
