@@ -1,5 +1,6 @@
 // Maintenance command registration: doctor, triage, dashboard, reset, and uninstall.
 import type { Command } from "commander";
+import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -56,7 +57,11 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--yes", "Accept defaults without prompting", false)
     .option("--repair", "Apply recommended repairs without prompting", false)
     .option("--fix", "Apply recommended repairs (alias for --repair)", false)
-    .option("--force", "Apply aggressive repairs (overwrites custom service config)", false)
+    .option(
+      "--force",
+      "Allow aggressive repair choices (with --fix, preserves service definitions)",
+      false,
+    )
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
     .option(
@@ -128,7 +133,11 @@ export function registerMaintenanceCommands(program: Command) {
         opts.postUpgrade !== true &&
         typeof opts.stateSqlite !== "string" &&
         typeof opts.sessionSqlite !== "string";
-      const lintMode = opts.lint === true ? "--lint" : jsonImpliesLint ? "--json" : undefined;
+      const unsupportedNode =
+        !process.versions.bun &&
+        Boolean(nodeRuntimeFailure(process.versions.node, detectCurrentSqliteCapabilities()));
+      const lintMode =
+        opts.lint === true || unsupportedNode ? "--lint" : jsonImpliesLint ? "--json" : undefined;
       const mutationOption =
         opts.repair === true || opts.fix === true || opts.force === true
           ? "--repair, --fix, or --force"
@@ -210,7 +219,7 @@ export function registerMaintenanceCommands(program: Command) {
 
   program
     .command("triage")
-    .description("Collect sanitized diagnostics and prepare an agent debugging handoff")
+    .description("Collect sanitized diagnostics and open a local coding agent for repair")
     .addHelpText(
       "after",
       () =>
@@ -218,10 +227,36 @@ export function registerMaintenanceCommands(program: Command) {
     )
     .option("--json", "Output sanitized handoff paths, finding counts, and commands as JSON", false)
     .option("--no-export", "Skip the sanitized diagnostics archive")
+    .option("--agent <name>", "Select a coding agent (claude|codex|opencode|pi)")
     .option("--run", "Run one embedded agent turn after verifying model inference", false)
+    .option(
+      "--non-interactive",
+      "Prepare diagnostics without prompting or starting an agent",
+      false,
+    )
+    .option("--update-result <path>", "Include update-failure diagnostics from this JSON artifact")
     .action(async (opts) => {
       if (opts.json === true && opts.run === true) {
         return exitDoctorError("triage --json cannot be combined with --run.", true);
+      }
+      if (opts.nonInteractive === true && opts.run === true) {
+        return exitDoctorError("triage --non-interactive cannot be combined with --run.", false);
+      }
+      const agent: unknown = opts.agent;
+      if (opts.run === true && agent !== undefined) {
+        return exitDoctorError("triage --run cannot be combined with --agent.", opts.json === true);
+      }
+      if (
+        agent !== undefined &&
+        agent !== "claude" &&
+        agent !== "codex" &&
+        agent !== "opencode" &&
+        agent !== "pi"
+      ) {
+        return exitDoctorError(
+          "Invalid --agent. Use claude, codex, opencode, or pi.",
+          opts.json === true,
+        );
       }
       return await runCommandWithRuntime(
         defaultRuntime,
@@ -231,6 +266,9 @@ export function registerMaintenanceCommands(program: Command) {
             json: opts.json === true,
             noExport: opts.export === false,
             run: opts.run === true,
+            ...(opts.nonInteractive === true ? { nonInteractive: true } : {}),
+            ...(typeof opts.updateResult === "string" ? { updateResult: opts.updateResult } : {}),
+            ...(agent ? { agent } : {}),
           });
         },
         opts.json ? (err: unknown) => exitDoctorError(formatError(err), true) : undefined,
@@ -285,7 +323,7 @@ export function registerMaintenanceCommands(program: Command) {
 
   program
     .command("uninstall")
-    .description("Uninstall the gateway service + local data (CLI remains)")
+    .description("Uninstall the gateway service + local data")
     .addHelpText(
       "after",
       () =>

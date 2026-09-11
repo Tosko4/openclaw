@@ -6,6 +6,10 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import {
+  NODE_CLAUDE_SKILLS_CAPABILITY,
+  NODE_CLAUDE_SKILLS_MESSAGE_BYTES,
+} from "../infra/node-claude-skill-protocol.js";
+import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_DEVICE_APPS_COMMAND,
   NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
@@ -26,6 +30,7 @@ import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node
 import { BoundedBuffer } from "../shared/bounded-buffer.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { NodeHostClient } from "./client.js";
+import { requestsClaudeNodeSkillRuntime } from "./invoke-agent-cli-claude-params.js";
 import { handleInvoke, type NodeInvokeRequestPayload, type SkillBinsProvider } from "./invoke.js";
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
@@ -62,6 +67,7 @@ export type NodeHostInventory = {
 type PreparedNodeHostRuntime = {
   manifest: NodeHostManifest;
   workerHostingEnabled: boolean;
+  preparedWorkspacesEnabled: boolean;
   workerHostingDisabledReason?: string;
   initialInventory: NodeHostInventory;
   start(params: {
@@ -186,6 +192,7 @@ function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinT
 class SkillBinsCache implements SkillBinsProvider {
   private bins: SkillBinTrustEntry[] = [];
   private lastRefresh = 0;
+  private refreshInFlight: Promise<void> | undefined;
   private readonly ttlMs = 90_000;
 
   constructor(
@@ -195,7 +202,16 @@ class SkillBinsCache implements SkillBinsProvider {
 
   async current(force = false): Promise<SkillBinTrustEntry[]> {
     if (force || Date.now() - this.lastRefresh > this.ttlMs) {
-      await this.refresh();
+      const refresh = this.refreshInFlight ?? this.refresh();
+      this.refreshInFlight = refresh;
+      try {
+        await refresh;
+      } finally {
+        // An older waiter must not clear a newer retry's in-flight promise.
+        if (this.refreshInFlight === refresh) {
+          this.refreshInFlight = undefined;
+        }
+      }
     }
     return this.bins;
   }
@@ -298,6 +314,7 @@ export async function prepareNodeHostRuntime(params?: {
   let workerRunsEnabled =
     params?.enableWorkerRuns === true &&
     (params.forceWorkerRuns === true || config.nodeHost?.workerRuns?.enabled === true);
+  const workspaceOptions = { env, ephemeral: params?.ephemeral };
   let preparedContainerWorkspace: NodeWorkerWorkspaceRuntime | undefined;
   let preparedContainerSupervisor: ReturnType<typeof createNodeWorkerSupervisor> | undefined;
   let preparedContainerCapacity: NodeWorkerCapacitySnapshot | undefined;
@@ -327,7 +344,7 @@ export async function prepareNodeHostRuntime(params?: {
         );
       }
       const containerEngine = await resolveNodeWorkerContainerEngine({ env });
-      preparedContainerWorkspace = new NodeWorkerWorkspaceRuntime({ env });
+      preparedContainerWorkspace = new NodeWorkerWorkspaceRuntime(workspaceOptions);
       preparedContainerSupervisor = createNodeWorkerSupervisor({
         env,
         capacity: config.nodeHost?.workerRuns?.capacity,
@@ -364,6 +381,7 @@ export async function prepareNodeHostRuntime(params?: {
       ...new Set([
         "system",
         "mcp",
+        ...(claudePath ? [NODE_CLAUDE_SKILLS_CAPABILITY] : []),
         ...(installedAppsSharingEnabled ? ["device"] : []),
         ...pluginManifest.caps.filter(
           (cap) => params?.ephemeral !== true || (cap !== "computer" && cap !== "screen"),
@@ -398,6 +416,7 @@ export async function prepareNodeHostRuntime(params?: {
   return {
     manifest,
     workerHostingEnabled: workerRunsEnabled,
+    preparedWorkspacesEnabled: workerRunsEnabled && params?.ephemeral === true,
     ...(workerHostingDisabledReason ? { workerHostingDisabledReason } : {}),
     initialInventory,
     start({
@@ -414,7 +433,7 @@ export async function prepareNodeHostRuntime(params?: {
       let initializationRetry: ReturnType<typeof setTimeout> | undefined;
       const workerWorkspace =
         preparedContainerWorkspace ??
-        (workerRunsEnabled ? new NodeWorkerWorkspaceRuntime({ env }) : undefined);
+        (workerRunsEnabled ? new NodeWorkerWorkspaceRuntime(workspaceOptions) : undefined);
       const workerBundleInstaller = workerRunsEnabled
         ? new NodeWorkerBundleInstaller({ env })
         : undefined;
@@ -462,7 +481,7 @@ export async function prepareNodeHostRuntime(params?: {
       if (workerSupervisor && !preparedContainerInitialized) {
         initializeWorkerSupervisor();
       }
-      const skillBins = new SkillBinsCache(client, pathEnv);
+      let skillBins = new SkillBinsCache(client, pathEnv);
       const activeInvokes = new Map<string, ActiveNodeInvoke>();
       let pluginDisconnectCleanup: Promise<void> = Promise.resolve();
       const pluginCommandContext: OpenClawPluginNodeHostCommandContext = {
@@ -528,7 +547,11 @@ export async function prepareNodeHostRuntime(params?: {
           if (closing || generation !== connectionGeneration) {
             return;
           }
-          const duplexCommand = duplexEnabled && isRegisteredNodeHostCommandDuplex(frame.command);
+          const claudeSkills =
+            frame.command === NODE_AGENT_CLI_CLAUDE_RUN_COMMAND &&
+            requestsClaudeNodeSkillRuntime(frame.paramsJSON);
+          const duplexCommand =
+            duplexEnabled && (claudeSkills || isRegisteredNodeHostCommandDuplex(frame.command));
           const progressEnabled = duplexCommand || frame.command === NODE_DESKTOP_STREAM_COMMAND;
           const controller = new AbortController();
           // Every command must remain cancellable after dispatch; only duplex
@@ -569,7 +592,8 @@ export async function prepareNodeHostRuntime(params?: {
           const framedIo =
             input && progress
               ? createNodeDuplexEndpoint({
-                  sendFrame: async (payloadJSON) => await progress.write(payloadJSON),
+                  ...(claudeSkills ? { maxMessageBytes: NODE_CLAUDE_SKILLS_MESSAGE_BYTES } : {}),
+                  sendFrame: async (payload) => await progress.write(JSON.stringify(payload)),
                   onError: (error) => {
                     active.framedFailure = error;
                     controller.abort(error);
@@ -660,6 +684,8 @@ export async function prepareNodeHostRuntime(params?: {
         },
         cancelAll() {
           connectionGeneration += 1;
+          // Retired refreshes may still finish; their cache must never serve the next connection.
+          skillBins = new SkillBinsCache(client, pathEnv);
           for (const active of activeInvokes.values()) {
             active.controller.abort();
           }

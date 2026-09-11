@@ -1,4 +1,5 @@
 // Covers SQLite WAL maintenance configuration.
+import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import childProcess, { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,6 +9,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   configureSqliteConnectionPragmas,
@@ -541,26 +543,64 @@ describe("sqlite WAL maintenance", () => {
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
   });
 
-  it("runs lightweight periodic PASSIVE checkpoints and TRUNCATE on close", () => {
-    vi.useFakeTimers();
+  it("runs periodic maintenance outside request contexts and TRUNCATE on close", async () => {
+    const requestScope = new AsyncLocalStorage<object>();
+    const sessionScope = new AsyncLocalStorage<object>();
+    const request = {};
+    const session = {};
+    const timerContexts: Array<[object | undefined, object | undefined]> = [];
+    const periodic = createDeferredCore<[object | undefined, object | undefined]>();
+    const hook = createHook({
+      init(_asyncId, type) {
+        if (type === "Timeout") {
+          timerContexts.push([requestScope.getStore(), sessionScope.getStore()]);
+        }
+      },
+    });
     const db = createMockDb();
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.mocked(db["exec"]).mockImplementation((sql) => {
+      if (sql === "PRAGMA incremental_vacuum(512);") {
+        periodic.resolve([requestScope.getStore(), sessionScope.getStore()]);
+      }
+    });
+    let maintenance: ReturnType<typeof configureSqliteWalMaintenance> | undefined;
+    try {
+      await requestScope.run(request, () =>
+        sessionScope.run(session, async () => {
+          hook.enable();
+          try {
+            maintenance = configureSqliteWalMaintenance(db, { checkpointIntervalMs: 5 });
+          } finally {
+            hook.disable();
+          }
+          expect(requestScope.getStore()).toBe(request);
+          expect(sessionScope.getStore()).toBe(session);
+          // The native resource must be detached at allocation, not only when its callback runs.
+          expect(timerContexts).toEqual([[undefined, undefined]]);
+          expect(db["exec"]).toHaveBeenCalledTimes(3);
 
-    const maintenance = configureSqliteWalMaintenance(db, { checkpointIntervalMs: 100 });
-    // journal_mode=WAL, wal_autocheckpoint, journal_size_limit.
-    expect(db["exec"]).toHaveBeenCalledTimes(3);
+          expect(await periodic.promise).toEqual([undefined, undefined]);
+          expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
+          expect(db["exec"]).toHaveBeenCalledWith("PRAGMA incremental_vacuum(512);");
+          expect(maintenance.close()).toBe(true);
+          expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(TRUNCATE);");
+          expect(requestScope.getStore()).toBe(request);
+          expect(sessionScope.getStore()).toBe(session);
+          const statementsAfterClose = vi.mocked(db).exec.mock.calls.length;
 
-    vi.advanceTimersByTime(100);
-    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
-    expect(db["exec"]).toHaveBeenNthCalledWith(4, "PRAGMA incremental_vacuum(512);");
-    expect(db["exec"]).toHaveBeenCalledTimes(4);
-
-    expect(maintenance.close()).toBe(true);
-    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(TRUNCATE);");
-    expect(db["exec"]).toHaveBeenCalledTimes(4);
-
-    vi.advanceTimersByTime(200);
-    expect(db["exec"]).toHaveBeenCalledTimes(4);
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 10);
+          });
+          expect(db["exec"]).toHaveBeenCalledTimes(statementsAfterClose);
+        }),
+      );
+    } finally {
+      hook.disable();
+      maintenance?.close();
+      requestScope.disable();
+      sessionScope.disable();
+    }
   });
 
   it.runIf(process.platform === "linux").each([
@@ -616,14 +656,14 @@ describe("sqlite WAL maintenance", () => {
     expect(close).not.toHaveBeenCalled();
     expect(maintenance.checkpoint()).toBe(false);
     expect(write).toHaveBeenCalledWith(
-      process.stderr.fd,
+      2,
       expect.stringContaining(`"sidecarPath":"${sidecarPath}"`),
     );
   });
 
-  it.runIf(process.platform === "linux")(
-    "preserves the replacement WAL family across fatal containment and reopen",
-    async () => {
+  it.runIf(process.platform === "linux").each(["main", "worker"] as const)(
+    "preserves the replacement WAL family across fatal containment and reopen from a %s thread",
+    async (thread) => {
       const tempDir = tempDirs.make("openclaw-sqlite-wal-replacement-");
       const databasePath = path.join(tempDir, "state.sqlite");
       const staleCloseMarker = path.join(tempDir, "stale-close-marker");
@@ -641,13 +681,16 @@ describe("sqlite WAL maintenance", () => {
         childScript,
         `
           import fs from "node:fs";
+          import { Worker } from "node:worker_threads";
           import { DatabaseSync } from "node:sqlite";
           import { configureSqliteWalMaintenance } from ${JSON.stringify(sqliteWalModuleUrl)};
 
           const role = process.argv[2];
           const databasePath = process.argv[3];
           const staleCloseMarker = process.argv[4];
-          if (role === "stale") {
+          if (role === "worker") {
+            new Worker(new URL(import.meta.url), { argv: ["stale", databasePath, staleCloseMarker] });
+          } else if (role === "stale") {
             const stale = new DatabaseSync(databasePath);
             setTimeout(() => {
               fs.writeFileSync(staleCloseMarker, stale.isOpen ? "open" : "closed");
@@ -676,7 +719,14 @@ describe("sqlite WAL maintenance", () => {
         let stderr = "";
         const child = spawn(
           process.execPath,
-          ["--import", "tsx", childScript, role, databasePath, staleCloseMarker],
+          [
+            "--import",
+            "tsx",
+            childScript,
+            role === "stale" && thread === "worker" ? "worker" : role,
+            databasePath,
+            staleCloseMarker,
+          ],
           {
             env: { ...process.env, OPENCLAW_TEST_CONSOLE: "1" },
             stdio: ["ignore", "pipe", "pipe"],
@@ -714,13 +764,37 @@ describe("sqlite WAL maintenance", () => {
         current = spawnRole("current", "current-ready");
         await current.ready;
 
-        const timeout = setTimeout(() => stale.child.kill("SIGKILL"), 20_000);
+        let containmentWatchdogFired = false;
+        const timeout = setTimeout(() => {
+          containmentWatchdogFired = true;
+          stale.child.kill("SIGKILL");
+        }, 20_000);
         const childResult = await stale.closed;
         clearTimeout(timeout);
 
         expect(childResult, stale.stderr()).toEqual({ code: null, signal: "SIGKILL" });
-        expect(stale.stderr()).toContain("SQLite WAL sidecar identity mismatch");
+        expect(containmentWatchdogFired).toBe(false);
         expect(fs.existsSync(staleCloseMarker)).toBe(false);
+        const fatalEvents = stale
+          .stderr()
+          .split("\n")
+          .filter((line) => line.startsWith("{"))
+          .map((line) => JSON.parse(line))
+          .filter((event) => event.event === "sqlite_wal_sidecar_identity_mismatch");
+        expect(fatalEvents).toHaveLength(1);
+        expect(fatalEvents[0]).toMatchObject({
+          level: "fatal",
+          subsystem: "infra/sqlite-wal",
+          message: "SQLite WAL sidecar identity mismatch; terminating without SQLite cleanup",
+          databasePath,
+          databaseLabel: "replacement-family-test",
+          pid: stale.child.pid,
+          descriptorDevice: expect.stringMatching(/^\d+$/u),
+          descriptorInode: expect.stringMatching(/^\d+$/u),
+        });
+        expect([`${databasePath}-wal`, `${databasePath}-shm`]).toContain(
+          fatalEvents[0].sidecarPath,
+        );
 
         current.child.kill("SIGKILL");
         await current.closed;
@@ -728,8 +802,11 @@ describe("sqlite WAL maintenance", () => {
         if (stale.child.exitCode === null && stale.child.signalCode === null) {
           stale.child.kill("SIGKILL");
         }
+        await stale.closed;
         if (current && current.child.exitCode === null && current.child.signalCode === null) {
           current.child.kill("SIGKILL");
+        }
+        if (current) {
           await current.closed;
         }
       }
@@ -821,7 +898,7 @@ describe("sqlite WAL maintenance", () => {
 
     vi.advanceTimersByTime(100);
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(FULL);");
-    expect(db["exec"]).toHaveBeenNthCalledWith(4, "PRAGMA incremental_vacuum(512);");
+    expect(db["exec"]).toHaveBeenCalledWith("PRAGMA incremental_vacuum(512);");
 
     expect(maintenance.close({ checkpointMode: "PASSIVE" })).toBe(true);
     expect(db["prepare"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(PASSIVE);");

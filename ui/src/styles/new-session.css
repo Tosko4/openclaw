@@ -43,9 +43,9 @@ openclaw-new-session-page {
 }
 
 :is(
-  .new-session-page__draft-toggle,
-  .new-session-page__incognito-toggle
-).shell-chrome-controls__button:hover:not(:disabled) {
+    .new-session-page__draft-toggle,
+    .new-session-page__incognito-toggle
+  ).shell-chrome-controls__button:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--text-strong) 18%, transparent);
   background: color-mix(in srgb, var(--text-strong) 7%, var(--panel));
 }
@@ -61,8 +61,8 @@ openclaw-new-session-page {
 
 :is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active),
 :is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active):hover:not(
-  :disabled
-) {
+    :disabled
+  ) {
   border-color: color-mix(in srgb, var(--accent) 42%, transparent);
   background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
   color: var(--accent);
@@ -202,11 +202,6 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
   border-style: dashed;
 }
 
-/* Image and emoji fallbacks carry the same welcome-avatar silhouette. */
-.new-session-page .agent-chat__avatar--text {
-  border-radius: 50%;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .new-session-page__incognito-notice {
     transition-duration: 0ms;
@@ -216,7 +211,7 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
 /* Sits after the model and reasoning pickers: the footer row reads as the
    settings for the next turn, and how the session is recorded is the last of
    them, not the first thing between "+" and the model. The model control claims
-   order 3 in chat/layout.css, so this follows it.
+   order 3 in chat/composer.css, so this follows it.
    Box, type and rhythm come from the composer's chip family tokens rather than
    numbers of its own: this control is a peer of the pickers beside it, and it
    used to announce itself as a different component — smaller text, shorter box,
@@ -756,6 +751,175 @@ wa-popover.new-session-page__project-popover::part(body) {
   overflow-y: auto;
 }
 
+/* Destination search and mode controls stay visible while the flat inventory scrolls. */
+wa-popover.new-session-page__where-popover {
+  --max-width: min(420px, calc(100vw - 24px));
+}
+
+wa-popover.new-session-page__where-popover::part(body) {
+  width: min(420px, calc(100vw - 24px));
+  max-width: none;
+  padding: 0;
+  overflow: hidden;
+}
+
+.new-session-page__environment-picker {
+  display: flex;
+  flex-direction: column;
+  max-height: min(560px, calc(var(--auto-size-available-height, 70vh) - 2px));
+  overflow: hidden;
+}
+
+.new-session-page__environment-search {
+  margin-bottom: var(--space-2);
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  color: var(--muted);
+  border-radius: var(--menu-item-radius);
+}
+
+.new-session-page__environment-search:focus-within {
+  background: var(--bg-hover);
+}
+
+.new-session-page__environment-search svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+.new-session-page__environment-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-text-md);
+  outline: none;
+}
+
+.new-session-page__environment-search input::placeholder {
+  color: var(--muted);
+}
+
+.new-session-page__environment-list {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.new-session-page__environment-option,
+.new-session-page__auto-device,
+.new-session-page__connect-machine {
+  min-height: 60px;
+  gap: 12px;
+  padding: 12px;
+}
+
+.new-session-page__environment-option,
+.new-session-page__connect-machine {
+  min-height: 56px;
+  padding-block: 8px;
+}
+
+/* Reserve the selection column even when empty so labels and meters never move. */
+.new-session-page__environment-option > .session-menu__check {
+  flex: 0 0 20px;
+  width: 20px;
+}
+
+.new-session-page__environment-option[aria-pressed="true"] {
+  background: var(--bg-hover);
+}
+
+.new-session-page__environment-list--automatic .new-session-page__environment-option {
+  opacity: 0.5;
+}
+
+.new-session-page__device-icon {
+  display: inline-flex;
+}
+
+.new-session-page__environment-option .session-menu__icon,
+.new-session-page__auto-device .session-menu__icon,
+.new-session-page__connect-machine .session-menu__icon,
+.new-session-page__environment-option .session-menu__icon svg,
+.new-session-page__auto-device .session-menu__icon svg,
+.new-session-page__connect-machine .session-menu__icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.new-session-page__environment-option > .session-context-meter {
+  flex: 0 0 84px;
+}
+
+.new-session-page__environment-empty {
+  padding: 24px 12px;
+  color: var(--muted);
+  text-align: center;
+  font-size: var(--control-ui-text-sm);
+}
+
+.new-session-page__environment-auto {
+  flex: 0 0 auto;
+  margin: var(--space-2) 12px 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.new-session-page__auto-device {
+  padding-inline: 0;
+}
+
+.new-session-page__auto-device .session-menu__icon {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+.new-session-page__auto-device .session-menu__text {
+  white-space: normal;
+}
+
+.new-session-page__auto-switch {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 20px;
+  padding: 3px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+}
+
+.new-session-page__auto-switch::after {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+  background: var(--text);
+  content: "";
+}
+
+.new-session-page__auto-device[aria-checked="true"] .new-session-page__auto-switch {
+  background: var(--accent);
+}
+
+.new-session-page__auto-device[aria-checked="true"] .new-session-page__auto-switch::after {
+  transform: translateX(12px);
+}
+
+.new-session-page__environment-picker > .session-menu__separator,
+.new-session-page__environment-picker > .new-session-page__connect-machine {
+  flex-shrink: 0;
+}
+
 .new-session-page__menu-chevron {
   display: inline-flex;
   margin-left: auto;
@@ -826,11 +990,6 @@ wa-popover.new-session-page__project-popover::part(body) {
   border-radius: var(--radius-md);
 }
 
-.new-session-page__start-split {
-  display: inline-flex;
-  align-items: center;
-}
-
 .new-session-page__start-submit[aria-busy="true"] svg {
   animation: new-session-start-spin 2.25s linear infinite;
 }
@@ -839,25 +998,6 @@ wa-popover.new-session-page__project-popover::part(body) {
   to {
     transform: rotate(1turn);
   }
-}
-
-.new-session-page__start-primary {
-  width: 34px;
-  min-width: 34px;
-  border-radius: var(--radius-full) 0 0 var(--radius-full);
-}
-
-.new-session-page__start-menu-trigger {
-  width: 34px;
-  min-width: 34px;
-  padding: 0;
-  border-left: 1px solid color-mix(in srgb, var(--primary-foreground) 28%, transparent);
-  border-radius: 0 var(--radius-full) var(--radius-full) 0;
-}
-
-.new-session-page__start-menu-trigger svg {
-  width: 15px;
-  height: 15px;
 }
 
 .new-session-page__start-submit--blocked {
@@ -1005,6 +1145,10 @@ wa-popover.new-session-page__project-popover::part(body) {
   background: var(--bg-hover);
 }
 
+.new-session-page__browser-entry--active {
+  background: var(--bg-hover);
+}
+
 .new-session-page__browser-entry:disabled {
   color: var(--muted);
   cursor: not-allowed;
@@ -1111,14 +1255,6 @@ wa-popover.new-session-page__project-popover::part(body) {
 .new-session-page__browser-register:disabled {
   opacity: 0.5;
   cursor: default;
-}
-
-/* The trailing actions already own the stable right edge on /new. Collapse the
-   empty effort slot while loading unless the open model menu needs its anchor. */
-.new-session-page__composer
-  .chat-controls__model-settings:not(:has(.chat-controls__model-picker[open]))
-  .chat-controls__effort-picker--reserved {
-  display: none;
 }
 
 /* Phones (and short landscape): match the chat thread's mobile inset, and

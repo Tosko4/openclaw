@@ -26,7 +26,7 @@ const SHORT_TERM_STORE_NAMESPACES = {
   phase: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
 };
 
-async function readShortTermStore(
+export async function readShortTermStore(
   workspaceDir: string,
   kind: keyof typeof SHORT_TERM_STORE_NAMESPACES,
   nowIso: string,
@@ -53,19 +53,19 @@ async function writeShortTermStore(
   kind: keyof typeof SHORT_TERM_STORE_NAMESPACES,
   store: ShortTermRecallStore | ShortTermPhaseSignalStore,
 ): Promise<void> {
-  await Promise.all([
-    writeMemoryCoreWorkspaceEntries({
-      namespace: SHORT_TERM_STORE_NAMESPACES[kind],
-      workspaceDir,
-      entries: Object.entries(store.entries).map(([key, value]) => ({ key, value })),
-    }),
-    writeMemoryCoreWorkspaceEntry({
-      namespace: SHORT_TERM_META_NAMESPACE,
-      workspaceDir,
-      key: kind,
-      value: { updatedAt: store.updatedAt },
-    }),
-  ]);
+  // Settle row mutations before metadata can fail and release the caller's
+  // workspace lock; an unfinished replacement could delete a later writer's rows.
+  await writeMemoryCoreWorkspaceEntries({
+    namespace: SHORT_TERM_STORE_NAMESPACES[kind],
+    workspaceDir,
+    entries: Object.entries(store.entries).map(([key, value]) => ({ key, value })),
+  });
+  await writeMemoryCoreWorkspaceEntry({
+    namespace: SHORT_TERM_META_NAMESPACE,
+    workspaceDir,
+    key: kind,
+    value: { updatedAt: store.updatedAt },
+  });
 }
 
 export function resolveStorePath(workspaceDir: string): string {

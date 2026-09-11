@@ -283,11 +283,13 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
         sessionAgentId: "main",
         agentDir: state.agentDir(),
         workspaceDir: state.workspaceDir,
-        provider: "fixture-provider",
-        modelId: "fixture-model",
+        modelSelection: {
+          provider: "fixture-provider",
+          model: "fixture-model",
+          authProfileIdSource: "auto",
+        },
         harnessRuntime: "openclaw",
         thinkLevel: "off",
-        authProfileIdSource: "auto",
         resolveContextEnginePluginId: () => undefined,
         buildRuntimeSettings: ({ tokenBudget, degradedReason }) =>
           buildContextEngineRuntimeSettings({
@@ -319,7 +321,8 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
         replacements: new Map(),
         frozen: new Set(),
         ambiguousBaseKeys: new Set(),
-        sourceTextByKey: new Map(),
+        restoredCacheTtl: new Map(),
+        sourceHashByKey: new Map(),
       };
       return recoverEmbeddedRunOverflow({
         ...input,

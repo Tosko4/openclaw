@@ -13,7 +13,12 @@ export const HEARTBEAT_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} If nothing needs at
 export const HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS =
   "Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.";
 export const HEARTBEAT_RESPONSE_TOOL_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`;
-export const HEARTBEAT_TRANSCRIPT_PROMPT = "[OpenClaw heartbeat poll]";
+export const INTERNAL_WAKE_TRANSCRIPT_PROMPTS = {
+  heartbeat: "[OpenClaw heartbeat poll]",
+  exec: "[OpenClaw exec completion]",
+  cron: "[OpenClaw cron wake]",
+  event: "[OpenClaw session event]",
+} as const;
 export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 
@@ -162,6 +167,10 @@ export function stripHeartbeatToken(
   if (!trimmed) {
     return { shouldSkip: true, text: "", didStrip: false };
   }
+  // Markup cleanup inserts spaces or removes edge wrappers; it cannot create this token.
+  if (!trimmed.includes(HEARTBEAT_TOKEN)) {
+    return { shouldSkip: false, text: trimmed, didStrip: false };
+  }
 
   const mode: StripHeartbeatMode = opts.mode ?? "message";
   const maxAckCharsRaw = opts.maxAckChars;
@@ -187,10 +196,6 @@ export function stripHeartbeatToken(
       .replace(/[*`~_]+$/, "");
 
   const trimmedNormalized = stripMarkup(trimmed);
-  const hasToken = trimmed.includes(HEARTBEAT_TOKEN) || trimmedNormalized.includes(HEARTBEAT_TOKEN);
-  if (!hasToken) {
-    return { shouldSkip: false, text: trimmed, didStrip: false };
-  }
 
   const strippedOriginal = stripTokenAtEdges(trimmed);
   const strippedNormalized = stripTokenAtEdges(trimmedNormalized);

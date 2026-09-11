@@ -1,11 +1,9 @@
 import { html, nothing } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
 
-export type ChatModelCatalogState = {
-  hasSnapshot: boolean;
-  status: "idle" | "loading" | "ready" | "error" | "offline";
-};
+export type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
 
 export function renderChatModelCatalogState(
   state: ChatModelCatalogState | undefined,
@@ -15,63 +13,72 @@ export function renderChatModelCatalogState(
   errorLabel = t("chat.modelControls.modelsUnavailable"),
   retryTarget?: { disabled: boolean; groupId: string; onRetry: (groupId: string) => unknown },
 ) {
-  if (!state || (state.status === "ready" && hasSelectableOptions)) {
+  if (!state) {
     return nothing;
   }
-  if (state.status === "error" && hasOptions) {
+  const { status } = state;
+  const refreshWarning = status === "ready" && state.refreshFailed;
+  if (status === "ready" && hasSelectableOptions && !refreshWarning) {
     return nothing;
   }
   const label =
-    state.status === "offline"
+    status === "offline"
       ? t("common.offline")
-      : state.status === "error"
-        ? errorLabel
-        : state.status === "ready"
+      : status === "error" || refreshWarning
+        ? hasOptions
+          ? t("chat.modelControls.modelsRefreshFailed")
+          : errorLabel
+        : status === "ready"
           ? t("chat.modelControls.noModelsAvailable")
           : t("chat.modelControls.loadingModels");
   return html`
     <div
-      class="chat-controls__model-catalog-state ${hasOptions
-        ? ""
-        : "chat-controls__model-catalog-state--empty"}"
-      data-chat-model-catalog-state=${state.status}
+      class="chat-controls__model-catalog-state ${
+        hasOptions ? "" : "chat-controls__model-catalog-state--empty"
+      }"
+      data-chat-model-catalog-state=${status}
+      role="status"
       aria-live="polite"
     >
       <span class="chat-controls__model-catalog-state-label">
-        ${state.status === "error" ? icons.alertTriangle : nothing}
+        ${status === "error" || refreshWarning ? icons.alertTriangle : nothing}
         <span>${label}</span>
       </span>
-      ${state.status === "error" && retryTarget
-        ? html`
-            <button
-              class="chat-controls__model-catalog-action"
-              data-chat-model-target-retry=${retryTarget.groupId}
-              type="button"
-              ?disabled=${retryTarget.disabled}
-              @click=${(event: MouseEvent) => {
-                event.stopPropagation();
-                retryTarget.onRetry(retryTarget.groupId);
-              }}
-            >
-              ${t("common.retry")}
-            </button>
-          `
-        : nothing}
-      ${state.status === "ready" && !hasSelectableOptions && onModelSetup
-        ? html`
-            <button
-              class="chat-controls__model-catalog-action"
-              data-chat-model-setup="true"
-              type="button"
-              @click=${(event: MouseEvent) => {
-                event.stopPropagation();
-                onModelSetup();
-              }}
-            >
-              ${t("chat.modelControls.emptyModelsAction")}
-            </button>
-          `
-        : nothing}
+      ${
+        status === "error" && retryTarget
+          ? html`
+              <button
+                class="chat-controls__model-catalog-action"
+                data-chat-model-target-retry=${retryTarget.groupId}
+                type="button"
+                ?disabled=${retryTarget.disabled}
+                @click=${(event: MouseEvent) => {
+                  event.stopPropagation();
+                  retryTarget.onRetry(retryTarget.groupId);
+                }}
+              >
+                ${t("common.retry")}
+              </button>
+            `
+          : nothing
+      }
+      ${
+        status === "ready" && !hasSelectableOptions && onModelSetup
+          ? html`
+              <button
+                class="chat-controls__model-catalog-action"
+                data-chat-model-setup="true"
+                type="button"
+                @click=${(event: MouseEvent) => {
+                  event.stopPropagation();
+                  onModelSetup();
+                }}
+              >
+                ${t("chat.modelControls.emptyModelsAction")}
+              </button>
+            `
+          : nothing
+      }
     </div>
   `;
 }

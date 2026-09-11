@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { zstdCompressSync } from "node:zlib";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -28,17 +27,15 @@ import {
   closeMemoryForgetFixture,
   seedMemoryForgetSession,
 } from "./memory-forget.test-helpers.js";
-import * as memoryDatabase from "./memory/manager-db.js";
-import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./memory/manager-db.js";
 import { runSessionBackfill } from "./session-backfill.js";
 import { readSessionIngestionState, writeSessionIngestionState } from "./session-ingestion.js";
+import { readPhaseSignalStore, writePhaseSignalStore } from "./short-term-promotion-store.js";
 import { readShortTermRecallEntries } from "./short-term-promotion.js";
 
 describe("memory forget", () => {
   let stateDir: string;
   let workspaceDir: string;
   let cfg: OpenClawConfig;
-  let vectorDatabase: DatabaseSync | undefined;
 
   beforeEach(async () => {
     stateDir = tempDirs.make("openclaw-memory-forget-");
@@ -47,13 +44,30 @@ describe("memory forget", () => {
 
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(() => {
-      if (vectorDatabase) {
-        closeMemoryDatabase(vectorDatabase);
-        vectorDatabase = undefined;
-      }
       closeMemoryForgetFixture();
       cleanup();
     }),
+  );
+
+  it.each([true, false])(
+    "reports no cache deletion for an empty selection (dryRun=%s)",
+    async (dryRun) => {
+      const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+      db.prepare(`INSERT INTO memory_embedding_cache
+      (provider, model, provider_key, hash, embedding, dims, updated_at)
+      VALUES ('test', 'test', 'test', 'unrelated', '[1,0]', 2, 1)`).run();
+      const report = await forgetMemoryEntries({
+        cfg,
+        agentId: "main",
+        hookSources: ["no-matching-source"],
+        dryRun,
+      });
+      expect(report.sessionIds).toEqual([]);
+      expect(report.artifacts.embeddingCacheRows).toBe(0);
+      expect(db.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([
+        { hash: "unrelated" },
+      ]);
+    },
   );
 
   it.each([
@@ -148,6 +162,73 @@ describe("memory forget", () => {
     ]);
   });
 
+  it("leaves the original memory file intact when a rewrite fails mid-write", async () => {
+    await seedMemoryForgetSession("archived");
+    recordMemoryEntryOrigins({
+      agentId: "main",
+      origins: [
+        {
+          entryKey: "archived-entry",
+          agentId: "main",
+          sessionId: "archived",
+          sessionKey: "agent:main:archived",
+          originClass: "owner",
+          observedAt: 1_000,
+        },
+      ],
+    });
+    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    const originalContent =
+      "# Long-Term Memory\n" +
+      "Curated operator fact that must survive.\n" +
+      "<!-- openclaw-memory-promotion:archived-entry -->\n" +
+      "- Archived secret.\n";
+    await fs.writeFile(memoryPath, originalContent);
+    await deleteSessionEntry({
+      agentId: "main",
+      sessionKey: "agent:main:archived",
+      expectedSessionId: "archived",
+      archiveTranscript: true,
+    });
+
+    // Exercise both the old direct write and the replacement temp write so this
+    // regression fails against the original boundary for the observed data loss.
+    const writeFile = fs.writeFile.bind(fs);
+    const directWriteFault = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      if (args[0] === memoryPath) {
+        await writeFile(memoryPath, "Curated ope");
+        throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+      }
+      return await writeFile(...args);
+    });
+    const open = fs.open.bind(fs);
+    const tempPrefix = `${memoryPath}.forget.`;
+    const fault = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const target = args[0];
+      if (typeof target === "string" && target.startsWith(tempPrefix)) {
+        const handle = await open(...args);
+        await handle.writeFile("Curated ope");
+        await handle.close();
+        throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+      }
+      return await open(...args);
+    });
+    try {
+      await expect(
+        forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["archived"] }),
+      ).rejects.toMatchObject({ code: "ENOSPC" });
+    } finally {
+      fault.mockRestore();
+      directWriteFault.mockRestore();
+    }
+    expect(await fs.readFile(memoryPath, "utf8")).toBe(originalContent);
+
+    // A retry with the fault cleared still completes the purge.
+    const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["archived"] });
+    expect(report.entryKeys).toEqual(["archived-entry"]);
+    expect(await fs.readFile(memoryPath, "utf8")).not.toContain("Archived secret");
+  });
+
   it.each([
     { label: "LF", content: "# Long-Term Memory\nKeep this.\n" },
     { label: "CRLF", content: "# Long-Term Memory\r\nKeep this.\r\n" },
@@ -177,6 +258,11 @@ describe("memory forget", () => {
        VALUES ('unrelated', 'MEMORY.md', 'memory', 1, 2,
          'unrelated-hash', 'test', 'Keep this.', '[1,0]', 1)`,
       ).run();
+      db.prepare(
+        `INSERT INTO memory_embedding_cache
+        (provider, model, provider_key, hash, embedding, dims, updated_at)
+       VALUES ('test', 'test', 'test', 'unrelated-hash', '[1,0]', 2, 1)`,
+      ).run();
 
       const preview = await forgetMemoryEntries({
         cfg,
@@ -187,8 +273,13 @@ describe("memory forget", () => {
       expect(preview).toMatchObject({
         sessionIds: ["unknown-session"],
         sessionResolutions: [{ sessionId: "unknown-session", source: "unresolved" }],
+        artifacts: { embeddingCacheRows: 1 },
       });
-      expect(Object.values(preview.artifacts).every((count) => count === 0)).toBe(true);
+      expect(
+        Object.entries(preview.artifacts)
+          .filter(([name]) => name !== "embeddingCacheRows")
+          .every(([, count]) => count === 0),
+      ).toBe(true);
       expect(listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
 
       const report = await forgetMemoryEntries({
@@ -201,10 +292,14 @@ describe("memory forget", () => {
       expect(tombstones).toMatchObject([{ sessionId: "unknown-session", reason: "forgotten" }]);
       expect(
         await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["unknown-session"] }),
-      ).toEqual(report);
+      ).toEqual({
+        ...report,
+        artifacts: { ...report.artifacts, embeddingCacheRows: 0 },
+      });
       expect(listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
       expect(await fs.readFile(memoryPath, "utf8")).toBe(content);
       expect(db.prepare("SELECT id FROM memory_index_chunks").all()).toEqual([{ id: "unrelated" }]);
+      expect(db.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
       expect(
         await readMemoryCoreWorkspaceEntries({
           namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
@@ -447,6 +542,14 @@ describe("memory forget", () => {
           },
         ],
       });
+      await writePhaseSignalStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-08-26T00:00:00.000Z",
+        entries: {
+          "mixed-entry": { key: "mixed-entry", lightHits: 1, remHits: 0 },
+          "clean-entry": { key: "clean-entry", lightHits: 0, remHits: 1 },
+        },
+      });
       await writeSessionIngestionState(workspaceDir, {
         version: 3,
         files: {
@@ -481,8 +584,7 @@ describe("memory forget", () => {
       });
 
       const agentDatabase = openOpenClawAgentDatabase({ agentId: "main" });
-      const db = openMemoryDatabaseAtPath(agentDatabase.path, true, "main");
-      vectorDatabase = db;
+      const db = agentDatabase.db;
       const loaded = await loadSqliteVecExtension({ db });
       expect(loaded.ok).toBe(true);
       db.exec(`
@@ -607,7 +709,7 @@ describe("memory forget", () => {
           indexSources: 3,
           ftsRows: 4,
           vectorRows: 4,
-          embeddingCacheRows: 4,
+          embeddingCacheRows: 5,
           shortTermEntries: 1,
           seenHashScopes: 1,
           backups: 1,
@@ -631,14 +733,16 @@ describe("memory forget", () => {
       if (failure !== "none") {
         const failureMessage = `synthetic ${failure} storage failure`;
         if (failure === "memory" || failure === "corpus") {
-          const writeFile = fs.writeFile.bind(fs);
+          const open = fs.open.bind(fs);
           const failedPath =
             failure === "memory" ? path.join(workspaceDir, "MEMORY.md") : mixedCorpusPath;
-          const fault = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-            await writeFile(...args);
-            if (args[0] === failedPath) {
+          const failedTempPrefix = `${failedPath}.forget.`;
+          const fault = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+            const target = args[0];
+            if (typeof target === "string" && target.startsWith(failedTempPrefix)) {
               throw new Error(failureMessage);
             }
+            return await open(...args);
           });
           try {
             await expect(
@@ -654,27 +758,12 @@ describe("memory forget", () => {
               : failure === "index"
                 ? "BEFORE DELETE ON memory_index_chunks WHEN OLD.id = 'chunk-0'"
                 : "BEFORE DELETE ON memory_entry_origins WHEN OLD.entry_key = 'mixed-entry'";
-          const injectFailure = (connection: DatabaseSync) =>
-            connection.exec(
-              `CREATE TEMP TRIGGER abort_forget ${trigger} BEGIN SELECT RAISE(ABORT, '${failureMessage}'); END`,
-            );
           // Attach the fault to the actual purge connection after schema validation,
           // so an unexpected persistent trigger cannot fail database admission first.
           const faultDb = failure === "backup" ? openOpenClawStateDatabase().db : agentDatabase.db;
-          const openDatabase = openMemoryDatabaseAtPath;
-          const fault =
-            failure === "index"
-              ? vi
-                  .spyOn(memoryDatabase, "openMemoryDatabaseAtPath")
-                  .mockImplementation((...args) => {
-                    const connection = openDatabase(...args);
-                    injectFailure(connection);
-                    return connection;
-                  })
-              : undefined;
-          if (!fault) {
-            injectFailure(faultDb);
-          }
+          faultDb.exec(
+            `CREATE TEMP TRIGGER abort_forget ${trigger} BEGIN SELECT RAISE(ABORT, '${failureMessage}'); END`,
+          );
           try {
             await expect(
               forgetMemoryEntries({ cfg, agentId: "main", hookSources: ["gmail"] }),
@@ -684,11 +773,7 @@ describe("memory forget", () => {
                 : { message: failureMessage },
             );
           } finally {
-            if (fault) {
-              fault.mockRestore();
-            } else {
-              faultDb.exec("DROP TRIGGER abort_forget");
-            }
+            faultDb.exec("DROP TRIGGER abort_forget");
           }
         }
         expect(listMemorySessionTombstones({ agentId: "main" })).toMatchObject([
@@ -723,12 +808,18 @@ describe("memory forget", () => {
         "memory_index_chunks_fts",
         "memory_index_chunks_vec",
         "memory_index_chunk_provenance",
-        "memory_embedding_cache",
       ]) {
         expect(
           (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count,
         ).toBe(1);
       }
+      expect(
+        (
+          db.prepare("SELECT COUNT(*) AS count FROM memory_embedding_cache").get() as {
+            count: number;
+          }
+        ).count,
+      ).toBe(0);
       expect(
         (db.prepare("SELECT path FROM memory_index_sources").all() as Array<{ path: string }>).map(
           (row) => row.path,
@@ -756,6 +847,9 @@ describe("memory forget", () => {
             workspaceDir,
           })
         ).map((entry) => entry.key),
+      ).toEqual(["clean-entry"]);
+      expect(
+        Object.keys((await readPhaseSignalStore(workspaceDir, new Date().toISOString())).entries),
       ).toEqual(["clean-entry"]);
       expect((await readSessionIngestionState(workspaceDir)).seenMessages).toEqual({
         "main:sessions/main/survivor": ["survivor-hash"],

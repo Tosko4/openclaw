@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
+import { setImmediate } from "node:timers/promises";
 
 export type PosixProcess = {
   pid: number;
@@ -8,6 +9,11 @@ export type PosixProcess = {
   state: string;
   startedAt: string;
 };
+
+/** A zombie leader can still own running threads, reported by the ps-style l flag. */
+export function isDeadProcessState(state: string): boolean {
+  return state.startsWith("Z") && !state.includes("l");
+}
 
 const PROCESS_COLUMNS = "pid=,ppid=,pgid=,stat=,lstart=";
 const MAX_PROCESS_CONTAINMENT_MS = 2_000;
@@ -74,27 +80,49 @@ export async function readCodexAppServerProcess(
 }
 
 export async function readCodexAppServerProcessCommand(
-  pid: number,
+  observed: PosixProcess,
   deadline: number,
 ): Promise<string> {
   let output: string;
   if (process.platform === "linux") {
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
-      throw new ProcessInspectionError("deadline");
-    }
-    try {
-      const command = await readFile(`/proc/${pid}/cmdline`, {
-        encoding: "utf8",
-        signal: AbortSignal.timeout(remainingMs),
-      });
+    let pending = false;
+    do {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        throw new ProcessInspectionError("deadline");
+      }
+      let command: string;
+      try {
+        command = await readFile(`/proc/${observed.pid}/cmdline`, {
+          encoding: "utf8",
+          signal: AbortSignal.timeout(remainingMs),
+        });
+      } catch (error) {
+        throw inspectionFailure(error);
+      }
+      // Linux can expose zero command bytes during exec startup. Wait only for
+      // that state, with the original identity and deadline, including the final read.
+      if (!command || pending) {
+        const current = await readCodexAppServerProcess(observed.pid, deadline);
+        if (
+          !current ||
+          current.startedAt !== observed.startedAt ||
+          current.ppid !== observed.ppid ||
+          current.pgid !== observed.pgid ||
+          current.state.startsWith("Z")
+        ) {
+          throw new ProcessInspectionError("unavailable");
+        }
+      }
       output = command.split("\0").join(" ").trim();
-    } catch (error) {
-      throw inspectionFailure(error);
-    }
+      pending = command.length === 0;
+      if (pending) {
+        await setImmediate();
+      }
+    } while (pending);
   } else {
     output =
-      (await readProcessOutput(["-o", "command=", "-p", String(pid)], deadline))
+      (await readProcessOutput(["-o", "command=", "-p", String(observed.pid)], deadline))
         .split("\n")[0]
         ?.trim() ?? "";
   }
@@ -164,6 +192,9 @@ async function readProcessOutput(args: string[], deadline: number): Promise<stri
       Math.max(1, remainingMs),
     );
     timer.unref?.();
+  }).catch((error: unknown) => {
+    // Spawn denial can throw before the inspector or its callback exists.
+    throw inspectionFailure(error);
   });
 }
 
@@ -261,12 +292,18 @@ async function readLinuxProcesses(
       ) {
         throw new ProcessInspectionError("unavailable");
       }
+      // An exiting task can lose its signal lock and report pgid=-1, threads=0.
+      // Full scans omit that row; selected owners still require usable group evidence.
       if (pgid > 0) {
+        const threads = Number(fields[17]);
+        if (!/^[1-9]\d*$/.test(fields[17] ?? "") || !Number.isSafeInteger(threads)) {
+          throw new ProcessInspectionError("unavailable");
+        }
         rows.push({
           pid: Number(entry),
           ppid,
           pgid,
-          state: fields[0]!,
+          state: `${fields[0]}${threads > 1 ? "l" : ""}`,
           startedAt: `${bootId}:${startTicks}`,
         });
       }

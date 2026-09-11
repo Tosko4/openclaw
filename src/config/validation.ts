@@ -3,7 +3,6 @@ import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configu
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { listAgentEntriesWithSource } from "../agents/agent-scope.js";
-import type { ChannelDmAllowFromMode } from "../channels/plugins/dm-access.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { listChannelIdsForOwnershipMigration } from "../plugins/channel-presence-policy.js";
 import { normalizePluginsConfig, normalizePluginId } from "../plugins/config-state.js";
@@ -21,6 +20,7 @@ import {
   collectChannelDmPolicyMetadata,
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
+import { resolveChannelSchemaSelection } from "./channel-schema-selection.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
 import {
@@ -28,6 +28,7 @@ import {
   tryGetLegacyDefaultAgentId,
 } from "./legacy.default-agent-owner.js";
 import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
+import { removeLegacyCopilotDiscovery } from "./legacy.github-copilot.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
@@ -56,6 +57,7 @@ type ValidateConfigWithPluginsResult =
 
 type ValidateConfigWithPluginsParams = {
   env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
   pluginValidation?: "full" | "skip" | "core-only";
   /** Runtime preserves inactive-owner startup; strict mode checks all declared targets for explicit validation and writes. */
   semanticValidation?: "runtime" | "strict";
@@ -72,7 +74,7 @@ type RegistryInfo = {
   knownIds?: Set<string>;
   overriddenPluginIds?: Set<string>;
   normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
-  channelDmAllowFromModes?: Map<string, ChannelDmAllowFromMode>;
+  channelSchemaSelection?: ReadonlySet<string>;
   channelSchemas?: Map<
     string,
     { schema?: Record<string, unknown>; pluginId?: string; origin: PluginOrigin }
@@ -135,18 +137,18 @@ function validateConfigObjectWithPluginMode(
   params: ValidateConfigWithPluginsParams | undefined,
   applyDefaults: boolean,
 ): ValidateConfigWithPluginsResult {
-  const contextBudgetConfig = migrateLegacyContextBudgetConfig(raw).config;
-  const migrated = migratePersistedImplicitMainRoster(contextBudgetConfig).config as OpenClawConfig;
+  const copilotConfig = removeLegacyCopilotDiscovery(raw);
+  const contextBudgetConfig = migrateLegacyContextBudgetConfig(copilotConfig).config;
+  const migrated = migratePersistedImplicitMainRoster(contextBudgetConfig, {
+    env: params?.env,
+    homedir: params?.homedir,
+  }).config as OpenClawConfig;
   let manifestRegistry = params?.pluginMetadataSnapshot?.manifestRegistry;
   const result = validateConfigObjectWithPluginsBase(migrated, {
+    ...params,
     applyDefaults,
-    env: params?.env,
     pluginValidation: params?.pluginValidation ?? "full",
     semanticValidation: params?.semanticValidation ?? "runtime",
-    pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
-    loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
-    sourceRaw: params?.sourceRaw,
-    preservedLegacyRootKeys: params?.preservedLegacyRootKeys,
     onManifestRegistryResolved: (registry) => {
       manifestRegistry = registry;
     },
@@ -164,8 +166,7 @@ function validateConfigObjectWithPluginMode(
     params?.env,
     manifestRegistry?.plugins,
   );
-  const config = materialized.config;
-  return { ...result, config };
+  return { ...result, config: materialized.config };
 }
 
 export function materializeLegacyAgentOwnershipForActiveChannelsResult(
@@ -173,7 +174,11 @@ export function materializeLegacyAgentOwnershipForActiveChannelsResult(
   legacyDefaultAgentId: string,
   env?: NodeJS.ProcessEnv,
   manifestRecords?: PluginManifestRegistry["plugins"],
-  options?: { materializeSessionStore?: boolean; materializeWorkspace?: boolean },
+  options?: {
+    materializeSessionStore?: boolean;
+    materializeWorkspace?: boolean;
+    homedir?: () => string;
+  },
 ): ReturnType<typeof materializeLegacyDefaultAgentRoles> {
   const ambientChannelIds = listChannelIdsForOwnershipMigration({
     config,
@@ -183,6 +188,7 @@ export function materializeLegacyAgentOwnershipForActiveChannelsResult(
   const materialized = materializeLegacyDefaultAgentRoles(config, legacyDefaultAgentId, {
     ambientChannelIds,
     env,
+    homedir: options?.homedir,
     materializeSessionStore: options?.materializeSessionStore,
     materializeWorkspace: options?.materializeWorkspace,
   });
@@ -201,6 +207,7 @@ function validateConfigObjectWithPluginsBase(
     sourceRaw: opts.sourceRaw,
     preservedLegacyRootKeys: opts.preservedLegacyRootKeys,
     env: opts.env,
+    homedir: opts.homedir,
   });
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
@@ -216,6 +223,17 @@ function validateConfigObjectWithPluginsBase(
   let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
     ? rememberRegistry(opts.pluginMetadataSnapshot.manifestRegistry)
     : null;
+  const ensureLoadedRegistryInfo = (): RegistryInfo => {
+    registryInfo ??= rememberRegistry(
+      opts.loadPluginMetadataSnapshot?.(parsedConfig)?.manifestRegistry ??
+        resolveConfigWidePluginManifestRegistry({
+          config: parsedConfig,
+          env: opts.env ?? process.env,
+        }),
+    );
+    return registryInfo;
+  };
+
   if (opts.applyDefaults && !registryInfo && opts.pluginValidation !== "core-only") {
     const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(parsedConfig);
     if (pluginMetadataSnapshot) {
@@ -224,9 +242,17 @@ function validateConfigObjectWithPluginsBase(
   }
   const config = opts.applyDefaults
     ? materializeRuntimeConfig(parsedConfig, {
+        env: opts.env,
+        homedir: opts.homedir,
         manifestRegistry:
           registryInfo?.registry ??
           (opts.pluginValidation === "core-only" ? { plugins: [] } : undefined),
+        // Catalog defaults must use the same metadata as later plugin validation;
+        // generic defaults erase omitted fields and create false runtime diffs.
+        loadManifestRegistry:
+          opts.pluginValidation === "core-only"
+            ? undefined
+            : () => ensureLoadedRegistryInfo().registry,
       })
     : parsedConfig;
   if (opts.pluginValidation === "skip" || opts.pluginValidation === "core-only") {
@@ -272,22 +298,6 @@ function validateConfigObjectWithPluginsBase(
     }
   };
 
-  const loadValidationRegistry = (): RegistryInfo => {
-    const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(config);
-    if (pluginMetadataSnapshot) {
-      registryInfo = rememberRegistry(pluginMetadataSnapshot.manifestRegistry);
-      return registryInfo;
-    }
-    const registry = resolveConfigWidePluginManifestRegistry({
-      config,
-      env: opts.env ?? process.env,
-    });
-    registryInfo = rememberRegistry(registry);
-    return registryInfo;
-  };
-
-  const ensureLoadedRegistryInfo = (): RegistryInfo => registryInfo ?? loadValidationRegistry();
-
   const ensureCompatPluginIds = (): ReadonlySet<string> => {
     if (compatPluginIds) {
       return compatPluginIds;
@@ -297,7 +307,7 @@ function validateConfigObjectWithPluginsBase(
       compatPluginIds = new Set<string>();
       return compatPluginIds;
     }
-    const { registry } = registryInfo ?? loadValidationRegistry();
+    const { registry } = ensureLoadedRegistryInfo();
     const overriddenBundledPluginIds = ensureOverriddenPluginIds();
     compatPluginIds = new Set(
       registry.plugins
@@ -341,6 +351,16 @@ function validateConfigObjectWithPluginsBase(
     return info.normalizedPlugins;
   };
 
+  const ensureChannelSchemaSelection = (): ReadonlySet<string> => {
+    const info = ensureLoadedRegistryInfo();
+    info.channelSchemaSelection ??= resolveChannelSchemaSelection(
+      info.registry,
+      parsedConfig,
+      opts.env,
+    );
+    return info.channelSchemaSelection;
+  };
+
   const ensureChannelSchemas = (): Map<
     string,
     { schema?: Record<string, unknown>; pluginId?: string; origin: PluginOrigin }
@@ -352,7 +372,8 @@ function validateConfigObjectWithPluginsBase(
           (entry) => [entry.channelId, { schema: entry.schema, origin: "bundled" }] as const,
         ),
       );
-      for (const entry of collectChannelSchemaMetadataWithOwnership(info.registry)) {
+      const selection = ensureChannelSchemaSelection();
+      for (const entry of collectChannelSchemaMetadataWithOwnership(info.registry, selection)) {
         const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {
           info.channelSchemas.set(entry.id, {
@@ -370,25 +391,15 @@ function validateConfigObjectWithPluginsBase(
     return info.channelSchemas;
   };
 
-  const ensureChannelDmAllowFromModes = (): ReadonlyMap<string, ChannelDmAllowFromMode> => {
-    const info = ensureLoadedRegistryInfo();
-    info.channelDmAllowFromModes ??= new Map(
-      collectChannelDmPolicyMetadata(info.registry).flatMap((entry) =>
-        entry.dmAllowFromMode ? [[entry.id, entry.dmAllowFromMode] as const] : [],
-      ),
-    );
-    return info.channelDmAllowFromModes;
-  };
-
   // Generic DM-policy/allowFrom dependency check on the raw user config (pre-defaults)
   // so account inheritance matches the per-channel Zod refinements.
-  warnings.push(
-    ...(hasChannelDmPolicyDependencyWarningCandidates(parsedConfig)
-      ? collectChannelDmPolicyDependencyWarnings(parsedConfig, {
-          dmAllowFromModes: ensureChannelDmAllowFromModes(),
-        })
-      : collectChannelDmPolicyDependencyWarnings(parsedConfig)),
-  );
+  const dmPolicyMetadata = hasChannelDmPolicyDependencyWarningCandidates(parsedConfig)
+    ? collectChannelDmPolicyMetadata(
+        ensureLoadedRegistryInfo().registry,
+        ensureChannelSchemaSelection(),
+      )
+    : undefined;
+  warnings.push(...collectChannelDmPolicyDependencyWarnings(parsedConfig, { dmPolicyMetadata }));
 
   let mutatedConfig = config;
   let channelsCloned = false;
@@ -640,7 +651,7 @@ function validateConfigObjectWithPluginsBase(
         schema: channelSchema.schema,
         cacheKey: `channel:${trimmed}`,
         value: config.channels[trimmed],
-        applyDefaults: true, // Always apply defaults for AJV schema validation;
+        applyDefaults: true, // Always apply defaults for plugin schema validation;
         // writeConfigFile persists persistCandidate, not validated.config (#61841)
       });
       if (!result.ok) {

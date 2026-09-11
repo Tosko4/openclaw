@@ -31,7 +31,10 @@ import {
 } from "./openai-responses-contracts.js";
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
 import type { ResponsesOutputTracker } from "./openai-responses-stream-slots-internal.js";
-import { parseTerminalToolCallArguments } from "./transport-stream-shared.js";
+import {
+  IncompleteToolCallError,
+  parseTerminalToolCallArguments,
+} from "./transport-stream-shared.js";
 
 export type ResponsesEventSink = { push(event: AssistantMessageEvent): void };
 export type TextBlockReference = {
@@ -57,6 +60,7 @@ type TerminalOptions = {
     tier: ResponseCreateParamsStreaming["service_tier"] | undefined,
   ) => void;
   reasoningReplayMetadata?: OpenAIResponsesReasoningReplayMetadata;
+  resolveResponseModel?: () => string | undefined;
 };
 
 function splitToolCallId(id: string): [string, string | undefined] {
@@ -85,7 +89,9 @@ export function resolveCompletedResponsesToolCall(
   streamed?: { name?: string; arguments?: string },
 ): Pick<ToolCall, "name" | "arguments"> {
   if (item.status && item.status !== "completed") {
-    throw new Error("Responses stream completed with an incomplete terminal tool call");
+    throw new IncompleteToolCallError(
+      "Responses stream completed with an incomplete terminal tool call",
+    );
   }
   const streamedName = streamed?.name?.trim() || undefined;
   const completedName = typeof item.name === "string" ? item.name.trim() || undefined : undefined;
@@ -207,7 +213,7 @@ export function createResponsesTerminalController(params: {
     item: { type: "function_call"; id?: string; call_id?: string },
     outputIndex: number | undefined,
     started: { block: ToolCall; contentIndex: number } | undefined,
-    validated: Pick<ToolCall, "name" | "arguments">,
+    validated: Pick<ToolCall, "name" | "arguments" | "async">,
   ): void => {
     // Complete the same public block with authoritative identities and arguments;
     // scratch JSON must never survive into transcript replay.
@@ -304,7 +310,9 @@ export function createResponsesTerminalController(params: {
     responseId = response.id,
   ) => {
     output.responseId = responseId || output.responseId;
-    output.responseModel = response.model?.trim() || undefined;
+    output.responseModel = options?.resolveResponseModel
+      ? options.resolveResponseModel()?.trim() || undefined
+      : response.model?.trim() || undefined;
     const usage = mapResponsesTerminalUsage(response.usage);
     const reasoningTokens = readResponsesReasoningTokens(response.usage);
     if (usage) {

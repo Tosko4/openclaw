@@ -14,15 +14,16 @@ import {
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
   resolveAgentMaxConcurrent,
 } from "./agent-limits.js";
+import { mergeModelCost } from "./model-cost.js";
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelSelectionForConfig,
 } from "./model-input.js";
+import { materializeConfiguredProviderModelRows } from "./model-provider-rows.js";
 import {
   applyProviderConfigDefaultsForConfig,
   normalizeProviderConfigForConfigDefaults,
 } from "./provider-policy.js";
-import { normalizeTalkConfig } from "./talk.js";
 import type { ModelDefinitionConfig } from "./types.models.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -153,10 +154,6 @@ export function applySessionDefaults(
   return next;
 }
 
-export function applyTalkConfigNormalization(config: OpenClawConfig): OpenClawConfig {
-  return normalizeTalkConfig(config);
-}
-
 /** Catalog metadata eligible to fill fields the operator did not author. */
 type CatalogSeedModel = Pick<
   ModelDefinitionConfig,
@@ -229,11 +226,19 @@ export function applyModelDefaults(
     );
     const nextProviders = { ...providerConfig };
     for (const [providerId, provider] of Object.entries(providerConfig)) {
-      const normalizedProvider = normalizeProviderConfigForConfigDefaults({
-        provider: providerId,
-        providerConfig: provider,
-        manifestRegistry,
-      });
+      const normalizedProvider = materializeConfiguredProviderModelRows(
+        normalizeProviderConfigForConfigDefaults({
+          provider: providerId,
+          providerConfig: provider,
+          manifestRegistry,
+        }),
+        (modelId) =>
+          normalizeConfiguredProviderCatalogModelId(
+            providerId,
+            modelId,
+            modelIdNormalizationPolicies,
+          ),
+      );
       const models = normalizedProvider.models;
       if (!Array.isArray(models) || models.length === 0) {
         if (normalizedProvider !== provider) {
@@ -251,11 +256,7 @@ export function applyModelDefaults(
       let providerMutated = false;
       const nextModels = models.map((model) => {
         const raw = model as ModelDefinitionLike;
-        const id = normalizeConfiguredProviderCatalogModelId(
-          providerId,
-          raw.id,
-          modelIdNormalizationPolicies,
-        );
+        const id = raw.id;
 
         // Config entries are overrides, not full definitions: authored fields
         // win, the owning catalog row fills omitted fields, and only then do
@@ -268,16 +269,7 @@ export function applyModelDefaults(
 
         const input = raw.input ?? catalogModel?.input ?? [...DEFAULT_MODEL_INPUT];
 
-        const cost = resolveModelCost(
-          raw.cost || catalogModel?.cost ? { ...catalogModel?.cost, ...raw.cost } : undefined,
-        );
-        // resolveModelCost keeps only the flat per-token fields; carry tiered
-        // pricing through explicitly so an authored or catalog tier table is
-        // not silently discarded when other cost fields are defaulted.
-        const tieredPricing = raw.cost?.tieredPricing ?? catalogModel?.cost?.tieredPricing;
-        if (tieredPricing) {
-          cost.tieredPricing = tieredPricing;
-        }
+        const cost = resolveModelCost(mergeModelCost(catalogModel?.cost, raw.cost));
         const costMutated =
           !raw.cost ||
           raw.cost.input !== cost.input ||
@@ -318,7 +310,6 @@ export function applyModelDefaults(
             ? catalogModel.compat
             : undefined;
         const modelMutated =
-          id !== raw.id ||
           raw.reasoning !== reasoning ||
           raw.input === undefined ||
           costMutated ||
@@ -336,7 +327,6 @@ export function applyModelDefaults(
           {},
           raw,
           {
-            id,
             reasoning,
             input,
             cost,
@@ -487,25 +477,17 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
     return cfg;
   }
 
-  let mutated = false;
   const nextDefaults = defaults ? { ...defaults } : {};
   if (!hasMax) {
     nextDefaults.maxConcurrent = resolveAgentMaxConcurrent();
-    mutated = true;
   }
 
   const nextSubagents = defaults?.subagents ? { ...defaults.subagents } : {};
   if (!hasSubMax) {
     nextSubagents.maxConcurrent = DEFAULT_SUBAGENT_MAX_CONCURRENT;
-    mutated = true;
   }
   if (!hasSubArchive) {
     nextSubagents.archiveAfterMinutes = DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES;
-    mutated = true;
-  }
-
-  if (!mutated) {
-    return cfg;
   }
 
   return {
@@ -518,14 +500,6 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
       },
     },
   };
-}
-
-export function applyCronDefaults(cfg: OpenClawConfig): OpenClawConfig {
-  return cfg;
-}
-
-export function applyLoggingDefaults(cfg: OpenClawConfig): OpenClawConfig {
-  return cfg;
 }
 
 function hasAnthropicDefaultSignal(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {

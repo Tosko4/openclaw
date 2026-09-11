@@ -75,7 +75,11 @@ test.each([
       totalBytes: 1_000,
       observedAtMs: 350,
     };
-    const identity = { providerId: "machine0", profileId: "team" };
+    const identity = {
+      providerId: "machine0",
+      profileId: "team",
+      machine: { class: "medium", os: "linux", osLabel: "Linux", cpu: 4, memoryGb: 16 },
+    };
     const getEnvironment = vi.fn((environmentId: string) =>
       ownerEpoch !== undefined && environmentId === placement.environmentId
         ? { ...identity, ownerEpoch, state: "attached" }
@@ -87,7 +91,12 @@ test.each([
       {
         context: {
           workerSessionPlacementService: { getMany },
-          workerEnvironmentService: { get: getEnvironment, inventoryVersion: () => 0 },
+          workerEnvironmentService: {
+            get: getEnvironment,
+            readMachineShape: () => identity.machine,
+            machineShapeVersion: () => 0,
+            inventoryVersion: () => 0,
+          },
           workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
           workerPlacementRunnerAvailabilityReader: {
             read: () => ({ kind: "device", status: "offline" }),
@@ -161,6 +170,8 @@ test.each(["provisioning", "syncing", "starting"] as const)(
               ownerEpoch: 0,
               state: "provisioning",
             }),
+            readMachineShape: () => undefined,
+            machineShapeVersion: () => 0,
             inventoryVersion: () => 0,
           },
         },
@@ -319,6 +330,8 @@ test.each([
                     ownerEpoch,
                     state: "destroyed",
                   },
+            readMachineShape: () => undefined,
+            machineShapeVersion: () => 0,
             inventoryVersion: () => 0,
           },
         },
@@ -328,6 +341,7 @@ test.each([
     expect(result.ok).toBe(true);
     expect(result.payload?.session?.placement).toMatchObject({
       state: "failed",
+      recoveryAction: "restart",
       terminalReason: "cloud worker disappeared: provider reported lease destroyed",
       terminalAtMs: 400,
     });
@@ -341,3 +355,46 @@ test.each([
     }
   },
 );
+
+test("sessions.describe requires worker teardown before failed-placement restart", async () => {
+  await seedSessionRows();
+  const active = activePlacementRecord();
+  const placement = {
+    ...active,
+    state: "failed" as const,
+    turnClaim: null,
+    recoveryError: "worker unavailable",
+    terminalReason: "worker unavailable",
+    terminalAtMs: 400,
+  } satisfies WorkerSessionPlacementRecord;
+
+  const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
+    "sessions.describe",
+    { key: "main" },
+    {
+      context: {
+        workerSessionPlacementService: {
+          getMany: () => new Map([[placement.sessionId, placement]]),
+        },
+        workerEnvironmentService: {
+          get: () => ({
+            providerId: "machine0",
+            profileId: "team",
+            ownerEpoch: placement.activeOwnerEpoch,
+            state: "failed",
+            leaseId: "lease-live",
+          }),
+          readMachineShape: () => undefined,
+          machineShapeVersion: () => 0,
+          inventoryVersion: () => 0,
+        },
+      },
+    },
+  );
+
+  expect(result.ok).toBe(true);
+  expect(result.payload?.session?.placement).toMatchObject({
+    state: "failed",
+    recoveryAction: "stop-first",
+  });
+});

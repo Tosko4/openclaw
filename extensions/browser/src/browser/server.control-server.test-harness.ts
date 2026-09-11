@@ -195,12 +195,18 @@ const pwMocks = vi.hoisted(() => {
     clickViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     closePageViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     closePlaywrightBrowserConnection,
+    hasCachedPlaywrightBrowserConnection: vi.fn((_cdpUrl: string) => false),
     retirePlaywrightBrowserConnection: vi.fn(() => false),
     retirePlaywrightBrowserConnectionExact: vi.fn((opts: { cdpUrl: string }) => ({
       retired: false,
       close: async () => await closePlaywrightBrowserConnection(opts),
     })),
     cookiesGetViaPlaywright: vi.fn(async () => ({ cookies: [] })),
+    downloadCurrentDocumentViaPlaywright: vi.fn(async (_opts?: unknown) => ({
+      url: "https://example.com/inline.png",
+      suggestedFilename: "inline.png",
+      path: "/tmp/managed-inline.png",
+    })),
     downloadViaPlaywright: vi.fn(async () => ({
       url: "https://example.com/report.pdf",
       suggestedFilename: "report.pdf",
@@ -242,7 +248,7 @@ const pwMocks = vi.hoisted(() => {
       stats: { lines: 1, chars: 24, refs: 1, interactive: 1 },
     })),
     storageGetViaPlaywright: vi.fn(async () => ({ values: {} })),
-    storeAriaSnapshotRefsViaPlaywright: vi.fn(async () => {}),
+    storeSnapshotRefsViaPlaywright: vi.fn(async () => {}),
     traceStartViaPlaywright: vi.fn(async () => {}),
     traceStopViaPlaywright: vi.fn(async (opts: { path: string }) => opts.path),
     takeScreenshotViaPlaywright: vi.fn(async () => ({
@@ -391,6 +397,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
   clickChromeMcpElement: vi.fn(async () => {}),
   closeChromeMcpSession: vi.fn(async () => true),
   closeChromeMcpTab: vi.fn(async () => {}),
+  countChromeMcpTabs: vi.fn(async () => 1),
   dragChromeMcpElement: vi.fn(async () => {}),
   ensureChromeMcpAvailable: vi.fn(async () => {}),
   evaluateChromeMcpScript: vi.fn(async () => true),
@@ -570,6 +577,7 @@ vi.mock("./screenshot.js", () => ({
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE: 64,
   normalizeBrowserScreenshot: vi.fn(async (buf: Buffer) => ({
     buffer: buf,
+    sourceDimensions: null,
     contentType: "image/png",
   })),
 }));

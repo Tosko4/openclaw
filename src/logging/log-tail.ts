@@ -77,18 +77,7 @@ async function readLogSlice(params: {
   maxBytes: number;
   filter?: (line: string) => boolean;
 }): Promise<Omit<LogTailPayload, "file">> {
-  const stat = await fs.stat(params.file).catch(missingPathToNull);
-  if (!stat) {
-    return {
-      cursor: 0,
-      size: 0,
-      lines: [],
-      truncated: false,
-      reset: false,
-    };
-  }
-
-  const size = stat.size;
+  const size = (await fs.stat(params.file).catch(missingPathToNull))?.size ?? 0;
   const maxBytes = clamp(params.maxBytes, 1, MAX_BYTES);
   const limit = clamp(params.limit, 1, MAX_LIMIT);
   let cursor =
@@ -148,10 +137,10 @@ async function readLogSlice(params: {
     const bytesRead = await readFileWindowFully(handle, buffer, start);
     const text = buffer.toString("utf8", 0, bytesRead);
     let lines = text.split("\n");
-    lines = lines.slice(0, -1);
+    lines.pop();
     if (start > 0 && prefix !== "\n") {
       // Drop the first partial line when starting in the middle of a file.
-      lines = lines.slice(1);
+      lines.shift();
     }
     if (params.filter) {
       // Sparse consumers inspect the full byte-bounded window before the shared line cap.

@@ -1,6 +1,10 @@
 /** Covers provider discovery runtime loading from plugin manifests and registries. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import {
+  prepareSyntheticAuthWithProvider,
+  resolveSyntheticAuthWithProvider,
+} from "./provider-synthetic-auth.js";
 import type { ProviderPlugin } from "./types.js";
 
 const mocks = vi.hoisted(() => {
@@ -236,9 +240,40 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     mocks.loadSource.mockReturnValue(staticProvider);
 
     expect(resolvePluginDiscoveryProvidersRuntime({})).toEqual([
-      { ...staticProvider, pluginId: "deepseek" },
+      { ...staticProvider, pluginId: "deepseek", pluginRoot: "/tmp/deepseek" },
     ]);
     expect(mocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
+  });
+
+  it("retains prepared auth through attribution until the provider hook changes", async () => {
+    const auth = { apiKey: "native-marker", source: "fixture", mode: "oauth" as const };
+    const provider: ProviderPlugin = {
+      id: "deepseek",
+      label: "Native fixture",
+      auth: [],
+      prepareSyntheticAuth: vi.fn(async () => auth),
+    };
+    mocks.loadSource.mockReturnValue(provider);
+    const context = { config: {}, provider: "deepseek" };
+    const options = { env: {}, workspaceDir: "/workspace" };
+    const discover = () => {
+      const [discovered] = resolvePluginDiscoveryProvidersRuntime({
+        discoveryEntriesOnly: true,
+        includeSyntheticAuthProviders: true,
+      });
+      if (!discovered) {
+        throw new Error("Fixture discovery provider missing");
+      }
+      return discovered;
+    };
+    await prepareSyntheticAuthWithProvider(discover(), context, options);
+    expect(resolveSyntheticAuthWithProvider(discover(), context, options)).toEqual(auth);
+
+    const replacement = { ...provider, prepareSyntheticAuth: vi.fn(async () => undefined) };
+    mocks.getCachedPluginModuleLoader.mockReturnValueOnce(vi.fn(() => replacement));
+    expect(resolveSyntheticAuthWithProvider(discover(), context, options)).toBeUndefined();
+    expect(provider.prepareSyntheticAuth).toHaveBeenCalledOnce();
+    expect(replacement.prepareSyntheticAuth).not.toHaveBeenCalled();
   });
 
   it("does not synthesize manifest entry providers for runtime-discovered catalogs", () => {
@@ -430,7 +465,7 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     mocks.loadSource.mockReturnValue(staticProvider);
 
     expect(resolvePluginDiscoveryProvidersRuntime({})).toEqual([
-      { ...staticProvider, pluginId: "deepseek" },
+      { ...staticProvider, pluginId: "deepseek", pluginRoot: "/tmp/deepseek" },
     ]);
 
     expect(mocks.getCachedPluginModuleLoader).toHaveBeenCalledOnce();
@@ -493,8 +528,8 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
         env: { KILOCODE_API_KEY: "sk-test" } as NodeJS.ProcessEnv,
       }),
     ).toEqual([
-      { ...codexEntryProvider, pluginId: "codex" },
-      { ...deepseekEntryProvider, pluginId: "deepseek" },
+      { ...codexEntryProvider, pluginId: "codex", pluginRoot: "/tmp/codex" },
+      { ...deepseekEntryProvider, pluginId: "deepseek", pluginRoot: "/tmp/deepseek" },
       ...fullProviders,
     ]);
     expect(mocks.resolvePluginProvidersCore).toHaveBeenCalledTimes(1);
@@ -526,7 +561,10 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       resolvePluginDiscoveryProvidersRuntime({
         env: { KILOCODE_API_KEY: "sk-test" } as NodeJS.ProcessEnv,
       }),
-    ).toEqual([{ ...codexEntryProvider, pluginId: "codex" }, ...fullProviders]);
+    ).toEqual([
+      { ...codexEntryProvider, pluginId: "codex", pluginRoot: "/tmp/codex" },
+      ...fullProviders,
+    ]);
     expect(mocks.resolvePluginProvidersCore).toHaveBeenCalledTimes(1);
     const params = requireResolvePluginProvidersParams();
     expect(params.onlyPluginIds).toEqual(["kilocode"]);

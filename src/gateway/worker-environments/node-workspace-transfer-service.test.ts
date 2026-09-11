@@ -144,7 +144,6 @@ describe("node workspace transfer service", () => {
 
       const staged = await service.prepareSync({ ...request, generation: 2 });
       expect(staged.snapshot.manifest.baseCommit).toBeNull();
-      expect(staged.snapshot.packPath).toBeUndefined();
       expect(staged.snapshot.manifestRef).toBe(plain.snapshot.manifestRef);
       expect(staged.snapshot.manifest.entries).toContainEqual(
         expect.objectContaining({ path: "input.txt", type: "file" }),
@@ -163,7 +162,6 @@ describe("node workspace transfer service", () => {
       );
       const committed = await service.prepareSync({ ...request, generation: 3 });
       expect(committed.snapshot.manifest.baseCommit).toBe(await git("rev-parse", "HEAD"));
-      expect(committed.snapshot.packPath).toBeDefined();
 
       await fs.writeFile(path.join(localPath, ".git", "HEAD"), "invalid HEAD\n");
       await expect(service.prepareSync({ ...request, generation: 4 })).rejects.toThrow(
@@ -354,6 +352,7 @@ describe("node workspace transfer service", () => {
               direction: "upload",
               token,
               baseManifestRef: prepared.snapshot.manifestRef,
+              referenceManifestRef: prepared.snapshot.manifestRef,
             },
           },
           undefined,
@@ -382,7 +381,9 @@ describe("node workspace transfer service", () => {
         headers: { authorization: `Bearer ${uploadToken}`, "content-length": "0" },
       });
       expect(replay.status).toBe(404);
+      service.revoke("environment-1", uploadToken);
       const uploaded = service.takeUpload("environment-1", prepared.snapshot.manifestRef);
+      await service.discardUpload("environment-1", uploadToken);
       expect(uploaded.current.entries).toContainEqual(
         expect.objectContaining({ path: "result.txt", type: "file" }),
       );
@@ -411,7 +412,9 @@ describe("node workspace transfer service", () => {
         "environment-1",
         prepared.snapshot.manifestRef,
       );
-      await expect(uploadResult(failedUploadToken)).rejects.toThrow("workspace-transfer-failed");
+      await expect(uploadResult(failedUploadToken)).rejects.toThrow(
+        "workspace-transfer-invalid: gateway rejected workspace transfer payload (staging)",
+      );
       expect(writeFaults.lastStagingRoot()).toBeDefined();
       await expect(fs.stat(writeFaults.lastStagingRoot()!)).rejects.toMatchObject({
         code: "ENOENT",

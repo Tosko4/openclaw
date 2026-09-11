@@ -1,10 +1,12 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { formatCommandErrorForUser } from "../../process/command-error.js";
 import {
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
+  formatTransportErrorCopy,
   isCloudflareOrHtmlErrorPage,
   isGenericProviderInternalError,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
@@ -175,54 +177,6 @@ export function renderRateLimitOrOverloadedCopy(params: {
   );
 }
 
-export function formatTransportErrorCopy(raw: string): string | undefined {
-  if (!raw || isCloudflareOrHtmlErrorPage(raw)) {
-    return undefined;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(raw);
-  if (
-    /\beconnrefused\b/i.test(raw) ||
-    lower.includes("connection refused") ||
-    lower.includes("actively refused")
-  ) {
-    return "LLM request failed: connection refused by the provider endpoint.";
-  }
-  if (
-    /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i.test(raw) ||
-    lower.includes("socket hang up") ||
-    lower.includes("connection reset") ||
-    lower.includes("connection aborted")
-  ) {
-    return "LLM request failed: network connection was interrupted.";
-  }
-  if (
-    /\benotfound\b|\beai_again\b/i.test(raw) ||
-    lower.includes("getaddrinfo") ||
-    lower.includes("no such host") ||
-    lower.includes("dns")
-  ) {
-    return "LLM request failed: DNS lookup for the provider endpoint failed.";
-  }
-  if (
-    /\benetunreach\b|\behostunreach\b|\behostdown\b/i.test(raw) ||
-    lower.includes("network is unreachable") ||
-    lower.includes("host is unreachable")
-  ) {
-    return "LLM request failed: the provider endpoint is unreachable from this host.";
-  }
-  if (
-    lower.includes("fetch failed") ||
-    lower.includes("connection error") ||
-    lower.includes("network request failed")
-  ) {
-    return "LLM request failed: network connection error.";
-  }
-  if (raw.includes("网络错误") || raw.includes("网络异常") || raw.includes("连接错误")) {
-    return "LLM request failed: provider reported a network error.";
-  }
-  return undefined;
-}
-
 export function formatDiskSpaceErrorCopy(raw: string): string | undefined {
   const lower = normalizeLowercaseStringOrEmpty(raw);
   return /\benospc\b/i.test(raw) ||
@@ -266,21 +220,8 @@ export function isLikelyHttpErrorText(raw: string): boolean {
   return Boolean(
     status &&
     status.code >= 400 &&
-    (classifyFailoverReason(raw) !== null ||
+    (classifyFailoverReason(raw, { providerPlugin: null }) !== null ||
       classifyProviderRequestFacets({ status: status.code, message: raw }) !== null),
-  );
-}
-
-function shouldRewriteContextOverflowText(raw: string): boolean {
-  if (classifyFailoverReason(raw) !== "context_overflow") {
-    return false;
-  }
-  const status = extractLeadingHttpStatus(raw);
-  return (
-    isRawApiErrorPayload(raw) ||
-    Boolean(status && status.code >= 400) ||
-    ERROR_PREFIX_RE.test(raw) ||
-    CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(raw)
   );
 }
 
@@ -314,6 +255,10 @@ export function renderSanitizedUserFacingText(
       ? formatRawAssistantErrorForUi(trimmed)
       : sanitized;
   }
+  const commandError = formatCommandErrorForUser(trimmed);
+  if (commandError) {
+    return commandError;
+  }
   const execDenied = formatExecDeniedUserMessage(trimmed);
   if (execDenied) {
     return execDenied;
@@ -325,12 +270,33 @@ export function renderSanitizedUserFacingText(
   if (/incorrect role information|roles must alternate/i.test(trimmed)) {
     return "Message ordering conflict - please try again. If this persists, use /new to start a fresh session.";
   }
-  if (shouldRewriteContextOverflowText(trimmed)) {
+  const reason = classifyFailoverReason(trimmed, { providerPlugin: null });
+  const status = extractLeadingHttpStatus(trimmed);
+  const rawPayload = isRawApiErrorPayload(trimmed);
+  if (
+    reason === "context_overflow" &&
+    (rawPayload ||
+      (status && status.code >= 400) ||
+      ERROR_PREFIX_RE.test(trimmed) ||
+      CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(trimmed))
+  ) {
     return renderFailoverBaseCopy("context_overflow") ?? trimmed;
   }
-  const reason = classifyFailoverReason(trimmed);
   if (reason === "billing" || reason === "rate_limit" || reason === "overloaded") {
     return renderFailoverBaseCopy(reason, { raw: trimmed }) ?? trimmed;
+  }
+  // Reason-level provider copy is surface-independent: the channel reply path renders
+  // it from failover facts, while session transcripts, run status, and the TUI read
+  // this renderer. Facets stay null so the rate-limit/overload branches above keep
+  // provider retry detail; labeled statuses ("unexpected status 401 ...") never carry
+  // a leading code, so the status is re-read from the full error grammar here.
+  const providerRequestCopy = renderProviderRequestFailureCopy({
+    classification: reason ? { kind: "reason", reason } : null,
+    facet: null,
+    status: extractErrorHttpStatus(trimmed)?.code,
+  });
+  if (providerRequestCopy) {
+    return providerRequestCopy;
   }
   if (isGenericProviderInternalError(trimmed)) {
     return formatRawAssistantErrorForUi(trimmed);
@@ -338,8 +304,7 @@ export function renderSanitizedUserFacingText(
   if (isInvalidStreamingEventOrderError(trimmed)) {
     return "LLM request failed: provider returned an invalid streaming response. Please try again.";
   }
-  const status = extractLeadingHttpStatus(trimmed);
-  if (isRawApiErrorPayload(trimmed) || (status && status.code >= 400 && reason)) {
+  if (rawPayload || (status && status.code >= 400 && reason)) {
     return formatRawAssistantErrorForUi(trimmed);
   }
   if (isStreamingJsonParseError(trimmed)) {
@@ -363,8 +328,19 @@ export function renderSanitizedUserFacingText(
 
 export const GENERIC_EXTERNAL_RUN_FAILURE_TEXT =
   "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
-export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT =
-  "⚠️ Heartbeat check failed before it could produce an update. The main chat session remains available.";
+const HEARTBEAT_FAILURE_LEAD = "⚠️ Heartbeat check failed before it could produce an update";
+const HEARTBEAT_FAILURE_TAIL = "The main chat session remains available.";
+export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT = `${HEARTBEAT_FAILURE_LEAD}. ${HEARTBEAT_FAILURE_TAIL}`;
+
+/** `reason` is the failure-reply owner's already sanitized and capped detail. */
+export function renderHeartbeatRunFailureCopy(reason?: string): string {
+  if (!reason) {
+    return HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT;
+  }
+  const terminator = /[.!?]$/u.test(reason) ? "" : ".";
+  return `${HEARTBEAT_FAILURE_LEAD}: ${reason}${terminator} ${HEARTBEAT_FAILURE_TAIL}`;
+}
+
 export const PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE =
   "⚠️ The model provider rejected the conversation state. Please try again, or use /new to start a fresh session.";
 const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
@@ -431,7 +407,6 @@ export function resolveProviderRequestFailureCopy(params: {
     code,
     userMessage,
     technicalMessage: params.technicalMessage,
-    ...(params.facet === "provider-internal-503" ? { allowTransientHttpRetry: true as const } : {}),
   };
 }
 

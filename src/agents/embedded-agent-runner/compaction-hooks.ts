@@ -8,8 +8,12 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { resolveMemorySearchConfig } from "../memory-search.js";
+import { resolveMemorySearchIndexConfig } from "../memory-search.js";
 import type { AgentMessage } from "../runtime/index.js";
+import {
+  estimateCompactedRequestTokens,
+  type CompactionRequestBudget,
+} from "../sessions/compaction/request-budget.js";
 import { log } from "./logger.js";
 
 function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "async" | "await" {
@@ -43,7 +47,9 @@ async function runPostCompactionSessionMemorySync(params: PostCompactionSession)
       config: params.config,
       agentId: params.agentId,
     });
-    const resolvedMemory = resolveMemorySearchConfig(params.config, agentId);
+    // The memory backend owns provider resolution; an unavailable backend must
+    // not cold-load embedding plugins just to decide whether to sync.
+    const resolvedMemory = resolveMemorySearchIndexConfig(params.config, agentId);
     if (!resolvedMemory || !resolvedMemory.sources.includes("sessions")) {
       return;
     }
@@ -282,7 +288,14 @@ export function estimateTokensAfterCompaction(params: {
   observedTokenCount?: number;
   fullSessionTokensBefore: number;
   estimateTokensFn: (message: AgentMessage) => number;
+  requestBudget?: CompactionRequestBudget;
 }) {
+  if (params.requestBudget) {
+    return estimateCompactedRequestTokens(params.messagesAfter, {
+      ...params.requestBudget,
+      pendingTokens: 0,
+    });
+  }
   const tokensAfter = estimateTokenCountSafe(params.messagesAfter, params.estimateTokensFn);
   if (tokensAfter === undefined) {
     return undefined;

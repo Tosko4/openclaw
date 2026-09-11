@@ -121,7 +121,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       containerWithoutUserSystemd: false,
     });
     mocks.waitForGatewayReachable.mockResolvedValue({ ok: true });
-    mocks.refreshPluginRegistry.mockResolvedValue(undefined);
     mocks.updateExecApprovals.mockResolvedValue(undefined);
     mocks.verifySetupInferenceConfig.mockResolvedValue({
       ok: true,
@@ -200,25 +199,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(mocks.state.persistedConfig?.agents?.entries).not.toHaveProperty("main");
   });
 
-  it("does not mistake a proposal-created roster for an existing fleet", async () => {
-    const absent = snapshot(null, {}, { agents: { entries: { main: { default: true } } } });
-    setSetupCommitState({ agents: { entries: { main: { default: true } } } }, absent);
-    mocks.state.commitPreviousHash = null;
-
-    await applySystemAgentSetup(
-      baseParams({
-        expectedConfigHash: null,
-        workspace: "/tmp/requested-workspace",
-        configPatch: { agents: { entries: { main: { default: true } } } },
-      }),
-    );
-
-    expect(mocks.state.persistedConfig?.agents).toMatchObject({
-      defaults: { workspace: "/tmp/requested-workspace" },
-      entries: { main: { default: true } },
-    });
-  });
-
   it.each([
     { label: "missing", agents: {} },
     { label: "entries", agents: { entries: {} } },
@@ -288,7 +268,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
           }),
         );
 
-        expect(assertCommitPreconditions).toHaveBeenCalledOnce();
+        expect(assertCommitPreconditions).toHaveBeenCalledTimes(3);
         expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
           expect.objectContaining({ workspace: "/tmp/current-workspace" }),
         );
@@ -409,9 +389,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     await applySystemAgentSetup(
       baseParams({
         workspace: "/tmp/requested-workspace",
-        configPatch: {
-          agents: { defaults: { workspace: "/tmp/patch-workspace" }, entries: null },
-        },
       }),
     );
 
@@ -530,7 +507,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(mocks.state.persistedConfig).toBeUndefined();
   });
 
-  it("folds plugin and auth config into one commit while preserving concurrent edits", async () => {
+  it("preserves concurrent settings in one setup commit", async () => {
     mocks.state.commitConfig = {
       ...mocks.state.commitConfig,
       logging: { level: "debug" },
@@ -542,8 +519,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         expectedConfigHash: "probe",
         expectedAgentId: "main",
         expectedModelRef: "openai/gpt-5.5",
-        enablePluginId: "codex",
-        configPatch: { agents: { defaults: { maxConcurrent: 7 } } },
       }),
     );
 
@@ -551,12 +526,10 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(mocks.state.persistedConfig).toMatchObject({
       agents: {
         defaults: {
-          maxConcurrent: 7,
           model: { primary: "openai/gpt-5.5" },
         },
       },
       logging: { level: "debug" },
-      plugins: { entries: { codex: { enabled: true } } },
     });
     expect(result.configPath).toBe("/tmp/openclaw.json");
   });
@@ -606,7 +579,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     await expect(
       applySystemAgentSetup(
         baseParams({
-          model: "anthropic/claude-opus-4-8",
+          finalizeConfig: () => mainAgentModelConfig("anthropic/claude-opus-4-8"),
           expectedInferenceRoute: await projectDefaultInferenceRoute(initial),
         }),
       ),
@@ -858,21 +831,17 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       };
       authorityValid = false;
     });
-    let guardCalls = 0;
     let authorityValid = true;
-    const authorityCommit = async <T>(effect: () => Promise<T> | T): Promise<T> => {
-      guardCalls += 1;
+    const beforePersistentApply = () => {
       if (!authorityValid) {
         throw new Error("verified inference binding changed");
       }
-      return await effect();
     };
 
     await expect(
-      applySystemAgentSetup(baseParams({ expectedInferenceRoute }), { commit: authorityCommit }),
+      applySystemAgentSetup(baseParams({ expectedInferenceRoute }), { beforePersistentApply }),
     ).rejects.toThrow("verified inference binding changed");
 
-    expect(guardCalls).toBe(3);
     expect(mocks.ensureWorkspace).toHaveBeenCalledOnce();
     expect(mocks.updateExecApprovals).not.toHaveBeenCalled();
   });
@@ -917,17 +886,14 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     );
   });
 
-  it("returns visible post-commit workspace, approval, registry, and service failures", async () => {
+  it("returns visible post-commit workspace, approval, and service failures", async () => {
     mocks.ensureWorkspace.mockRejectedValueOnce(new Error("workspace exploded"));
     mocks.updateExecApprovals.mockRejectedValueOnce(new Error("approval exploded"));
-    mocks.refreshPluginRegistry.mockRejectedValueOnce(new Error("registry exploded"));
     mocks.ensureGatewayService.mockRejectedValueOnce(new Error("service exploded"));
 
     const result = await applySystemAgentSetup(
       baseParams({
         expectedConfigHash: "probe",
-        enablePluginId: "codex",
-        refreshPluginRegistry: true,
         surface: "cli",
       }),
     );
@@ -937,7 +903,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       expect.arrayContaining([
         "Workspace files: workspace exploded",
         "OpenClaw exec approval: approval exploded; local model harnesses may ask again.",
-        "Plugin registry refresh failed: registry exploded",
         "Gateway service: service exploded",
       ]),
     );
@@ -954,6 +919,37 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     const marker = gateway.status === "failed" ? gateway.error : "SUPERVISOR_MODE=external";
     expect(result.gateway).toEqual(gateway);
     expect(result.lines.join("\n")).toContain(marker);
+    expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      reason: "explicit",
+      installDaemon: false,
+      line: "Gateway: service installation skipped. Run `openclaw gateway run` to start it in the foreground.",
+    },
+    {
+      reason: "systemd-unavailable",
+      installDaemon: false,
+      line: "Gateway: service installation skipped. Run `openclaw gateway run` to start it in the foreground.",
+    },
+    {
+      reason: "explicit",
+      installDaemon: undefined,
+      line: "Gateway: service install skipped — say `start gateway` when you want it running.",
+    },
+  ])("reports $reason service setup with installDaemon=$installDaemon", async (scenario) => {
+    const gateway = { status: "skipped", reason: scenario.reason };
+    mocks.ensureGatewayService.mockResolvedValueOnce({ gateway });
+    const result = await applySystemAgentSetup(
+      baseParams({ surface: "cli", installDaemon: scenario.installDaemon }),
+    );
+
+    expect(mocks.ensureGatewayService).toHaveBeenCalledWith(
+      expect.objectContaining({ opts: { installDaemon: scenario.installDaemon } }),
+    );
+    expect(result.gateway).toEqual(gateway);
+    expect(result.lines).toContain(scenario.line);
     expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
   });
 

@@ -5,13 +5,12 @@ import { z } from "zod";
 import {
   CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN,
   type CodexAppServerCommandSource,
-  type CodexPluginConfig,
   type CodexPluginDestructiveApprovalMode,
   type CodexPluginDestructivePolicy,
   type CodexPluginMarketplaceName,
   type ResolvedCodexPluginPolicy,
   type ResolvedCodexPluginsPolicy,
-} from "./config-contracts.js";
+} from "./config-contracts.shared.js";
 import { normalizeCodexServiceTier } from "./config-utils.js";
 import {
   codexDiscoveryConfigSchema,
@@ -176,9 +175,6 @@ const codexPluginConfigSchema = z
         codeModeOnly: z.boolean().optional(),
         loopDetectionPreToolUseRelay: z.boolean().optional(),
         requestTimeoutMs: z.number().positive().optional(),
-        turnCompletionIdleTimeoutMs: z.number().positive().optional(),
-        turnAssistantCompletionIdleTimeoutMs: z.number().positive().optional(),
-        postToolRawAssistantCompletionIdleTimeoutMs: z.number().positive().optional(),
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
         sandbox: codexAppServerSandboxSchema.optional(),
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
@@ -192,7 +188,15 @@ const codexPluginConfigSchema = z
   })
   .strict();
 
-export function readCodexPluginConfig(value: unknown): CodexPluginConfig {
+export type ParsedCodexSupervisionEndpoint = z.infer<typeof codexSupervisionEndpointSchema>;
+export type ParsedCodexPluginConfig = Omit<
+  z.infer<typeof codexPluginConfigSchema>,
+  "codexPlugins"
+> & {
+  codexPlugins?: z.infer<typeof codexPluginsConfigSchema>;
+};
+
+export function readCodexPluginConfig(value: unknown): ParsedCodexPluginConfig {
   const appServer = asNullableRecord(asNullableRecord(value)?.appServer);
   if (appServer?.approvalPolicy === "untrusted") {
     throw new Error(

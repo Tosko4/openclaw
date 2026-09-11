@@ -16,8 +16,10 @@ export type ChatRouteData =
       agentId?: string;
       draft?: string;
       focusComposer?: boolean;
+      dashboardExpanded?: boolean;
       face: BoardFace;
       shortId?: string;
+      routeLoadingSkeleton?: true;
       canonicalLocation?: RouteLocation;
       canonicalLocationReady?: Promise<RouteLocation | null>;
       canonicalLocationSource?: RouteLocation;

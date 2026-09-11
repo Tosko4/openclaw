@@ -79,6 +79,62 @@ async function writeInboundMedia(
 }
 
 describe("stageSandboxMedia", () => {
+  it("leaves no staged input directory when an owned source is missing", async () => {
+    await withSandboxMediaTempHome("openclaw-staging-missing-", async (home) => {
+      sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue(null);
+      const cfg = createSandboxMediaStageConfig(home);
+      const workspaceDir = join(home, "openclaw");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      const projectFile = join(workspaceDir, "keep.txt");
+      await fs.writeFile(projectFile, "existing project file");
+      const missingPath = await writeInboundMedia(home, "missing.png", "small input");
+      await fs.unlink(missingPath);
+      const { ctx, sessionCtx } = createSandboxMediaContexts(missingPath);
+      const originalMedia = structuredClone(ctx.media);
+
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      expect(result.staged).toEqual(new Map());
+      expect(ctx.media).toEqual(originalMedia);
+      expect(sessionCtx.media).toEqual(originalMedia);
+      expect(await fs.readdir(workspaceDir)).toEqual(["keep.txt"]);
+      await expect(fs.readFile(projectFile, "utf8")).resolves.toBe("existing project file");
+    });
+  });
+
+  it("stages global-session media with the prepared agent owner", async () => {
+    await withSandboxMediaTempHome("openclaw-staging-global-", async (home) => {
+      const { ensureSandboxWorkspaceForSession } = await vi.importActual<
+        typeof import("../agents/sandbox/context.js")
+      >("../agents/sandbox/context.js");
+      sandboxMocks.ensureSandboxWorkspaceForSession.mockImplementation(
+        ensureSandboxWorkspaceForSession,
+      );
+      const mediaPath = await writeInboundMedia(home, "global.png", "image-bytes");
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
+      const workspaceDir = join(home, "workspace");
+
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg: { agents: { ownership: "explicit", entries: { main: {}, other: {} } } },
+        agentId: "main",
+        sessionKey: "global",
+        workspaceDir,
+      });
+
+      const stagedPath = result.staged.get(0)!;
+      expect(ctx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir, staged: true });
+      await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("image-bytes");
+    });
+  });
+
   it("stages managed inbound media URIs into the sandbox workspace", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
       const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
@@ -561,9 +617,7 @@ describe("stageSandboxMedia", () => {
       });
 
       const inboundDir = join(sandboxDir, "media", "inbound");
-      const directories = await fs.readdir(inboundDir);
-      expect(directories).toEqual([expect.stringMatching(/^openclaw-staged-[0-9a-f-]+$/)]);
-      await expect(fs.readdir(join(inboundDir, directories[0]!))).resolves.toEqual([".gitignore"]);
+      await expect(fs.stat(inboundDir)).rejects.toMatchObject({ code: "ENOENT" });
       expect(result.staged).toEqual(new Map());
       expect(ctx.media?.[0]?.path).toBe(mediaPath);
       expect(sessionCtx.media?.[0]?.path).toBe(mediaPath);

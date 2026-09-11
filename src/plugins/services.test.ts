@@ -83,9 +83,7 @@ function expectServiceContexts(
   config: Parameters<typeof startPluginServices>[0]["config"],
 ) {
   expect(contexts).not.toHaveLength(0);
-  contexts.forEach((ctx) => {
-    expectServiceContext(ctx, config);
-  });
+  contexts.forEach((ctx) => expectServiceContext(ctx, config));
 }
 
 function expectServiceLifecycleState(params: {
@@ -372,28 +370,6 @@ describe("startPluginServices", () => {
 
     await handle.stop();
     expect(rollback).toHaveBeenCalledOnce();
-  });
-
-  it("runs concurrent and repeated shutdowns through one cleanup operation", async () => {
-    let releaseStop: (() => void) | undefined;
-    const stopping = new Promise<void>((resolve) => {
-      releaseStop = resolve;
-    });
-    const stop = vi.fn(() => stopping);
-    const handle = await startTrackingServices({
-      services: [{ id: "service", start: () => {}, stop }],
-    });
-
-    const firstStop = handle.stop();
-    const secondStop = handle.stop();
-    releaseStop?.();
-    await Promise.all([firstStop, secondStop]);
-
-    expect(firstStop).toBe(secondStop);
-    expect(stop).toHaveBeenCalledOnce();
-
-    await handle.stop();
-    expect(stop).toHaveBeenCalledOnce();
   });
 
   it("binds gateway events to the owning plugin namespace and scope", async () => {

@@ -1,4 +1,3 @@
-// Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -19,10 +18,11 @@ import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
-import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
+// Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
+import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
   clearPluginInteractiveHandlers,
-  resolvePluginInteractiveNamespaceMatch,
+  resolvePluginInteractiveRegistrationsMatch,
 } from "./interactive-registry.js";
 import { resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
 import { loadOpenClawPlugins, resolveRuntimePluginRegistry } from "./loader.js";
@@ -32,9 +32,11 @@ import {
   type PluginLoadConfig,
   useNoBundledPlugins,
   writePlugin,
+  writePluginMetadata,
 } from "./loader.test-fixtures.js";
 import {
   cachedBundledTelegramDir,
+  channelPluginSource,
   listRegisteredAgentHarnessIdsForTest,
   countMatching,
   updatePluginManifest,
@@ -57,6 +59,7 @@ import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
+  getActivePluginChannelRegistry,
   getActivePluginRegistry,
   getActivePluginRegistryKey,
   listImportedRuntimePluginIds,
@@ -513,8 +516,10 @@ describe("loadOpenClawPlugins", () => {
       id: "installed-record-plugin",
       body: `module.exports = { id: "installed-record-plugin", register() {} };`,
     });
-    writePersistedInstalledPluginIndexInstallRecordsSync(
-      {
+    refreshPersistedInstalledPluginIndex({
+      stateDir,
+      reason: "source-changed",
+      installRecords: {
         [plugin.id]: {
           source: "git",
           spec: "git:file:///tmp/installed-record-plugin.git@abc123",
@@ -523,8 +528,7 @@ describe("loadOpenClawPlugins", () => {
           gitCommit: "abc123",
         },
       },
-      { stateDir },
-    );
+    });
 
     const registry = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
       loadOpenClawPlugins({
@@ -790,6 +794,27 @@ describe("loadOpenClawPlugins", () => {
         expect(telegram?.error).toBe("disabled in config");
       },
     },
+    {
+      name: "keeps channels.<id>.enabled=false authoritative over plugins.entries enablement",
+      config: {
+        channels: {
+          telegram: {
+            enabled: false,
+          },
+        },
+        plugins: {
+          entries: {
+            telegram: { enabled: true },
+          },
+        },
+      } satisfies PluginLoadConfig,
+      assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        const telegram = registry.plugins.find((entry) => entry.id === "telegram");
+        expect(telegram?.status).toBe("disabled");
+        expect(telegram?.error).toBe("channel disabled in config");
+        expect(registry.channels.map((entry) => entry.plugin.id)).not.toContain("telegram");
+      },
+    },
   ] as const)(
     "handles bundled telegram plugin enablement and override rules: $name",
     ({ config, assert }) => {
@@ -800,6 +825,41 @@ describe("loadOpenClawPlugins", () => {
         config,
       });
       assert(registry);
+    },
+  );
+
+  it.each([
+    { channelEnabled: false, status: "disabled", error: "channel disabled in config" },
+    { channelEnabled: true, status: "loaded", error: undefined },
+  ])(
+    "resolves channels.<id>.enabled=$channelEnabled through the manifest channel id when it differs from the plugin id",
+    ({ channelEnabled, status, error }) => {
+      const dir = makePluginLoaderTempDir();
+      writePlugin({
+        id: "openclaw-demo",
+        dir,
+        body: channelPluginSource({
+          pluginId: "openclaw-demo",
+          channelId: "demo",
+          label: "Demo",
+          docsPath: "/channels/demo",
+          blurb: "demo channel",
+        }),
+      });
+      writePluginMetadata({ dir, id: "openclaw-demo", channels: ["demo"] });
+      const registry = withEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: dir }, () =>
+        loadOpenClawPlugins({
+          cache: false,
+          workspaceDir: dir,
+          config: {
+            channels: { demo: { enabled: channelEnabled } },
+            plugins: { entries: { "openclaw-demo": { enabled: true } } },
+          },
+        }),
+      );
+      const plugin = registry.plugins.find((entry) => entry.id === "openclaw-demo");
+      expect(plugin?.status).toBe(status);
+      expect(plugin?.error).toBe(error);
     },
   );
 
@@ -1652,7 +1712,13 @@ describe("loadOpenClawPlugins", () => {
       }),
     ]);
     expect(getPluginCommandSpecs("telegram")).toStrictEqual([]);
-    expect(resolvePluginInteractiveNamespaceMatch("telegram", "pair:device")).toBeNull();
+    expect(
+      resolvePluginInteractiveRegistrationsMatch(
+        getActivePluginChannelRegistry()?.interactiveHandlers ?? [],
+        "telegram",
+        "pair:device",
+      ),
+    ).toBeNull();
 
     const active = loadRegistryFromSinglePlugin({
       plugin,
@@ -1668,7 +1734,13 @@ describe("loadOpenClawPlugins", () => {
         acceptsArgs: true,
       },
     ]);
-    expect(resolvePluginInteractiveNamespaceMatch("telegram", "pair:device")).toMatchObject({
+    expect(
+      resolvePluginInteractiveRegistrationsMatch(
+        getActivePluginChannelRegistry()?.interactiveHandlers ?? [],
+        "telegram",
+        "pair:device",
+      ),
+    ).toMatchObject({
       namespace: "pair",
       payload: "device",
       registration: {

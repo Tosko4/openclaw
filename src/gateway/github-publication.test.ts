@@ -32,6 +32,7 @@ import {
   seedActivePlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
 const mocks = githubPublicationTestMocks();
 
@@ -50,6 +51,7 @@ describe("Gateway GitHub publication", () => {
 
     const first = await coordinator.requestForSession(request);
     expect(first).toEqual({
+      publisher: { source: "system-configured", accountId: 42, login: "roboclaw-bot" },
       requestId: expect.any(String),
       status: "published",
       url: "https://github.com/openclaw/openclaw/pull/125200",
@@ -580,6 +582,11 @@ describe("Gateway GitHub publication", () => {
   it("rejects a stale turn claim after awaited identity verification", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: "environment-1",
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: 2,
+    });
     const active = seedActivePlacement(placements, {
       environmentId: "environment-1",
       ownerEpoch: 2,
@@ -621,6 +628,11 @@ describe("Gateway GitHub publication", () => {
   it("rejects reuse of a worker publication idempotency key by a later turn", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: "environment-idempotency",
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: 2,
+    });
     const active = seedActivePlacement(placements, {
       environmentId: "environment-idempotency",
       ownerEpoch: 2,
@@ -663,6 +675,11 @@ describe("Gateway GitHub publication", () => {
   it("binds the accepted worker snapshot before acceptance and never recaptures it", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: "environment-snapshot",
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: 2,
+    });
     const active = seedActivePlacement(placements, {
       environmentId: "environment-snapshot",
       ownerEpoch: 2,
@@ -748,11 +765,12 @@ describe("Gateway GitHub publication", () => {
       }),
     ).resolves.toEqual({
       requestId: expect.any(String),
+      publisher: { source: "system-configured", accountId: 42, login: "roboclaw-bot" },
       status: "failed",
       code: "workspace_changed",
       message: "GitHub publication failed.",
       nextAction:
-        "Wait for the current turn to finish, inspect the reconciled workspace, and retry.",
+        "Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
     });
     expect(commands.some((argv) => argv.includes("commit-tree"))).toBe(false);
     expect(commands.some((argv) => argv.includes("push"))).toBe(false);
@@ -872,6 +890,7 @@ describe("Gateway GitHub publication", () => {
       await resumed.resumeSessionRequests();
 
       expect(resumed.read(requestId)).toEqual({
+        publisher: { source: "system-configured", accountId: 42, login: "roboclaw-bot" },
         requestId,
         status: "published",
         url: "https://github.com/openclaw/openclaw/pull/125200",
@@ -896,6 +915,11 @@ describe("Gateway GitHub publication", () => {
   it("projects an accepted worker publication exactly once across transcript-report restart", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: "environment-publication",
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: 2,
+    });
     const active = seedActivePlacement(placements, {
       environmentId: "environment-publication",
       ownerEpoch: 2,

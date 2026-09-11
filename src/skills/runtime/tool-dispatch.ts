@@ -3,6 +3,7 @@ import { applyToolAvailabilityDescriptions } from "../../agents/agent-tools.defe
 import { resolveEffectiveToolPolicy } from "../../agents/agent-tools.policy.js";
 import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
 import type { createOpenClawTools } from "../../agents/openclaw-tools.js";
+import { filterRequesterYieldTools } from "../../agents/openclaw-tools.requester-yield.js";
 import { resolveRequesterToolPolicies } from "../../agents/requester-tool-policy.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { buildDeclaredToolAllowlistContext } from "../../agents/tool-policy-declared-context.js";
@@ -124,6 +125,7 @@ export function resolveSkillDispatchTools(
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
+    agentId: resolvedAgentId,
     sessionKey: params.sessionKey,
   });
   const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
@@ -225,12 +227,13 @@ export function resolveSkillDispatchTools(
       toolDenylist: explicitDenylist,
     }),
   });
-  const finalized = applyToolAvailabilityDescriptions(policyFiltered, { agentId: resolvedAgentId });
   if (explicitPolicyList.some(hasRestrictiveAllowPolicy)) {
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, finalized);
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, policyFiltered);
   }
-  replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, finalized, (tool) =>
+  replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, policyFiltered, (tool) =>
     getPluginToolMeta(tool),
   );
-  return finalized;
+  return applyToolAvailabilityDescriptions(
+    filterRequesterYieldTools(policyFiltered, params.sessionKey),
+  );
 }

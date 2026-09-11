@@ -9,6 +9,7 @@ import type { AgentToolResult } from "./runtime/index.js";
 
 type EmbeddedMessageDeliveryFact = {
   status: "settled" | "suppressed" | "dryRun" | "failed";
+  sourceReplyDelivered?: true;
   primaryPlatformMessageId?: string;
   partialDelivery: boolean;
   createdThreadIds: string[];
@@ -173,7 +174,9 @@ function readPluginDeliveryId(value: unknown): string | undefined {
   return found;
 }
 
-function projectPluginPayload(value: unknown): EmbeddedMessageDeliveryFact | undefined {
+export function projectPluginMessageDeliveryFact(
+  value: unknown,
+): EmbeddedMessageDeliveryFact | undefined {
   if (pluginEnvelopeHas(value, "dryRun")) {
     return { status: "dryRun", ...EMPTY_DELIVERY_FACT };
   }
@@ -208,7 +211,7 @@ export function pluginBroadcastHasDelivery(value: unknown): boolean {
           return false;
         }
         return [entry.payload, entry.toolResult].some(
-          (payload) => projectPluginPayload(payload)?.status === "settled",
+          (payload) => projectPluginMessageDeliveryFact(payload)?.status === "settled",
         );
       }),
   );
@@ -251,7 +254,13 @@ function projectPoll(result: MessagePollResult): EmbeddedMessageDeliveryFact {
 
 export function projectEmbeddedMessageDeliveryFact(
   result: MessageActionResult,
+  currentSourceReply = false,
 ): EmbeddedMessageDeliveryFact | undefined {
+  if (currentSourceReply && result.handledBy === "plugin") {
+    return result.dryRun
+      ? { status: "dryRun", ...EMPTY_DELIVERY_FACT }
+      : projectPluginMessageDeliveryFact(result.payload);
+  }
   if (result.kind === "send") {
     return result.handledBy === "core" && result.sendResult
       ? projectSend(result.sendResult)
@@ -280,7 +289,7 @@ export function projectEmbeddedMessageDeliveryFact(
       : entry.sentBeforeError
         ? { status: "settled" as const, partialDelivery: true, createdThreadIds: [] }
         : entry.ok
-          ? projectPluginPayload(entry.payload)
+          ? projectPluginMessageDeliveryFact(entry.payload)
           : undefined,
   }));
   const facts = entries.flatMap(({ fact }) => (fact ? [fact] : []));
@@ -364,6 +373,9 @@ export function readEmbeddedMessageDeliveryFact(
   }
   return {
     status: fact.status,
+    ...(fact.status === "settled" && !fact.partialDelivery && fact.sourceReplyDelivered === true
+      ? { sourceReplyDelivered: true as const }
+      : {}),
     ...(fact.primaryPlatformMessageId
       ? { primaryPlatformMessageId: fact.primaryPlatformMessageId }
       : {}),

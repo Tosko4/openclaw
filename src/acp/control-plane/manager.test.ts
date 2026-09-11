@@ -14,6 +14,7 @@ import { listSessionStateEventsSince } from "../../sessions/session-state-events
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { isAcpTurnActive } from "./active-turns.js";
 import {
+  installMutableAcpSessionMetaUpsert,
   AcpRuntimeError,
   AcpSessionManager,
   baseCfg,
@@ -388,6 +389,7 @@ describe("AcpSessionManager", () => {
       },
       { interval: 1 },
     );
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(1);
     const second = manager.runTurn({
       provenance: "system",
       cfg: baseCfg,
@@ -398,9 +400,11 @@ describe("AcpSessionManager", () => {
     });
     await flushMicrotasks();
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(2);
     releaseFirstTurn.resolve();
     await Promise.all([first, second]);
 
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(0);
     expect(maxInFlight).toBe(1);
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
   });
@@ -465,13 +469,13 @@ describe("AcpSessionManager", () => {
         throw new Error("Expected the ACP task record to carry a childSessionKey");
       }
       expect(childSessionKey).toBe("agent:codex:acp:child-1");
-      expect(isAcpTurnActive(childSessionKey)).toBe(true);
+      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(true);
 
       releaseTurn.resolve();
       await turn;
       await flushMicrotasks();
 
-      expect(isAcpTurnActive(childSessionKey)).toBe(false);
+      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(false);
     });
   }, 300_000);
 
@@ -543,13 +547,13 @@ describe("AcpSessionManager", () => {
       }
       // Liveness must already cover initialization, while the turn stream has not started.
       expect(runtimeState.runTurn).not.toHaveBeenCalled();
-      expect(isAcpTurnActive(childSessionKey)).toBe(true);
+      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(true);
 
       releaseInit.resolve();
       await turn;
       await flushMicrotasks();
 
-      expect(isAcpTurnActive(childSessionKey)).toBe(false);
+      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(false);
     });
   }, 300_000);
 
@@ -609,7 +613,7 @@ describe("AcpSessionManager", () => {
       if (!childSessionKey) {
         throw new Error("Expected the ACP task record to carry a childSessionKey");
       }
-      expect(isAcpTurnActive(childSessionKey)).toBe(false);
+      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(false);
     });
   }, 300_000);
 
@@ -675,6 +679,7 @@ describe("AcpSessionManager", () => {
       }),
     ]);
 
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(2);
     releaseFirstTurn?.();
     await first;
     await vi.waitFor(
@@ -1076,9 +1081,12 @@ describe("AcpSessionManager", () => {
 
     expect(closeResult.runtimeClosed).toBe(false);
     expect(closeResult.runtimeNotice).toBe("Could not initialize ACP session runtime.");
-    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
-      sessionKey: "agent:claude:acp:session-1",
-    });
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:claude:acp:session-1",
+        agentId: "claude",
+      }),
+    );
   });
 
   it("treats unsupported close controls as recoverable during discard cleanup", async () => {
@@ -1114,9 +1122,12 @@ describe("AcpSessionManager", () => {
     expect(closeResult.runtimeClosed).toBe(false);
     expect(closeResult.runtimeNotice).toContain("does not support session/close");
     expect(closeResult.metaCleared).toBe(true);
-    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
-      sessionKey: "agent:openclaw:acp:session-1",
-    });
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:openclaw:acp:session-1",
+        agentId: "openclaw",
+      }),
+    );
   });
 
   it("clears persisted resume identity when close discards persistent state", async () => {
@@ -1198,40 +1209,26 @@ describe("AcpSessionManager", () => {
       runtime: runtimeState.runtime,
     });
 
-    let currentMeta: SessionAcpMeta = readySessionMeta({
-      agent: "claude",
-      identity: {
-        state: "pending",
-        acpxRecordId: sessionKey,
-        source: "status",
-        lastUpdatedAt: Date.now(),
-      },
-    });
+    const metaState: { currentMeta: SessionAcpMeta } = {
+      currentMeta: readySessionMeta({
+        agent: "claude",
+        identity: {
+          state: "pending",
+          acpxRecordId: sessionKey,
+          source: "status",
+          lastUpdatedAt: Date.now(),
+        },
+      }),
+    };
     hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
       const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
       return {
         sessionKey: key,
         storeSessionKey: key,
-        acp: currentMeta,
+        acp: metaState.currentMeta,
       };
     });
-    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
-      const params = paramsUnknown as {
-        mutate: (
-          current: SessionAcpMeta | undefined,
-          entry: { acp?: SessionAcpMeta } | undefined,
-        ) => SessionAcpMeta | null | undefined;
-      };
-      const next = params.mutate(currentMeta, { acp: currentMeta });
-      if (next) {
-        currentMeta = next;
-      }
-      return {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        acp: currentMeta,
-      };
-    });
+    installMutableAcpSessionMetaUpsert(metaState);
 
     const manager = new AcpSessionManager();
     await expect(
@@ -1245,9 +1242,12 @@ describe("AcpSessionManager", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
-      sessionKey,
-    });
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        agentId: "claude",
+      }),
+    );
     expectRecordFields(mockCallArg(runtimeState.ensureSession), {
       sessionKey,
     });
@@ -1309,9 +1309,12 @@ describe("AcpSessionManager", () => {
     });
 
     expect(result.runtimeClosed).toBe(false);
-    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
-      sessionKey,
-    });
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        agentId: "claude",
+      }),
+    );
     expect(runtimeState.ensureSession).not.toHaveBeenCalled();
     expect(runtimeState.close).not.toHaveBeenCalled();
     expectRecordFields(entry.acp?.identity, {
@@ -1502,9 +1505,12 @@ describe("AcpSessionManager", () => {
 
     expect(result.runtimeClosed).toBe(false);
     expect(result.runtimeNotice).toContain("currently unavailable");
-    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
-      sessionKey: "agent:claude:acp:session-1",
-    });
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:claude:acp:session-1",
+        agentId: "claude",
+      }),
+    );
   });
 
   it("surfaces metadata clear errors during closeSession", async () => {

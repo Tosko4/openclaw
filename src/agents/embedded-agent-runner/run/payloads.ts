@@ -2,12 +2,12 @@
  * Builds embedded-agent payload objects from attempt inputs and outcomes.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { buildCodexLoginRecovery } from "../../../auto-reply/codex-login-recovery.js";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
   createHeartbeatToolResponsePayload,
   type HeartbeatToolResponse,
 } from "../../../auto-reply/heartbeat-tool-response.js";
+import { buildProviderLoginRecovery } from "../../../auto-reply/provider-login-recovery.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -143,7 +143,6 @@ export function buildEmbeddedRunPayloads(params: {
   reasoningLevel?: ReasoningLevel;
   thinkingLevel?: ThinkLevel;
   toolResultFormat?: ToolResultFormat;
-  suppressToolErrorWarnings?: boolean;
   didSendViaMessagingTool?: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
   messagingToolSentTargets?: MessagingToolSend[];
@@ -172,7 +171,6 @@ export function buildEmbeddedRunPayloads(params: {
     replyItems,
     hasSourceReplyPayload,
     deliveredSourceReplyViaMessageTool,
-    explicitFinalSourceReply,
     completedSourceReplyViaMessageTool,
   } = buildSourceReplyPayloadState({
     payloads: params.messagingToolSourceReplyPayloads,
@@ -215,8 +213,7 @@ export function buildEmbeddedRunPayloads(params: {
     ? normalizeOptionalString(assistantForPayload?.errorMessage)
     : undefined;
   const oauthRefreshFailure = rawErrorMessage ? classifyOAuthRefreshFailure(rawErrorMessage) : null;
-  const codexLoginRecovery = buildCodexLoginRecovery({
-    provider: oauthRefreshFailure?.provider ?? params.provider,
+  const providerLoginRecovery = buildProviderLoginRecovery({
     oauthReason: oauthRefreshFailure?.reason,
   });
   const errorText =
@@ -224,10 +221,11 @@ export function buildEmbeddedRunPayloads(params: {
       ? suppressFailureArtifacts
         ? undefined
         : lastAssistantErrored || rawErrorMessage
-          ? (codexLoginRecovery?.hint ??
+          ? (providerLoginRecovery?.hint ??
             formatUserFacingAssistantErrorText(assistantForPayload, {
               cfg: params.config,
               sessionKey: params.sessionKey,
+              agentId: params.agentId,
               provider: params.provider,
               providerOwner: params.providerOwner,
               model: params.model,
@@ -236,6 +234,7 @@ export function buildEmbeddedRunPayloads(params: {
           : formatAssistantErrorText(assistantForPayload, {
               cfg: params.config,
               sessionKey: params.sessionKey,
+              agentId: params.agentId,
               provider: params.provider,
               providerOwner: params.providerOwner,
               model: params.model,
@@ -248,11 +247,12 @@ export function buildEmbeddedRunPayloads(params: {
     isTimeoutErrorMessage(rawErrorMessage) &&
     errorText === SYNTHESIZED_TIMEOUT_ERROR_TEXT;
   if (errorText && !deferAssistantTimeoutError) {
-    replyItems.push({
+    const errorPayload = {
       text: errorText,
       isError: true,
-      ...(codexLoginRecovery ? { presentation: codexLoginRecovery.presentation } : {}),
-    });
+      ...(providerLoginRecovery ? { presentation: providerLoginRecovery.presentation } : {}),
+    };
+    replyItems.push(setReplyPayloadMetadata(errorPayload, { terminalProviderError: true }));
   }
   const reasoningText =
     suppressAssistantArtifacts || runAborted || lastAssistantNeedsErrorSurface
@@ -363,20 +363,18 @@ export function buildEmbeddedRunPayloads(params: {
   }
   if (params.lastToolError) {
     // A restart intentionally aborts the active tool while the Gateway takes over.
-    // Keep that lifecycle status independent from tool-error suppression.
+    // Report the lifecycle status instead of a tool failure.
     const isRestartStatus = params.runStopReason === "restart";
-    const failureWarning = isRestartStatus
-      ? { text: "Gateway restarting…", nonTerminalToolErrorWarning: false }
+    const warningText = isRestartStatus
+      ? "Gateway restarting…"
       : buildFailureWarning({
           lastToolError: params.lastToolError,
           hasUserFacingReply,
-          suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
-          suppressToolErrorWarnings: params.suppressToolErrorWarnings,
           verboseLevel: params.verboseLevel,
           useMarkdown,
         });
-    if (failureWarning) {
-      const normalizedWarning = normalizeTextForComparison(failureWarning.text);
+    if (warningText) {
+      const normalizedWarning = normalizeTextForComparison(warningText);
       const duplicateWarning = normalizedWarning
         ? replyItems.some((item) => {
             if (!item.text) {
@@ -387,16 +385,16 @@ export function buildEmbeddedRunPayloads(params: {
           })
         : false;
       if (!duplicateWarning) {
-        replyItems.push({
-          text: failureWarning.text,
-          ...(!isRestartStatus
-            ? {
-                isError: true,
-                nonTerminalToolErrorWarning:
-                  hasUserFacingReply && failureWarning.nonTerminalToolErrorWarning,
-              }
-            : {}),
-        });
+        const warning = {
+          text: warningText,
+          ...(!isRestartStatus ? { isError: true } : {}),
+        };
+        if (!isRestartStatus) {
+          setReplyPayloadMetadata(warning, {
+            toolErrorWarning: { toolName: params.lastToolError.toolName },
+          });
+        }
+        replyItems.push(warning);
       }
     }
   }
@@ -431,14 +429,9 @@ export function buildEmbeddedRunPayloads(params: {
       if (
         item.isError === true &&
         params.sourceReplyDeliveryMode === "message_tool_only" &&
-        explicitFinalSourceReply === false
+        !suppressFailureArtifacts
       ) {
         markReplyPayloadForSourceSuppressionDelivery(payload);
-      }
-      if (item.nonTerminalToolErrorWarning) {
-        setReplyPayloadMetadata(payload, {
-          nonTerminalToolErrorWarning: true,
-        });
       }
       if (heartbeatTerminalToolFailure) {
         setReplyPayloadMetadata(payload, {

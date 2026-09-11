@@ -1,19 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CronRunLogEntry } from "../../api/types.ts";
-import { createCronViewJob, renderCronView as renderView } from "./view.test-support.ts";
-
-function getElement<T extends Element>(
-  container: Element,
-  selector: string,
-  constructor: new () => T,
-): T {
-  const element = container.querySelector<T>(selector);
-  expect(element).toBeInstanceOf(constructor);
-  if (!(element instanceof constructor)) {
-    throw new Error(`Expected ${selector} to match ${constructor.name}`);
-  }
-  return element;
-}
+import {
+  createCronViewJob,
+  getElement,
+  renderCronView as renderView,
+} from "./view.test-support.ts";
 
 describe("cron view run history", () => {
   it("renders runs sorted newest first and wires run filters", () => {
@@ -66,6 +57,20 @@ describe("cron view run history", () => {
       listTab: "activity",
       runs: [
         {
+          ts: 6,
+          jobId: "job-hour-seconds",
+          action: "finished",
+          status: "ok",
+          durationMs: 3_630_000,
+        },
+        {
+          ts: 5,
+          jobId: "job-day-minutes",
+          action: "finished",
+          status: "ok",
+          durationMs: 86_460_000,
+        },
+        {
           ts: 4,
           jobId: "job-total",
           action: "finished",
@@ -116,6 +121,13 @@ describe("cron view run history", () => {
       expect(entry).toBeInstanceOf(HTMLDivElement);
       return entry;
     };
+
+    expect(
+      entryFor("job-hour-seconds")?.querySelector(".cron-run-entry__meta")?.textContent,
+    ).toContain("1h 30s");
+    expect(
+      entryFor("job-day-minutes")?.querySelector(".cron-run-entry__meta")?.textContent,
+    ).toContain("1d 1m");
 
     const total = entryFor("job-total");
     expect(total?.querySelector(".cron-run-entry__facts")?.textContent).toContain("1.2M Tokens");

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -8,9 +9,8 @@ import {
   createNewSessionPageE2eSuite,
   installMockGateway,
   pollLocatorText,
-  prepareProjectUiProof,
-  projectProofArtifactDir,
   replaceGatewayClient,
+  waitForGatewayRecoveryScope,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -21,7 +21,6 @@ const gatewayEnvironment = {
 };
 suite.define(() => {
   it("registers a Git checkout from Browse and selects the refreshed project", async () => {
-    await prepareProjectUiProof();
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const repoRoot = "/recorded/openclaw";
@@ -81,14 +80,13 @@ suite.define(() => {
       await pathInput.press("Enter");
       const register = place.getByRole("button", { name: "Register as project" });
       await register.waitFor();
-      await captureProjectUiProof(page, "project-register-action.png");
+      await captureProjectUiProof(suite, page, "project-register-action.png");
       await register.click();
 
       const request = await gateway.waitForRequest("projects.register");
       expect(request.params).toEqual({ path: repoRoot });
-      await expect.poll(async () => (await gateway.getRequests("projects.list")).length).toBe(2);
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("openclaw");
-      expect(await trigger.getAttribute("data-project-id")).toBe("recorded-openclaw");
+      await expect.poll(() => trigger.getAttribute("data-project-id")).toBe("recorded-openclaw");
     } finally {
       await context.close();
     }
@@ -141,8 +139,11 @@ suite.define(() => {
       await trigger.click();
       const place = page.locator("wa-popover.new-session-page__where-popover");
       await place.getByRole("button", { name: "Local" }).waitFor();
-      expect(await place.getByText("Your devices", { exact: true }).count()).toBe(0);
-      expect(await place.getByText("Cloud", { exact: true }).count()).toBe(0);
+      expect(await place.locator('[data-value^="device:"]').count()).toBe(0);
+      expect(await place.locator('[data-value^="cloud:"]').count()).toBe(0);
+      expect(
+        await place.getByRole("switch", { name: "Choose a device automatically" }).count(),
+      ).toBe(0);
     } finally {
       await context.close();
     }
@@ -151,11 +152,12 @@ suite.define(() => {
   it.each(["recovery scope", "system info"] as const)(
     "updates Gateway place labels after late %s",
     async (late) => {
-      await prepareProjectUiProof();
       const context = await suite.browser.newContext({
         locale: "en-US",
         serviceWorkers: "block",
-        ...(captureUiProofEnabled ? { recordVideo: { dir: projectProofArtifactDir } } : {}),
+        ...(captureUiProofEnabled
+          ? { recordVideo: { dir: path.join(suite.artifactDir, "project-registry") } }
+          : {}),
       });
       const page = await context.newPage();
       if (late === "recovery scope") {
@@ -204,7 +206,8 @@ suite.define(() => {
           await expect.poll(() => tooltipTitleText(local)).toBe("Gateway · QA-Gateway");
           const catalogRequests = (await gateway.getRequests("environments.list")).length;
           await page.evaluate(() => window.dispatchEvent(new Event("test-release-recovery-scope")));
-          await gateway.waitForRequest("environments.list", { after: catalogRequests });
+          await waitForGatewayRecoveryScope(page);
+          expect(await gateway.getRequests("environments.list")).toHaveLength(catalogRequests);
           await page.keyboard.press("Escape");
         }
         await page.locator("#new-session-project-trigger").click();
@@ -220,7 +223,10 @@ suite.define(() => {
           await expect.poll(() => tooltipTitleText(local)).toBe("Gateway · QA-Gateway");
         }
         await expect.poll(() => pathInput.getAttribute("placeholder")).toBe("Gateway · QA-Gateway");
-        await captureProjectUiProof(page, `gateway-name-${late.replaceAll(" ", "-")}.png`);
+        await captureProjectUiProof(suite, page, `gateway-name-${late.replaceAll(" ", "-")}.png`, {
+          surface: page.locator('.new-session-page__project-popover wa-popup [part="popup"]'),
+          content: [pathInput],
+        });
 
         await page.keyboard.press("Escape");
         await replaceGatewayClient(page);
@@ -229,7 +235,15 @@ suite.define(() => {
         await expect.poll(() => tooltipTitleText(local)).toBe("Gateway · QA-Gateway");
       } finally {
         try {
-          await captureProjectUiProof(page, `gateway-name-${late.replaceAll(" ", "-")}-final.png`);
+          await captureProjectUiProof(
+            suite,
+            page,
+            `gateway-name-${late.replaceAll(" ", "-")}-final.png`,
+            {
+              surface: page.locator('.new-session-page__where-popover wa-popup [part="popup"]'),
+              content: [page.locator('.new-session-page__where-popover [data-value="gateway"]')],
+            },
+          );
         } finally {
           await context.close();
         }
@@ -346,11 +360,11 @@ suite.define(() => {
         .toEqual({ repoRoot: "/home", includeRepositoryStatus: true });
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("home");
 
-      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
+      expect(await page.locator("#new-session-checkout-trigger").count()).toBe(0);
       await page.locator("#new-session-where-trigger").click();
       const where = page.locator("wa-popover.new-session-page__where-popover");
-      await where.getByText("Cloud", { exact: true }).waitFor();
       const cloud = where.getByRole("button", { name: "Cloud · aws" });
+      await cloud.waitFor();
       expect(await cloud.isDisabled()).toBe(true);
       await expect.poll(() => tooltipTitleText(cloud)).toBe("Cloud needs a Git checkout");
       await page.keyboard.press("Escape");

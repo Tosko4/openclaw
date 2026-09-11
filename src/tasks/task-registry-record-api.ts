@@ -28,12 +28,17 @@ import {
   maybeDeliverTaskTerminalUpdate,
 } from "./task-registry-delivery.js";
 import { syncFlowFromTaskAfterTaskMutation, updateTask } from "./task-registry-mutation.js";
-import { cloneTaskRecord, normalizeTaskTimestamps } from "./task-registry-records.js";
+import {
+  cloneTaskRecord,
+  cloneTaskRecordForObserver,
+  normalizeTaskTimestamps,
+} from "./task-registry-records.js";
 import {
   addOwnerKeyIndex,
   addParentFlowIdIndex,
   addRelatedSessionKeyIndex,
   addRunIdIndex,
+  bumpTaskRegistryRevision,
   emitTaskRegistryObserverEvent,
   ensureTaskRegistryReady,
   getTasksByRunScope,
@@ -280,6 +285,7 @@ export function createTaskRecord(params: {
     return null;
   }
   tasks.set(taskId, record);
+  bumpTaskRegistryRevision();
   if (requesterOrigin) {
     taskDeliveryStates.set(taskId, deliveryState!);
   }
@@ -290,7 +296,7 @@ export function createTaskRecord(params: {
   syncFlowFromTaskAfterTaskMutation(record, "create");
   emitTaskRegistryObserverEvent(() => ({
     kind: "upserted",
-    task: cloneTaskRecord(record),
+    task: cloneTaskRecordForObserver(record),
   }));
   if (isTerminalTaskStatus(record.status)) {
     void maybeDeliverTaskTerminalUpdate(taskId);

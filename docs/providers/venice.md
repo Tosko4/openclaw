@@ -126,15 +126,15 @@ You can also run `openclaw configure` and pick **Model/auth provider > Venice AI
   </Accordion>
 </AccordionGroup>
 
-Grok-backed Venice models (`grok-4-3` and similar) get the same tool-schema
+Grok-backed Venice models (`grok-4-5` and similar) get the same tool-schema
 compat patch as the native xAI provider, since they share the same upstream
 tool-call format.
 
 ## Model discovery
 
-The bundled catalog above is a manifest-backed seed list. At runtime OpenClaw
-refreshes it from the Venice `/models` API and falls back to the seed list if
-the API is unreachable. The `/models` endpoint is public (no auth needed for
+The built-in catalog above is the manifest-backed seed catalog. At runtime
+OpenClaw refreshes it from the Venice `/models` API and falls back to the seed
+catalog if the API is unreachable. The `/models` endpoint is public (no auth needed for
 listing), but inference requires a valid API key.
 
 Venice may continue accepting retired model IDs as provider-owned aliases. The
@@ -164,17 +164,44 @@ Venice uses a credit-based system. Anonymized models cost roughly the same as
 direct API pricing plus a small Venice fee. See
 [venice.ai/pricing](https://venice.ai/pricing) for current rates.
 
-OpenClaw uses the Venice plugin manifest's prices for bundled models, including
-when those models appear in live discovery. Newly discovered models outside the
-manifest keep zero estimates until pricing is configured; zero does not mean the
-model is free.
+OpenClaw reads live prices from Venice's public
+[`GET /api/v1/models`](https://docs.venice.ai/api-reference/endpoint/models/list)
+response during model discovery. The same plugin parser supplies the hosted
+catalog publisher. Known and newly discovered models use the API's complete
+schedule in USD per million tokens; the seed catalog prices are the offline
+fallback. Missing or invalid live prices retain the complete seed catalog schedule for known
+models. Unknown models without valid pricing keep zero estimates; that does not
+mean the model is free. Explicit API zero rates are valid.
 
-Existing explicit model prices take precedence, including zero. Onboarding
-preserves existing model entries rather than replacing their prices. If an older
-configuration contains obsolete zero rates, back up your configuration and update
-only the affected `models.providers.venice.models[].cost` fields to current rates.
-Keep intentional custom prices. See [Token use and costs](/reference/token-use)
-for pricing units and usage reporting.
+When the API supplies extended pricing, its rates apply to the entire request
+only when total prompt input **exceeds** `context_token_threshold`. Prompt input
+includes uncached input, cache reads, and cache writes; output tokens do not
+select the tier. A request exactly at the threshold still uses base rates.
+Base and extended rates always come from one schedule. An invalid extended
+schedule is not combined with seed catalog or other-source prices.
+
+Explicit `models.providers.venice.models[].cost` entries override catalog
+estimates, including zero. Omitted `cost` or `{}` inherits the catalog schedule.
+Partial flat overrides inherit missing base rates and remove inherited tiers;
+explicit `tieredPricing` wins, and `tieredPricing: []` selects flat pricing.
+Agent-local root `models.json` prices retain highest priority.
+
+New onboarding in `models.mode: "merge"` leaves generated catalog rows out of the
+configuration so they cannot become price pins. Re-onboarding preserves existing
+model entries, aliases, and model selection. In `models.mode: "replace"`,
+onboarding retains explicit seed catalog rows because that mode disables discovery.
+Existing serialized costs are never automatically removed or migrated, even if
+they match an old seed catalog entry. With merge mode enabled, back up your configuration and
+remove only unwanted `cost` fields to resume catalog pricing; keep intentional
+overrides.
+
+Discovery reuses its existing fetched rows and cache. Usage display makes no
+price requests, and a running Gateway does not immediately adopt every upstream
+price change. Hosted catalog updates activate at the existing restart boundary;
+see [Hosted model catalog](/concepts/models#hosted-catalog-updates).
+Make sizing-only edits in your source configuration without copying generated
+model rows back into it: replacing an entire model array from a runtime snapshot
+can persist inherited costs as explicit overrides. Historical recorded costs are preserved; current pricing fills only missing costs or unknown-price zero placeholders. See [Token use and costs](/reference/token-use).
 
 ## Usage examples
 
@@ -243,7 +270,6 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
                 name: "GLM 4.7",
                 reasoning: true,
                 input: ["text"],
-                cost: { input: 0.55, output: 2.65, cacheRead: 0.11, cacheWrite: 0 },
                 contextWindow: 198000,
                 maxTokens: 16384,
               },

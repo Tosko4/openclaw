@@ -205,7 +205,7 @@ describe("createReplyMediaPathNormalizer", () => {
         workspaceDir: "/tmp/sandboxes/session-1",
         containerWorkdir,
       });
-      const normalize = createTestReplyMediaNormalizer();
+      const normalize = createTestReplyMediaNormalizer({ agentId: "finance" });
       const fileUrl = `file://${containerWorkdir}/screens/final%20image.png`;
 
       const result = await normalize({
@@ -216,6 +216,9 @@ describe("createReplyMediaPathNormalizer", () => {
         ],
       });
 
+      expect(ensureSandboxWorkspaceForSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "finance" }),
+      );
       expectMedia(result, "/tmp/outbound-media/photo.png", [
         "/tmp/outbound-media/photo.png",
         "/tmp/outbound-media/final image.png",
@@ -229,6 +232,9 @@ describe("createReplyMediaPathNormalizer", () => {
         1,
         path.join("/tmp/sandboxes/session-1", "screens", "final image.png"),
         5 * 1024 * 1024,
+      );
+      expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionWorkspaceDir: "/tmp/sandboxes/session-1" }),
       );
     },
   );

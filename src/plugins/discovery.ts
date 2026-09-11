@@ -14,6 +14,8 @@ import { resolveCompatibilityHostVersion } from "../version.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import {
   hasUsableBundledPluginTree,
+  isPluginInPackageBundledRoots,
+  resolveBundledPluginsDir,
   resolveSourceCheckoutDependencyDiagnostic,
 } from "./bundled-dir.js";
 import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
@@ -40,7 +42,7 @@ import {
 } from "./manifest.js";
 import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
 import {
-  resolvePackageRuntimeExtensionSources,
+  resolvePackageRuntimeExtensions,
   resolvePackageSetupSource,
 } from "./package-entry-resolution.js";
 import { formatPosixMode, isPathInside } from "./path-safety.js";
@@ -558,6 +560,47 @@ function derivePackagePluginIdHint(packageName: unknown): string | undefined {
   return normalizeOptionalString(unscoped);
 }
 
+export function resolvePluginPackageEntries(
+  params: Parameters<typeof resolvePackageRuntimeExtensions>[0] & { manifestId?: string },
+): Array<{ idHint: string; entryPath: string; source: string }> {
+  const entryIdSources = new Map<string, Array<{ entryPath: string; source: string }>>();
+  for (const entry of resolvePackageRuntimeExtensions(params)) {
+    const idHint = deriveIdHint({
+      filePath: entry.source,
+      manifestId: params.manifestId,
+      packageName: params.manifest?.name,
+      fallbackId: path.basename(params.packageDir),
+      hasMultipleExtensions: params.extensions.length > 1,
+    });
+    const sources = entryIdSources.get(idHint);
+    if (sources) {
+      sources.push(entry);
+    } else {
+      entryIdSources.set(idHint, [entry]);
+    }
+  }
+  const entries: Array<{ idHint: string; entryPath: string; source: string }> = [];
+  for (const [idHint, sources] of entryIdSources) {
+    // Entry ids derive from basenames; colliding entries must not silently vanish in the registry.
+    if (params.extensions.length > 1 && sources.length > 1) {
+      params.diagnostics.push({
+        level: "error",
+        pluginId: idHint,
+        source: params.sourceLabel,
+        message:
+          `plugin package entries collide on derived id "${idHint}" ` +
+          `(${sources.map((entry) => path.relative(params.packageDir, entry.source)).join(", ")}); ` +
+          "rename the entry files to unique basenames",
+      });
+      continue;
+    }
+    for (const entry of sources) {
+      entries.push({ ...entry, idHint });
+    }
+  }
+  return entries;
+}
+
 function pushInvalidPackageExtensionDiagnostic(params: {
   resolution: PackageExtensionResolution;
   source: string;
@@ -666,15 +709,36 @@ function isSourceCheckoutExtensionsDir(extensionsDir: string): boolean {
   );
 }
 
-function resolveBundledSourceCheckoutExtensionsDir(bundledRoot?: string): string | undefined {
+export function resolveBundledSourceCheckoutExtensionsDir(
+  bundledRoot?: string,
+): string | undefined {
   if (!bundledRoot) {
     return undefined;
   }
   const legacyRoot = buildLegacyBundledRootPath(bundledRoot);
-  if (!legacyRoot || !isSourceCheckoutExtensionsDir(legacyRoot)) {
+  // Discovery must not touch a root that containment has not admitted.
+  if (
+    !legacyRoot ||
+    !isPluginInPackageBundledRoots({
+      rootDir: legacyRoot,
+      packageRoot: path.dirname(legacyRoot),
+    }) ||
+    !isSourceCheckoutExtensionsDir(legacyRoot)
+  ) {
     return undefined;
   }
   return legacyRoot;
+}
+
+// Host provenance is a fact about where a plugin lives, not how it was referenced.
+// These are exactly the trees the bundled scan walks, so a configured alias of
+// anything inside them is that same host-owned plugin and must classify identically.
+function isHostBundledPluginRoot(dir: string, env: NodeJS.ProcessEnv): boolean {
+  const bundledRoot = resolveBundledPluginsDir(env);
+  const realDir = pluginCacheRealpathSync(dir) ?? path.resolve(dir);
+  return [bundledRoot, resolveBundledSourceCheckoutExtensionsDir(bundledRoot)].some(
+    (root) => root && isPathInside(pluginCacheRealpathSync(root) ?? path.resolve(root), realDir),
+  );
 }
 
 function readChildDirectoryNames(dir: string | undefined): Set<string> {
@@ -959,11 +1023,12 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
     };
 
     if (extensions.length > 0) {
-      const resolvedRuntimeSources = resolvePackageRuntimeExtensionSources({
+      const entries = resolvePluginPackageEntries({
         packageDir: dir,
         ...(rootRealPath !== undefined ? { packageRootRealPath: rootRealPath } : {}),
         manifest,
         extensions,
+        manifestId: manifestId ?? normalizeOptionalString(packageMetadata?.plugin?.id),
         origin: params.origin,
         pluginIdHint,
         requireBuiltRuntimeEntry,
@@ -971,41 +1036,12 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
         diagnostics,
         rejectHardlinks,
       });
-      // Entry ids derive from basenames, so ./a/index.js and ./b/index.js would
-      // both become <pack>/index and one entry would silently vanish in the
-      // registry's same-id dedupe. Reject the colliding entries loudly instead.
-      const entryIdSources = new Map<string, string[]>();
-      for (const source of resolvedRuntimeSources) {
-        const idHint = deriveIdHint({
-          filePath: source,
-          manifestId: manifestId ?? normalizeOptionalString(packageMetadata?.plugin?.id),
-          packageName: manifest?.name,
-          fallbackId: path.basename(dir),
-          hasMultipleExtensions: extensions.length > 1,
-        });
-        const sources = entryIdSources.get(idHint);
-        if (sources) {
-          sources.push(source);
-        } else {
-          entryIdSources.set(idHint, [source]);
-        }
-      }
-      for (const [idHint, sources] of entryIdSources) {
-        if (extensions.length > 1 && sources.length > 1) {
-          diagnostics.push({
-            level: "error",
-            pluginId: idHint,
-            source: dir,
-            message:
-              `plugin package entries collide on derived id "${idHint}" ` +
-              `(${sources.map((s) => path.relative(dir, s)).join(", ")}); ` +
-              "rename the entry files to unique basenames",
-          });
-          continue;
-        }
-        for (const source of sources) {
-          addPackageCandidate(source, idHint, extensions.length > 1 ? idHint : undefined);
-        }
+      for (const entry of entries) {
+        addPackageCandidate(
+          entry.source,
+          entry.idHint,
+          extensions.length > 1 ? entry.idHint : undefined,
+        );
       }
       return true;
     }
@@ -1144,6 +1180,13 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
     if (!stat) {
       return;
     }
+    // Origin gates entry resolution and bundled runtime privileges. Configured
+    // paths and install records must resolve host-owned plugins as bundled.
+    const origin =
+      (params.origin === "config" || params.origin === "global") &&
+      isHostBundledPluginRoot(stat.isFile() ? path.dirname(resolved) : resolved, env)
+        ? "bundled"
+        : params.origin;
     if (stat.isFile()) {
       if (!isExtensionFile(resolved)) {
         diagnostics.push({
@@ -1157,7 +1200,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
         idHint: path.basename(resolved, path.extname(resolved)),
         source: resolved,
         rootDir: path.dirname(resolved),
-        origin: params.origin,
+        origin,
         workspaceDir: params.workspaceDir,
         ...(params.installOwner ? { installOwner: params.installOwner } : {}),
         ...(params.installOwnerAmbiguous ? { installOwnerAmbiguous: true } : {}),
@@ -1169,6 +1212,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
       if (
         discoverPluginDirectory({
           ...params,
+          origin,
           dir: resolved,
           rootRealPath: pluginCacheRealpathSync(resolved) ?? undefined,
         })
@@ -1178,7 +1222,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
 
       discoverInDirectory({
         dir: resolved,
-        origin: params.origin,
+        origin,
         workspaceDir: params.workspaceDir,
         ...(params.scanFiles !== undefined || params.origin === "config"
           ? { scanFiles: params.scanFiles ?? true }
@@ -1193,10 +1237,16 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
   }
 
   function discoverConfiguredPaths(loadPaths: readonly string[], workspaceDir?: string): void {
+    const firstConfigured = candidates.length;
     for (const loadPath of loadPaths) {
       if (typeof loadPath === "string" && loadPath.trim()) {
         discoverFromPath({ rawPath: loadPath.trim(), origin: "config", workspaceDir });
       }
+    }
+    // Explicit operator selection is its own fact: host-owned aliases keep bundled
+    // origin, so duplicate precedence must not read selection off `origin` alone.
+    for (const candidate of candidates.slice(firstConfigured)) {
+      candidate.configSelected = true;
     }
   }
   function finish(): PluginDiscoveryResult {
@@ -1213,6 +1263,9 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
         const duplicate = retained === candidate ? existing : candidate;
         if (duplicate.origin === "config" || duplicate.configSelected) {
           retained.configSelected = true;
+        }
+        if (duplicate.sourcePreferred) {
+          retained.sourcePreferred = true;
         }
         mergeCandidateInstallOwner(
           retained,
@@ -1252,10 +1305,16 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
   };
 }
 
-function discoveryPolicy(env: NodeJS.ProcessEnv, ownershipUid: number | null | undefined) {
+function discoveryPolicy(
+  env: NodeJS.ProcessEnv,
+  ownershipUid: number | null | undefined,
+  bundledRoot?: string,
+) {
   return {
     ownershipUid: currentUid(ownershipUid),
     compatibilityHostVersion: resolveCompatibilityHostVersion(env),
+    // Configured-path classification depends on the host's bundled tree.
+    bundledRoot: bundledRoot ?? resolveBundledPluginsDir(env) ?? "",
     nix: resolveIsNixMode(env),
     sourceOverlaysDisabled: env.OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS ?? "",
     home: env.OPENCLAW_HOME ?? "",
@@ -1300,11 +1359,15 @@ export function discoverOpenClawPlugins(params: {
   ownershipUid?: number | null;
   env?: NodeJS.ProcessEnv;
   rootScope?: PluginDiscoveryRootScope;
+  bundledRoot?: string;
 }): PluginDiscoveryResult {
   const env = params.env ?? process.env;
   const workspaceDir = normalizeOptionalString(params.workspaceDir);
   const workspaceRoot = workspaceDir ? resolveUserPath(workspaceDir, env) : undefined;
-  const roots = resolvePluginSourceRoots({ workspaceDir: workspaceRoot, env });
+  const defaultRoots = resolvePluginSourceRoots({ workspaceDir: workspaceRoot, env });
+  const roots = params.bundledRoot
+    ? { ...defaultRoots, stock: path.resolve(params.bundledRoot) }
+    : defaultRoots;
   const cache = getPluginCache().metadata.discovery;
   const key = hashStableJson({
     phase: "all",
@@ -1314,7 +1377,7 @@ export function discoverOpenClawPlugins(params: {
     // Install order determines which physical alias is retained during discovery.
     installRecords: Object.entries(params.installRecords ?? {}),
     rootScope: params.rootScope ?? "all",
-    policy: discoveryPolicy(env, params.ownershipUid),
+    policy: discoveryPolicy(env, params.ownershipUid, roots.stock),
   });
   const cached = cache.get(key);
   if (cached) {
@@ -1350,11 +1413,15 @@ export function discoverOpenClawPlugins(params: {
         bundledRoot: roots.stock,
         env,
       })) {
+        const firstOverlay = result.candidates.length;
         discoverFromPath({
           rawPath: sourceOverlayDir,
           origin: "bundled",
           workspaceDir,
         });
+        for (const candidate of result.candidates.slice(firstOverlay)) {
+          candidate.sourcePreferred = true;
+        }
         result.diagnostics.push({
           level: "warn",
           source: sourceOverlayDir,

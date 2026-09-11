@@ -19,10 +19,10 @@ import {
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import {
+  borrowOpenClawAgentDatabase,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   openNodeSqliteDatabase,
-  openOpenClawAgentDatabase,
   runSqliteImmediateTransactionSync,
   tableExists,
   withOpenClawAgentDatabaseReadOnly,
@@ -43,13 +43,14 @@ import {
 import { collectTranscriptWrites } from "./memory-forget-curated-writes.js";
 import { summarizeParticipantMatches, type MemoryForgetReport } from "./memory-forget-report.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
-import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./memory/manager-db.js";
 import { isMemorySessionIndexable } from "./memory/manager-session-sync-state.js";
 import {
   readSessionIngestionState,
   SESSION_CORPUS_RELATIVE_DIR,
   writeSessionIngestionState,
 } from "./session-ingestion.js";
+import { commitMemoryContent, hashMemoryContent } from "./short-term-promotion-memory-write.js";
+import { readPhaseSignalStore, writePhaseSignalStore } from "./short-term-promotion-store.js";
 import type { ShortTermRecallEntry } from "./short-term-promotion-types.js";
 
 type ForgetDatabase = {
@@ -77,6 +78,7 @@ type MemoryRewrite = {
   relativePath: string;
   content: string;
   remove: boolean;
+  expectedContent: string;
 };
 type ForgetIndexPlan = {
   chunks: Array<ForgetDatabase["memory_index_chunks"]>;
@@ -237,7 +239,6 @@ async function planMemoryIndex(params: {
           (source.source === "sessions" && removedSessionPaths.has(source.path)),
       );
       const chunkIds = chunks.map((chunk) => chunk.id);
-      const chunkHashes = [...new Set(chunks.map((chunk) => chunk.hash))];
       const ftsRows =
         chunkIds.length > 0 && tableExists(db, "memory_index_chunks_fts")
           ? executeSqliteQuerySync(
@@ -246,16 +247,14 @@ async function planMemoryIndex(params: {
             ).rows.length
           : 0;
       const hasVectorTable = tableExists(db, "memory_index_chunks_vec");
-      const embeddingCacheRows =
-        chunkHashes.length > 0 && tableExists(db, "memory_embedding_cache")
-          ? executeSqliteQuerySync(
-              db,
-              kysely
-                .selectFrom("memory_embedding_cache")
-                .select("hash")
-                .where("hash", "in", chunkHashes),
-            ).rows.length
-          : 0;
+      let embeddingCacheRows = 0;
+      if (params.sessionIds.size > 0 && tableExists(db, "memory_embedding_cache")) {
+        const cacheCount = db
+          .prepare("SELECT COUNT(*) AS count FROM memory_embedding_cache")
+          // SAFETY: the aggregate query always returns one row with the declared count alias.
+          .get() as { count?: unknown };
+        embeddingCacheRows = Number(cacheCount.count ?? 0);
+      }
       return { chunks, sources, ftsRows, embeddingCacheRows, hasVectorTable, databasePath };
     },
     { agentId: params.agentId },
@@ -285,8 +284,8 @@ async function planMemoryIndex(params: {
     } finally {
       probe.close();
     }
-    // Ordinary owner handles cannot enable extensions after construction.
-    // This fresh owner-validated handle stays read-only while exposing vec0.
+    // Preview must not create or migrate state; its owner-validated handle
+    // stays read-only while exposing vec0.
     const vectorResult = withOpenClawAgentDatabaseReadOnly(
       ({ db }) => {
         db.enableLoadExtension(true);
@@ -400,6 +399,7 @@ async function forgetWorkspaceMemory(
         relativePath: path.relative(workspaceDir, absolutePath).replaceAll("\\", "/"),
         content: rewritten,
         remove: rewritten.trim().length === 0,
+        expectedContent: content,
       });
     }
   }
@@ -437,23 +437,32 @@ async function forgetWorkspaceMemory(
         relativePath: path.relative(workspaceDir, absolutePath).replaceAll("\\", "/"),
         content: scrubbed.content,
         remove: false,
+        expectedContent: content,
       });
       removedMemoryEntries += scrubbed.removedEntries;
       removedMemoryLines += scrubbed.removedLines;
     }
   }
 
-  const [shortTermEntries, ingestionState, backups, artifactProvenance, sessionCorpusEntries] =
-    await Promise.all([
-      readMemoryCoreWorkspaceEntries<ShortTermRecallEntry>({
-        namespace: SHORT_TERM_RECALL_NAMESPACE,
-        workspaceDir,
-      }),
-      readSessionIngestionState(workspaceDir),
-      readMemoryPreimages(workspaceDir),
-      listMemoryArtifactProvenance({ workspaceDir }),
-      listSessionTranscriptCorpusEntriesForAgent(params.agentId),
-    ]);
+  const nowIso = new Date().toISOString();
+  const [
+    shortTermEntries,
+    phaseSignals,
+    ingestionState,
+    backups,
+    artifactProvenance,
+    sessionCorpusEntries,
+  ] = await Promise.all([
+    readMemoryCoreWorkspaceEntries<ShortTermRecallEntry>({
+      namespace: SHORT_TERM_RECALL_NAMESPACE,
+      workspaceDir,
+    }),
+    readPhaseSignalStore(workspaceDir, nowIso),
+    readSessionIngestionState(workspaceDir),
+    readMemoryPreimages(workspaceDir),
+    listMemoryArtifactProvenance({ workspaceDir }),
+    listSessionTranscriptCorpusEntriesForAgent(params.agentId),
+  ]);
   const sessionKeys = new Set(targets.map((target) => target.sessionKey));
   const curatedWrites = new Map(
     artifactProvenance
@@ -472,6 +481,15 @@ async function forgetWorkspaceMemory(
       !entryKeys.has(key) &&
       !entryKeys.has(value.key) &&
       !referencesSession(`${value.path}\n${value.snippet}`, params.agentId, sessionIds),
+  );
+  const retainedShortTermSet = new Set(retainedShortTerm);
+  const removedShortTermKeys = new Set(
+    shortTermEntries
+      .filter((entry) => !retainedShortTermSet.has(entry))
+      .flatMap(({ key, value }) => [key, value.key]),
+  );
+  const removedPhaseSignalKeys = Object.keys(phaseSignals.entries).filter(
+    (key) => entryKeys.has(key) || removedShortTermKeys.has(key),
   );
   const retainedSeenMessages = Object.entries(ingestionState.seenMessages).filter(
     ([scope]) => !referencesSession(scope, params.agentId, sessionIds),
@@ -591,17 +609,11 @@ async function forgetWorkspaceMemory(
     return report;
   }
 
-  const database = openOpenClawAgentDatabase({ agentId: params.agentId });
-  const vectorDb =
-    indexPlan.chunks.length > 0 && indexPlan.hasVectorTable
-      ? openMemoryDatabaseAtPath(database.path, true, params.agentId)
-      : undefined;
-  const db = vectorDb ?? database.db;
-  const kysely = getNodeSqliteKysely<ForgetDatabase>(db);
-  const chunkIds = indexPlan.chunks.map((chunk) => chunk.id);
-  const chunkHashes = [...new Set(indexPlan.chunks.map((chunk) => chunk.hash))];
+  const { db, release } = borrowOpenClawAgentDatabase({ agentId: params.agentId });
   try {
-    if (vectorDb) {
+    const kysely = getNodeSqliteKysely<ForgetDatabase>(db);
+    const chunkIds = indexPlan.chunks.map((chunk) => chunk.id);
+    if (chunkIds.length > 0 && indexPlan.hasVectorTable) {
       const loaded = await loadSqliteVecExtension({ db });
       if (!loaded.ok) {
         throw new Error(
@@ -616,9 +628,9 @@ async function forgetWorkspaceMemory(
       agentId: params.agentId,
       sessionIds: [...sessionIds],
     });
-    if (recorded === 0 && changedPaths.size > 0) {
-      // Repeating a partial purge can still rewrite an unindexed file. Fence
-      // pending shadow rebuilds before any filesystem mutation, even on failure.
+    if (recorded === 0) {
+      // Every explicit purge invalidates in-flight cache work, including a
+      // repeated purge whose selected source was already scrubbed.
       executeSqliteQuerySync(
         db,
         kysely
@@ -659,13 +671,19 @@ async function forgetWorkspaceMemory(
             .where("source", "=", source.source),
         );
       }
-      if (indexPlan.embeddingCacheRows > 0) {
-        executeSqliteQuerySync(
-          db,
-          kysely.deleteFrom("memory_embedding_cache").where("hash", "in", chunkHashes),
-        );
+      if (tableExists(db, "memory_embedding_cache")) {
+        executeSqliteQuerySync(db, kysely.deleteFrom("memory_embedding_cache"));
       }
     });
+    if (removedPhaseSignalKeys.length > 0) {
+      for (const key of removedPhaseSignalKeys) {
+        delete phaseSignals.entries[key];
+      }
+      phaseSignals.updatedAt = nowIso;
+      // Phase signals are derived from recall rows. Remove them first so a
+      // later failure leaves the authoritative recall evidence for a retry.
+      await writePhaseSignalStore(workspaceDir, phaseSignals);
+    }
     if (retainedShortTerm.length !== shortTermEntries.length) {
       await writeMemoryCoreWorkspaceEntries({
         namespace: SHORT_TERM_RECALL_NAMESPACE,
@@ -691,17 +709,19 @@ async function forgetWorkspaceMemory(
       });
     }
     for (const rewrite of [...memoryRewrites, ...corpusRewrites]) {
-      if (rewrite.remove) {
-        await fs.unlink(rewrite.absolutePath);
-      } else {
-        await fs.writeFile(rewrite.absolutePath, rewrite.content, "utf8");
-      }
+      await commitMemoryContent({
+        filePath: rewrite.absolutePath,
+        tempPrefix: `${path.basename(rewrite.absolutePath)}.forget`,
+        expectedHash: hashMemoryContent(rewrite.expectedContent),
+        expectedContent: rewrite.expectedContent,
+        allowInPlaceFallback: true,
+        conflictMessage: `${path.basename(rewrite.absolutePath)} changed before the memory forget rewrite could commit`,
+        content: rewrite.remove ? null : rewrite.content,
+      });
     }
     deleteMemoryEntryOrigins({ agentId: params.agentId, entryKeys: [...entryKeys] });
     return report;
   } finally {
-    if (vectorDb) {
-      closeMemoryDatabase(vectorDb);
-    }
+    release();
   }
 }

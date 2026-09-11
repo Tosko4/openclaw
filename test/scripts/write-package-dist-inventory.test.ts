@@ -5,9 +5,10 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-  PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
 } from "../../scripts/lib/package-dist-inventory-contract.mts";
+import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { withTempDirSync } from "../../src/test-helpers/temp-dir.js";
 
 const repoRoot = fs.realpathSync(fileURLToPath(new URL("../..", import.meta.url)));
@@ -56,15 +57,15 @@ describe("write-package-dist-inventory direct entry", () => {
         JSON.parse(
           fs.readFileSync(path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH), "utf8"),
         ),
-      ).toEqual(["dist/entry.js"]);
+      ).toEqual(["dist/entry.js", PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH]);
       expect(
-        fs.readFileSync(path.join(packageRoot, PACKAGE_INSTALL_GUARD_RELATIVE_PATH), "utf8"),
-      ).toBe("OpenClaw package preinstall has not completed.\n");
+        fs.readFileSync(path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH), "utf8"),
+      ).toBe("pending\n");
       expect(fs.readdirSync(path.join(packageRoot, "dist")).sort()).toEqual(
         [
           "entry.js",
           path.basename(PACKAGE_DIST_INVENTORY_RELATIVE_PATH),
-          path.basename(PACKAGE_INSTALL_GUARD_RELATIVE_PATH),
+          path.basename(PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH),
         ].sort(),
       );
     });
@@ -76,10 +77,13 @@ describe("write-package-dist-inventory direct entry", () => {
         const expected: Record<string, string> = { "entry.js": "export {};\n" };
         if (seeded) {
           expected[path.basename(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)] = '["dist/previous.js"]\n';
-          expected[path.basename(PACKAGE_INSTALL_GUARD_RELATIVE_PATH)] = "existing guard\n";
           for (const [name, content] of Object.entries(expected)) {
             fs.writeFileSync(path.join(packageRoot, "dist", name), content);
           }
+          fs.writeFileSync(
+            path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH),
+            "existing marker\n",
+          );
         }
         const importSource = `await import(${JSON.stringify(pathToFileURL(writerPath).href)});\n`;
         const importerPath = path.join(packageRoot, path.basename(writerPath));
@@ -95,6 +99,12 @@ describe("write-package-dist-inventory direct entry", () => {
             .map((name) => [name, fs.readFileSync(path.join(packageRoot, "dist", name), "utf8")]),
         );
         expect(actual).toEqual(expected);
+        const markerPath = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
+        if (seeded) {
+          expect(fs.readFileSync(markerPath, "utf8")).toBe("existing marker\n");
+        } else {
+          expect(fs.existsSync(markerPath)).toBe(false);
+        }
       });
     });
   });

@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { AssistantMessage } from "../../llm/types.js";
+import { buildAssistantFailoverSignal } from "../embedded-agent-helpers/assistant-message-failures.js";
+import { classifyFailoverSignal } from "../failover/classify.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
@@ -62,8 +64,12 @@ vi.mock("./run/session-bootstrap.js", async () => {
 });
 
 type RecoveryInput = Parameters<typeof recoverEmbeddedRunOverflow>[0];
-type RecoveryInputOverrides = Omit<Partial<RecoveryInput>, "attempt"> & {
+type RecoveryInputOverrides = Omit<
+  Partial<RecoveryInput>,
+  "attempt" | "assistantOverflowCandidate"
+> & {
   attempt?: Partial<EmbeddedRunAttemptResult>;
+  assistantOverflowCandidate?: AssistantMessage;
 };
 type CompactionResult = Awaited<ReturnType<RecoveryInput["contextEngine"]["compact"]>>;
 
@@ -105,6 +111,7 @@ function makeAssistantMessage(
 }
 
 function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
+  const { assistantOverflowCandidate, ...restOverrides } = overrides;
   const promptError = Object.hasOwn(overrides, "promptError")
     ? overrides.promptError
     : overflowError();
@@ -177,11 +184,23 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
     aborted: false,
     signalOwnedInterruption: false,
     promptError,
+    assistantOverflowCandidate: assistantOverflowCandidate
+      ? {
+          message: assistantOverflowCandidate,
+          classification:
+            assistantOverflowCandidate.stopReason === "error"
+              ? classifyFailoverSignal(buildAssistantFailoverSignal(assistantOverflowCandidate), {
+                  providerPlugin: null,
+                })
+              : null,
+        }
+      : undefined,
     toolResultPromptProjectionState: {
       replacements: new Map(),
       frozen: new Set(),
       ambiguousBaseKeys: new Set(),
-      sourceTextByKey: new Map(),
+      restoredCacheTtl: new Map(),
+      sourceHashByKey: new Map(),
     },
     attemptCompactionCount: 0,
     runtimeAuthPlan: {
@@ -192,18 +211,16 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
     sessionAgentId: "main",
     agentDir: "/tmp/agent",
     workspaceDir: "/tmp/workspace",
-    provider: "openai",
-    modelId: "gpt-5.6-luna",
+    modelSelection: { provider: "openai", model: "gpt-5.6-luna", authProfileIdSource: "auto" },
     harnessRuntime: "embedded",
     thinkLevel: "off",
-    authProfileIdSource: "auto",
     resolveContextEnginePluginId: () => undefined,
     buildRuntimeSettings: ({ tokenBudget, degradedReason }) =>
       buildContextEngineRuntimeSettings({
         contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-        provider: input.provider,
-        requestedModel: input.modelId,
-        resolvedModel: input.modelId,
+        provider: input.modelSelection.provider,
+        requestedModel: input.modelSelection.model,
+        resolvedModel: input.modelSelection.model,
         promptTokenBudget: tokenBudget,
         degradedReason,
       }),
@@ -217,7 +234,7 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
     markOwnedTranscriptRetry: vi.fn(),
     armPostCompactionGuard: vi.fn(),
     usageAccumulator: createUsageAccumulator(),
-    ...overrides,
+    ...restOverrides,
     attempt,
   };
   return input;
@@ -268,6 +285,50 @@ describe("recoverEmbeddedRunOverflow", () => {
 
     expect(result).toEqual({ action: "none" });
     expect(mocks.compact).not.toHaveBeenCalled();
+  });
+
+  it("does not compact a validation rejection naming context_length_exceeded", async () => {
+    const assistantOverflowCandidate = makeAssistantMessage({
+      stopReason: "error",
+      errorMessage: "500 Unsupported parameter: context_length_exceeded",
+    });
+    assistantOverflowCandidate.errorType = "invalid_request_error";
+    assistantOverflowCandidate.errorCode = "unknown_parameter";
+    const input = makeInput({
+      promptError: null,
+      assistantOverflowCandidate,
+      assistantErrorText: assistantOverflowCandidate.errorMessage,
+    });
+
+    expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "none" });
+    expect(mocks.compact).not.toHaveBeenCalled();
+    expect(mocks.markProviderPromptRejected).not.toHaveBeenCalled();
+    expect(mocks.truncateOversizedToolResults).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "refusal alone", promptError: null, action: "none" },
+    { name: "independent prompt overflow", promptError: overflowError(), action: "retry" },
+    {
+      name: "non-overflow prompt failure",
+      promptError: new Error("transport disconnected"),
+      action: "none",
+    },
+  ])("preserves a structured refusal alongside $name", async ({ promptError, action }) => {
+    const assistant = makeAssistantMessage({
+      stopReason: "error",
+      errorMessage: "Anthropic refusal: prompt is too long.",
+    });
+    assistant.diagnostics = [{ type: "provider_refusal", timestamp: 1 }];
+    const input = makeInput({
+      promptError,
+      assistantOverflowCandidate: assistant,
+      assistantErrorText: assistant.errorMessage,
+    });
+
+    expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action });
+    expect(mocks.compact).toHaveBeenCalledTimes(action === "retry" ? 1 : 0);
+    expect(mocks.truncateOversizedToolResults).not.toHaveBeenCalled();
   });
 
   it("preserves compaction recovery after a bodyless 413", async () => {
@@ -346,7 +407,8 @@ describe("recoverEmbeddedRunOverflow", () => {
       replacements: new Map(),
       frozen: new Set(["tool:call_1:1"]),
       ambiguousBaseKeys: new Set(),
-      sourceTextByKey: new Map(),
+      restoredCacheTtl: new Map(),
+      sourceHashByKey: new Map(),
     };
     const messagesSnapshot = [
       {

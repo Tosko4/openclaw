@@ -240,32 +240,30 @@ describe("CronService failure alerts", () => {
 
   it.each([
     {
-      name: "suppressed before reaching the recipient",
-      recipientReached: false,
+      name: "was not delivered",
+      outcome: { delivered: false, status: "not-delivered" as const },
       rejects: false,
       fallbackCalls: 1,
     },
     {
-      name: "suppressed after the recipient may have received it",
-      recipientReached: true,
+      name: "has an unknown outcome",
+      outcome: { status: "unknown" as const },
       rejects: false,
       fallbackCalls: 0,
     },
     {
-      name: "failed after reaching the recipient",
-      recipientReached: true,
-      rejects: true,
+      name: "was delivered",
+      outcome: { delivered: true, status: "delivered" as const },
+      rejects: false,
       fallbackCalls: 0,
     },
     {
-      name: "failed before reaching the recipient",
-      recipientReached: false,
-      rejects: true,
-      fallbackCalls: 1,
-    },
-    {
-      name: "rejected before a delivery attempt",
-      recipientReached: undefined,
+      name: "failed after settling as not delivered",
+      outcome: {
+        delivered: false,
+        status: "not-delivered" as const,
+        error: "failure alert delivery failed",
+      },
       rejects: true,
       fallbackCalls: 1,
     },
@@ -274,9 +272,7 @@ describe("CronService failure alerts", () => {
       { failureAlert: { enabled: true, after: 1 } },
       async ({ cron, sendCronFailureAlert, enqueueSystemEvent, addJob }) => {
         sendCronFailureAlert.mockImplementationOnce(async (alert) => {
-          if (testCase.recipientReached !== undefined) {
-            alert.onDeliveryAttempt?.(testCase.recipientReached);
-          }
+          await alert.onDeliverySettled(testCase.outcome);
           if (testCase.rejects) {
             throw new Error("failure alert delivery failed");
           }
@@ -286,14 +282,9 @@ describe("CronService failure alerts", () => {
         await cron.run(job.id, "force");
 
         expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-        expect(enqueueSystemEvent).toHaveBeenCalledTimes(testCase.fallbackCalls);
-
-        const deliveryAttempt = alertCallArg(sendCronFailureAlert).onDeliveryAttempt;
-        expect(typeof deliveryAttempt).toBe("function");
-        if (typeof deliveryAttempt === "function") {
-          deliveryAttempt(false);
-        }
-        expect(enqueueSystemEvent).toHaveBeenCalledTimes(testCase.fallbackCalls);
+        await vi.waitFor(() =>
+          expect(enqueueSystemEvent).toHaveBeenCalledTimes(testCase.fallbackCalls),
+        );
       },
     );
   });
@@ -851,7 +842,7 @@ describe("CronService failure alerts", () => {
     );
   });
 
-  it("adds Codex login recovery to OpenAI OAuth refresh failures", async () => {
+  it("adds provider login recovery to OpenAI OAuth refresh failures", async () => {
     await withFailureAlertCron(
       {
         failureAlert: { enabled: true, after: 1 },
@@ -872,15 +863,15 @@ describe("CronService failure alerts", () => {
 
         const alert = alertCallArg(sendCronFailureAlert);
         expect(alert.text).toContain("Cause: auth_permanent");
-        expect(alert.text).toContain("/login codex");
+        expect(alert.text).toContain("/login");
         expect(alert.presentation).toEqual({
           blocks: [
             {
               type: "buttons",
               buttons: [
                 {
-                  label: "Log in to Codex",
-                  action: { type: "command", command: "/login codex" },
+                  label: "Sign in",
+                  action: { type: "command", command: "/login" },
                 },
               ],
             },
@@ -890,7 +881,7 @@ describe("CronService failure alerts", () => {
     );
   });
 
-  it("does not offer Codex login for non-OAuth authentication failures", async () => {
+  it("does not offer provider login for non-OAuth authentication failures", async () => {
     await withFailureAlertCron(
       {
         failureAlert: { enabled: true, after: 1 },

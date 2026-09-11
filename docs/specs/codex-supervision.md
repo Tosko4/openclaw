@@ -20,6 +20,24 @@ fleet catalog, authenticated operator UI, session binding, and channel delivery.
 The feature belongs to the official `codex` plugin. There is no separate
 Supervisor plugin or second Codex protocol implementation.
 
+This spec uses these stage names:
+
+- **Gateway-local branch**: the new supervised Chat that OpenClaw creates from a
+  stored or idle local Codex source instead of resuming that source thread.
+- **Pending harness branch**: that branch before its first turn, when the bounded
+  history is projected but no canonical Codex thread exists yet.
+- **Chat mirror** (visible history mirror): the bounded copy of visible user and
+  assistant messages projected into the Chat.
+- **Visible-history branch**: an unmapped Gateway-local source that carries only
+  that mirrored history, so its canonical harness thread never resumes the
+  source.
+- **Canonical appServer-source branch**: the native Codex thread the plugin
+  creates with `threadSource: "appServer"` after pinning the source snapshot.
+- **Canonical full Codex harness thread**: that canonical thread once it runs
+  with OpenClaw's full harness tool surface; every later model turn runs on it.
+- **Supervised model-locked Chat**: an OpenClaw Chat bound to a supervised
+  thread under the Codex-only model and runtime lock.
+
 ## Product boundary
 
 The catalog registers whenever the Codex plugin is active unless native session
@@ -175,7 +193,7 @@ previews. The returned native cursor lets callers continue the scan.
 The plugin registers three Gateway-backed shell commands:
 
 ```text
-openclaw codex sessions [--search <text>] [--host <id>] [--limit <count>] [--cursor <cursor>] [--json] [gateway-options]
+openclaw codex sessions [--agent <id>] [--search <text>] [--host <id>] [--limit <count>] [--cursor <cursor>] [--json] [gateway-options]
 openclaw codex continue <thread-id> [--agent <id>] [--host <id>] [--json] [gateway-options]
 openclaw codex archive <thread-id> --confirm-no-other-runner [--agent <id>] [--host <id>] [--json] [gateway-options]
 ```
@@ -204,6 +222,128 @@ node, `/codex threads` lists App Server threads for the current conversation
 connection, and `/codex resume` or `/codex bind` mutates that conversation's
 binding. Those commands do not replace `sessions.catalog.continue`, and there is
 no `/codex continue` or `/codex archive` runtime command.
+
+## Canonical message forks
+
+Message-cut routing classifies the selected local user row before reading the
+original source. Original imported provenance still requires that source's exact
+cut. Canonical provenance is checked against the current privately bound native
+thread, independently of original-source availability. Repeated text does not
+identify a turn: native turn/item identity and retained mirror attestations do.
+Only explicit host-recorded blocked user inputs may be excluded from delivered
+input matching.
+
+When Gateway has already persisted the current user turn, native acceptance
+annotates that exact recorder-owned event through the host capability. The
+plugin supplies only existing native provenance fields; the host validates the
+live operational instance, recorder, session/writer claim, active anchor, and
+unchanged content again inside the anchored write transaction. Identical
+provenance is a no-op; conflicts, redaction mismatches, confirmed steering, and
+revoked owners fail closed. Annotation uses ordinary transcript generation
+invalidation and refreshes the same recorder admission before publication.
+It never establishes provenance for older unannotated canonical rows. Such a
+prefix requires a fresh original-source branch, not an inferred mapping or
+historical repair.
+
+Canonical creation uses the host's `SessionInitialization` lifetime. Its narrow
+native tool policy check fixes child identity, source revision, registry and
+configuration without constructing tools, provisioning requester MCP resources,
+or registering live hooks. The native source owns its immutable declarations.
+Bounded, identity-checked `SessionMeta.dynamic_tools` must match the fresh child's
+actual metadata, with only omitted `deferLoading: false` normalized according to
+native serde. The source binding digest detects drift of its own metadata;
+child fingerprints are computed from verified child data and current child config.
+
+Resumed supervised turns keep those native declarations. Current host-owned
+executors, approvals and hooks remain independently fenced and unavailable calls
+report `executionStarted: false`. The existing physical client owns a bounded
+metadata cache containing data only; close or thread retirement discards it.
+There is no parallel persisted catalog or retained executor. Configuration,
+execution environment, MCP and native policy changes still pass through their
+existing lifecycle checks, and external/manual adoption remains unchanged.
+
+A read-only rollout adapter observes the latest durable model/provider pair:
+matching session metadata sets provider, settings-applied events set both, and
+turn context sets model. Rollback does not reset these scalar settings. The exact
+plain file is preferred over its `.zst` sibling. Descriptor/root identity and
+size/timestamps are verified; symlinks, hardlinks, replacement, malformed records
+and budget exhaustion fail closed. Bounds are 64 KiB reads, 1 MiB records, 256-byte
+scalars, an 8 MiB backward scan and five seconds. Compressed input is limited to
+8 MiB and output/window to 32 MiB. This is a verified snapshot, not live-memory
+selection or a metadata cache.
+
+The child uses direct `thread/fork` with `beforeTurnId` and the observed pair,
+then exact cut read-back. It never imports projected history or reinjects the
+inherited prefix. Deterministic child config shares the start/resume renderer;
+a fresh hook relay generation has static commands but no live registration.
+The first actual admitted run still owns prompt hooks and callback registration.
+Canonical SDK append copies the frozen display messages and their original
+attestations/idempotency identities with new destination event IDs and parents.
+The public link retains the original source identity and reference; the private
+binding points to the new native child. Its activity marker describes the
+verified retained native cut, including an empty baseline when no turns remain,
+so the first poll cannot mistake inherited turns for new human input.
+
+The exact host creation or rollback assertion reaches every physical fork/archive
+write, including writes after a native configuration fence or overload retry.
+The exact physical fork subscription is claimed through validation and released
+before readiness. If authority closes before cleanup can archive the fresh child,
+the captured physical client is detached from new acquisitions and retired after
+sibling leases drain. Subscription retirement does not grant archive authority;
+ordinary archive notifications already release their subscription claims. Later supervised resumes require native `notLoaded` evidence
+before accepting configuration application, preserving the separate restrictions
+on arbitrary external-thread adoption. Competing subscriptions or failed shutdown
+cannot be converted into successful configuration by an unsubscribe acknowledgement.
+
+Shipping Codex App Server supports the handoff through `thread/inject_items`.
+Validated native `forkedFromId` and the exact private supervision binding classify
+lineage; missing nullable provenance is not equivalent to `null`. No custom
+initialize capability, binary patch, or extra operator option is required.
+
+After native cut, catalog, model, app, and source validation, creation appends
+exactly one raw developer message containing a bounded supersession notice and
+the complete final generic `developerInstructions` body. Accepted cold resumes
+with proven configuration ownership do the same for supervised canonical threads before binding
+CAS and `turn/start`, including threads initially materialized from an original
+source. The exact final generic body remains native configuration for compaction
+and native-child inheritance. Full hook replacement and explicit empty bodies
+retain their existing meaning; post-hook diagnostics remain part of that body.
+
+The notice supersedes only earlier OpenClaw generic policy. Independent managed,
+guardian, security, collaboration, and native project instructions remain
+authoritative. Supersession is prose, not machine-enforced deletion. The append
+is session configuration history: a later rejected user turn does not roll it
+back, and an exclusive user-turn cut retains preceding configuration updates,
+including hook output computed for the excluded request. Refreshes have no
+client-assigned item IDs, user-turn annotations, mirror entries, or model turns.
+
+Every physical refresh write and overload retry revalidates its exact host,
+configuration, source/binding, signal, and physical-client owners; the handoff
+checks them again after acknowledgement. Accepted resume failures never rotate
+the binding into a new thread. Uncertain delivery retires the exact physical
+client and cannot trigger startup or whole-fork replay. Existing native history
+is preserved. For a fresh child, uncertainty refuses local deletion before
+commit and prevents archive without proven quiescence; the existing non-ready
+initialization outcome remains available for inspection.
+
+Side questions put their current-question, non-continuation, non-mutation, and
+inherited-tool/approval reference-only rules in generic fork configuration and
+the same guarded developer refresh. They no longer inject a synthetic user
+boundary. Cleanup owns only the exact side child and does not interrupt a turn
+that never started.
+
+Fresh starts and initial imported-history materialization need no additional
+refresh. Ordinary nonsupervised cold, warm, and incognito paths retain their
+existing behavior and exclusions. Manual compaction, native review, and goals
+keep their existing configuration owners; standalone cold operations have no
+authoritative last-run generic body to refresh. A future admitted supervised
+run supplies current configuration and the policy handoff. No policy store,
+receipt, history scan, retention flag, or extra user turn fills that gap.
+
+Readiness seals creation authority. Before readiness, the registered deletion
+owner compensates only exact child state and a verified fresh native artifact;
+source/successor state is preserved. Lost native responses do not authorize
+orphan-ID guessing, and post-readiness publication errors cannot delete the child.
 
 ## Local continuation
 
@@ -430,7 +570,7 @@ The standalone legacy MCP adapter resolves these same tools from the official
 plugin and is the only path that honors the retained legacy policy environment
 variables.
 
-The July catalog UI, Gateway method, node capability, and CLI registration had
+The 2026.8.1 catalog UI, Gateway method, node capability, and CLI registration had
 not shipped under the old plugin id. They move directly to `codex` ownership
 without a second runtime facade.
 
@@ -498,3 +638,7 @@ surfaces remain the recovery path for archived threads.
 - Legacy Supervisor config migrates to the canonical Codex config shape.
 - Legacy list is loaded-only by default, stored enumeration obeys its per-endpoint
   cap, and compatibility send never starts or resumes an idle thread.
+
+## Related
+
+- [Codex supervision](/plugins/codex-supervision) - the user-facing guide for this spec

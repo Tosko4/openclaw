@@ -14,7 +14,7 @@ const PLUGIN_LIFECYCLE_LEASE_KEY = "global";
 const DEFAULT_PLUGIN_LIFECYCLE_LEASE_MS = 5 * 60_000;
 const DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS = 10 * 60_000;
 
-type PluginLifecycleLeaseContext = OpenClawStateLeaseContext & {
+export type PluginLifecycleLeaseContext = OpenClawStateLeaseContext & {
   databasePath: string;
 };
 
@@ -27,6 +27,7 @@ type PluginLifecycleLeaseOptions = Pick<
   OpenClawStateDatabaseOptions,
   "env" | "path" | "database"
 > & {
+  schemaPolicy?: "existing";
   signal?: AbortSignal;
   leaseMs?: number;
   waitMs?: number;
@@ -86,6 +87,7 @@ export async function withPluginLifecycleLease<T>(
       key: PLUGIN_LIFECYCLE_LEASE_KEY,
       database: {
         scope: "shared",
+        schemaPolicy: options.schemaPolicy,
         options: {
           env,
           ...(options.path ? { path: options.path } : {}),

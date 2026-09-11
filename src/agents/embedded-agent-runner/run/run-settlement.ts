@@ -2,12 +2,9 @@
 import { incrementCompactionCount } from "../../../auto-reply/reply/session-updates.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { getAdmittedRunDelegatedAuthority } from "../../admitted-run-context.js";
-import {
-  retireSessionMcpRuntime,
-  retireSessionMcpRuntimeForSessionKey,
-} from "../../agent-bundle-mcp-tools.js";
+import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-tools.js";
 import type { ContextEngineLogicalTurnLease } from "../../harness/context-engine-logical-turn.js";
-import { runAgentCleanupStep } from "../../run-cleanup-timeout.js";
+import { recordAgentCleanupFailure, runAgentCleanupStep } from "../../run-cleanup-timeout.js";
 import { log } from "../logger.js";
 import { clearProviderPromptState } from "../provider-prompt-state.js";
 import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
@@ -27,7 +24,10 @@ export async function settleEmbeddedRun(input: {
   >;
   compaction: {
     state: Pick<EmbeddedRunContextRecoveryState, "autoCompactionCount" | "currentContextSnapshot">;
-    session: Pick<SessionPromptState, "committedCompactionSuccessor" | "sessionWriterFence">;
+    session: Pick<
+      SessionPromptState,
+      "sessionId" | "committedCompactionSuccessor" | "sessionWriterFence"
+    >;
     originalTarget: NonNullable<SessionPromptState["sessionTarget"]>;
     durable: boolean;
     authority: ReturnType<typeof getAdmittedRunDelegatedAuthority>;
@@ -38,40 +38,46 @@ export async function settleEmbeddedRun(input: {
   const params = runInput.runParams;
   // Publish committed bookkeeping before cleanup can throw or cancellation closes the caller.
   // A returned model/session id is never a substitute for the accepted host target.
-  let fact: CompactionAccountingFact | undefined;
-  if (compaction.state.autoCompactionCount > 0 || compaction.state.currentContextSnapshot) {
-    const committed = compaction.session.committedCompactionSuccessor;
-    const originalCompactionWriter = compaction.session.sessionWriterFence;
-    const target = committed?.sessionTarget ?? compaction.originalTarget;
-    const counts = {
-      count: compaction.state.autoCompactionCount,
-      currentContextTokens: compaction.state.currentContextSnapshot?.tokens,
-    };
-    fact =
-      compaction.durable &&
-      (committed || originalCompactionWriter) &&
-      target.agentId &&
-      target.sessionId &&
-      target.sessionKey &&
-      target.storePath
-        ? {
-            kind: "durable",
-            ...counts,
-            target: {
-              agentId: target.agentId,
-              sessionId: committed?.entry.sessionId ?? target.sessionId,
-              sessionKey: target.sessionKey,
-              storePath: target.storePath,
-              lifecycleRevision: committed
-                ? committed.entry.lifecycleRevision
-                : originalCompactionWriter?.expectedLifecycleRevision,
-              activeWriterRunId: committed
-                ? committed.entry.activeWriterRunId
-                : originalCompactionWriter?.expectedWriterRunId,
-            },
-          }
-        : { kind: "presentation-only", ...counts };
-  }
+  const committed = compaction.session.committedCompactionSuccessor;
+  const originalWriter = compaction.session.sessionWriterFence;
+  const target = committed?.sessionTarget ?? compaction.originalTarget;
+  const counts = {
+    count: compaction.state.autoCompactionCount,
+    currentContextSnapshot:
+      compaction.state.currentContextSnapshot ??
+      (compaction.state.autoCompactionCount > 0 ? { tokens: undefined } : undefined),
+  };
+  // Native runtimes can return usage without ordered context events. Carry their
+  // claimed writer without inventing a context observation that would override it.
+  const fact: CompactionAccountingFact | undefined =
+    compaction.durable &&
+    (committed || originalWriter) &&
+    target.agentId &&
+    target.sessionId &&
+    target.sessionKey &&
+    target.storePath
+      ? {
+          kind: "durable",
+          ...counts,
+          ...(committed?.previousSessionId !== undefined
+            ? { previousSessionId: committed.previousSessionId }
+            : {}),
+          target: {
+            agentId: target.agentId,
+            sessionId: committed?.entry.sessionId ?? target.sessionId,
+            sessionKey: target.sessionKey,
+            storePath: target.storePath,
+            lifecycleRevision: committed
+              ? committed.entry.lifecycleRevision
+              : originalWriter?.expectedLifecycleRevision,
+            activeWriterRunId: committed
+              ? committed.entry.activeWriterRunId
+              : originalWriter?.expectedWriterRunId,
+          },
+        }
+      : counts.count > 0 || counts.currentContextSnapshot
+        ? { kind: "presentation-only", ...counts }
+        : undefined;
   if (params.onCompactionAccounting) {
     params.onCompactionAccounting(fact);
   } else if (fact?.kind === "durable" && fact.count > 0) {
@@ -80,7 +86,7 @@ export async function settleEmbeddedRun(input: {
         ...fact.target,
         expectedSession: fact.target,
         amount: fact.count,
-        tokensAfter: fact.currentContextTokens,
+        tokensAfter: fact.currentContextSnapshot?.tokens,
         // Cancellation preserves bookkeeping, but a reused run id cannot lend a new admission.
         authorize: () =>
           compaction.authority !== undefined &&
@@ -96,17 +102,7 @@ export async function settleEmbeddedRun(input: {
   forgetPromptBuildDrainCacheForRun(params.runId);
   clearProviderPromptState(params.runId);
   runtime.stopRuntimeAuthRefreshTimer();
-  if (ownedContextEngineLease) {
-    await runAgentCleanupStep({
-      runId: params.runId,
-      sessionId: params.sessionId,
-      step: "context-engine-dispose",
-      log,
-      cleanup: async () => {
-        await ownedContextEngineLease.dispose();
-      },
-    });
-  }
+  await ownedContextEngineLease?.dispose();
   if (params.cleanupBundleMcpOnRunEnd === true) {
     await runAgentCleanupStep({
       runId: params.runId,
@@ -115,25 +111,22 @@ export async function settleEmbeddedRun(input: {
       log,
       cleanup: async () => {
         const onError = (errorLocal: unknown, sessionId: string) => {
+          recordAgentCleanupFailure();
           log.warn(
             `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(errorLocal)}`,
           );
         };
-        const retiredBySessionKey = await retireSessionMcpRuntimeForSessionKey({
-          sessionKey: params.sessionKey,
-          reason: "embedded-run-end",
-          // MCP App views hold bounded leases so their bridge can remain
-          // usable after a one-shot gateway run returns.
-          preserveActiveLeases: true,
-          onError,
-        });
-        if (!retiredBySessionKey) {
-          await retireSessionMcpRuntime({
-            sessionId: params.sessionId,
-            reason: "embedded-run-end",
-            preserveActiveLeases: true,
-            onError,
-          });
+        // This run owns its original ID and its accepted successor;
+        // its mutable session key may already belong to another run.
+        for (const sessionId of new Set([params.sessionId, compaction.session.sessionId])) {
+          if (sessionId) {
+            await retireSessionMcpRuntime({
+              sessionId,
+              reason: "embedded-run-end",
+              preserveActiveLeases: true,
+              onError,
+            });
+          }
         }
       },
     });

@@ -10,6 +10,7 @@ import {
   resolveAgentIdFromSessionKey,
   scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
+import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
 import {
   extractAssistantPhaseText,
   extractFirstTextBlock,
@@ -29,14 +30,15 @@ import {
 import { resolveDefaultSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
 import {
   loadSessionEntryReadOnly,
-  loadTranscriptEvents,
   isSessionTranscriptProjectionUnavailableError,
   persistSessionTranscriptTurn,
   readActiveTranscriptEntryAnchor,
+  readLatestSessionTranscriptMessageEvent,
   readLatestTranscriptAssistantText,
   readSessionTranscriptMessageEventPage,
   resolveSessionEntrySelection,
   updateSessionEntry,
+  waitForSessionTranscriptProjection,
   type SessionTranscriptTurnPersistOptions,
   type SessionTranscriptTurnWriteContext,
   type SessionTranscriptTurnExpectedState,
@@ -58,10 +60,6 @@ import {
   readPreferredUpstreamUserText,
 } from "./transcript-recent-window.js";
 import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
-import {
-  scanSessionTranscriptTree,
-  selectSessionTranscriptTreePathNodes,
-} from "./transcript-tree.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionTranscriptAppendTarget = {
@@ -110,6 +108,7 @@ type InternalSessionTranscriptDeliveryMirror =
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
+  [ASSISTANT_DISPLAY_CONTENT_FIELD]?: Array<Record<string, unknown>>;
 };
 
 type AssistantTranscriptText = {
@@ -405,6 +404,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   text?: string;
   mediaUrls?: string[];
   content?: SessionTranscriptAssistantMessage["content"];
+  displayContent?: Array<Record<string, unknown>>;
   eventId?: string;
   idempotencyKey?: string;
   runId?: string;
@@ -429,7 +429,8 @@ export async function appendAssistantMessageToSessionTranscript(params: {
       });
   const content =
     params.content ?? (mirrorText ? [{ type: "text" as const, text: mirrorText }] : []);
-  if (content.length === 0) {
+  const displayContent = params.displayContent?.map((block) => Object.assign({}, block));
+  if (content.length === 0 && !displayContent?.length) {
     return { ok: false, reason: "empty text" };
   }
 
@@ -456,6 +457,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     message: {
       role: "assistant" as const,
       content,
+      ...(displayContent ? { [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent } : {}),
       api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
       provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
       model: OPENCLAW_DELIVERY_MIRROR_MODEL,
@@ -476,7 +478,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
       stopReason: "stop" as const,
       timestamp: Date.now(),
       ...(params.deliveryMirror ? { openclawDeliveryMirror: params.deliveryMirror } : {}),
-    } as SessionTranscriptAssistantMessage,
+    },
   });
 }
 
@@ -587,6 +589,11 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       sessionKey: resolved.normalizedKey,
       storePath,
     };
+    if (isRedundantDeliveryMirror(params.message) && !identifiedDeliveryMirror) {
+      // Reconciliation needs the writer queue. Wait before entering it, then
+      // read the current projected tail again inside the guarded append.
+      await waitForSessionTranscriptProjection(target);
+    }
     let latestEquivalentAssistantId: string | undefined;
     // Identified delivery mirrors, including suppressed finals, dedupe only by
     // key so same-text markers from different source ids remain separate rows.
@@ -736,29 +743,23 @@ async function readLatestVisibleTranscriptMessage(scope: {
   sessionKey?: string;
   storePath: string;
 }): Promise<{ id?: string; message: unknown } | undefined> {
-  const events = await loadTranscriptEvents(scope).catch(() => []);
-  const tree = scanSessionTranscriptTree(events);
-  const visiblePath = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
-  const visibleEvents =
-    visiblePath.length > 0
-      ? visiblePath.map((node) => node.entry)
-      : tree.hasLeafControl
-        ? []
-        : events;
-  for (const event of visibleEvents.toReversed()) {
+  try {
+    const event = readLatestSessionTranscriptMessageEvent(scope)?.event;
     if (!event || typeof event !== "object" || Array.isArray(event)) {
-      continue;
+      return undefined;
     }
     const record = event as { id?: unknown; message?: unknown };
     if (record.message === undefined) {
-      continue;
+      return undefined;
     }
     return {
       ...(typeof record.id === "string" ? { id: record.id } : {}),
       message: record.message,
     };
+  } catch {
+    // Mirror deduplication remains best-effort when transcript reads are unavailable.
+    return undefined;
   }
-  return undefined;
 }
 
 function isIdentifiedDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {

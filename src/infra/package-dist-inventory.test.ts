@@ -6,10 +6,10 @@ import { describe, expect, it } from "vitest";
 import {
   isLegacyPluginDependencyInstallStagePath,
   LOCAL_BUILD_METADATA_DIST_PATHS,
-  PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
   writePackageDistInventory,
   writePackageDistInventoryForPublish,
 } from "../../scripts/lib/package-dist-inventory.ts";
+import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   collectPackageDistInventory,
@@ -25,9 +25,11 @@ describe("package dist inventory", () => {
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/current-BR6xv1a1.js",
+        "dist/postinstall-content-inventory.json",
       ]);
       await expect(readPackageDistInventoryIfPresent(packageRoot)).resolves.toStrictEqual([
         "dist/current-BR6xv1a1.js",
+        "dist/postinstall-content-inventory.json",
       ]);
 
       await fs.rm(currentFile);
@@ -38,30 +40,33 @@ describe("package dist inventory", () => {
       );
 
       await expect(collectPackageDistInventory(packageRoot)).resolves.toEqual([
+        "dist/postinstall-content-inventory.json",
         "dist/stale-CJUAgRQR.js",
       ]);
     });
   });
 
-  it("keeps the pending install guard outside the expected inventory", async () => {
-    await withTestDir({ prefix: "openclaw-dist-install-guard-" }, async (packageRoot) => {
+  it("keeps lifecycle state outside the closed dist inventory", async () => {
+    await withTestDir({ prefix: "openclaw-package-lifecycle-" }, async (packageRoot) => {
       const currentFile = path.join(packageRoot, "dist", "current.js");
       await fs.mkdir(path.dirname(currentFile), { recursive: true });
       await fs.writeFile(currentFile, "export {};\n", "utf8");
 
       await expect(writePackageDistInventoryForPublish(packageRoot)).resolves.toEqual([
         "dist/current.js",
+        "dist/postinstall-content-inventory.json",
       ]);
       await expect(collectPackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/current.js",
-        PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+        "dist/postinstall-content-inventory.json",
       ]);
       await expect(readPackageDistInventoryIfPresent(packageRoot)).resolves.toEqual([
         "dist/current.js",
+        "dist/postinstall-content-inventory.json",
       ]);
       await expect(
-        fs.readFile(path.join(packageRoot, PACKAGE_INSTALL_GUARD_RELATIVE_PATH), "utf8"),
-      ).resolves.toContain("preinstall has not completed");
+        fs.readFile(path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH), "utf8"),
+      ).resolves.toBe("pending\n");
     });
   });
 
@@ -153,6 +158,7 @@ describe("package dist inventory", () => {
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toStrictEqual([
         "dist/plugin-sdk/provider-entry.d.ts",
+        "dist/postinstall-content-inventory.json",
       ]);
     });
   });
@@ -226,6 +232,7 @@ describe("package dist inventory", () => {
 
           await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
             "dist/plugin-sdk/runtime.js",
+            "dist/postinstall-content-inventory.json",
           ]);
         },
       );
@@ -259,7 +266,10 @@ describe("package dist inventory", () => {
       await fs.writeFile(rootDependencyPackage, "{}", "utf8");
       await fs.writeFile(pluginDependencyPackage, "{}", "utf8");
 
-      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual(["dist/index.js"]);
+      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
+        "dist/index.js",
+        "dist/postinstall-content-inventory.json",
+      ]);
     });
   });
 
@@ -301,19 +311,20 @@ describe("package dist inventory", () => {
 
         await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
           "dist/extensions/demo/runtime-api.js",
+          "dist/postinstall-content-inventory.json",
         ]);
       },
     );
   });
 
-  it("keeps publishable externalized bundled plugin dist trees out of the inventory", async () => {
+  it.each(["index.js", ""])("omits externalized plugin entry %j", async (entry) => {
     await withTestDir({ prefix: "openclaw-dist-inventory-externalized-" }, async (packageRoot) => {
       const externalizedRuntime = path.join(
         packageRoot,
         "dist",
         "extensions",
         "external-chat",
-        "index.js",
+        entry,
       );
       const bundledRuntime = path.join(
         packageRoot,
@@ -373,6 +384,7 @@ describe("package dist inventory", () => {
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/extensions/bundled-chat/index.js",
+        "dist/postinstall-content-inventory.json",
       ]);
     });
   });
@@ -401,6 +413,7 @@ describe("package dist inventory", () => {
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/extensions/core-chat/index.js",
+        "dist/postinstall-content-inventory.json",
       ]);
     });
   });
