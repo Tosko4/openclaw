@@ -264,6 +264,25 @@ describe("createClaudeLocalSessionSource", () => {
     );
   });
 
+  it("sends whole-millisecond timestamps so the Gateway accepts the frame", async () => {
+    const { frames } = await start();
+    const sessionFrames = frames.filter(
+      (frame): frame is Extract<Frame, { type: "session" }> => frame.type === "session",
+    );
+    expect(sessionFrames.length).toBeGreaterThan(0);
+    for (const { frame } of sessionFrames) {
+      // Catalog recency comes from stat.mtimeMs, which is fractional. The wire
+      // contract is z.number().int(), and one fractional value makes the Gateway
+      // reject the whole frame, so the session never appears for the team.
+      for (const value of [frame.startedAt, frame.updatedAt]) {
+        if (value !== undefined) {
+          expect(Number.isSafeInteger(value)).toBe(true);
+          expect(value).toBeGreaterThanOrEqual(0);
+        }
+      }
+    }
+  });
+
   it("replays only past the resume cursor and honors excluded threads", async () => {
     const { frames } = await start({ [SESSION_ID]: 1 });
     expect(frames[0]).toMatchObject({

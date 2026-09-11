@@ -63,7 +63,19 @@ function catalogTitle(entry: CatalogEntry): string | undefined {
   return entry.name?.trim() ? entry.name.trim().slice(0, 512) : undefined;
 }
 
+/**
+ * Catalog recency comes from `stat.mtimeMs`, which carries sub-millisecond
+ * precision, while the wire contract requires whole milliseconds. Normalize at
+ * the frame boundary so every producer path is covered; an unnormalized frame is
+ * rejected wholesale and the session silently never appears on the Gateway.
+ */
+function wholeMs(value: number | undefined): number | undefined {
+  return value === undefined ? undefined : Math.max(0, Math.floor(value));
+}
+
 function sessionFrame(thread: TrackedThread) {
+  const startedAt = wholeMs(thread.startedAt);
+  const updatedAt = wholeMs(thread.updatedAt);
   return {
     threadId: thread.threadId,
     state: thread.state,
@@ -71,8 +83,8 @@ function sessionFrame(thread: TrackedThread) {
     ...(thread.title ? { title: thread.title } : {}),
     ...(thread.cwd ? { cwd: thread.cwd.slice(0, 4096) } : {}),
     ...(thread.canInput ? {} : { reason: NO_CHANNEL_REASON }),
-    ...(thread.startedAt !== undefined ? { startedAt: thread.startedAt } : {}),
-    ...(thread.updatedAt !== undefined ? { updatedAt: thread.updatedAt } : {}),
+    ...(startedAt !== undefined ? { startedAt } : {}),
+    ...(updatedAt !== undefined ? { updatedAt } : {}),
     ...(thread.earliestSeq !== undefined ? { earliestSeq: thread.earliestSeq } : {}),
   };
 }
