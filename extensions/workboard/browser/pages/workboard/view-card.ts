@@ -363,8 +363,7 @@ export function renderColumn(
       aria-controls=${workboardCardModalId}
       ?disabled=${state.dispatching}
       @click=${() => {
-        openCreateModal(state, props);
-        state.draftStatus = status;
+        openCreateModal(state, props, status);
         props.onRequestUpdate?.();
       }}
     >
