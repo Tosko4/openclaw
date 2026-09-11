@@ -723,7 +723,13 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
                     if Task.isCancelled {
                         return
                     }
-                    guard delivery.isCurrent, let push = delivery.push else { continue }
+                    guard delivery.isCurrent else { continue }
+                    // A current disconnect retires chat health too; otherwise
+                    // attachment capture mistakes the offline route for a healthy one.
+                    guard let push = delivery.push else {
+                        continuation.yield(.health(ok: false))
+                        continue
+                    }
                     if case .snapshot = push {
                         if hasSeenSnapshot {
                             continuation.yield(.routeChanged)

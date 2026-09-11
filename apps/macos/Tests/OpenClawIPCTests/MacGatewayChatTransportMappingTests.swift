@@ -6,6 +6,52 @@ import Testing
 @testable import OpenClaw
 
 struct MacGatewayChatTransportMappingTests {
+    @Test func `current disconnect reaches chat health and reconnect recovers`() async throws {
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+            }, receiveHook: { socket, receiveIndex in
+                if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: socket.snapshotConnectRequestID() ?? "connect"))
+            })
+        })
+        let connection = GatewayConnection(
+            configProvider: { (url: URL(string: "ws://127.0.0.1:1")!, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let transport = MacGatewayChatTransport(connection: connection)
+        do {
+            _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
+            let health = try await AsyncTimeout.withTimeout(
+                seconds: 2,
+                onTimeout: { CancellationError() },
+                operation: {
+                    var health: [Bool] = []
+                    for await event in transport.events() {
+                        guard case let .health(ok) = event else { continue }
+                        health.append(ok)
+                        if health.count == 1 {
+                            session.latestTask()?.emitReceiveFailure()
+                        } else if !ok {
+                            _ = try await connection.request(
+                                method: "health", params: nil, retryTransportFailures: false)
+                        } else {
+                            return health
+                        }
+                    }
+                    return health
+                })
+            #expect(health == [true, false, true])
+            await connection.shutdown()
+        } catch {
+            await connection.shutdown()
+            throw error
+        }
+    }
+
     private actor RequestRecorder {
         var payloads: [Data] = []
 
