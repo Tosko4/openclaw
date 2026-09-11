@@ -1121,6 +1121,14 @@ describe("renderWorkboard", () => {
 
   it("passes dialog labels and cancellation back to the plugin draft owner", () => {
     const { host, state } = createLoadedWorkboardState();
+    state.lastDispatchSummary = {
+      started: 0,
+      failures: 0,
+      promoted: 0,
+      blocked: 0,
+      reclaimed: 0,
+      orchestrated: 0,
+    };
     state.draftOpen = true;
     state.draftTitle = "Unsaved task";
     const container = document.createElement("div");
@@ -1128,6 +1136,7 @@ describe("renderWorkboard", () => {
       onRequestUpdate: () => renderInto(container, props),
     });
     renderInto(container, props);
+    expect(container.textContent).not.toContain("No cards were started.");
     const dialog = container.querySelector("[data-test-dialog]")!;
     expect(dialog.getAttribute("aria-label")).toBe("New card");
     expect(dialog.getAttribute("aria-description")).toContain("Queue work");
@@ -1142,6 +1151,7 @@ describe("renderWorkboard", () => {
     dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
     expect(state.draftOpen).toBe(false);
     expect(container.querySelector(".workboard-draft")).toBeNull();
+    expect(container.textContent).toContain("No cards were started.");
   });
 
   it("keeps cards compact and puts model-specific execution actions in details", () => {
