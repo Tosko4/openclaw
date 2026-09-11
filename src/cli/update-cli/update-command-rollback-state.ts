@@ -2,6 +2,7 @@ import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.j
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { UpdateRecoveryBackupRef } from "../../infra/update-recovery-backup-contract.js";
 import {
+  preserveUpdateRecoveryCandidate,
   restoreUpdateRecoveryBackup,
   verifyUpdateRecoveryBackup,
   writeUpdateRecoveryBackupOutcome,
@@ -17,6 +18,61 @@ import {
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
 } from "./update-command-result.js";
+
+/** State admission precedes the first reverse package replacement. */
+export async function prepareUpdateRecoveryRollback(
+  backup: UpdateRecoveryBackupRef | undefined,
+  assertOwned: () => void,
+): Promise<void> {
+  if (!backup) {
+    return;
+  }
+  const [{ beginDoctorMaintenance }, { defaultRuntime }] = await Promise.all([
+    import("../../commands/doctor-maintenance.js"),
+    import("../../runtime.js"),
+  ]);
+  assertOwned();
+  const maintenance = await beginDoctorMaintenance({
+    root: null,
+    options: { repair: true },
+    runtime: defaultRuntime,
+  });
+  if (!maintenance) {
+    throw new Error("Candidate preservation requires offline state maintenance.");
+  }
+  const authority = {
+    assertOwned() {
+      assertOwned();
+      maintenance.assertCurrent();
+    },
+  };
+  let failure: { error: unknown } | undefined;
+  try {
+    authority.assertOwned();
+    const candidate = await preserveUpdateRecoveryCandidate(backup, authority);
+    const { assertUpdateRecoveryPublicationPrepared } =
+      await import("../../infra/update-recovery-publication.js");
+    await assertUpdateRecoveryPublicationPrepared(backup, candidate, authority);
+  } catch (error) {
+    failure = { error };
+  }
+  try {
+    await maintenance.release();
+  } catch (error) {
+    if (failure) {
+      throw new AggregateError(
+        [failure.error, error],
+        "Candidate preservation and physical maintenance settlement failed.",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  if (failure) {
+    throw failure.error;
+  }
+  assertOwned();
+}
 
 /** The caller owns stopped writers and joined children; this operation never starts a Gateway. */
 export async function restoreUpdateRecoveryState(
