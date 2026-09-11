@@ -385,7 +385,7 @@ describe("update plugin lifecycle lease boundaries", () => {
     },
   );
 
-  it("does not repeat a fresh child's completed migrations in the old parent", async () => {
+  it("retains parent validation for fresh children without a migration completion contract", async () => {
     vi.mocked(continuePostCoreUpdateInFreshProcess).mockResolvedValueOnce({
       resumed: true,
       pluginUpdate: successfulPluginUpdate,
@@ -415,7 +415,12 @@ describe("update plugin lifecycle lease boundaries", () => {
 
     expect(continuePostCoreUpdateInFreshProcess).toHaveBeenCalledOnce();
     expect(updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
-    expect(completePostCorePluginUpdate).not.toHaveBeenCalled();
+    expect(completePostCorePluginUpdate).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        pluginUpdate: successfulPluginUpdate,
+        freshDoctorRequired: true,
+      }),
+    );
     expect(result.resultWithPostUpdate).toMatchObject({
       status: "ok",
       postUpdate: { plugins: successfulPluginUpdate },

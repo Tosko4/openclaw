@@ -58,6 +58,7 @@ async function seedLegacyPluginConfig(state: OpenClawTestState) {
   };
   const config = {
     agents: {
+      entries: { main: {} },
       defaults: { memorySearch: { store: { path: legacyStorePath } } },
     },
     plugins: {
