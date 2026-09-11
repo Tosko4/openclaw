@@ -20,6 +20,7 @@ import {
 } from "../auth-profiles/order.js";
 import { resolveStoredCredentialReadOnlyAvailability } from "../auth-profiles/read-only-availability.js";
 import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
+import { isSetupCredentialAccessActive } from "../auth-profiles/setup-access.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
 import { resolveProviderDirectAuthPlanningEvidence } from "../model-auth-env.js";
@@ -38,6 +39,7 @@ import {
   buildProviderModelAuthDirectSource,
   buildProviderModelAuthSourcePlan,
   classifyProviderModelAuthSource,
+  resolveProviderEnvironmentAdmission,
   resolveProviderUseAdmission,
   type ProviderModelAuthDirectSource,
   type ProviderModelAuthProfileSource,
@@ -229,11 +231,12 @@ export function prepareAgentRuntimeAuth(
   input: PrepareAgentRuntimeAuthPlanParams,
 ): PreparedAgentRuntimeAuth {
   const params = { ...input, config: resolveModelProviderAuthConfig(input) };
+  const providerEnvVars = resolveProviderBindingEnvVarCandidates(input);
   // Route projection may add a provider entry; only authored config grants use.
   const providerUseAdmission = resolveProviderUseAdmission({
     config: input.config,
     env: input.env,
-    providerEnvVars: resolveProviderBindingEnvVarCandidates(input),
+    providerEnvVars,
     profiles: input.authProfileStore?.profiles,
     requestedProviders: [input.provider],
     storedCredentialAuthAliases: resolveProviderAuthAliasMap({ ...params, storedCredential: true }),
@@ -262,8 +265,12 @@ export function prepareAgentRuntimeAuth(
   const providerUseBinding =
     providerUseAdmission.get(normalizeProviderId(input.provider)) ??
     (harnessOwnsOpenAIAuth ? providerUseAdmission.get("openai") : undefined);
-  const boundEnvVar =
-    providerUseBinding?.kind === "environment" ? providerUseBinding.envVar : undefined;
+  const environmentBinding = resolveProviderEnvironmentAdmission({
+    env: input.env,
+    providerEnvVars,
+  }).bindings.get(normalizeProviderId(authProfileSelectionProvider));
+  const directUseBinding =
+    providerUseBinding?.kind === "profile" ? environmentBinding : providerUseBinding;
   if (userPinnedProfileId) {
     const eligibility = store
       ? resolveAuthProfileEligibility({
@@ -418,11 +425,17 @@ export function prepareAgentRuntimeAuth(
         : "provider-config",
     availability?: boolean,
     authorization: ProviderModelAuthDirectSource["authorization"] = "declared",
-  ) => buildProviderModelAuthDirectSource({ mode, evidence, availability, authorization });
+    boundEnvVar?: string,
+  ) =>
+    buildProviderModelAuthDirectSource({
+      mode,
+      evidence,
+      availability,
+      authorization,
+      boundEnvVar,
+    });
   const directPlanningCandidate =
-    harnessAllowsAuthProfileForwarding &&
-    providerUseBinding &&
-    providerUseBinding.kind !== "profile"
+    harnessAllowsAuthProfileForwarding && directUseBinding
       ? resolveProviderDirectAuthPlanningEvidence(
           authProfileSelectionProvider,
           params.env ?? process.env,
@@ -430,13 +443,11 @@ export function prepareAgentRuntimeAuth(
             config: params.config,
             workspaceDir: params.workspaceDir,
             metadataSnapshot: params.metadataSnapshot,
-            ...(providerUseBinding.kind === "environment"
+            ...(directUseBinding.kind === "environment"
               ? {
                   aliasMap: {},
                   candidateMap: {
-                    [normalizeProviderId(authProfileSelectionProvider)]: [
-                      providerUseBinding.envVar,
-                    ],
+                    [normalizeProviderId(authProfileSelectionProvider)]: [directUseBinding.envVar],
                   },
                   authEvidenceMap: {},
                   setupProviderFallbackRefs: [],
@@ -468,6 +479,9 @@ export function prepareAgentRuntimeAuth(
         directPlanningEvidence?.kind === "environment" ? "environment" : "runtime",
         directPlanningEvidence?.kind === "environment" ? true : undefined,
         fallbackIsAmbientCredential ? "ambient" : "declared",
+        fallbackIsAmbientCredential && !userPinnedProfileId && !isSetupCredentialAccessActive()
+          ? environmentBinding?.envVar
+          : undefined,
       )
     : providerBindingNeedsNonProfileFallback
       ? directSource(selectedConfiguredAuthMode)
@@ -510,6 +524,7 @@ export function prepareAgentRuntimeAuth(
     providerUseBinding?.kind === "profile" &&
     sourcePlan.kind === "automatic" &&
     !sourcePlan.profiles.explicitOrder &&
+    !sourcePlan.fallback?.boundEnvVar &&
     (sourcePlan.profiles.kind === "empty" || sourcePlan.profiles.kind === "all-unavailable")
   ) {
     throw new ProviderAuthError(
@@ -569,7 +584,7 @@ export function prepareAgentRuntimeAuth(
       return buildAgentRuntimeAuthPlan({
         provider: params.provider,
         modelId: params.modelId,
-        boundEnvVar,
+        boundEnvVar: attempt?.kind === "direct" ? attempt.source.boundEnvVar : undefined,
         authProfileProvider: profile?.provider,
         authProfileMode:
           profile?.mode ??
@@ -648,7 +663,8 @@ export function prepareAgentRuntimeAuth(
     const plan = buildAgentRuntimeAuthPlan({
       provider: params.provider,
       modelId: params.modelId,
-      boundEnvVar,
+      boundEnvVar:
+        providerUseBinding?.kind === "environment" ? providerUseBinding.envVar : undefined,
       config: params.config,
       env: params.env,
       workspaceDir: params.workspaceDir,
@@ -678,7 +694,7 @@ export function prepareAgentRuntimeAuth(
     return buildAgentRuntimeAuthPlan({
       provider: params.provider,
       modelId: params.modelId,
-      boundEnvVar,
+      boundEnvVar: attempt?.kind === "direct" ? attempt.source.boundEnvVar : undefined,
       authProfileProvider: profile?.provider,
       authProfileMode:
         profile?.mode ??

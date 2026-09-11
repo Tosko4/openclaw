@@ -27,6 +27,7 @@ import {
   noteImplicitFallbackClobberWarnings,
   noteMcpOriginWarning,
   noteOpencodeProviderOverrides,
+  noteProviderEnvOwnershipConflicts,
   noteSandboxOriginProxyWarning,
 } from "./doctor-config-analysis.js";
 import {
@@ -673,6 +674,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       resolveEnabledProviderPluginIds({ config: cfg, onlyPluginIds: configuredOpencodePluginIds }),
     );
   }
+  runWithCurrentPluginMetadata(cfg, () => noteProviderEnvOwnershipConflicts(cfg));
   noteOpencodeProviderOverrides(cfg, {
     opencodePluginActive: activeOpencodePluginIds.includes("opencode"),
     opencodeGoPluginActive: activeOpencodePluginIds.includes("opencode-go"),

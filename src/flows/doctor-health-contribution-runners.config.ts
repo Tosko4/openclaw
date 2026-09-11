@@ -3,7 +3,8 @@ import nodePath from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV } from "../commands/doctor/shared/update-phase.js";
 import { resolveIsConfigReadOnly, resolveIsNixMode } from "../config/paths.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
+import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 import { recordUpdateModelRetirement } from "../infra/update-deferred-model-retirement.js";
 import {
   getUpdateDoctorConfigWriteAuthority,
@@ -65,7 +66,9 @@ export async function runWriteConfigHealth(
       import("../commands/doctor/shared/provider-use-binding-migration.js"),
       import("../../packages/terminal-core/src/note.js"),
     ]);
+  let entered = false;
   await withConfigMutationExclusive(async (sourceConfig) => {
+    entered = true;
     const panels = ctx.configResult.pendingChangePanels ?? [];
     const checked = await writeProviderUseBindingMigration(
       {
@@ -95,7 +98,50 @@ export async function runWriteConfigHealth(
     if (!ctx.configWriteRefusal) {
       delete ctx.configResult.providerUseBindings;
     }
+  }).catch(async (error: unknown) => {
+    if (entered || !(await noteReadOnlyConfigWrite(ctx, error))) {
+      throw error;
+    }
   });
+}
+
+async function noteReadOnlyConfigWrite(
+  ctx: DoctorHealthFlowContext,
+  error: unknown,
+): Promise<boolean> {
+  const codes = new Set([
+    "EROFS",
+    "EACCES",
+    "EPERM",
+    "OPENCLAW_CONFIG_READONLY",
+    "OPENCLAW_NIX_MODE_CONFIG_IMMUTABLE",
+  ]);
+  if (
+    !collectNestedErrorCandidates(error).some((candidate) =>
+      codes.has(extractErrorCode(candidate) ?? ""),
+    )
+  ) {
+    return false;
+  }
+  const { note } = await import("../../packages/terminal-core/src/note.js");
+  const entries = Object.entries(ctx.configResult.providerUseBindings ?? {}).map(
+    ([provider, binding]) =>
+      binding.apiKey
+        ? `models.providers.${provider}.apiKey = ${JSON.stringify(binding.apiKey)}`
+        : `models.providers.${provider} = {}`,
+  );
+  note(
+    [
+      `Doctor cannot write the read-only config ${ctx.configPath}. Edit its managed source instead.`,
+      ...entries,
+      "Provider binding completion remains pending; no receipt was written.",
+    ].join("\n"),
+    "Doctor warnings",
+  );
+  ctx.configWriteRefusal = "read-only";
+  ctx.configResult.providerUseBindingMigrationPending = false;
+  ctx.configResult.pendingChangePanels = [];
+  return true;
 }
 
 async function writeConfigHealth(
@@ -264,6 +310,9 @@ async function writeConfigHealth(
           "Doctor warnings",
         );
         ctx.configWriteRefusal = "config-conflict";
+        return;
+      }
+      if (await noteReadOnlyConfigWrite(ctx, error)) {
         return;
       }
       const { isConfigIncludeOwnershipError, isConfigValidationFailedError } =
