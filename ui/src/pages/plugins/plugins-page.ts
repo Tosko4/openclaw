@@ -322,9 +322,9 @@ class PluginsPage extends OpenClawLightDomElement {
           void this.showCatalogDetail(catalogId);
         } else {
           void this.discovery.refresh();
-          void this.discovery.refreshCategories();
-          void this.discovery.refreshFeatured();
-          void this.discovery.refreshTrending();
+          void this.discovery.categories.refresh();
+          void this.discovery.featured.refresh();
+          void this.discovery.trending.refresh();
         }
       }
     } else {
@@ -593,8 +593,8 @@ class PluginsPage extends OpenClawLightDomElement {
     this.icons.syncCatalog(
       [
         ...(this.discovery.result?.items ?? []),
-        ...this.discovery.featured,
-        ...this.discovery.trending,
+        ...this.discovery.featured.items,
+        ...this.discovery.trending.items,
         ...(detail ? [detail.plugin] : []),
       ],
       detail?.detail.author?.imageUrl ? [detail.detail.author.imageUrl] : [],

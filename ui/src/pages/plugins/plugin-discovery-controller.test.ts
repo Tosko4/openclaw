@@ -125,7 +125,7 @@ it("hydrates grouped shelves from each category's top results", async () => {
   });
 
   await controller.refresh();
-  await controller.refreshCategories();
+  await controller.categories.refresh();
 
   expect(controller.result?.items.map((item) => item.id)).toEqual([
     financeSecond.id,
@@ -313,7 +313,7 @@ it("surfaces rejected category shelf requests", async () => {
   });
 
   await controller.refresh();
-  await controller.refreshCategories();
+  await controller.categories.refresh();
 
   expect(controller.remoteError).toContain("category unavailable");
 });
@@ -354,7 +354,7 @@ it("preserves enriched catalog facts from a fulfilled category fallback", async 
   });
 
   await controller.refresh();
-  await controller.refreshCategories();
+  await controller.categories.refresh();
 
   expect(controller.result?.items).toHaveLength(1);
   expect(controller.result?.items[0]).toMatchObject({
@@ -375,7 +375,7 @@ it("surfaces partial ClawHub failures on the Featured shelf", async () => {
     { items: [], remoteError: "ClawHub is unavailable; local plugins remain available." },
   ]);
 
-  await controller.refreshFeatured();
+  await controller.featured.refresh();
 
-  expect(controller.featuredError).toBe("ClawHub is unavailable; local plugins remain available.");
+  expect(controller.featured.error).toBe("ClawHub is unavailable; local plugins remain available.");
 });

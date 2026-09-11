@@ -92,16 +92,73 @@ function mergeDiscoveryEntryInto(
   );
 }
 
+function createCatalogSection<Result, Item>(
+  host: ReactiveControllerHost,
+  gateway: PluginDiscoveryGateway,
+  load: (client: GatewayBrowserClient, signal: AbortSignal) => Promise<Result>,
+  project: (result: Result) => { items: Item[]; error: string | null },
+  onAccepted?: () => void,
+  onRefreshed?: () => Promise<void>,
+) {
+  let items: Item[] = [];
+  let error: string | null = null;
+  const task = new Task(host, {
+    autoRun: false,
+    args: () => [gateway.isConnected() ? gateway.getClient() : null] as const,
+    task: ([client], { signal }) => (client ? load(client, signal) : initialState),
+    onComplete: (result) => {
+      // Task publishes value after this callback; consumers need the accepted snapshot now.
+      ({ items, error } = project(result));
+      onAccepted?.();
+    },
+    onError: (failure) => {
+      // Keep this section's last successful items visible after a failed refresh.
+      error = formatUiError(failure);
+    },
+  });
+  const refresh = async (): Promise<void> => {
+    const client = gateway.getClient();
+    if (!client || !gateway.isConnected()) {
+      return;
+    }
+    error = null;
+    await task.run([client]);
+    if (onRefreshed) {
+      await onRefreshed();
+    }
+  };
+  return {
+    get items() {
+      return items;
+    },
+    get error() {
+      return error;
+    },
+    get loading() {
+      return gateway.isConnected() && task.status === TaskStatus.PENDING;
+    },
+    ensureInitial(): void {
+      if (task.status === TaskStatus.INITIAL && items.length === 0 && !error) {
+        void refresh();
+      }
+    },
+    invalidate(): void {
+      void task.run([null]);
+      // initialState retains Task.value/error; retire the owner snapshot synchronously.
+      items = [];
+      error = null;
+    },
+    refresh,
+  };
+}
+
 export class PluginDiscoveryController {
   result: PluginDiscoveryResult | null = null;
   error: string | null = null;
   remoteError: string | null = null;
-  categories: PluginDiscoveryCategory[] = [];
-  categoriesError: string | null = null;
-  featured: PluginDiscoveryEntry[] = [];
-  featuredError: string | null = null;
-  trending: PluginDiscoveryEntry[] = [];
-  trendingError: string | null = null;
+  readonly categories;
+  readonly featured;
+  readonly trending;
   intent: PluginDiscoveryIntent = "all";
   category: string | null = null;
   query = "";
@@ -110,9 +167,6 @@ export class PluginDiscoveryController {
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
   private overviewRequestEpoch = 0;
   private readonly browseTask: Task;
-  private readonly categoriesTask: Task;
-  private readonly featuredTask: Task;
-  private readonly trendingTask: Task;
 
   constructor(
     private readonly host: ReactiveControllerHost,
@@ -141,76 +195,44 @@ export class PluginDiscoveryController {
         this.error = formatUiError(error);
       },
     });
-    this.categoriesTask = new Task(host, {
-      autoRun: false,
-      args: () => [this.gateway.isConnected() ? this.gateway.getClient() : null] as const,
-      task: ([client], { signal }) =>
-        client
-          ? client.request<PluginDiscoveryCategoriesResult>(
-              "plugins.catalog.categories",
-              {},
-              { signal },
-            )
-          : initialState,
-      onComplete: (result) => {
-        this.categories = result.categories;
-      },
-      onError: (error) => {
-        this.categoriesError = formatUiError(error);
-      },
-    });
-    this.featuredTask = new Task(host, {
-      autoRun: false,
-      args: () => [this.gateway.isConnected() ? this.gateway.getClient() : null] as const,
-      task: ([client], { signal }) =>
-        client
-          ? client.request<PluginDiscoveryResult>(
-              "plugins.catalog.browse",
-              { intent: "featured", pageSize: CATALOG_SECTION_SIZE },
-              { signal },
-            )
-          : initialState,
-      onComplete: (result) => {
-        this.featured = result.items.slice(0, CATALOG_SECTION_SIZE);
-        this.featuredError = result.remoteError ?? null;
-        this.gateway.onEntriesChanged?.();
-      },
-      onError: (error) => {
-        this.featuredError = formatUiError(error);
-      },
-    });
-    this.trendingTask = new Task(host, {
-      autoRun: false,
-      args: () => [this.gateway.isConnected() ? this.gateway.getClient() : null] as const,
-      task: ([client], { signal }) =>
-        client
-          ? client.request<PluginDiscoveryResult>(
-              "plugins.catalog.browse",
-              { intent: "trending", pageSize: CATALOG_SECTION_SIZE },
-              { signal },
-            )
-          : initialState,
-      onComplete: (result) => {
-        this.trending = result.items.slice(0, CATALOG_SECTION_SIZE);
-        this.trendingError = result.remoteError ?? null;
-        this.gateway.onEntriesChanged?.();
-      },
-      onError: (error) => {
-        this.trendingError = formatUiError(error);
-      },
-    });
+    this.categories = createCatalogSection<
+      PluginDiscoveryCategoriesResult,
+      PluginDiscoveryCategory
+    >(
+      host,
+      gateway,
+      (client, signal) =>
+        client.request<PluginDiscoveryCategoriesResult>(
+          "plugins.catalog.categories",
+          {},
+          { signal },
+        ),
+      (result) => ({ items: result.categories, error: null }),
+      undefined,
+      () => this.hydrateOverviewSections(),
+    );
+    const shelf = (intent: "featured" | "trending") =>
+      createCatalogSection<PluginDiscoveryResult, PluginDiscoveryEntry>(
+        host,
+        gateway,
+        (client, signal) =>
+          client.request<PluginDiscoveryResult>(
+            "plugins.catalog.browse",
+            { intent, pageSize: CATALOG_SECTION_SIZE },
+            { signal },
+          ),
+        (result) => ({
+          items: result.items.slice(0, CATALOG_SECTION_SIZE),
+          error: result.remoteError ?? null,
+        }),
+        () => this.gateway.onEntriesChanged?.(),
+      );
+    this.featured = shelf("featured");
+    this.trending = shelf("trending");
   }
 
   get loading(): boolean {
     return this.gateway.isConnected() && this.browseTask.status === TaskStatus.PENDING;
-  }
-
-  get featuredLoading(): boolean {
-    return this.gateway.isConnected() && this.featuredTask.status === TaskStatus.PENDING;
-  }
-
-  get trendingLoading(): boolean {
-    return this.gateway.isConnected() && this.trendingTask.status === TaskStatus.PENDING;
   }
 
   private async fetchAvailablePage(params: {
@@ -278,11 +300,11 @@ export class PluginDiscoveryController {
 
   private async hydrateOverviewSections(): Promise<void> {
     const scope = this.gateway.capture();
-    if (!scope || !this.isGroupedOverview() || !this.result || this.categories.length === 0) {
+    if (!scope || !this.isGroupedOverview() || !this.result || this.categories.items.length === 0) {
       return;
     }
     const requestEpoch = ++this.overviewRequestEpoch;
-    const sparseCategories = this.categories.filter(
+    const sparseCategories = this.categories.items.filter(
       (category) =>
         (this.result?.items.filter((item) => item.catalog.categories.includes(category.slug))
           .length ?? 0) < CATALOG_SECTION_SIZE,
@@ -330,43 +352,19 @@ export class PluginDiscoveryController {
     if (this.browseTask.status === TaskStatus.INITIAL && !this.result && !this.error) {
       void this.refresh();
     }
-    if (
-      this.categoriesTask.status === TaskStatus.INITIAL &&
-      this.categories.length === 0 &&
-      !this.categoriesError
-    ) {
-      void this.refreshCategories();
-    }
-    if (
-      this.featuredTask.status === TaskStatus.INITIAL &&
-      this.featured.length === 0 &&
-      !this.featuredError
-    ) {
-      void this.refreshFeatured();
-    }
-    if (
-      this.trendingTask.status === TaskStatus.INITIAL &&
-      this.trending.length === 0 &&
-      !this.trendingError
-    ) {
-      void this.refreshTrending();
-    }
+    this.categories.ensureInitial();
+    this.featured.ensureInitial();
+    this.trending.ensureInitial();
   }
 
   invalidate(): void {
     void this.browseTask.run([null, this.intent, this.category, this.committedQuery]);
-    void this.categoriesTask.run([null]);
-    void this.featuredTask.run([null]);
-    void this.trendingTask.run([null]);
+    this.categories.invalidate();
+    this.featured.invalidate();
+    this.trending.invalidate();
     this.result = null;
     this.error = null;
     this.remoteError = null;
-    this.categories = [];
-    this.categoriesError = null;
-    this.featured = [];
-    this.featuredError = null;
-    this.trending = [];
-    this.trendingError = null;
     this.overviewRequestEpoch += 1;
   }
 
@@ -387,34 +385,6 @@ export class PluginDiscoveryController {
     this.overviewRequestEpoch += 1;
     await this.browseTask.run([client, this.intent, this.category, this.committedQuery]);
     await this.hydrateOverviewSections();
-  }
-
-  async refreshCategories(): Promise<void> {
-    const client = this.gateway.getClient();
-    if (!client || !this.gateway.isConnected()) {
-      return;
-    }
-    this.categoriesError = null;
-    await this.categoriesTask.run([client]);
-    await this.hydrateOverviewSections();
-  }
-
-  async refreshFeatured(): Promise<void> {
-    const client = this.gateway.getClient();
-    if (!client || !this.gateway.isConnected()) {
-      return;
-    }
-    this.featuredError = null;
-    await this.featuredTask.run([client]);
-  }
-
-  async refreshTrending(): Promise<void> {
-    const client = this.gateway.getClient();
-    if (!client || !this.gateway.isConnected()) {
-      return;
-    }
-    this.trendingError = null;
-    await this.trendingTask.run([client]);
   }
 
   selectIntent(intent: PluginDiscoveryIntent): void {
