@@ -43,7 +43,11 @@ async function seedLegacyPluginConfig(state: OpenClawTestState) {
   );
   fs.writeFileSync(
     path.join(installPath, "openclaw.plugin.json"),
-    JSON.stringify({ id: pluginId, configSchema: { type: "object" } }),
+    JSON.stringify({
+      id: pluginId,
+      doctorContract: { stateMigrations: true },
+      configSchema: { type: "object" },
+    }),
   );
   fs.writeFileSync(
     path.join(installPath, "index.js"),
@@ -181,6 +185,89 @@ describe("Doctor migration plugin generation", () => {
             .db.prepare("SELECT count(*) AS count FROM migration_sources")
             .get(),
         ).toEqual({ count: 0 });
+      });
+    },
+  );
+
+  it("does not block independent repairs for a quarantined plugin with no Doctor contract", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const fixture = await seedLegacyPluginConfig(state);
+      fs.writeFileSync(
+        path.join(fixture.record.installPath!, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: fixture.pluginId,
+          doctorContract: {},
+          configSchema: { type: "object" },
+        }),
+      );
+      mocks.converge.mockResolvedValue({
+        blockingDiagnostic: null,
+        quarantinedPlugins: [
+          {
+            pluginId: fixture.pluginId,
+            state: "configured-unavailable",
+            diagnostic: {
+              kind: "plugin-verification",
+              reason: "missing-extension-entry",
+              detail: "Unrelated runtime entry is missing",
+              installPath: fixture.record.installPath,
+            },
+          },
+        ],
+      });
+      await expect(convergeDoctorMigrationPlugins({ env: state.env })).resolves.toBeUndefined();
+      expect(fs.existsSync(fixture.runtimeMarker)).toBe(false);
+      expect(fs.readFileSync(state.configPath)).toEqual(fixture.configBefore);
+    });
+  });
+
+  it.each(["legacy-channel", "route-owner"])(
+    "retains unavailable %s migration contracts",
+    async (kind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const fixture = await seedLegacyPluginConfig(state);
+        const installPath = fixture.record.installPath!;
+        fs.writeFileSync(
+          path.join(installPath, "openclaw.plugin.json"),
+          JSON.stringify({
+            id: fixture.pluginId,
+            ...(kind === "legacy-channel" ? { channels: [fixture.pluginId] } : {}),
+            doctorContract: kind === "legacy-channel" ? {} : { sessionRouteStateOwners: true },
+            configSchema: { type: "object" },
+          }),
+        );
+        fs.writeFileSync(
+          path.join(installPath, "package.json"),
+          JSON.stringify({
+            name: "@fixture/migration-fixture",
+            version: "1.0.0",
+            openclaw: { extensions: ["./index.js"], setupEntry: "./setup-entry.js" },
+          }),
+        );
+        fs.writeFileSync(
+          path.join(installPath, "setup-entry.js"),
+          "throw new Error('unavailable legacy setup must not run');",
+        );
+        mocks.converge.mockResolvedValue({
+          blockingDiagnostic: null,
+          quarantinedPlugins: [
+            {
+              pluginId: fixture.pluginId,
+              state: "configured-unavailable",
+              diagnostic: {
+                kind: "plugin-verification",
+                reason: "missing-extension-entry",
+                detail: "Unavailable package",
+                installPath,
+              },
+            },
+          ],
+        });
+        await expect(convergeDoctorMigrationPlugins({ env: state.env })).rejects.toThrow(
+          "before migrating state",
+        );
+        expect(fs.readFileSync(state.configPath)).toEqual(fixture.configBefore);
+        expect(fs.existsSync(fixture.runtimeMarker)).toBe(false);
       });
     },
   );

@@ -97,6 +97,32 @@ describe("config snapshot plugin metadata", () => {
     },
   );
 
+  it("defers executable plugin repair diagnostics without relaxing full schema validation", async () => {
+    const root = tempDirs.make("openclaw-config-deferred-doctor-");
+    const context = createContext(root);
+    context.options.pluginValidation = "full";
+    context.deps.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+    context.deps.env.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR = "1";
+    fs.writeFileSync(
+      context.configPath,
+      JSON.stringify({
+        nodeHost: { browserProxy: { enabled: "invalid" } },
+        channels: { discord: {} },
+        routing: { allowFrom: ["fixture"] },
+      }),
+    );
+    const doctor = vi.spyOn(doctorLegacy, "findDoctorLegacyConfigIssues");
+    const snapshot = await readConfigFileSnapshotFromContext(context);
+    expect(snapshot.valid).toBe(false);
+    expect(snapshot.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "nodeHost.browserProxy.enabled" })]),
+    );
+    expect(snapshot.legacyIssues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "routing.allowFrom" })]),
+    );
+    expect(doctor).not.toHaveBeenCalled();
+  });
+
   it("keeps best-effort core-only materialization independent of plugin metadata", async () => {
     const root = tempDirs.make("openclaw-config-best-effort-metadata-");
     const context = createContext(root);

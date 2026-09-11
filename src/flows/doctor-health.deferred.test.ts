@@ -131,6 +131,65 @@ describe("Doctor health during configured-plugin repair deferral", () => {
     },
   );
 
+  it.each([false, true])(
+    "repairs independent config aliases while plugin work is deferred (plugin=%s)",
+    async (withPlugin) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+        vi.stubEnv("OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR", "1");
+        vi.stubEnv("OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE", "1");
+        const pluginRoot = state.statePath("extensions", "fixture");
+        const runtimeMarker = state.path("stale-doctor-loaded");
+        fs.mkdirSync(pluginRoot, { recursive: true });
+        fs.writeFileSync(
+          path.join(pluginRoot, "package.json"),
+          JSON.stringify({
+            name: "@fixture/stale",
+            version: "1.0.0",
+            openclaw: { extensions: ["./index.js"] },
+          }),
+        );
+        fs.writeFileSync(
+          path.join(pluginRoot, "openclaw.plugin.json"),
+          JSON.stringify({
+            id: "fixture",
+            doctorContract: { configRepair: true, stateMigrations: true },
+            configSchema: { type: "object" },
+          }),
+        );
+        const pluginSource = `require("node:fs").writeFileSync(${JSON.stringify(runtimeMarker)}, "loaded"); throw new Error("stale plugin API");`;
+        fs.writeFileSync(path.join(pluginRoot, "index.js"), pluginSource);
+        fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.js"), pluginSource);
+        await state.writeConfig({
+          agents: { entries: {}, defaults: { pdfMaxBytesMb: 5 } },
+          tools: { exec: { security: "deny", ask: "off" } },
+          plugins: withPlugin
+            ? {
+                allow: ["fixture"],
+                entries: { fixture: { enabled: true } },
+                load: { paths: [pluginRoot] },
+              }
+            : { enabled: false },
+        });
+        mocks.config.mockImplementation(() => {
+          throw new Error("full config flow must wait");
+        });
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+        const after = JSON.parse(fs.readFileSync(state.configPath, "utf8"));
+        expect(after.agents.defaults).toMatchObject({ pdfMaxMb: 5 });
+        expect(after.agents.defaults).not.toHaveProperty("pdfMaxBytesMb");
+        expect(after.tools.exec).toEqual({ mode: "deny" });
+        expect(fs.existsSync(runtimeMarker)).toBe(false);
+        expect(mocks.runContributions).not.toHaveBeenCalled();
+        expect(mocks.config).not.toHaveBeenCalled();
+        expect(runtime.log).toHaveBeenCalledWith(
+          expect.stringContaining("deferred until post-core"),
+        );
+      });
+    },
+  );
+
   it.each(["standalone", "post-core"])(
     "still performs real state repair and records its receipt in %s Doctor",
     async (phase) => {

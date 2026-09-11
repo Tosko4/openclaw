@@ -36,8 +36,12 @@ beyond the grace period.
 
 `doctor --repair` refreshes configured plugin packages before running their
 migrations. During an update, if the parent updater requires plugin repair to
-wait for the new process, Doctor defers its config and state repairs too. It
-leaves the original config and migration inputs intact and reports the deferral.
+wait for the new process, Doctor defers plugin-dependent config and state repairs.
+Independent config aliases, including PDF limits and exec policy, still normalize
+through their existing migration owners. This also supports private rehearsals
+started by older updaters. A repair that would require retiring state locators or
+cannot pass normal config validation remains pending with its source unchanged.
+Unavailable plugins without migration contracts do not block unrelated repairs.
 The updated process repairs plugins, finishes Doctor, and validates the result
 before reporting completion to the parent. If plugin repair fails, fix the
 reported cause and run `openclaw update repair`; deferred work is not marked

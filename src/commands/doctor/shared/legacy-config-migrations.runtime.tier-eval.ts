@@ -396,6 +396,18 @@ function stripCompactionInstructionConfig(
   }
 }
 
+/** Exec policy renames do not consume state locators or load plugin contracts. */
+export function migrateExecModeConfig(raw: Record<string, unknown>, changes: string[]): void {
+  const inheritedExecPolicy = resolveConfiguredExecPolicy(raw);
+  migrateExecMode(raw, "root", changes);
+  visitAgentConfigScopes(raw, (scope, path) => {
+    // Agent entries inherit directly from root; defaults has no tools.exec surface.
+    if (path !== "agents.defaults") {
+      migrateExecMode(scope, path, changes, inheritedExecPolicy);
+    }
+  });
+}
+
 export function migrateTierEvalTranche(raw: Record<string, unknown>, changes: string[]): void {
   const initialChangeCount = changes.length;
   let stripped = false;
@@ -414,15 +426,9 @@ export function migrateTierEvalTranche(raw: Record<string, unknown>, changes: st
     delete session.idleMinutes;
     stripped = true;
   }
-  const inheritedExecPolicy = resolveConfiguredExecPolicy(raw);
-  migrateExecMode(raw, "root", changes);
+  migrateExecModeConfig(raw, changes);
   visitAgentConfigScopes(raw, (scope, path) => {
     stripCompactionInstructionConfig(scope, path, changes);
-    // Agent entries inherit exec policy directly from root tools.exec. The
-    // agents.defaults schema has no tools.exec policy surface.
-    if (path !== "agents.defaults") {
-      migrateExecMode(scope, path, changes, inheritedExecPolicy);
-    }
     migrateCliBackendSessionArgs(scope, path, changes);
     for (const retiredPath of TIER_EVAL_RETIRED_AGENT_PATHS) {
       stripped = deleteRetiredPath(scope, retiredPath) || stripped;

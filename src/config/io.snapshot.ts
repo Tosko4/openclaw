@@ -1,3 +1,4 @@
+import { shouldDeferConfiguredPluginInstallRepair } from "../commands/doctor/shared/update-phase.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -239,7 +240,10 @@ export async function readConfigFileSnapshotInternal(
     if (!validated.ok) {
       const availableSnapshot = pluginMetadata.getSnapshot();
       const collect = () =>
-        context.options.pluginValidation === "core-only"
+        // Validation above remains plugin-aware. Only executable repair diagnostics
+        // wait for the updater's selected plugin generation, including writer snapshots.
+        context.options.pluginValidation === "core-only" ||
+        shouldDeferConfiguredPluginInstallRepair(deps.env)
           ? findLegacyConfigIssues(effectiveConfigRaw, effectiveParsed)
           : collectInvalidConfigLegacyIssues(effectiveConfigRaw, effectiveParsed);
       const legacyIssues = await deps.measure("config.snapshot.read.legacy-issues", () =>

@@ -5,11 +5,13 @@ import { describe, expect, it } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import { validateConfigObjectWithPlugins } from "../../../config/validation.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../../version.js";
 import {
   isStartupConfigRepairResult,
   planAutomaticConfigRepair,
   resolveStartupConfigSnapshot,
+  repairDoctorConfigBeforePluginConvergence,
 } from "./automatic-startup-config-repair.js";
 
 function invalidSnapshot(params: {
@@ -208,4 +210,74 @@ describe("automatic startup config repair", () => {
 
     expect(planAutomaticConfigRepair(snapshot)).toBeNull();
   });
+});
+
+describe("config repair before plugin convergence", () => {
+  it.each(["absent", "empty"])(
+    "initializes an %s ordinary roster while repairing core aliases",
+    async (kind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await state.writeConfig({
+          agents: { ...(kind === "empty" ? { entries: {} } : {}), defaults: { pdfMaxBytesMb: 5 } },
+          tools: { exec: { security: "deny", ask: "off" } },
+          plugins: { enabled: false },
+        });
+        expect(await repairDoctorConfigBeforePluginConvergence()).not.toEqual([]);
+        const after = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+        expect(after.agents.entries).toEqual({ main: {} });
+        expect(after.agents.defaults.pdfMaxMb).toBe(5);
+        expect(after.agents.defaults).not.toHaveProperty("pdfMaxBytesMb");
+        expect(after.agents.defaults).not.toHaveProperty("systemAgent");
+        expect(after.tools.exec).toEqual({ mode: "deny" });
+      });
+    },
+  );
+  it.each(["locators", "include", "invalid", "roster", "keyed-roster"])(
+    "retains %s inputs when independent repairs cannot form a valid write",
+    async (kind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const legacy = {
+          agents: { entries: {}, defaults: { pdfMaxBytesMb: 5 } },
+          tools: { exec: { security: "deny", ask: "off" } },
+        };
+        await state.writeConfig({
+          ...legacy,
+          ...(kind === "roster"
+            ? {
+                agents: {
+                  defaults: legacy.agents.defaults,
+                  list: [{ id: "alpha", default: true }, { id: "beta" }],
+                },
+              }
+            : {}),
+          ...(kind === "keyed-roster"
+            ? {
+                agents: {
+                  defaults: legacy.agents.defaults,
+                  entries: { alpha: { default: true }, beta: {} },
+                },
+              }
+            : {}),
+          ...(kind === "locators"
+            ? {
+                cron: { store: state.path("retained-cron.sqlite") },
+                tts: { prefsPath: state.path("retained-tts.json") },
+                memory: { search: { store: { path: state.path("retained-memory.sqlite") } } },
+              }
+            : {}),
+          ...(kind === "invalid" ? { gateway: { port: "not-a-port" } } : {}),
+          ...(kind === "include" ? { $include: "./included.json" } : {}),
+        });
+        if (kind === "include") {
+          await fs.writeFile(
+            state.statePath("included.json"),
+            JSON.stringify({ gateway: { mode: "local" } }),
+          );
+        }
+        const before = await fs.readFile(state.configPath);
+        expect(await repairDoctorConfigBeforePluginConvergence()).toEqual([]);
+        expect(await fs.readFile(state.configPath)).toEqual(before);
+      });
+    },
+  );
 });

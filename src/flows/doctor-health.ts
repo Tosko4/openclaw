@@ -120,10 +120,18 @@ async function runDoctorHealthFlowWithResult(
   let doctorResult: UpdatePostInstallDoctorResult = { status: "error" };
   try {
     if (shouldDeferConfiguredPluginInstallRepair(process.env)) {
-      // The returning updater can overwrite refreshed plugin records. Leave the
-      // original config and migration inputs intact for its fresh post-core owner.
+      // Shipped parents use these same flags for private rehearsal. Pure config
+      // aliases can be repaired there, but plugin/state inputs must survive.
+      if (options.repair === true || options.yes === true) {
+        const { repairDoctorConfigBeforePluginConvergence } =
+          await import("../commands/doctor/shared/automatic-startup-config-repair.js");
+        const changes = await repairDoctorConfigBeforePluginConvergence();
+        for (const change of changes) {
+          effectiveRuntime.log(change);
+        }
+      }
       const message =
-        "Doctor repair deferred until post-core plugin convergence; config and state migrations have not run.";
+        "Plugin-dependent Doctor repair deferred until post-core plugin convergence; state migrations have not run.";
       effectiveRuntime.log(message);
       doctorResult = createDeferredConfiguredPluginRepairDoctorResult([message]);
       if (updateResult) {
