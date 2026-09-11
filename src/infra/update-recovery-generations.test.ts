@@ -25,7 +25,7 @@ vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./tmp-openclaw-dir.js")>()),
   resolvePreferredOpenClawTmpDir: temporaryRoot,
 }));
-const authority = { assertOwned() {} };
+const authority = { assertOwned(this: void) {} };
 
 describe("retained update generations", () => {
   it("refuses candidate sealing while a real agent lease is active, then releases maintenance on refusal", async () => {
