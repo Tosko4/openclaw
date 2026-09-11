@@ -1147,7 +1147,7 @@ extension IOSGatewayChatTransportTests {
                 let response = try await transport.sendMessage(
                     sessionKey: "agent:reviewer:main",
                     message: "one invocation",
-                    thinking: nil,
+                    thinking: "",
                     idempotencyKey: "app-send",
                     attachments: [])
                 #expect(response.runId == "submitted-run")
@@ -1226,7 +1226,7 @@ extension IOSGatewayChatTransportTests {
                 _ = try await transport.sendMessage(
                     sessionKey: "agent:reviewer:main",
                     message: "one invocation",
-                    thinking: nil,
+                    thinking: "",
                     idempotencyKey: "not-dispatched",
                     attachments: [])
             }
@@ -1255,7 +1255,7 @@ extension IOSGatewayChatTransportTests {
                 _ = try await transport.sendMessage(
                     sessionKey: "agent:reviewer:main",
                     message: "one invocation",
-                    thinking: nil,
+                    thinking: "",
                     idempotencyKey: "not-dispatched",
                     attachments: [])
             }
@@ -1277,7 +1277,7 @@ extension IOSGatewayChatTransportTests {
             let response = try await self.observingRunActivity(base, recorder: accepted).sendMessage(
                 sessionKey: "agent:reviewer:main",
                 message: "one invocation",
-                thinking: nil,
+                thinking: "",
                 idempotencyKey: "unsupported-activity",
                 attachments: [])
             #expect(response.runId == "submitted-run")
