@@ -1664,6 +1664,37 @@ describe("Claude session catalog", () => {
     },
   );
 
+  it("discovers live desktop-tagged CLI transcripts without admitting dormant history", async () => {
+    const home = await createHome();
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: Object.fromEntries(
+        ["live", "dormant", "sidechain"].map((id) => [
+          id,
+          [
+            {
+              ...sdkCliMessage(id, `Hello ${id}`),
+              entrypoint: "claude-desktop",
+              isSidechain: id === "sidechain",
+            },
+          ],
+        ]),
+      ),
+    });
+    // Claude launched from Desktop's terminal inherits this entrypoint but has
+    // no Desktop metadata. A lifecycle hook supplies the independent live ID.
+    expect(await listClaudeSessions(home)).toEqual([]);
+    const liveThreadIds = new Set(["live", "sidechain"]);
+    expect(await listClaudeSessions(home, { liveThreadIds })).toEqual([
+      expect.objectContaining({ threadId: "live", name: "Hello live", cwd: "/work/live" }),
+    ]);
+    // Neither the live lookup nor mutation of its set may poison cached scans.
+    liveThreadIds.clear();
+    expect(await listClaudeSessions(home, { liveThreadIds })).toEqual([]);
+    expect(await listClaudeSessions(home)).toEqual([]);
+  });
+
   it("discovers CLI fallback transcripts and rejects sidechains, foreign entrypoints, and escapes", async () => {
     const home = await createHome();
     const projectDir = path.join(home, ".claude", "projects", "-workspace");

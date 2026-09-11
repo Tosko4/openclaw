@@ -11,6 +11,7 @@ import {
   type LocalSessionSourceSession,
   type LocalSessionSourceStartOptions,
 } from "openclaw/plugin-sdk/local-session-source";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   createClaudeChannelBridge,
   resolveClaudeChannelBridgeEndpoint,
@@ -32,6 +33,7 @@ const ACTIVE_WINDOW_MS = 120_000;
 const WATCH_TICK_MS = 250;
 const POLL_BACKSTOP_MS = 5_000;
 const NO_CHANNEL_REASON = "start Claude Code with the openclaw channel to accept team messages";
+const log = createSubsystemLogger("node/claude-local-sessions");
 
 export type ClaudeLocalSessionSourceRuntimeOptions = {
   homeDir?: string;
@@ -107,8 +109,8 @@ export async function startClaudeLocalSessionSource(
     }
     try {
       await work();
-    } catch {
-      // The duplex is gone; the command runtime tears the session down.
+    } catch (error) {
+      log.warn(`could not publish Claude local session update: ${String(error)}`);
     }
   };
 
@@ -170,10 +172,14 @@ export async function startClaudeLocalSessionSource(
   // a hook or channel proves its Claude process is live; dormant history stays
   // on the laptop.
   const live = new Set<string>();
+  const waitingForCatalog = new Set<string>();
   const markLive = (sessionId: string) => {
     if (!live.has(sessionId)) {
       live.add(sessionId);
-      void enumerate().catch(() => {});
+      log.info(`observed live Claude session ${sessionId}`);
+      void enumerate().catch((error) => {
+        log.warn(`could not discover live Claude session ${sessionId}: ${String(error)}`);
+      });
     }
   };
 
@@ -193,6 +199,7 @@ export async function startClaudeLocalSessionSource(
       // The row closes and leaves the tracking quota; a later SessionStart
       // (resume) admits it again from its cursor.
       live.delete(event.sessionId);
+      waitingForCatalog.delete(event.sessionId);
       void closeThread(event.sessionId, "session ended");
       return;
     }
@@ -214,6 +221,7 @@ export async function startClaudeLocalSessionSource(
     endpoint: config.bridgeEndpoint ?? resolveClaudeChannelBridgeEndpoint(),
     events: { onPairingChange, onHook },
   });
+  log.info(`Claude local session bridge listening at ${bridge.endpoint}`);
 
   const admit = async (entry: CatalogEntry, cursor: number) => {
     const tailer = createClaudeTranscriptTailer(entry.filePath);
@@ -243,6 +251,7 @@ export async function startClaudeLocalSessionSource(
       earliestSeq: bootstrap.earliestSeq,
     };
     tracked.set(entry.threadId, thread);
+    log.info(`admitted Claude session ${entry.threadId} (canInput=${thread.canInput})`);
     await publishSession(thread);
     // Bootstrap replays history; the turn frames it would imply already ended.
     const history = bootstrap.records.map((record) => toWireRecord(record));
@@ -272,7 +281,19 @@ export async function startClaudeLocalSessionSource(
   };
 
   const enumerate = async () => {
-    const entries = await listClaudeSessions(homeDir, scanOptions);
+    const entries = await listClaudeSessions(homeDir, { ...scanOptions, liveThreadIds: live });
+    const catalogIds = new Set(entries.map((entry) => entry.threadId));
+    for (const sessionId of live) {
+      if (excluded.has(sessionId) || catalogIds.has(sessionId)) {
+        waitingForCatalog.delete(sessionId);
+      } else if (!waitingForCatalog.has(sessionId)) {
+        waitingForCatalog.add(sessionId);
+        log.info(
+          `live Claude session ${sessionId} is waiting for a discoverable transcript; ` +
+            "check CLAUDE_CONFIG_DIR and whether the session has written its first user record",
+        );
+      }
+    }
     let admitted = tracked.size;
     for (const entry of entries) {
       if (excluded.has(entry.threadId) || !live.has(entry.threadId)) {
@@ -325,8 +346,8 @@ export async function startClaudeLocalSessionSource(
         }
       }
       await enumerate();
-    } catch {
-      // A failed tick retries on the next interval; the backstop guarantees progress.
+    } catch (error) {
+      log.warn(`Claude local session scan failed; retrying on the next tick: ${String(error)}`);
     } finally {
       ticking = false;
     }

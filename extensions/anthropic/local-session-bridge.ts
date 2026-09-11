@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   isRecord,
@@ -19,6 +20,7 @@ const INPUT_ACK_TIMEOUT_MS = 5_000;
 /** Hook and MCP startup race at session start; keep an unmatched hello/hook around this long. */
 const PAIRING_WINDOW_MS = 60_000;
 const MAX_LINE_BYTES = 256 * 1024;
+const log = createSubsystemLogger("node/claude-channel");
 
 type ClaudeHookEvent = "SessionStart" | "UserPromptSubmit" | "Stop" | "SessionEnd";
 
@@ -129,6 +131,9 @@ export async function createClaudeChannelBridge(params: {
     }
     connection.sessionId = sessionId;
     bySession.set(sessionId, connection);
+    log.info(
+      `paired Claude session ${sessionId} with channel (parentPid=${connection.ppid ?? "unknown"})`,
+    );
     params.events.onPairingChange(sessionId, true);
   };
 
@@ -140,6 +145,7 @@ export async function createClaudeChannelBridge(params: {
     connection.sessionId = undefined;
     if (bySession.get(sessionId) === connection) {
       bySession.delete(sessionId);
+      log.info(`unpaired Claude session ${sessionId}`);
       params.events.onPairingChange(sessionId, false);
     }
   };
@@ -171,6 +177,13 @@ export async function createClaudeChannelBridge(params: {
   };
 
   const rememberStart = (sessionId: string, cwd: string, ancestorPids: number[]) => {
+    if (!pendingStarts.some((entry) => entry.sessionId === sessionId)) {
+      log.warn(
+        `Claude session ${sessionId} has no matching channel yet ` +
+          `(ancestorPids=${ancestorPids.join(",") || "unavailable"}, channels=${channels.size}); ` +
+          "start Claude Code with --dangerously-load-development-channels server:openclaw and check that its channel uses the same OPENCLAW_STATE_DIR",
+      );
+    }
     const cutoff = now() - PAIRING_WINDOW_MS;
     const kept = pendingStarts.filter(
       (entry) => entry.at >= cutoff && entry.sessionId !== sessionId,
@@ -189,6 +202,7 @@ export async function createClaudeChannelBridge(params: {
     const cwd = readBoundedFrameText(frame.cwd);
     const ancestorPids = readPidList(frame.ancestorPids);
     if (!isHookEvent(name) || !sessionId) {
+      log.warn("ignored invalid Claude lifecycle hook frame (missing event or session ID)");
       return;
     }
     if (name === "SessionEnd") {
@@ -228,6 +242,10 @@ export async function createClaudeChannelBridge(params: {
     const start = index >= 0 ? pendingStarts[index] : undefined;
     if (start) {
       pair(connection, start.sessionId);
+    } else {
+      log.info(
+        `Claude channel connected (parentPid=${ppid ?? "unknown"}); waiting for a matching lifecycle hook`,
+      );
     }
   };
 

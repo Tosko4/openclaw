@@ -183,86 +183,96 @@ describe("createClaudeLocalSessionSource", () => {
     );
   });
 
-  it("bootstraps sessions, tails new records with turn boundaries, and closes removed transcripts", async () => {
-    const { frames } = await start();
-    expect(frames[0]).toMatchObject({
-      type: "session",
-      frame: {
-        threadId: SESSION_ID,
-        state: "active",
-        canInput: false,
-        title: "Fix the build",
-        cwd: workspace,
-        reason: expect.stringContaining("openclaw channel"),
-      },
-    });
-    expect(frames[1]).toMatchObject({
-      type: "records",
-      records: [
-        { id: "u1", seq: 1, kind: "user", text: "hello" },
-        { id: "a1", seq: 2, kind: "assistant", text: "hi" },
-      ],
-    });
-    await fs.appendFile(
-      transcript,
-      transcriptLine(
-        { type: "user", uuid: "u2", message: { role: "user", content: "next" } },
-        workspace,
-      ) +
+  it.each(["cli", "claude-desktop"])(
+    "bootstraps %s sessions, tails turns, and closes removed transcripts",
+    async (entrypoint) => {
+      await fs.writeFile(
+        transcript,
+        (await fs.readFile(transcript, "utf8")).replaceAll(
+          '"entrypoint":"cli"',
+          `"entrypoint":"${entrypoint}"`,
+        ),
+      );
+      const { frames } = await start();
+      expect(frames[0]).toMatchObject({
+        type: "session",
+        frame: {
+          threadId: SESSION_ID,
+          state: "active",
+          canInput: false,
+          title: "Fix the build",
+          cwd: workspace,
+          reason: expect.stringContaining("openclaw channel"),
+        },
+      });
+      expect(frames[1]).toMatchObject({
+        type: "records",
+        records: [
+          { id: "u1", seq: 1, kind: "user", text: "hello" },
+          { id: "a1", seq: 2, kind: "assistant", text: "hi" },
+        ],
+      });
+      await fs.appendFile(
+        transcript,
         transcriptLine(
-          {
-            type: "assistant",
-            uuid: "a2",
-            message: {
-              role: "assistant",
-              content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }],
-              stop_reason: "tool_use",
-            },
-          },
+          { type: "user", uuid: "u2", message: { role: "user", content: "next" } },
           workspace,
         ) +
-        transcriptLine(
-          {
-            type: "assistant",
-            uuid: "a3",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "done" }],
-              stop_reason: "end_turn",
+          transcriptLine(
+            {
+              type: "assistant",
+              uuid: "a2",
+              message: {
+                role: "assistant",
+                content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }],
+                stop_reason: "tool_use",
+              },
             },
-          },
-          workspace,
-        ),
-    );
-    await waitFor(() => expect(frames.filter((f) => f.type === "turn")).toHaveLength(2));
-    const live = frames.slice(2);
-    expect(live).toEqual([
-      { type: "turn", turn: { threadId: SESSION_ID, turnId: "u2", state: "started" } },
-      {
-        type: "records",
-        threadId: SESSION_ID,
-        records: [
-          expect.objectContaining({ id: "u2", seq: 3, kind: "user", turnId: "u2" }),
-          expect.objectContaining({
-            id: "a2",
-            seq: 4,
-            kind: "toolCall",
-            toolName: "Bash",
-            turnId: "u2",
-          }),
-          expect.objectContaining({ id: "a3", seq: 5, kind: "assistant", turnId: "u2" }),
-        ],
-      },
-      { type: "turn", turn: { threadId: SESSION_ID, turnId: "u2", state: "completed" } },
-    ]);
-    await fs.rm(transcript);
-    await waitFor(() =>
-      expect(frames.at(-1)).toMatchObject({
-        type: "session",
-        frame: { threadId: SESSION_ID, state: "closed", reason: "transcript removed" },
-      }),
-    );
-  });
+            workspace,
+          ) +
+          transcriptLine(
+            {
+              type: "assistant",
+              uuid: "a3",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "done" }],
+                stop_reason: "end_turn",
+              },
+            },
+            workspace,
+          ),
+      );
+      await waitFor(() => expect(frames.filter((f) => f.type === "turn")).toHaveLength(2));
+      const live = frames.slice(2);
+      expect(live).toEqual([
+        { type: "turn", turn: { threadId: SESSION_ID, turnId: "u2", state: "started" } },
+        {
+          type: "records",
+          threadId: SESSION_ID,
+          records: [
+            expect.objectContaining({ id: "u2", seq: 3, kind: "user", turnId: "u2" }),
+            expect.objectContaining({
+              id: "a2",
+              seq: 4,
+              kind: "toolCall",
+              toolName: "Bash",
+              turnId: "u2",
+            }),
+            expect.objectContaining({ id: "a3", seq: 5, kind: "assistant", turnId: "u2" }),
+          ],
+        },
+        { type: "turn", turn: { threadId: SESSION_ID, turnId: "u2", state: "completed" } },
+      ]);
+      await fs.rm(transcript);
+      await waitFor(() =>
+        expect(frames.at(-1)).toMatchObject({
+          type: "session",
+          frame: { threadId: SESSION_ID, state: "closed", reason: "transcript removed" },
+        }),
+      );
+    },
+  );
 
   it("sends whole-millisecond timestamps so the Gateway accepts the frame", async () => {
     const { frames } = await start();

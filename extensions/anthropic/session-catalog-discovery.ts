@@ -34,7 +34,7 @@ const MAX_CATALOG_DISCOVERY_FILES = 10_000;
 const MAX_CATALOG_DISCOVERY_CACHE_ENTRIES = 20_000;
 const MAX_CLAUDE_SESSION_SCAN_CACHE_ENTRIES = 8;
 const MAX_CATALOG_METADATA_SCAN_BYTES = 64 * 1024 * 1024;
-const CLI_ENTRYPOINTS = new Set(["cli", "sdk-cli"]);
+const CLAUDE_CODE_ENTRYPOINTS = new Set(["cli", "sdk-cli", "claude-desktop"]);
 
 type CatalogDiscoveryCacheEntry = {
   // The module-global cache is keyed by canonical transcript path, so an entry must also record the
@@ -109,8 +109,8 @@ export type CatalogRecord = ClaudeSessionCatalogSession & {
   filePath: string;
 };
 
-function isCliEntrypoint(value: unknown): value is string {
-  return typeof value === "string" && CLI_ENTRYPOINTS.has(value);
+function isClaudeCodeEntrypoint(value: unknown): value is string {
+  return typeof value === "string" && CLAUDE_CODE_ENTRYPOINTS.has(value);
 }
 
 // Claude's persisted string timestamps are date expressions, including numeric-looking years.
@@ -340,15 +340,15 @@ async function discoverCliRecords(
         if (metadataOnly) {
           return false;
         }
-        if (typeof raw.entrypoint === "string" && !isCliEntrypoint(raw.entrypoint)) {
+        if (typeof raw.entrypoint === "string" && !isClaudeCodeEntrypoint(raw.entrypoint)) {
           return true;
         }
-        if (isCliEntrypoint(raw.entrypoint) && raw.isSidechain === true) {
+        if (isClaudeCodeEntrypoint(raw.entrypoint) && raw.isSidechain === true) {
           sidechainIds.add(sessionId);
           return true;
         }
         if (
-          !isCliEntrypoint(raw.entrypoint) ||
+          !isClaudeCodeEntrypoint(raw.entrypoint) ||
           raw.type !== "user" ||
           raw.isMeta === true ||
           !isRecord(raw.message) ||
@@ -368,7 +368,7 @@ async function discoverCliRecords(
           ...(createdAt !== undefined ? { createdAt } : {}),
           updatedAt: stat.mtimeMs,
           recencyAt: stat.mtimeMs,
-          source: "claude-cli",
+          source: raw.entrypoint === "claude-desktop" ? "claude-desktop" : "claude-cli",
           modelProvider: "anthropic",
           ...(readBoundedString(raw.version, 256)
             ? { cliVersion: readBoundedString(raw.version, 256) }
@@ -444,9 +444,17 @@ async function scanClaudeSessions(snapshot: ClaudeProjectsTreeSnapshot) {
 async function mergeClaudeSessions(
   cli: ClaudeCliScan,
   desktop: DesktopOverlay,
+  liveThreadIds?: ReadonlySet<string>,
 ): Promise<CatalogRecord[]> {
   const { context, sidechainIds } = cli;
-  const records = new Map(cli.records);
+  // A CLI launched from Desktop can inherit CLAUDE_CODE_ENTRYPOINT and write
+  // desktop-tagged records without a Desktop overlay. Only the live source's
+  // lifecycle evidence admits those otherwise unlisted transcripts.
+  const records = new Map(
+    [...cli.records].filter(
+      ([id, record]) => record.source !== "claude-desktop" || liveThreadIds?.has(id),
+    ),
+  );
   for (const sessionId of desktop.archived) {
     records.delete(sessionId);
   }
@@ -530,7 +538,13 @@ async function readCliScan(
 
 export async function listClaudeSessions(
   homeDir = resolveClaudeCatalogHomeDir(),
-  options: { forceRefresh?: boolean; configDir?: string; includeDesktop?: boolean } = {},
+  options: {
+    forceRefresh?: boolean;
+    configDir?: string;
+    includeDesktop?: boolean;
+    /** Session IDs observed by the live source's lifecycle hooks, never inferred from mtime. */
+    liveThreadIds?: ReadonlySet<string>;
+  } = {},
 ): Promise<CatalogRecord[]> {
   const [cli, desktop] = await Promise.all([
     readProjectsTreeSnapshot(projectsDir(homeDir, options.configDir), options).then((snapshot) =>
@@ -540,6 +554,11 @@ export async function listClaudeSessions(
       ? readDesktopOverlay(homeDir, options.forceRefresh)
       : emptyDesktopOverlay,
   ]);
+  // The live set changes independently of transcript/overlay caches. Reuse the
+  // expensive scan, but never cache an admission decision based on that set.
+  if (options.liveThreadIds) {
+    return mergeClaudeSessions(cli, desktop, options.liveThreadIds);
+  }
   let overlays = mergedScans.get(cli);
   if (!overlays) {
     overlays = new WeakMap();

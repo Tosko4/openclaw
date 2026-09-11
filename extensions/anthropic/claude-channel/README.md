@@ -1,9 +1,9 @@
 # OpenClaw channel for Claude Code
 
 Lets teammates on your OpenClaw team server send messages into a Claude Code
-session running on this machine. Reading the session needs nothing from this
-directory: the OpenClaw node host tails `~/.claude/projects/**.jsonl` on its
-own. Input needs the two files here:
+session running on this machine. The OpenClaw node host tails
+`~/.claude/projects/**.jsonl` after a lifecycle hook identifies the session as
+running. Install both files here to mirror sessions and accept team input:
 
 - `openclaw-channel-server.mjs`: a Claude Code [channel](https://code.claude.com/docs/en/channels-reference)
   MCP server. Claude Code spawns it; it connects to the OpenClaw bridge socket
@@ -13,7 +13,8 @@ own. Input needs the two files here:
 - `openclaw-channel-hook.mjs`: a hook that posts `{session_id, cwd}` to the same
   socket on SessionStart / UserPromptSubmit / Stop / SessionEnd, which is how the
   bridge learns which Claude session a channel process belongs to (matched by
-  working directory) and where turns end.
+  process ancestry, or unambiguous working directory when ancestry is unavailable)
+  and where turns end. Delivery errors go to stderr without blocking Claude.
 
 `openclaw` prints the exact paths and commands for your install
 (`describeClaudeLocalSessionSetup()` in the plugin). By hand:

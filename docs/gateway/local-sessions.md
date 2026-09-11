@@ -83,12 +83,17 @@ claude --dangerously-load-development-channels server:openclaw
 
 and install the lifecycle hooks the plugin ships (`extensions/anthropic/claude-channel/hooks.json`) into your Claude settings. Channels are a Claude Code research preview; the development flag stays visible on purpose. Messages are delivered at the next turn boundary and Claude Code does not acknowledge consumption, so the Gateway shows them as **submitted** until the mirrored transcript record arrives. Only **followup** is available.
 
+The hooks identify running sessions; transcript files alone do not enroll dormant history. This also covers CLI sessions launched from a Claude Desktop terminal that inherit its `claude-desktop` entrypoint. If you use `OPENCLAW_STATE_DIR`, give the node host, Claude process, hooks, and channel server the same value so they reach the same bridge socket.
+
+For missing sessions, inspect the node host's `claude-local-sessions` and `claude-channel` logs. They report the listening socket, observed session IDs, channel pairing, admission, and sessions waiting for a discoverable transcript. Missing catalog entries point to `CLAUDE_CONFIG_DIR` or a session that has not written its first user record. Hook delivery failures also appear on the hook's stderr with the socket path and error code; they still exit successfully so they do not block Claude Code.
+
 ## What teammates see
 
 - The session appears in the sidebar under the enrolled agent with a source badge and the owner. It is owned by the sharing person; teammates who send become participants.
 - The transcript shows user turns, assistant text, and tool calls and results (collapsed). Earlier history that stayed on the laptop is marked as such.
 - The composer is enabled while the device and source are connected and the harness accepts input. Every message ends in a visible receipt: accepted, submitted, committed, or rejected with the reason.
 - When the laptop goes offline the row shows **device is offline** and new messages are rejected rather than queued. Nothing already accepted by the local harness is resent.
+- If the device stays online but the source disconnects or the thread ends, the row reports that the source or session is unavailable on the device.
 
 ## What the Gateway cannot do
 

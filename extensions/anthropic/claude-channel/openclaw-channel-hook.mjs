@@ -37,7 +37,12 @@ function readAncestorPids(env = process.env) {
     pids.push(pid);
     try {
       const parent = Number.parseInt(
-        execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8", env }).trim(),
+        execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], {
+          encoding: "utf8",
+          env,
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: 500,
+        }).trim(),
         10,
       );
       if (!Number.isInteger(parent) || parent === pid) {
@@ -45,6 +50,9 @@ function readAncestorPids(env = process.env) {
       }
       pid = parent;
     } catch {
+      process.stderr.write(
+        "[openclaw/claude-hook] could not read process ancestry; channel pairing may be unavailable\n",
+      );
       break;
     }
   }
@@ -58,6 +66,9 @@ process.stdin.on("end", () => {
   try {
     payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
+    process.stderr.write(
+      "[openclaw/claude-hook] ignored invalid hook JSON; no lifecycle event delivered\n",
+    );
     process.exit(0);
   }
   const frame = {
@@ -71,8 +82,18 @@ process.stdin.on("end", () => {
   const endpoint = resolveBridgeEndpoint();
   const socket = net.createConnection(endpoint);
   const finish = () => process.exit(0);
-  socket.setTimeout(1_000, () => socket.destroy());
+  socket.setTimeout(1_000, () => {
+    process.stderr.write(
+      `[openclaw/claude-hook] bridge timed out at ${endpoint}; check the node host and OPENCLAW_STATE_DIR\n`,
+    );
+    socket.destroy();
+  });
   socket.on("connect", () => socket.end(`${JSON.stringify(frame)}\n`));
-  socket.on("error", finish);
+  socket.on("error", (error) => {
+    process.stderr.write(
+      `[openclaw/claude-hook] lifecycle event not delivered to ${endpoint} (${error.code ?? "socket error"}); check the node host and OPENCLAW_STATE_DIR\n`,
+    );
+    finish();
+  });
   socket.on("close", finish);
 });

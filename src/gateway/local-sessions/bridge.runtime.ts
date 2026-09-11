@@ -176,7 +176,7 @@ export class LocalSessionBridgeRuntime implements LocalSessionBridge {
     };
   }
 
-  /** Offline projection for a stored row whose device is not connected right now. */
+  /** Stored rows can outlive a thread or source channel while the device stays online. */
   describeOffline(entry: SessionEntry): LocalSessionStatus | undefined {
     const source = entry.localSource;
     if (!source) {
@@ -189,6 +189,8 @@ export class LocalSessionBridgeRuntime implements LocalSessionBridge {
     const descriptor = listRegisteredLocalSessionSources().find(
       (candidate) => candidate.sourceId === source.sourceId,
     );
+    const connected = this.connectedNodes.has(source.deviceId);
+    const sourceConnected = this.connections.has(connectionKey(source.deviceId, source.sourceId));
     return {
       sourceId: source.sourceId,
       sourceLabel: descriptor?.label ?? source.sourceId,
@@ -196,14 +198,18 @@ export class LocalSessionBridgeRuntime implements LocalSessionBridge {
       threadId: source.threadId,
       ownerProfileId: enrollment?.ownerProfileId ?? "",
       ownerLabel: enrollment?.ownerLabel ?? "",
-      connected: false,
+      connected,
       state: "unavailable",
       canInput: false,
       inputModes: [],
       reason:
-        enrollment?.state === "active"
-          ? "device is offline"
-          : `sharing ${enrollment?.state ?? "ended"} for this device`,
+        enrollment?.state !== "active"
+          ? `sharing ${enrollment?.state ?? "ended"} for this device`
+          : !connected
+            ? "device is offline"
+            : !sourceConnected
+              ? "local session source is not connected"
+              : "session is not currently available on the device",
     };
   }
 
