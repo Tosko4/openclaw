@@ -262,7 +262,13 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
                           agent,
                         })),
                         ...(missingScope
-                          ? [{ value: missingScope, label: missingScope, agent: { id: missingScope } }]
+                          ? [
+                              {
+                                value: missingScope,
+                                label: missingScope,
+                                agent: { id: missingScope },
+                              },
+                            ]
                           : []),
                       ],
                       value: scope ?? "",

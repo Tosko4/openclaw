@@ -1,6 +1,9 @@
 import "../../test/dom.setup.ts";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { ControlUiAgentPickerProps, ControlUiSessionListResult } from "openclaw/plugin-sdk/control-ui";
+import type {
+  ControlUiAgentPickerProps,
+  ControlUiSessionListResult,
+} from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentsListResult } from "../../api/types.ts";
@@ -118,10 +121,12 @@ it("keeps a historical scope recoverable after the roster shrinks to one agent",
     "historical scope picker",
   );
   expect(picker.value).toBe("writer");
-  expect(picker.options).toEqual(expect.arrayContaining([
-    expect.objectContaining({ value: "writer", label: "writer" }),
-    expect.objectContaining({ value: "", label: "All agents" }),
-  ]));
+  expect(picker.options).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ value: "writer", label: "writer" }),
+      expect.objectContaining({ value: "", label: "All agents" }),
+    ]),
+  );
   picker.onSelect("");
   await vi.waitFor(() => expect(page.container.textContent).toContain("Initial card"));
   expect(page.fixture.host.agents.scopeId).toBeNull();
