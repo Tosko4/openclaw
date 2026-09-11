@@ -18,6 +18,7 @@ import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic
 import { manifestPluginResolvesRuntimeModelCatalogAugment } from "../plugins/providers.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
+import { resolveProviderBindingEnvVarCandidates } from "../secrets/provider-env-vars.js";
 import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
@@ -41,6 +42,7 @@ import {
 } from "./prepared-model-catalog-worker.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
+import { resolveProviderUseAdmission } from "./provider-model-auth-source-plan.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
@@ -249,13 +251,25 @@ export async function runPreparedModelCatalogWorkerRequest(
       ...ambientCredentials,
       ...resolveAgentCredentialMapFromStore(authStore, { config: value.input.config }),
     };
+    const admitted = resolveProviderUseAdmission({
+      config: value.input.config,
+      env: value.input.env,
+      profiles: authStore.profiles,
+      nativeProviders: Object.entries(credentials).flatMap(([provider, credential]) =>
+        credential.type === "api_key" && credential.nativeAuth ? [provider] : [],
+      ),
+      providerEnvVars: resolveProviderBindingEnvVarCandidates({
+        ...value.input,
+        metadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
+      }),
+    });
     const exactAgentFacts = {
       ...prepared.agentFacts,
       authStore,
       templateAuthStorage: AuthStorage.inMemory(credentials),
       credentials,
       providerIds: [
-        ...new Set(request.providerIds ?? [...value.providerIds, ...Object.keys(credentials)]),
+        ...new Set(request.providerIds ?? [...value.providerIds, ...admitted.keys()]),
       ].toSorted((left, right) => left.localeCompare(right)),
     };
     const { pluginMetadataSnapshot, pluginRegistry } = prepared.pluginGeneration;
