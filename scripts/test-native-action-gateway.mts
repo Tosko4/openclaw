@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -369,6 +370,31 @@ export async function withNativeActionGateway(
       let approvals: ApprovalFixture | undefined;
       let approvalPhase: "pending" | "allowed" | "retired" | "complete" = "pending";
       let approvalRetirementStart = 0;
+      const joinApprovalResponses = async (count: number) => {
+        assert(approvalProxy);
+        const deadline = performance.now() + 10_000;
+        while (performance.now() < deadline) {
+          const events = approvalProxy.snapshot().events;
+          const requests = events.filter(
+            (event: { kind: string; method?: string }) =>
+              event.kind === "rpc-request" && event.method === "exec.approval.resolve",
+          );
+          const completedRequests = requests.filter(
+            (request: { connection: number; requestId: string }) =>
+              events.some(
+                (event: { kind: string; connection?: number; requestId?: string }) =>
+                  event.kind === "rpc-response" &&
+                  event.connection === request.connection &&
+                  event.requestId === request.requestId,
+              ),
+          );
+          if (completedRequests.length >= count) {
+            return;
+          }
+          await delay(Math.max(0, Math.min(50, deadline - performance.now())));
+        }
+        assert.fail("native approval response observation timed out");
+      };
       const pairedDevices = new Set<string>();
       const pending = new Set<Promise<void>>();
       let firstControlFailure: Error | undefined;
@@ -650,6 +676,9 @@ export async function withNativeActionGateway(
           }
           case "approval-allowed": {
             assert(approvalProxy && approvalPhase === "pending");
+            // The requester can observe the decision before the presenter's ACK arrives.
+            // Join observed completions, including errors; the assertions still own success.
+            await joinApprovalResponses(1);
             const events = approvalProxy.snapshot().events;
             const resolved = events.filter(
               (event: { kind: string; method?: string }) =>
@@ -693,6 +722,7 @@ export async function withNativeActionGateway(
           }
           case "approval-complete": {
             assert(approvalProxy && approvals && approvalPhase === "retired");
+            await joinApprovalResponses(2);
             const events = approvalProxy.snapshot().events;
             for (const [method, count] of [
               ["exec.approval.request", 4],
