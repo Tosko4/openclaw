@@ -20,6 +20,14 @@ vi.mock("./device-pair-setup.js", () => ({
   }),
 }));
 
+// Order of the stop-sharing steps: the device must drop the thread before the row goes.
+const stopSteps: string[] = [];
+const bridge = {
+  unshare: vi.fn(async () => {
+    stopSteps.push("unshare");
+  }),
+  onEnrollmentChanged: vi.fn(),
+};
 vi.mock("../local-sessions/bridge.js", () => ({
   listRegisteredLocalSessionSources: () => [
     {
@@ -29,7 +37,37 @@ vi.mock("../local-sessions/bridge.js", () => ({
       command: "codex.localSessions.source.v1",
     },
   ],
-  getLocalSessionBridge: () => undefined,
+  getLocalSessionBridge: () => bridge,
+}));
+
+// Projection removal goes through the canonical delete method; the store itself is
+// not under test here, so the delete handler and the row listing are recorded.
+const deletedKeys: string[] = [];
+let deleteOutcome = true;
+vi.mock("./sessions-delete.js", () => ({
+  sessionDeleteHandlers: {
+    "sessions.delete": async ({
+      params,
+      respond,
+    }: {
+      params: { key: string };
+      respond: (ok: boolean, payload?: unknown) => void;
+    }) => {
+      deletedKeys.push(params.key);
+      stopSteps.push("delete");
+      respond(deleteOutcome, deleteOutcome ? { deleted: true } : undefined);
+    },
+  },
+}));
+const projectedRows: Array<{ sessionKey: string; entry: Record<string, unknown> }> = [];
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
+  listSessionEntriesCore: () => projectedRows,
+}));
+const loadedEntries = new Map<string, Record<string, unknown>>();
+vi.mock("../session-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils.js")>()),
+  loadSessionEntry: (key: string) => ({ entry: loadedEntries.get(key), storePath: "/store" }),
 }));
 
 const tempDirs: string[] = [];
@@ -37,7 +75,30 @@ const tempDirs: string[] = [];
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
+  deletedKeys.length = 0;
+  deleteOutcome = true;
+  projectedRows.length = 0;
+  loadedEntries.clear();
+  stopSteps.length = 0;
 });
+
+function request(
+  method: string,
+  params: Record<string, unknown>,
+  profile: { profileId: string; displayName: string },
+) {
+  const respond = vi.fn();
+  const options = {
+    params,
+    respond,
+    client: { authenticatedUserProfile: profile, connect: { scopes: ["operator.write"] } },
+    context: { broadcast: vi.fn() },
+    // SAFETY: the handlers read only the fields stubbed above.
+  } as unknown as GatewayRequestHandlerOptions;
+  return Promise.resolve(sessionsLocalHandlers[method]!(options)).then(
+    () => respond.mock.calls[0] ?? [],
+  );
+}
 
 afterAll(() => {
   cleanupTempDirs(tempDirs);
@@ -142,5 +203,74 @@ describe("sessions.local.enroll", () => {
     expect(respond.mock.calls[0]?.[2]).toMatchObject({
       message: expect.stringContaining("gemini"),
     });
+  });
+});
+
+describe("stopping a share removes what it projected", () => {
+  const alice = { profileId: "alice", displayName: "Alice" };
+  const localSource = (enrollmentId: string, threadId: string) => ({
+    pluginId: "codex",
+    sourceId: "codex",
+    deviceId: "device-1",
+    threadId,
+    enrollmentId,
+  });
+
+  it("revoke deletes every row the enrollment projected and leaves other shares alone", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", makeTempDir(tempDirs, "sessions-local-"));
+    openOpenClawStateDatabase();
+    const [, enrolled] = await enroll(alice, ["operator.write"]);
+    const enrollmentId = (enrolled as { enrollment: { enrollmentId: string } }).enrollment
+      .enrollmentId;
+    projectedRows.push(
+      {
+        sessionKey: "agent:main:local:codex:device-1:alice:t1",
+        entry: { localSource: localSource(enrollmentId, "t1") },
+      },
+      {
+        sessionKey: "agent:main:local:codex:device-1:alice:t2",
+        entry: { localSource: localSource(enrollmentId, "t2") },
+      },
+      {
+        sessionKey: "agent:main:local:codex:device-2:bob:t9",
+        entry: { localSource: localSource("other", "t9") },
+      },
+      { sessionKey: "agent:main:main", entry: {} },
+    );
+    const [ok, payload] = await request("sessions.local.revoke", { enrollmentId }, alice);
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({ enrollment: { state: "revoked" } });
+    expect(deletedKeys).toEqual([
+      "agent:main:local:codex:device-1:alice:t1",
+      "agent:main:local:codex:device-1:alice:t2",
+    ]);
+  });
+
+  it("unshare tells the device first, then deletes the row", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", makeTempDir(tempDirs, "sessions-local-"));
+    openOpenClawStateDatabase();
+    const sessionKey = "agent:main:local:codex:device-1:alice:t1";
+    loadedEntries.set(sessionKey, {
+      localSource: localSource("enrollment-1", "t1"),
+      createdActor: { type: "human", id: "alice", label: "Alice", source: "profile" },
+    });
+    const [ok] = await request("sessions.local.unshare", { sessionKey }, alice);
+    expect(ok).toBe(true);
+    expect(stopSteps).toEqual(["unshare", "delete"]);
+    expect(deletedKeys).toEqual([sessionKey]);
+  });
+
+  it("reports a row that could not be removed instead of claiming success", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", makeTempDir(tempDirs, "sessions-local-"));
+    openOpenClawStateDatabase();
+    const sessionKey = "agent:main:local:codex:device-1:alice:t1";
+    loadedEntries.set(sessionKey, {
+      localSource: localSource("enrollment-1", "t1"),
+      createdActor: { type: "human", id: "alice", label: "Alice", source: "profile" },
+    });
+    deleteOutcome = false;
+    const [ok, , error] = await request("sessions.local.unshare", { sessionKey }, alice);
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({ message: expect.stringContaining(sessionKey) });
   });
 });

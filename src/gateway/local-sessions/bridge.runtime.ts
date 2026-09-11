@@ -67,6 +67,8 @@ type SourceConnection = {
   inputModes: LocalSessionInputMode[];
   helloReceived: boolean;
   threads: Map<string, LiveThread>;
+  /** Threads unshared for good; a frame that races the device's unshare must not re-create the row. */
+  excludedThreadIds: Set<string>;
   /** inputId -> session key, so a late result still settles the right ledger. */
   pendingInputs: Map<string, { sessionKey: string; agentId: string; storePath: string }>;
   send: (frame: LocalSessionGatewayFrame) => Promise<void>;
@@ -307,9 +309,18 @@ export class LocalSessionBridgeRuntime implements LocalSessionBridge {
       byProfileId: params.byProfileId,
     });
     const connection = this.connections.get(connectionKey(source.deviceId, source.sourceId));
-    if (connection) {
-      await connection.send({ type: "unshare", threadId: source.threadId }).catch(() => {});
+    if (!connection) {
+      return;
     }
+    // The caller deletes the projected row next; drop the live mapping first so
+    // records still in flight cannot land in (or re-create) it.
+    connection.excludedThreadIds.add(source.threadId);
+    const thread = connection.threads.get(source.threadId);
+    if (thread) {
+      connection.threads.delete(source.threadId);
+      this.threadsBySessionKey.delete(thread.sessionKey);
+    }
+    await connection.send({ type: "unshare", threadId: source.threadId }).catch(() => {});
   }
 
   private async reconcileDevice(deviceId: string): Promise<void> {
@@ -393,6 +404,7 @@ export class LocalSessionBridgeRuntime implements LocalSessionBridge {
       inputModes: [],
       helloReceived: false,
       threads: new Map(),
+      excludedThreadIds: new Set(),
       pendingInputs: new Map(),
       send: (frame) => channel.send(encodeLocalSessionFrame(frame)),
       close: () => {
@@ -573,14 +585,16 @@ export class LocalSessionBridgeRuntime implements LocalSessionBridge {
     for (const [threadId, thread] of connection.threads) {
       cursors[threadId] = Math.max(cursors[threadId] ?? 0, thread.acceptedSeq);
     }
+    const excludedThreadIds = listLocalSessionExclusions({
+      deviceId: connection.deviceId,
+      sourceId: connection.source.sourceId,
+    });
+    connection.excludedThreadIds = new Set(excludedThreadIds);
     await connection.send({
       type: "resume",
       enrollment: enrollmentSummary(connection.enrollment),
       cursors,
-      excludedThreadIds: listLocalSessionExclusions({
-        deviceId: connection.deviceId,
-        sourceId: connection.source.sourceId,
-      }),
+      excludedThreadIds,
     });
   }
 
@@ -595,6 +609,9 @@ export class LocalSessionBridgeRuntime implements LocalSessionBridge {
         this.threadsBySessionKey.delete(existing.sessionKey);
         this.emitChanged(existing.sessionKey, existing.agentId, "local-session-closed");
       }
+      return;
+    }
+    if (!existing && connection.excludedThreadIds.has(frame.threadId)) {
       return;
     }
     const thread = existing ?? (await this.ensureThread(connection, frame));

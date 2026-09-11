@@ -14,6 +14,7 @@ import {
   validateSessionsLocalUnshareParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { quoteCliArg } from "../../cli/quote-cli-arg.js";
+import { listSessionEntriesCore } from "../../config/sessions/session-accessor.js";
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { resolveHostAccountName } from "../../infra/host-account-name.js";
 import {
@@ -33,6 +34,7 @@ import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { isGatewayAdmin } from "../session-sharing-policy.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { mintNodeJoinUrl } from "./device-pair-setup.js";
+import { sessionDeleteHandlers } from "./sessions-delete.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -71,6 +73,40 @@ function publishEnrollment(
 ): void {
   context.broadcast("sessions.local.enrollment", { enrollment });
   getLocalSessionBridge()?.onEnrollmentChanged(enrollment);
+}
+
+// Stopping a share ends what teammates can read, not only future records: the
+// projected rows leave the Gateway, transcript included. The laptop keeps the
+// original, and the exclusion or revoked enrollment keeps the device from
+// projecting the thread again.
+async function removeProjectedSessions(
+  options: GatewayRequestHandlerOptions,
+  sessionKeys: string[],
+): Promise<string[]> {
+  const deleteSession = sessionDeleteHandlers["sessions.delete"];
+  const failed: string[] = [];
+  for (const sessionKey of sessionKeys) {
+    let deleted = false;
+    // Local session keys name their agent; sessions.delete resolves the store from the key.
+    await deleteSession?.({
+      ...options,
+      params: { key: sessionKey, deleteTranscript: true, emitLifecycleHooks: false },
+      respond: (ok) => {
+        deleted = ok;
+      },
+    });
+    if (!deleted) {
+      failed.push(sessionKey);
+    }
+  }
+  return failed;
+}
+
+function projectionsNotRemovedError(failed: string[]) {
+  return errorShape(
+    ErrorCodes.UNAVAILABLE,
+    `Sharing stopped, but ${failed.length} mirrored session(s) could not be removed from the Gateway; delete them from the sidebar: ${failed.join(", ")}`,
+  );
 }
 
 export const sessionsLocalHandlers: GatewayRequestHandlers = {
@@ -255,7 +291,8 @@ export const sessionsLocalHandlers: GatewayRequestHandlers = {
       sources: resolvedSources,
     });
   },
-  "sessions.local.revoke": async ({ params, respond, context, client }) => {
+  "sessions.local.revoke": async (options) => {
+    const { params, respond, context, client } = options;
     if (
       !assertValidParams(
         params,
@@ -294,10 +331,21 @@ export const sessionsLocalHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "enrollment not found"));
       return;
     }
+    // The bridge drops the device channel synchronously here, so no frame can
+    // land in a row after it is removed.
     publishEnrollment(context, enrollment);
+    const projected = listSessionEntriesCore({ agentId: enrollment.agentId })
+      .filter(({ entry }) => entry.localSource?.enrollmentId === enrollment.enrollmentId)
+      .map(({ sessionKey }) => sessionKey);
+    const failed = await removeProjectedSessions(options, projected);
+    if (failed.length > 0) {
+      respond(false, undefined, projectionsNotRemovedError(failed));
+      return;
+    }
     respond(true, { enrollment });
   },
-  "sessions.local.unshare": async ({ params, respond, context, client }) => {
+  "sessions.local.unshare": async (options) => {
+    const { params, respond, context, client } = options;
     if (
       !assertValidParams(
         params,
@@ -344,6 +392,11 @@ export const sessionsLocalHandlers: GatewayRequestHandlers = {
       return;
     }
     await bridge.unshare({ entry, byProfileId: profile.profileId });
+    const failed = await removeProjectedSessions(options, [request.sessionKey]);
+    if (failed.length > 0) {
+      respond(false, undefined, projectionsNotRemovedError(failed));
+      return;
+    }
     respond(true, { ok: true });
   },
 };

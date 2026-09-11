@@ -4961,7 +4961,8 @@ export const en: TranslationMap & {
       inputUnavailable: "This session is not accepting messages right now.",
       earlierHistory: "Earlier history remains on {owner}'s laptop.",
       stopSharing: "Stop sharing this session",
-      stopSharingDone: "This session is no longer shared with the team.",
+      stopSharingDone:
+        "This session is no longer shared with the team; its copy was removed from the Gateway.",
       receipt: {
         sending: "Sending to the device…",
         delivered: "Delivered to {source}",
