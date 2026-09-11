@@ -5,6 +5,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   activateLocalSessionConnectIntent,
   createLocalSessionEnrollment,
+  listLocalSessionEnrollments,
 } from "../../state/local-session-enrollments.js";
 import type { GatewayBroadcastFn } from "../server-broadcast-types.js";
 import { getLocalSessionBridge, listRegisteredLocalSessionSources } from "./bridge.js";
@@ -27,11 +28,27 @@ export function activateLocalSessionConnectIntentForDevice(params: {
     return;
   }
   const sources = listRegisteredLocalSessionSources();
+  // Redeeming a link carries no admin authority: it must not take over a
+  // source someone else shares from this device (sessions.local.enroll gates
+  // that), so such a source is left as it is and the person sees it on Profile.
+  const liveEnrollments = listLocalSessionEnrollments({ deviceId: params.deviceId }).filter(
+    (candidate) => candidate.state === "pending" || candidate.state === "active",
+  );
   for (const sourceId of intent.sourceIds) {
     const source = sources.find((candidate) => candidate.sourceId === sourceId);
     if (!source) {
       log.warn(
         `connect intent ${intent.setupId} names unknown local session source ${sourceId}; skipped`,
+      );
+      continue;
+    }
+    const sharedByOther = liveEnrollments.find(
+      (candidate) =>
+        candidate.sourceId === sourceId && candidate.ownerProfileId !== intent.ownerProfileId,
+    );
+    if (sharedByOther) {
+      log.warn(
+        `connect intent ${intent.setupId}: ${sourceId} on device ${params.deviceId.slice(0, 8)} is already shared by ${sharedByOther.ownerLabel}; left unchanged`,
       );
       continue;
     }

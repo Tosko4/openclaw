@@ -102,6 +102,25 @@ async function removeProjectedSessions(
   return failed;
 }
 
+// Rows are keyed by owner, device, source, and thread; the enrollment id on a
+// row lags behind a same-owner re-share until the device republishes it, so a
+// stop is scoped by the identity the row belongs to, not the id it last saw.
+function listProjectedSessionKeys(share: {
+  agentId: string;
+  deviceId: string;
+  sourceId: string;
+  ownerProfileId: string;
+}): string[] {
+  return listSessionEntriesCore({ agentId: share.agentId })
+    .filter(
+      ({ entry }) =>
+        entry.localSource?.deviceId === share.deviceId &&
+        entry.localSource.sourceId === share.sourceId &&
+        sessionCreatorProfileId(entry.createdActor) === share.ownerProfileId,
+    )
+    .map(({ sessionKey }) => sessionKey);
+}
+
 function projectionsNotRemovedError(failed: string[]) {
   return errorShape(
     ErrorCodes.UNAVAILABLE,
@@ -139,7 +158,8 @@ export const sessionsLocalHandlers: GatewayRequestHandlers = {
       enrollments: listLocalSessionEnrollments(deviceId ? { deviceId } : {}),
     });
   },
-  "sessions.local.enroll": async ({ params, respond, context, client }) => {
+  "sessions.local.enroll": async (options) => {
+    const { params, respond, context, client } = options;
     if (
       !assertValidParams(
         params,
@@ -225,6 +245,15 @@ export const sessionsLocalHandlers: GatewayRequestHandlers = {
       agentId: request.agentId,
     });
     publishEnrollment(context, enrollment);
+    // Replacing another person's share stops it for them: their projections
+    // leave with it, exactly as if they had pressed Stop sharing.
+    if (live && live.ownerProfileId !== profile.profileId) {
+      const failed = await removeProjectedSessions(options, listProjectedSessionKeys(live));
+      if (failed.length > 0) {
+        respond(false, undefined, projectionsNotRemovedError(failed));
+        return;
+      }
+    }
     respond(true, { enrollment });
   },
   "sessions.local.connectCode": async ({ params, respond, context, client }) => {
@@ -334,10 +363,7 @@ export const sessionsLocalHandlers: GatewayRequestHandlers = {
     // The bridge drops the device channel synchronously here, so no frame can
     // land in a row after it is removed.
     publishEnrollment(context, enrollment);
-    const projected = listSessionEntriesCore({ agentId: enrollment.agentId })
-      .filter(({ entry }) => entry.localSource?.enrollmentId === enrollment.enrollmentId)
-      .map(({ sessionKey }) => sessionKey);
-    const failed = await removeProjectedSessions(options, projected);
+    const failed = await removeProjectedSessions(options, listProjectedSessionKeys(enrollment));
     if (failed.length > 0) {
       respond(false, undefined, projectionsNotRemovedError(failed));
       return;

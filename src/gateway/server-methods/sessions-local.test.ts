@@ -208,12 +208,15 @@ describe("sessions.local.enroll", () => {
 
 describe("stopping a share removes what it projected", () => {
   const alice = { profileId: "alice", displayName: "Alice" };
-  const localSource = (enrollmentId: string, threadId: string) => ({
+  const localSource = (enrollmentId: string, threadId: string, deviceId = "device-1") => ({
     pluginId: "codex",
     sourceId: "codex",
-    deviceId: "device-1",
+    deviceId,
     threadId,
     enrollmentId,
+  });
+  const ownedBy = (profileId: string) => ({
+    createdActor: { type: "human", id: profileId, label: profileId, source: "profile" },
   });
 
   it("revoke deletes every row the enrollment projected and leaves other shares alone", async () => {
@@ -225,15 +228,20 @@ describe("stopping a share removes what it projected", () => {
     projectedRows.push(
       {
         sessionKey: "agent:main:local:codex:device-1:alice:t1",
-        entry: { localSource: localSource(enrollmentId, "t1") },
+        entry: { localSource: localSource(enrollmentId, "t1"), ...ownedBy("alice") },
       },
+      // Still tagged with the enrollment a re-share replaced: it is Alice's row all the same.
       {
         sessionKey: "agent:main:local:codex:device-1:alice:t2",
-        entry: { localSource: localSource(enrollmentId, "t2") },
+        entry: { localSource: localSource("enrollment-before-reshare", "t2"), ...ownedBy("alice") },
       },
       {
-        sessionKey: "agent:main:local:codex:device-2:bob:t9",
-        entry: { localSource: localSource("other", "t9") },
+        sessionKey: "agent:main:local:codex:device-2:alice:t3",
+        entry: { localSource: localSource("other-device", "t3", "device-2"), ...ownedBy("alice") },
+      },
+      {
+        sessionKey: "agent:main:local:codex:device-1:bob:t9",
+        entry: { localSource: localSource("bobs", "t9"), ...ownedBy("bob") },
       },
       { sessionKey: "agent:main:main", entry: {} },
     );
@@ -244,6 +252,33 @@ describe("stopping a share removes what it projected", () => {
       "agent:main:local:codex:device-1:alice:t1",
       "agent:main:local:codex:device-1:alice:t2",
     ]);
+  });
+
+  it("an admin replacing someone's share removes that person's projections", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", makeTempDir(tempDirs, "sessions-local-"));
+    openOpenClawStateDatabase();
+    await enroll(alice, ["operator.write"]);
+    projectedRows.push(
+      {
+        sessionKey: "agent:main:local:codex:device-1:alice:t1",
+        entry: { localSource: localSource("any", "t1"), ...ownedBy("alice") },
+      },
+      {
+        sessionKey: "agent:main:local:codex:device-1:bob:t2",
+        entry: { localSource: localSource("bobs", "t2"), ...ownedBy("bob") },
+      },
+    );
+    const [ok] = await enroll({ profileId: "bob", displayName: "Bob" }, [
+      "operator.write",
+      "operator.admin",
+    ]);
+    expect(ok).toBe(true);
+    expect(deletedKeys).toEqual(["agent:main:local:codex:device-1:alice:t1"]);
+    // Re-sharing your own source keeps your rows; the device re-tags them on resume.
+    deletedKeys.length = 0;
+    const [again] = await enroll({ profileId: "bob", displayName: "Bob" }, ["operator.write"]);
+    expect(again).toBe(true);
+    expect(deletedKeys).toEqual([]);
   });
 
   it("unshare tells the device first, then deletes the row", async () => {

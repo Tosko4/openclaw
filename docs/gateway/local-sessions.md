@@ -55,7 +55,7 @@ approve. The link expires with the pairing setup (about ten minutes) and can be
 used once. Your shared devices and a **Stop sharing** action stay on the same
 Profile page.
 
-The node host delivers the decision within a few seconds while it is connected. From then on every future session in that source on that device is published automatically; sessions that existed before are published too when the harness still has them loaded. Use **Stop sharing** on the Profile or Devices page to revoke the whole source, or **Stop sharing this session** in a session's menu to keep one thread off the Gateway for good. Either way the mirrored sessions are deleted from the Gateway, transcript included; the originals stay on your laptop, and nothing is projected again unless you share anew.
+The node host delivers the decision within a few seconds while it is connected. From then on every future session in that source on that device is published automatically; sessions that existed before are published too when the harness still has them loaded. Use **Stop sharing** on the Profile or Devices page to revoke the whole source, or **Stop sharing this session** in a session's menu to keep one thread off the Gateway for good. Either way the mirrored sessions are deleted from the Gateway, transcript included; the originals stay on your laptop, and nothing is projected again unless you share anew. An admin who replaces your share with their own stops it the same way. A connect link never takes over a source someone else already shares from that device; that needs an admin on the Devices page.
 
 Accepting means teammates who can send into the session drive your local tools with your local permissions. Approval prompts stay on your terminal.
 
