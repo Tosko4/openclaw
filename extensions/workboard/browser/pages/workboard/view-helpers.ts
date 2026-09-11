@@ -328,8 +328,12 @@ const priorityIcons = {
 export const renderPriorityIcon = (priority: WorkboardPriority) => priorityIcons[priority];
 
 export function workboardErrorMessage(
-  state: { error: string | null; lifecycleTaskRefreshError: string | null },
+  state: {
+    error: string | null;
+    lifecycleTaskRefreshError: string | null;
+    lastRefreshError: string | null;
+  },
   pageError?: string | null,
 ) {
-  return state.error ?? pageError ?? state.lifecycleTaskRefreshError;
+  return state.error ?? pageError ?? state.lifecycleTaskRefreshError ?? state.lastRefreshError;
 }

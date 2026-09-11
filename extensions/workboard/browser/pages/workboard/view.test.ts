@@ -348,14 +348,19 @@ describe("renderWorkboard", () => {
 
   it("renders lifecycle refresh errors without replacing generic errors", () => {
     const { state, container, renderView } = createWorkboardView();
+    state.lastRefreshError = "Card refresh unavailable";
     state.lifecycleTaskRefreshError = "Task refresh unavailable";
     renderView();
     expect(container.querySelector(".callout.danger")?.textContent).toBe(
       "Task refresh unavailable",
     );
 
+    renderView({ pageError: "Agent metadata unavailable" });
+    expect(container.querySelector(".callout.danger")?.textContent).toBe(
+      "Agent metadata unavailable",
+    );
     state.error = "Write denied";
-    renderView();
+    renderView({ pageError: "Agent metadata unavailable" });
     expect(container.querySelector(".callout.danger")?.textContent).toBe("Write denied");
   });
 
@@ -547,6 +552,16 @@ describe("renderWorkboard", () => {
     ).toContain("Refreshing");
     expect(container.querySelector(".workboard-refresh")?.getAttribute("aria-busy")).toBe("true");
     expect(container.querySelector(".workboard-refresh")?.textContent).not.toContain("Refreshing");
+
+    state.loading = false;
+    state.lastRefreshError = "Card refresh unavailable";
+    renderView();
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Card refresh unavailable");
+    expect(buttonByLabel(container, "Refresh")?.disabled).toBe(false);
+
+    state.lastRefreshError = null;
+    renderView();
+    expect(container.querySelector('[role="alert"]')).toBeNull();
   });
 
   it("renders board columns and preloaded cards", () => {
