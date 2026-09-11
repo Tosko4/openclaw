@@ -18,6 +18,10 @@
     "../../src/agents/sandbox/**/*.test.ts",
     "../../src/agents/sandbox/**/*.test.tsx",
     "../../src/agents/tools/**/*.test.ts",
-    "../../src/agents/tools/**/*.test.tsx"
+    "../../src/agents/tools/**/*.test.tsx",
+    "../../src/agents/auth-profiles/**/*.test.ts",
+    "../../src/agents/auth-profiles/**/*.test.tsx",
+    "../../src/agents/runtime-plan/**/*.test.ts",
+    "../../src/agents/runtime-plan/**/*.test.tsx"
   ]
 }
