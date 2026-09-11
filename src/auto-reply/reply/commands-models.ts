@@ -78,6 +78,7 @@ type ModelsCommandSessionEntry = Partial<
 
 export type ModelsProviderData = {
   byProvider: Map<string, Set<string>>;
+  pendingProviders?: readonly string[];
   providers: string[];
   resolvedDefault: { provider: string; model: string };
   modelNames: Map<string, string>;
@@ -429,6 +430,17 @@ async function projectPreparedModelsProviderData(
   }
   addModelConfigEntries();
 
+  const pendingProviders = decisions.snapshot.pendingProviders?.filter(
+    (provider) =>
+      isModelsBrowseVisibleProvider(provider) &&
+      (options.view === "all" ||
+        visibilityPolicy.allowAny ||
+        [...visibilityPolicy.allowedKeys].some((key) => key.startsWith(`${provider}/`))),
+  );
+  for (const provider of pendingProviders ?? []) {
+    if (!byProvider.has(provider)) byProvider.set(provider, new Set());
+  }
+
   const providers = [...byProvider.keys()].toSorted();
   const loginProviders = new Set(
     providers.filter(
@@ -495,6 +507,7 @@ async function projectPreparedModelsProviderData(
 
   return {
     byProvider,
+    pendingProviders,
     providers,
     resolvedDefault,
     modelNames,
@@ -775,7 +788,13 @@ export async function resolveModelsCommandReply(params: {
           .map((provider) => provider.notice)
           .filter(Boolean)
           .join("\n");
-  const withAvailability = (text: string) => [text, notice].filter(Boolean).join("\n\n");
+  const checking = data.pendingProviders
+    ?.filter(
+      (provider) => parsed.action !== "list" || !parsed.provider || parsed.provider === provider,
+    )
+    .map((provider) => `${provider}: checking models…`)
+    .join("\n");
+  const withAvailability = (text: string) => [text, notice, checking].filter(Boolean).join("\n\n");
   const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
   const providerInfos = buildProviderInfos({ providers, byProvider });
 
@@ -836,6 +855,7 @@ export async function resolveModelsCommandReply(params: {
   const total = models.length;
 
   if (total === 0) {
+    if (checking) return { text: checking };
     const emptyProviderLabel = resolveProviderLabel({
       provider,
       cfg: params.cfg,

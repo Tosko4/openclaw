@@ -37,7 +37,6 @@ type DefaultModelsViewProps = {
   onFastModeChange: (mode: FastMode) => void;
   onFastModeReset: () => void;
   /** Invoked when any default-model picker opens; triggers demand-driven discovery. */
-  onOpen: () => void;
   onCatalogRetry: () => void;
 };
 
@@ -129,9 +128,7 @@ function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
   return value === "auto" ? "auto" : value === "on";
 }
 
-// Progress/retry feedback for the demand-driven catalog discovery that runs when
-// a picker opens. Keeps the first-screen prepared catalog fast while surfacing the
-// slower full discovery as an accessible status without changing saved selections.
+// Discovery progress does not change the saved selection or disable known models.
 function renderCatalogProgress(props: DefaultModelsViewProps): TemplateResult | typeof nothing {
   if (props.catalogDiscovering) {
     return html`
@@ -189,7 +186,6 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           ],
           disabled: modelControlsDisabled || saving,
           title,
-          onOpen: props.onOpen,
           onChange: props.onPrimaryChange,
         }),
       })}
@@ -215,7 +211,6 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           ],
           disabled: modelControlsDisabled || saving,
           title,
-          onOpen: props.onOpen,
           onChange: (value) =>
             props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value),
         }),
@@ -234,7 +229,6 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           ],
           disabled: modelControlsDisabled || saving || !props.selection.primary,
           title,
-          onOpen: props.onOpen,
           onChange: (value) => props.onFallbackChange(value || null),
         }),
       })}

@@ -34,6 +34,7 @@ export type ModelProvidersData = {
   authStatus: ModelAuthStatusResult | null;
   models: ModelCatalogEntry[] | null;
   providerOutcomes: ModelCatalogProviderOutcome[];
+  pendingProviders?: readonly string[];
   catalogError: string | null;
   config: Record<string, unknown> | null;
   providerUsage: ProviderUsageRequestResult | null;
@@ -112,6 +113,7 @@ export async function loadModelProvidersData(
       authStatus.ok && Array.isArray(authStatus.result?.providers) ? authStatus.result : null,
     models: catalog.ok ? catalog.result.models : null,
     providerOutcomes: catalog.ok ? (catalog.result.providerOutcomes ?? []) : [],
+    pendingProviders: catalog.ok ? catalog.result.pendingProviders : undefined,
     catalogError:
       refreshResult && !refreshResult.ok
         ? errorMessage(refreshResult.error)

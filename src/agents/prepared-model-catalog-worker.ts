@@ -50,7 +50,7 @@ export type PreparedModelCatalogWorkerInput = Readonly<{
 }>;
 
 type PreparedModelWorkerCommand =
-  | Readonly<{ kind: "catalog" }>
+  | Readonly<{ kind: "catalog"; providerIds?: readonly string[] }>
   | Readonly<{
       kind: "auth-refresh";
       profileIds?: readonly string[];
@@ -88,7 +88,7 @@ export type PreparedModelWorkerResult =
 
 // Cold source/plugin loading can take well over a minute. Three minutes preserves exact full-view
 // discovery while bounding a wedged provider; expiry rejects and never returns partial results.
-const PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS = 180_000;
+export const PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS = 180_000;
 const PREPARED_MODEL_CATALOG_WORKER_GENERATION_POLL_MS = 25;
 
 class PreparedModelCatalogGenerationMismatchError extends Error {
@@ -201,9 +201,9 @@ export function createPreparedModelCatalogWorkerInput(params: {
 
 type PreparedModelCatalogWorker = Readonly<{
   loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
-  loadCatalog: () => Promise<
-    Pick<PreparedModelRuntimeCatalogFacts, "modelCatalog" | "configuredRuntimeModels">
-  >;
+  loadCatalog: (
+    providerIds?: readonly string[],
+  ) => Promise<Pick<PreparedModelRuntimeCatalogFacts, "modelCatalog" | "configuredRuntimeModels">>;
 }>;
 
 export function createPreparedModelCatalogWorker(
@@ -300,6 +300,10 @@ export function createPreparedModelCatalogWorker(
       }, PREPARED_MODEL_CATALOG_WORKER_GENERATION_POLL_MS);
       generationPoll.unref();
       const { input } = workerInput;
+      const providerScope =
+        command.kind === "catalog" && command.providerIds
+          ? command.providerIds
+          : [...workerInput.providerIds, ...(command.providerIds ?? [])];
       const capture = withPluginRuntimeGenerationScope(
         { metadataSnapshot, pluginRegistry: params.pluginRegistry },
         () =>
@@ -308,17 +312,16 @@ export function createPreparedModelCatalogWorker(
             env: input.env,
             workspaceDir: input.workspaceDir,
             providerRefs:
-              command.kind === "catalog"
+              command.kind === "catalog" && !command.providerIds
                 ? [
                     ...listManifestSyntheticAuthProviderRefs(metadataSnapshot.index),
                     ...workerInput.providerIds,
                   ]
                 : [
-                    ...workerInput.providerIds,
-                    ...command.providerIds,
+                    ...providerScope,
                     ...scopeSyntheticAuthProviderRefs(
                       listManifestSyntheticAuthProviderRefs(metadataSnapshot.index),
-                      [...workerInput.providerIds, ...command.providerIds],
+                      providerScope,
                     ),
                   ],
             signal: controller.signal,
@@ -371,8 +374,8 @@ export function createPreparedModelCatalogWorker(
   };
 
   return {
-    loadCatalog: async () => {
-      const message = await request({ kind: "catalog" });
+    loadCatalog: async (providerIds) => {
+      const message = await request({ kind: "catalog", ...(providerIds ? { providerIds } : {}) });
       if (message.kind !== "catalog") {
         throw new Error("prepared model catalog worker returned an auth refresh result");
       }

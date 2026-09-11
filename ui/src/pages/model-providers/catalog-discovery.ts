@@ -1,10 +1,4 @@
-// Demand-driven catalog discovery for the Models settings page.
-//
-// The initial page load uses the fast prepared catalog
-// so full discovery stays out of first navigation. Opening a default-model picker
-// signals interest; the first open for this core-data snapshot and explicit retries
-// refresh the Gateway-owned catalog. Completed reopens read its current publication.
-// Pending opens share this page's request without disturbing the saved selection.
+// Picker reads consume the Gateway publication; only an explicit retry starts discovery.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -23,8 +17,6 @@ export type CatalogDiscoveryController = {
   readonly discovering: boolean;
   /** A user-facing retry hint when discovery failed; null while clean. */
   readonly error: string | null;
-  /** Fired when a default-model picker opens. */
-  openPicker: () => void;
   /** Retries a failed discovery. */
   retry: () => void;
   /** Resets request history and pending/error state when core data or its owner changes. */
@@ -45,7 +37,6 @@ export function createCatalogDiscoveryController(
 ): CatalogDiscoveryController {
   let pending: AbortController | null = null;
   let error: string | null = null;
-  let requestedDiscovery = false;
 
   const controller: CatalogDiscoveryController = {
     get discovering() {
@@ -54,23 +45,19 @@ export function createCatalogDiscoveryController(
     get error() {
       return error;
     },
-    openPicker() {
-      void discover(!requestedDiscovery);
-    },
     retry() {
-      void discover(true);
+      void discover();
     },
     reset() {
       const retired = pending;
       pending = null;
       error = null;
-      requestedDiscovery = false;
       retired?.abort();
       options.requestUpdate();
     },
   };
 
-  async function discover(refresh: boolean): Promise<void> {
+  async function discover(): Promise<void> {
     const agentId = options.getAgentId();
     if (!agentId || pending) {
       return;
@@ -90,12 +77,11 @@ export function createCatalogDiscoveryController(
       options.getAgentEpoch() === agentEpoch;
     pending = request;
     error = null;
-    requestedDiscovery = true;
     options.requestUpdate();
     try {
       const result = await loadModelCatalog(client, {
         agentId,
-        ...(refresh ? { refresh: true } : {}),
+        refresh: true,
         signal: request.signal,
       });
       if (ownsResult()) {
@@ -106,6 +92,7 @@ export function createCatalogDiscoveryController(
             ...data,
             models: result.models,
             providerOutcomes: result.providerOutcomes ?? [],
+            pendingProviders: result.pendingProviders,
             catalogError: null,
           });
         }

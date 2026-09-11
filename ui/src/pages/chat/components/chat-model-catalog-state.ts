@@ -18,7 +18,8 @@ export function renderChatModelCatalogState(
   }
   const { status } = state;
   const refreshWarning = status === "ready" && state.refreshFailed;
-  if (status === "ready" && hasSelectableOptions && !refreshWarning) {
+  const checking = state.pendingProviders?.join(", ");
+  if (status === "ready" && hasSelectableOptions && !refreshWarning && !checking) {
     return nothing;
   }
   const label =
@@ -28,9 +29,11 @@ export function renderChatModelCatalogState(
         ? hasOptions
           ? t("chat.modelControls.modelsRefreshFailed")
           : errorLabel
-        : status === "ready"
-          ? t("chat.modelControls.noModelsAvailable")
-          : t("chat.modelControls.loadingModels");
+        : checking
+          ? t("chat.modelControls.checkingProviderModels", { providers: checking })
+          : status === "ready"
+            ? t("chat.modelControls.noModelsAvailable")
+            : t("chat.modelControls.loadingModels");
   return html`
     <div
       class="chat-controls__model-catalog-state ${

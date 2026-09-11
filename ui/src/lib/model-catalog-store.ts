@@ -12,11 +12,12 @@ export type ModelCatalogReadScope = Pick<
 export type ChatModelCatalogState = {
   hasSnapshot: boolean;
   refreshFailed?: boolean;
+  pendingProviders?: readonly string[];
   status: "idle" | "loading" | "ready" | "error" | "offline";
 };
 
 export function resolveModelCatalogState(
-  result: Pick<ModelCatalogResult, "models" | "refreshFailed">,
+  result: Pick<ModelCatalogResult, "models" | "refreshFailed" | "pendingProviders">,
   {
     connected = true,
     loading = false,
@@ -30,6 +31,7 @@ export function resolveModelCatalogState(
   return {
     hasSnapshot: result.models.length > 0 || (!loading && !error),
     refreshFailed: result.refreshFailed,
+    pendingProviders: result.pendingProviders,
     status: !connected ? "offline" : error ? "error" : loading ? "loading" : "ready",
   };
 }

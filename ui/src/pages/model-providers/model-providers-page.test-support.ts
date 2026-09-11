@@ -252,6 +252,7 @@ export function createHarness(initialScopeId: string) {
     request,
     runtimeConfig,
     snapshot,
+    publishEvent: gatewaySource.publishEvent,
     publishPhase: (phase: ApplicationGatewaySnapshot["phase"]) => {
       snapshot.phase = phase;
       gatewaySource.publish({ ...snapshot });

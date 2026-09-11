@@ -11,6 +11,7 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { subscribeModelCatalogChanges } from "../../lib/model-catalog-store.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -178,9 +179,13 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     getScope: () => ({ context: this.context, agentId: this.selectedAgentId, data: this.data }),
     canStart: () => this.canMutate(),
     canContinue: () => this.mutationBlockedReason() === null,
-    refresh: () => this.refresh({ force: true }),
+    refresh: () => this.refresh({ force: false }),
   });
   private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => subscribeModelCatalogChanges(gateway, () => void this.refresh({ force: false })),
+    )
     .watch(
       () => this.context?.runtimeConfig,
       (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
@@ -659,8 +664,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       thinkingOverridden: defaults.thinkingOverridden,
       fastMode: defaults.fastMode,
       fastModeOverridden: defaults.fastModeOverridden,
-      catalogDiscovering: this.catalogDiscovery.discovering,
-      catalogDiscoveryError: this.catalogDiscovery.error,
+      catalogDiscovering:
+        this.catalogDiscovery.discovering || Boolean(data.pendingProviders?.length),
+      catalogDiscoveryError: this.catalogDiscovery.error ?? data.catalogError,
       configBusy: this.configBusy(),
       quickAddSupported: data.authStatus?.providerCapabilities !== undefined,
       unconfiguredProviders: buildUnconfiguredProviderOptions(
@@ -724,7 +730,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       onThinkingReset: () => stageDefaults({ thinkingLevel: undefined, thinkingOverridden: false }),
       onFastModeChange: (mode) => stageDefaults({ fastMode: mode, fastModeOverridden: true }),
       onFastModeReset: () => stageDefaults({ fastMode: undefined, fastModeOverridden: false }),
-      onModelPickerOpen: () => this.catalogDiscovery.openPicker(),
       onCatalogRetry: () => this.catalogDiscovery.retry(),
       onOpenModelSetup: () => this.context.navigate("model-setup"),
       ...this.login.providerActions,

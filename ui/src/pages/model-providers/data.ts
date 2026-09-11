@@ -79,6 +79,7 @@ export type ModelProviderCard = {
   modelCount: number;
   availableModelCount: number;
   catalogStatus?: ModelCatalogProviderOutcome["status"];
+  checkingModels?: boolean;
   /** Live provider-reported usage (quota windows, billing, cost history). */
   usage?: ProviderUsageSnapshot;
   /** Locally-computed session spend for the requested window. */
@@ -89,6 +90,7 @@ type ModelProviderCardsInput = {
   authStatus: ModelAuthStatusResult | null;
   models: ModelCatalogEntry[] | null;
   providerOutcomes?: ModelCatalogProviderOutcome[];
+  pendingProviders?: readonly string[];
   configProviderIds?: string[] | null;
   configApiKeyProviderIds?: string[] | null;
   configProviderAuthModes?: Record<string, string> | null;
@@ -401,6 +403,11 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
       return Object.assign(
         {},
         draft.card,
+        {
+          checkingModels: input.pendingProviders?.some(
+            (id) => canonicalProviderId(id) === draft.card.id,
+          ),
+        },
         draft.catalogOutcome ? { catalogStatus: draft.catalogOutcome.status } : {},
         apiKeySupported === undefined ? {} : { apiKeySupported },
       );

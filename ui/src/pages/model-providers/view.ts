@@ -103,7 +103,6 @@ type ModelProvidersViewProps = {
   onThinkingReset: () => void;
   onFastModeChange: (mode: FastMode) => void;
   onFastModeReset: () => void;
-  onModelPickerOpen: () => void;
   onCatalogRetry: () => void;
   onOpenModelSetup: () => void;
   onConnect: (card: ModelProviderCard) => void;
@@ -567,7 +566,6 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
           onThinkingReset: props.onThinkingReset,
           onFastModeChange: props.onFastModeChange,
           onFastModeReset: props.onFastModeReset,
-          onOpen: props.onModelPickerOpen,
           onCatalogRetry: props.onCatalogRetry,
         })}
       </div>
@@ -619,7 +617,6 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
         onThinkingReset: props.onThinkingReset,
         onFastModeChange: props.onFastModeChange,
         onFastModeReset: props.onFastModeReset,
-        onOpen: props.onModelPickerOpen,
         onCatalogRetry: props.onCatalogRetry,
       })}
     </div>

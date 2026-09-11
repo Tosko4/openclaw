@@ -151,6 +151,7 @@ export {
 };
 
 function resolveProviderPluginsForCatalogHooks(params: {
+  providerIds?: readonly string[];
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -167,7 +168,7 @@ function resolveProviderPluginsForCatalogHooks(params: {
     env,
     metadataSnapshot: params.metadataSnapshot,
   });
-  if (onlyPluginIds.length === 0) {
+  if (onlyPluginIds.length === 0 || params.providerIds?.length === 0) {
     return [];
   }
   return resolveProviderPluginsForHooks({
@@ -175,6 +176,7 @@ function resolveProviderPluginsForCatalogHooks(params: {
     workspaceDir,
     env,
     onlyPluginIds,
+    providerRefs: params.providerIds,
     pluginMetadataSnapshot: params.metadataSnapshot,
   });
 }
@@ -1102,6 +1104,7 @@ export function shouldDeferProviderSyntheticProfileAuthWithPlugin(params: {
 }
 
 export async function augmentModelCatalogWithProviderPlugins(params: {
+  providerIds?: readonly string[];
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;

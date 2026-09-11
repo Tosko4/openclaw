@@ -18,6 +18,12 @@ import type { ModelRegistry } from "./sessions/model-registry.js";
 
 export type PreparedModelRuntimeCatalogMode = "live" | "static";
 
+export type PreparedModelCatalogRefreshOptions = {
+  refresh?: boolean;
+  providerIds?: readonly string[];
+  changedOnly?: boolean;
+};
+
 export type PreparedModelRuntimeResourceClaim = { release: () => void };
 
 export type PreparedMediaCapabilityProviderSource = Readonly<{
@@ -81,7 +87,9 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   /** Reads a completed full catalog without starting provider discovery. */
   readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
   /** Builds this generation's full control-plane catalog without replacing turn facts. */
-  loadFullModelCatalog?: (options?: { refresh?: boolean }) => Promise<ModelCatalogSnapshot>;
+  loadFullModelCatalog?: (
+    options?: PreparedModelCatalogRefreshOptions,
+  ) => Promise<ModelCatalogSnapshot>;
   /** Full static models for configured refs, resolved once at the lifecycle boundary. */
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
   /** Inline provider projection prepared once for all resolutions owned by this snapshot. */
@@ -189,6 +197,8 @@ export type PreparedModelCatalogInventory = {
   catalog: ModelCatalogSnapshot;
   key: string;
   pluginFingerprint: string;
+  providerSources: ReadonlyMap<string, string>;
+  providerCredentials: ReadonlyMap<string, string>;
   discoveryOrigins: readonly { provider: string; profileId?: string }[];
 };
 

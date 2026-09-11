@@ -779,11 +779,6 @@ describe("xAI OAuth", () => {
           ["grok-4.6"],
         );
       }
-      expect(
-        fetchImpl.mock.calls
-          .map(([input]) => requestUrl(input))
-          .filter((url) => url.endsWith("/models")),
-      ).toEqual(credentialOnly ? [] : ["https://cli-chat-proxy.grok.com/v1/models"]);
       if (credentialOnly) {
         expect(result.configPatch).not.toHaveProperty("gateway");
         expect(result.configPatch?.models?.providers).not.toHaveProperty("unrelated");

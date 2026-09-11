@@ -38,6 +38,7 @@ import {
 } from "./prepared-model-runtime.plugin-generation.js";
 import type {
   PreparedModelCatalogInventory,
+  PreparedModelCatalogRefreshOptions,
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimeSnapshot,
@@ -53,6 +54,7 @@ export async function prepareFullCatalogFacts(
   pluginGeneration: PreparedModelRuntimePluginGeneration,
   catalogMode: PreparedModelRuntimeCatalogMode,
   catalogSource: PreparedModelRuntimeCatalogSource,
+  options: { includeNative?: boolean; providerIds?: readonly string[] } = {},
 ): Promise<PreparedModelRuntimeCatalogFacts> {
   const { env, input, templateAuthStorage } = agentFacts;
   const { pluginMetadataSnapshot, preparedStaticProviderCatalog } = pluginGeneration;
@@ -74,6 +76,7 @@ export async function prepareFullCatalogFacts(
     ),
   });
   const modelCatalog = await buildPreparedPluginModelCatalog({
+    ...options,
     agentFacts,
     catalogMode,
     modelRegistry: templateModelRegistry,
@@ -295,7 +298,9 @@ export type PreparedModelRuntimeCatalogAccess = Readonly<{
   isCurrent: () => boolean;
   withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
   readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
-  loadFullModelCatalog: (options?: { refresh?: boolean }) => Promise<ModelCatalogSnapshot>;
+  loadFullModelCatalog: (
+    options?: PreparedModelCatalogRefreshOptions,
+  ) => Promise<ModelCatalogSnapshot>;
   loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
 }>;
 export function createPreparedModelRuntimeSnapshot(
