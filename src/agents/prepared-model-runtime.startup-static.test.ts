@@ -3,6 +3,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { setPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
+import type { AuthStorage } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 type CreateStaticCatalogResolver =
@@ -52,7 +53,7 @@ const mocks = vi.hoisted(() => {
     resolvePluginMetadataSnapshot: vi.fn(() => metadataSnapshot),
     resolveAmbientCredentials: vi.fn((..._args: unknown[]) => ({})),
     discoverAuthStorage: vi.fn((_agentDir?: string, _options?: unknown) => authStorage),
-    discoverModels: vi.fn(() => modelRegistry),
+    discoverModels: vi.fn((_authStorage: AuthStorage, _options?: unknown) => modelRegistry),
     ensureOpenClawModelsJson: vi.fn(
       async (_config: unknown, _agentDir: unknown, _options?: unknown) => ({
         agentDir: "/tmp/agent",
@@ -462,7 +463,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
     },
   );
 
-  it("imports and materializes only configured and auth-candidate providers", async () => {
+  it("keeps explicit provider discovery scoped while preparing configured static rows", async () => {
     const config = {
       models: {
         providers: {
@@ -497,7 +498,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
 
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledWith(
       expect.objectContaining({
-        providerDiscoveryProviderIds: ["anthropic", "local-runtime", "openai", "vllm"],
+        providerDiscoveryProviderIds: ["anthropic", "local-runtime"],
         staticCatalogProviderIds: ["anthropic", "local-runtime", "openai"],
       }),
     );
@@ -506,7 +507,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
       "/tmp/prepared-static-agent",
       expect.objectContaining({
         providerDiscoveryEntriesOnly: true,
-        providerDiscoveryProviderIds: ["anthropic", "local-runtime", "openai", "vllm"],
+        providerDiscoveryProviderIds: ["anthropic", "local-runtime"],
       }),
     );
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
@@ -650,8 +651,12 @@ describe("prepared model runtime Gateway catalog mode", () => {
       provider: "openai",
       providerConfig: undefined,
     });
+    const catalogAuthStorage = mocks.discoverModels.mock.lastCall?.[0];
+    expect(catalogAuthStorage?.getAll()).toEqual({
+      openai: { type: "api_key", key: "test-openai-key" },
+    });
     expect(mocks.discoverModels).toHaveBeenLastCalledWith(
-      mocks.authStorage,
+      catalogAuthStorage,
       expect.objectContaining({
         config,
         includePluginCatalogs: true,
