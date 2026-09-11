@@ -727,10 +727,24 @@ test("keeps native model choices through Telegram browsing, refresh, and restart
   const primaryRef = "anthropic/claude-haiku-4-5";
   const boundRef = "anthropic/claude-sonnet-4-6";
   const accountProvider = "catalog-account-fixture";
+  const faultProvider = "catalog-fault-fixture";
+  let rejectCatalog = true;
+  let rejectedCatalogRequests = 0;
   let catalogRequests = 0;
   let providerRequests = 0;
   const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
-    const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    const pathname = url.pathname;
+    if (pathname === "/fault-models") {
+      if (rejectCatalog && url.searchParams.get("agent") === "broken") {
+        rejectedCatalogRequests += 1;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end("{");
+      } else {
+        writeJson(res, 200, [configuredModel("fault-model")]);
+      }
+      return;
+    }
     if (pathname === "/account-models") {
       expect(req.headers.authorization).toBe("Bearer fixture-account-token");
       catalogRequests += 1;
@@ -802,7 +816,7 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
           path.join(accountPlugin, "openclaw.plugin.json"),
           JSON.stringify({
             id: accountProvider,
-            providers: [accountProvider],
+            providers: [accountProvider, faultProvider],
             configSchema: { type: "object", properties: {}, additionalProperties: false },
           }),
         );
@@ -810,6 +824,14 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
           path.join(accountPlugin, "index.js"),
           `module.exports = {
           id: ${JSON.stringify(accountProvider)}, register(api) {
+            api.registerProvider({ id: ${JSON.stringify(faultProvider)}, label: "Fault fixture", auth: [],
+              catalog: { async run(ctx) {
+                const agent = require("node:path").basename(require("node:path").dirname(ctx.agentDir));
+                const response = await fetch(${JSON.stringify(`${apiRoot}/fault-models?agent=`)} + agent);
+                return { provider: { baseUrl: ${JSON.stringify(apiRoot)}, api: "openai-responses",
+                  apiKey: "fixture-fault", models: await response.json() } };
+              } },
+            });
             api.registerProvider({ id: ${JSON.stringify(accountProvider)}, label: "Account fixture", auth: [],
               catalog: { async run(ctx) {
                 const auth = ctx.resolveProviderApiKey(${JSON.stringify(accountProvider)});
@@ -870,10 +892,12 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
                 entries: { ...cfg.plugins?.entries, [accountProvider]: { enabled: true } },
               },
               auth: { profiles: {} },
+              bindings: [{ agentId: "qa", match: { channel: "telegram" } }],
               agents: {
                 ...cfg.agents,
                 defaults: {
                   ...cfg.agents?.defaults,
+                  systemAgent: { agentId: "qa" },
                   model: primaryRef,
                   modelPolicy: { allow: [] },
                   models: {
@@ -884,11 +908,57 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
                 entries: {
                   ...cfg.agents?.entries,
                   qa: { ...cfg.agents?.entries?.qa, model: primaryRef },
+                  broken: { model: primaryRef },
                 },
               },
-              models: { providers: {} },
+              models: {
+                providers: {
+                  [faultProvider]: {
+                    baseUrl: apiRoot,
+                    api: "openai-responses",
+                    apiKey: "fixture-fault",
+                    models: [configuredModel("fault-model")],
+                  },
+                },
+              },
             }),
           });
+
+          expect(rejectedCatalogRequests).toBeGreaterThan(0);
+          const degraded = await gateway.call("models.list", {
+            agentId: "broken",
+            preparedOnly: true,
+          });
+          expect(degraded).toMatchObject({
+            refreshFailed: true,
+            models: expect.arrayContaining([
+              expect.objectContaining({
+                provider: "anthropic",
+                id: "claude-haiku-4-5",
+                available: true,
+              }),
+            ]),
+          });
+          rejectCatalog = false;
+          const recovered = await gateway.call("models.list", { agentId: "broken", refresh: true });
+          expect(recovered).toMatchObject({
+            models: expect.arrayContaining([
+              expect.objectContaining({
+                provider: faultProvider,
+                id: "fault-model",
+                available: true,
+              }),
+            ]),
+          });
+          expect(recovered).not.toHaveProperty("refreshFailed", true);
+          console.info(
+            "STARTUP_CATALOG_FAILURE_PROOF",
+            JSON.stringify({
+              rejectedCatalogRequests,
+              degraded,
+              recovered,
+            }),
+          );
 
           await expect
             .poll(() => gateway.call("models.list", { preparedOnly: true }), {

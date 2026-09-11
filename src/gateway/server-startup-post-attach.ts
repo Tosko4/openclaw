@@ -404,20 +404,43 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
         : {}),
     },
   );
-  const [{ listAgentIds }, { loadPreparedModelCatalogSnapshot }] = await Promise.all([
+  const [
+    { listAgentIds },
+    { loadPreparedModelCatalogSnapshot, getPublishedPreparedModelCatalogOwnerSnapshot },
+    { PreparedModelRuntimeOwnerNotPublishedError },
+    { PreparedModelCatalogConfigReplacedError },
+    { isAbortError },
+  ] = await Promise.all([
     import("../agents/agent-scope.js"),
     import("../agents/prepared-model-catalog.js"),
+    import("../agents/prepared-model-runtime.errors.js"),
+    import("../agents/prepared-model-catalog.errors.js"),
+    import("../infra/abort-signal.js"),
   ]);
   for (const agentId of listAgentIds(config)) {
     if (params.isCurrent?.() === false) {
       return;
     }
-    await loadPreparedModelCatalogSnapshot({
-      config,
-      agentId,
-      readOnly: false,
-      refreshFullCatalog: true,
-    });
+    const owner = getPublishedPreparedModelCatalogOwnerSnapshot({ config, agentId });
+    try {
+      await loadPreparedModelCatalogSnapshot({
+        config,
+        agentId,
+        readOnly: false,
+        refreshFullCatalog: true,
+      });
+    } catch (error) {
+      if (
+        params.isCurrent?.() === false ||
+        !owner?.isCurrent() ||
+        error instanceof PreparedModelRuntimeOwnerNotPublishedError ||
+        error instanceof PreparedModelCatalogConfigReplacedError ||
+        isAbortError(error)
+      ) {
+        throw error;
+      }
+      params.log.warn(`Model catalog acquisition failed for ${agentId}: ${String(error)}`);
+    }
   }
 }
 

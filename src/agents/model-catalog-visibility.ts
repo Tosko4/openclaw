@@ -6,10 +6,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
-import type {
-  ModelAuthAvailabilityEvaluation,
-  ModelAuthAvailabilityRef,
-} from "./model-auth-availability.js";
+import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import { compareModelCatalogEntries } from "./model-catalog-order.js";
 import {
   type ModelCatalogRoutePolicy,
@@ -27,10 +24,6 @@ import {
 import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 
 type ModelCatalogVisibilityView = "default" | "configured" | "all";
-export type ModelCatalogAuthChecker = (
-  provider: string,
-  ref?: ModelAuthAvailabilityRef,
-) => boolean | Promise<boolean>;
 
 type LogicalModelCatalogEntryState = {
   authBacked: boolean;

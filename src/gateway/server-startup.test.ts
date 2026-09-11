@@ -2,13 +2,18 @@
  * Gateway startup orchestration tests.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { PreparedModelCatalogConfigReplacedError } from "../agents/prepared-model-catalog.errors.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createAbortError } from "../infra/abort-signal.js";
 
+const catalogOwnerIsCurrent = vi.fn(() => true);
 const loadPreparedModelCatalogSnapshotMock = vi.fn(async (_params: unknown) => ({
   entries: [],
   routeVariants: [],
 }));
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  getPublishedPreparedModelCatalogOwnerSnapshot: () => ({ isCurrent: catalogOwnerIsCurrent }),
   loadPreparedModelCatalogSnapshot: (params: unknown) =>
     loadPreparedModelCatalogSnapshotMock(params),
 }));
@@ -66,6 +71,7 @@ describe("gateway startup primary model warmup", () => {
   });
 
   beforeEach(() => {
+    catalogOwnerIsCurrent.mockReturnValue(true);
     loadPreparedModelCatalogSnapshotMock.mockClear();
     prepareModelRuntimeSnapshotMock.mockClear();
     refreshPreparedModelRuntimeSnapshotsMock.mockClear();
@@ -103,6 +109,21 @@ describe("gateway startup primary model warmup", () => {
       readOnly: false,
       refreshFullCatalog: true,
     });
+  });
+
+  it.each([
+    ["abort", createAbortError("cancelled")],
+    ["superseded", new PreparedModelRuntimePublicationSupersededError("superseded")],
+    ["config replaced", new PreparedModelCatalogConfigReplacedError("/tmp/agent")],
+    ["retired owner", new Error("lifetime closed")],
+  ])("propagates catalog lifecycle failure: %s", async (kind, error) => {
+    if (kind === "retired owner") {
+      catalogOwnerIsCurrent.mockReturnValue(false);
+    }
+    loadPreparedModelCatalogSnapshotMock.mockRejectedValueOnce(error);
+    const warn = vi.fn();
+    await expect(prewarmConfiguredPrimaryModel({ cfg: {}, log: { warn } })).rejects.toBe(error);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("hydrates configured external CLI auth before prepared owner publication", async () => {

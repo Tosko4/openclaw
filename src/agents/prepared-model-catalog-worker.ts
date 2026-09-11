@@ -91,7 +91,7 @@ export type PreparedModelWorkerResult =
 const PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS = 180_000;
 const PREPARED_MODEL_CATALOG_WORKER_GENERATION_POLL_MS = 25;
 
-class PreparedModelCatalogGenerationMismatchError extends Error {
+class PreparedModelCatalogGenerationMismatchError extends PreparedModelRuntimePublicationSupersededError {
   constructor(
     readonly agentDir: string,
     readonly generationFingerprint: string,
