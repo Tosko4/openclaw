@@ -48,6 +48,9 @@ function createWorkboardRenderProps(
 
 function renderInto(container: HTMLElement, props: WorkboardRenderProps) {
   workboardTestHost().connection.connected = props.connected;
+  if (!container.isConnected) {
+    document.body.append(container);
+  }
   render(renderWorkboard(props), container);
 }
 
@@ -67,7 +70,8 @@ function createWorkboardView(
 function buttonByLabel(container: Element, label: string): HTMLButtonElement | null {
   return (
     Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.getAttribute("aria-label") === label,
+      (button) =>
+        button.getAttribute("aria-label") === label || button.textContent?.trim() === label,
     ) ?? null
   );
 }
@@ -371,7 +375,7 @@ describe("renderWorkboard", () => {
     state.loading = false;
     renderView();
 
-    expect(buttonByText(container, "Refresh")?.disabled).toBe(true);
+    expect(buttonByLabel(container, "Refresh")?.disabled).toBe(true);
 
     state.draftSaving = false;
     state.dispatching = true;
@@ -381,7 +385,7 @@ describe("renderWorkboard", () => {
 
     renderView();
 
-    expect(buttonByText(container, "Refresh")?.disabled).toBe(true);
+    expect(buttonByLabel(container, "Refresh")?.disabled).toBe(true);
   });
 
   it("disables card-write controls while dispatch is running", () => {
@@ -1821,10 +1825,9 @@ describe("renderWorkboard", () => {
       expect(container.querySelector(".workboard-board")?.textContent).not.toContain(
         "Other agent work",
       );
-      changeWorkboardSelect(
-        container.querySelector('select[aria-label="Workboard view"]'),
-        "default_agent",
-      );
+      statusButton(container, "Todo").click();
+      renderView();
+      statusButton(container, "All").click();
       renderView();
       expect(container.querySelector(".workboard-board")?.textContent).toContain(created.title);
       expect(container.querySelector(".workboard-board")?.textContent).toContain(
@@ -1979,12 +1982,15 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("stale");
     expect(container.textContent).not.toContain("Archived task");
 
-    container
-      .querySelector<HTMLButtonElement>(".workboard-archive-toggle")
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const archivedToggle = expectDefined(
+      container.querySelector<HTMLInputElement>('.workboard-filter-archived input[role="switch"]'),
+      "show archived switch",
+    );
+    archivedToggle.checked = true;
+    archivedToggle.dispatchEvent(new Event("change", { bubbles: true }));
     renderView();
     expect(container.textContent).toContain("Archived task");
-    expect(container.querySelector<HTMLButtonElement>(".workboard-archive-toggle")).not.toBeNull();
+    expect(archivedToggle.checked).toBe(true);
 
     container
       .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
