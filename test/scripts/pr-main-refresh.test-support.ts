@@ -397,6 +397,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
     } else if (args.some(arg => arg.includes('viewerMergeBodyText'))) {
       value = { data: { repository: { pullRequest: {
         headRefOid: control.metadata.headRefOid,
+        author: { ...control.metadata.author, __typename: 'User' },
         isMergeQueueEnabled: control.metadata.isMergeQueueEnabled,
         viewerMergeBodyText: 'Reviewed fixture body',
       } } } };
@@ -409,6 +410,15 @@ if (args[0] === 'pr' && args[1] === 'view') {
     } else {
       throw new Error('Unexpected GraphQL request');
     }
+  } else if (new RegExp('^repos/fixture/repo/commits/[0-9a-f]{40}$').test(endpoint)) {
+    const oid = endpoint.split('/').at(-1);
+    value = {
+      commit: { author: {
+        name: runGit(['-C', origin, 'show', '-s', '--format=%an', oid]),
+        email: runGit(['-C', origin, 'show', '-s', '--format=%ae', oid]),
+      } },
+      author: { login: control.metadata.author.login, type: 'User' },
+    };
   } else if (endpoint === 'users/fixture') {
     value = { id: 123 };
   } else if (endpoint === 'repos/fixture/repo/collaborators/fixture/permission') {
