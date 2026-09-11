@@ -1,4 +1,5 @@
 // Resolves public model catalogs without exposing runtime-only provider params.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type {
   ModelChoice,
   ModelsListParams,
