@@ -55,6 +55,7 @@ type CompactRuntimeState = {
 };
 
 type DiscordModelPickerRenderShellParams = {
+  data: ModelsProviderData;
   title: string;
   refreshWarning?: string;
   detailLines: string[];
@@ -271,6 +272,10 @@ function buildRenderedShell(
   }
   if (params.detailLines.length > 0) {
     containerComponents.push(new TextDisplay(params.detailLines.join("\n")));
+  }
+  const notice = params.data.allowList?.message;
+  if (notice) {
+    containerComponents.push(new TextDisplay(notice));
   }
   containerComponents.push(new Separator({ divider: true, spacing: "small" }));
   if (params.preRowText) {
@@ -696,6 +701,7 @@ export function renderDiscordModelPickerProvidersView(
       ? `Showing page ${page.page}/${page.totalPages} · ${page.totalItems} providers total`
       : `All ${page.totalItems} providers shown`;
   return buildRenderedShell({
+    data: params.data,
     title: "Model Picker",
     refreshWarning: params.data.refreshWarning,
     detailLines,
@@ -732,6 +738,7 @@ export function renderDiscordModelPickerModelsView(
     ];
 
     return buildRenderedShell({
+      data: params.data,
       title: "Model Picker",
       refreshWarning: params.data.refreshWarning,
       detailLines: [
@@ -814,6 +821,7 @@ export function renderDiscordModelPickerModelsView(
   }
 
   return buildRenderedShell({
+    data: params.data,
     title: "Model Picker",
     refreshWarning: params.data.refreshWarning,
     detailLines,
@@ -907,6 +915,7 @@ export function renderDiscordModelPickerRecentsView(
   ]);
 
   return buildRenderedShell({
+    data: params.data,
     title: "Recents",
     refreshWarning: params.data.refreshWarning,
     detailLines: [

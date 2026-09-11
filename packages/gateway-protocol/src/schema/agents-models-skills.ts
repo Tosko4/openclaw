@@ -372,6 +372,15 @@ export const ModelCatalogProviderOutcomeSchema = closedObject({
   ]),
 });
 
+export const ModelAllowListSchema = closedObject({
+  hiddenCount: Type.Integer({ minimum: 0 }),
+  settingsPath: NonEmptyString,
+  message: Type.String(),
+  selectedModelBlocked: Type.Optional(Type.Boolean()),
+});
+
+export type ModelAllowList = Static<typeof ModelAllowListSchema>;
+
 export const ModelsListResultSchema = closedObject({
   models: Type.Array(ModelChoiceSchema),
   defaultModels: Type.Optional(
@@ -380,6 +389,7 @@ export const ModelsListResultSchema = closedObject({
       automaticUtilityModel: Type.Union([NonEmptyString, Type.Null()]),
     }),
   ),
+  allowList: Type.Optional(ModelAllowListSchema),
   refreshFailed: Type.Optional(Type.Boolean()),
   pendingProviders: Type.Optional(Type.Array(NonEmptyString)),
   accountSelection: Type.Optional(ChatAccountSelectionSchema),

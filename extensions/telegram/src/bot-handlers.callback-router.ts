@@ -533,6 +533,8 @@ async function handleTelegramModelCallback(params: {
     return { sessionState: session, modelData: providerData };
   });
   const { byProvider, providers, resolvedDefault: activeResolvedDefault } = modelData;
+  const notice = modelData.allowList?.message;
+  const withNotice = (text: string) => (notice ? `${text}\n\n${notice}` : text);
   const providerInfos: ProviderInfo[] = providers.map((provider) => ({
     id: provider,
     count: byProvider.get(provider)?.size ?? 0,
@@ -540,7 +542,9 @@ async function handleTelegramModelCallback(params: {
 
   if (modelCallback.type === "providers" || modelCallback.type === "back") {
     if (providers.length === 0) {
-      await retryModelAction(() => editMessageWithButtons("No providers available.", []));
+      await retryModelAction(() =>
+        editMessageWithButtons(withNotice("No providers available."), []),
+      );
       return true;
     }
     const notice = [...(modelData.modelMenu?.byProvider.values() ?? [])]
@@ -549,7 +553,7 @@ async function handleTelegramModelCallback(params: {
       .join("\n");
     await retryModelAction(() =>
       editMessageWithButtons(
-        [modelData.refreshWarning, "Select a provider:", notice].filter(Boolean).join("\n\n"),
+        withNotice([modelData.refreshWarning, "Select a provider:", notice].filter(Boolean).join("\n\n")),
         buildTelegramModelsMenuButtons({ providers: providerInfos }),
       ),
     );
@@ -602,7 +606,7 @@ async function handleTelegramModelCallback(params: {
     })}\nSelecting a model also applies its configured runtime.`;
     await retryModelAction(() =>
       editMessageWithButtons(
-        [modelData.refreshWarning, text].filter(Boolean).join("\n\n"),
+        withNotice([modelData.refreshWarning, text].filter(Boolean).join("\n\n")),
         buttons,
       ),
     );
