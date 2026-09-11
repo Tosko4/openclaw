@@ -673,6 +673,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   const finalized = await finalizeDoctorConfigFlow({
     ...state,
+    snapshot,
     shouldRepair,
     confirm: params.confirm,
     note,
@@ -716,7 +717,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const planBound = preflight.postSessionPluginMigrationPlanBound;
 
   return {
-    cfg,
+    ...finalized,
     ...(pluginInstallConfigImport ? { pluginInstallConfigImport } : {}),
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig,
