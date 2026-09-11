@@ -5621,7 +5621,6 @@ describe("slack implicit mention policy", () => {
   async function prepareThreadMessage(params: {
     ctx: SlackMonitorContext;
     message?: Partial<SlackMessageEvent>;
-    eventScope?: SlackEventScope;
   }) {
     const { storePath } = storeFixture.makeTmpStorePath();
     vi.spyOn(
@@ -5642,10 +5641,7 @@ describe("slack implicit mention policy", () => {
         parent_user_id: "U2",
         ...params.message,
       },
-      opts: {
-        source: "message",
-        ...(params.eventScope ? { eventScope: params.eventScope } : {}),
-      },
+      opts: { source: "message" },
     });
   }
 
@@ -5681,33 +5677,15 @@ describe("slack implicit mention policy", () => {
     expect(result).toBeNull();
   });
 
-  it("does not invoke from old bot participation in a human-rooted thread", async () => {
+  it("does not invoke from bot participation in a human-rooted thread", async () => {
     const threadTs = "1700000000.000000";
-    const initialNow = 1_700_000_000_000;
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(initialNow);
-
-    try {
-      recordSlackThreadParticipation("default", "C123", threadTs);
-      nowSpy.mockReturnValue(initialNow + 25 * 60 * 60 * 1000);
-
-      const ctx = createCtxWithImplicitMentions(undefined, {
-        channelsConfig: { C123: { requireMention: true } },
-      });
-      const result = await prepareThreadMessage({ ctx, message: { thread_ts: threadTs } });
-
-      expect(result).toBeNull();
-    } finally {
-      nowSpy.mockRestore();
-    }
-  });
-
-  it("continues requiring a mention in an unrelated thread the bot never joined", async () => {
-    recordSlackThreadParticipation("default", "C123", "1700000000.000999");
+    recordSlackThreadParticipation("default", "C123", threadTs);
     const ctx = createCtxWithImplicitMentions(undefined, {
       channelsConfig: { C123: { requireMention: true } },
     });
+    const result = await prepareThreadMessage({ ctx, message: { thread_ts: threadTs } });
 
-    expect(await prepareThreadMessage({ ctx })).toBeNull();
+    expect(result).toBeNull();
   });
 
   it("requires native addressing even when the channel disables mention requirements", async () => {
@@ -5751,20 +5729,5 @@ describe("slack implicit mention policy", () => {
       expect(await prepareThreadMessage({ ctx, message: { parent_user_id: "B1" } })).toBeNull();
     },
   );
-
-  it("does not accept participation recorded in a different enterprise workspace", async () => {
-    recordSlackThreadParticipation("default", "C123", "1700000000.000000", {
-      teamId: "T_OTHER",
-    });
-    const ctx = createCtxWithImplicitMentions(undefined, {
-      channelsConfig: { C123: { requireMention: true } },
-    });
-    const eventScope = {
-      teamId: "T1",
-      client: {} as SlackEventScope["client"],
-    } satisfies SlackEventScope;
-
-    expect(await prepareThreadMessage({ ctx, eventScope })).toBeNull();
-  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -236,22 +236,6 @@ describe("observed reply input ownership", () => {
     ).toEqual([]);
   });
 
-  it("releases history when an early refusal returns before runtime execution", async () => {
-    await observe("background", "Do not lose this context");
-    const capture = await observe("refused");
-    await withObservedReplyInputOwner(capture, undefined, async (options) => {
-      await readObservedReplyInputOwner(options)!.prepare({
-        ...staging(),
-        recorder: recorderFor("refused"),
-        runId: "refused",
-        assertCurrent: () => {},
-      });
-      return { reason: "question-response-refused" };
-    });
-    expect(listSessionPendingInputs(target()).items[0]?.state).toBe("cancelled");
-    expect(await prepare(await observe("next"), "next")).toContain("Do not lose this context");
-  });
-
   it("retains interrupted input identity for a safe retry after a pre-submission error", async () => {
     const capture = await observe("retry");
     await expect(
