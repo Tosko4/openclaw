@@ -465,6 +465,7 @@ async function updateCommandInternal(
     channel,
     devTarget,
     packageTargetSchemaVersions,
+    packageAlreadyCurrent,
     packageTargetVersion: targetVersion ?? undefined,
     packageInstallSpec,
     opts,

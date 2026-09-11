@@ -283,7 +283,7 @@ export async function resolveUpdateCommandTarget(
       !fallbackToLatest &&
       currentVersion != null &&
       (targetVersion == null ? tag !== "latest" : cmp != null && cmp > 0);
-    if (targetVersion) {
+    if (targetVersion && !packageAlreadyCurrent) {
       const targetMetadata = await fetchNpmPackageTargetStatus({
         target: targetVersion,
         spec: resolveGlobalInstallSpec({

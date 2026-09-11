@@ -1,10 +1,15 @@
+import path from "node:path";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
+import { tryReadJson } from "../../infra/json-files.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
-import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import {
+  parsePackageOpenClawSchemaVersions,
+  type OpenClawSchemaVersions,
+} from "../../state/openclaw-schema-versions.js";
 import {
   checkTargetDatabaseSchemasForContexts,
   formatSchemaRefusalLines,
@@ -74,6 +79,7 @@ export async function preflightUpdateCommandSchemas(params: {
   channel: UpdateChannel;
   devTarget?: DevUpdateTarget;
   packageTargetSchemaVersions?: OpenClawSchemaVersions;
+  packageAlreadyCurrent: boolean;
   packageTargetVersion?: string;
   packageInstallSpec?: string | null;
   opts: Pick<UpdateCommandOptions, "dryRun" | "json" | "run">;
@@ -127,7 +133,17 @@ export async function preflightUpdateCommandSchemas(params: {
               channel,
               devTarget,
             })
-          : { schemaVersions: packageTargetSchemaVersions };
+          : {
+              // A current core keeps running its installed package; registry metadata
+              // for an uninstalled build cannot describe its schema capability.
+              schemaVersions: params.packageAlreadyCurrent
+                ? parsePackageOpenClawSchemaVersions(
+                    await tryReadJson<unknown>(path.join(root, "package.json"), {
+                      maxBytes: 1024 * 1024,
+                    }),
+                  )
+                : packageTargetSchemaVersions,
+            };
       if ("metadataUnreadable" in target && target.metadataUnreadable) {
         throw new UpdatePreMutationError(
           "target-metadata-preflight",
