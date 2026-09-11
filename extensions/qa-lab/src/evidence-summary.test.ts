@@ -81,9 +81,9 @@ const providerIdentityCases: {
 ];
 
 describe("evidence summary", () => {
-  it.each(providerIdentityCases)(
-    "provider identity fallback: $name",
-    ({ primaryModel, providerMode, providerId, expectedId, expectedName }) => {
+  for (const testCase of providerIdentityCases) {
+    it(`provider identity fallback: ${testCase.name}`, () => {
+      const { primaryModel, providerMode, providerId, expectedId, expectedName } = testCase;
       const evidence = buildScriptEvidenceSummary({
         artifactPaths: [],
         generatedAt: "2026-09-10T00:00:00.000Z",
@@ -109,8 +109,8 @@ describe("evidence summary", () => {
         status: "blocked",
         failure: { reason: "missing candidate" },
       });
-    },
-  );
+    });
+  }
 
   it("provider identity fallback: slim evidence still omits execution", () => {
     const evidence = buildScriptEvidenceSummary({

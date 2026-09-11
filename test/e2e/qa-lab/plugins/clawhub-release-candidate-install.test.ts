@@ -223,16 +223,10 @@ afterEach(async () => {
 });
 
 describe("ClawHub release candidate install producer", () => {
-  it.each(modelCases)(
-    "writes blocked evidence with $name",
-    async ({
-      platform,
-      model,
-      windowsModel,
-      expectedModel,
-      expectedModelName,
-      expectedProvider,
-    }) => {
+  for (const testCase of modelCases) {
+    it(`writes blocked evidence with ${testCase.name}`, async () => {
+      const { platform, model, windowsModel, expectedModel, expectedModelName, expectedProvider } =
+        testCase;
       const artifactBase = await fs.mkdtemp(
         path.join(os.tmpdir(), "openclaw-clawhub-release-evidence-"),
       );
@@ -281,6 +275,6 @@ describe("ClawHub release candidate install producer", () => {
         },
       });
       expect(evidence.entries[0]?.execution?.provider).not.toHaveProperty("fixture");
-    },
-  );
+    });
+  }
 });
