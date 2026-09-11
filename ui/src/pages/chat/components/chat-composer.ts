@@ -667,10 +667,9 @@ export function renderChatComposer(props: ChatComposerProps) {
     onPrimaryActionPointerDown: (event) =>
       preserveComposerFocusOnPrimaryAction(event, state.composerTextarea),
   };
-  const cameraFacingMode = props.realtimeTalkVideoStream
-    ?.getVideoTracks?.()[0]
-    ?.getSettings?.().facingMode;
-  const mirrorCameraPreview = cameraFacingMode !== "environment";
+  const mirrorCameraPreview =
+    props.realtimeTalkVideoStream?.getVideoTracks?.()[0]?.getSettings?.().facingMode !==
+    "environment";
   if (props.modelSwitching && state.slashMenuCommand?.key === "think") {
     resetSlashMenuState(state);
   }
@@ -690,7 +689,6 @@ export function renderChatComposer(props: ChatComposerProps) {
     activeMenuOptionLabel: activeSlashMenuOptionLabel,
     menuListboxId: slashMenuListboxId,
   } = resolveComposerMenus(props.paneId, commandsVisible, state, state, state.mentionMenu);
-  const slashMenuAnnouncementId = paneDomId(props.paneId, "slash-active-announcement");
 
   return renderChatComposerView({
     props,
@@ -729,7 +727,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     activeSlashMenuOptionId,
     activeSlashMenuOptionLabel,
     slashMenuListboxId,
-    slashMenuAnnouncementId,
+    slashMenuAnnouncementId: paneDomId(props.paneId, "slash-active-announcement"),
     goalComposer,
   });
 }
