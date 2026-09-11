@@ -550,12 +550,17 @@ internal class WearViewModel(
     }
   }
 
-  fun sendReply(text: String) {
-    val session = mutableState.value.selectedSession ?: return
+  fun sendReply(
+    text: String,
+    onAccepted: (String) -> Unit = {},
+  ): Boolean {
+    val current = mutableState.value
+    val session = current.selectedSession ?: return false
     val routeGeneration = phoneRouteGeneration
     val normalized = text.trim()
-    if (normalized.isEmpty() || mutableState.value.sending) return
+    if (normalized.isEmpty() || current.sending || current.activeRunId != null || current.streamText != null) return false
     val attempt = sendAttemptTracker.begin(session.key, normalized, session.phoneNodeId)
+    onAccepted(attempt.idempotencyKey)
     viewModelScope.launch {
       if (!isCurrentSessionAction(session, routeGeneration)) return@launch
       mutableState.update {
@@ -586,6 +591,7 @@ internal class WearViewModel(
         }
       }
     }
+    return true
   }
 
   fun abort() {

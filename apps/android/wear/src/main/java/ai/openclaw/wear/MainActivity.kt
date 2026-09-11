@@ -198,6 +198,7 @@ internal fun OpenClawWearApp(
   }
   var expectedAssistantKey by remember { mutableStateOf<String?>(null) }
   var awaitingReplySessionId by remember { mutableStateOf<String?>(null) }
+  var awaitingReplyRunId by remember { mutableStateOf<String?>(null) }
   var awaitingReply by remember { mutableStateOf(false) }
   var previousRealtimeSnapshot by remember { mutableStateOf(snapshot) }
   var realtimeThinkingTurnId by remember { mutableStateOf<String?>(null) }
@@ -226,12 +227,16 @@ internal fun OpenClawWearApp(
       view.performHapticFeedback(HapticFeedbackConstants.REJECT)
       return
     }
+    if (!viewModel.sendReply(message) { awaitingReplyRunId = it }) {
+      interaction = WearInteractionState.READY
+      view.performHapticFeedback(HapticFeedbackConstants.REJECT)
+      return
+    }
     expectedAssistantKey = snapshot.latestAssistantMessage()?.stableKey()
     awaitingReplySessionId = sessionId
     awaitingReply = true
     interaction = WearInteractionState.SENDING
     speaker.stop()
-    viewModel.sendReply(message)
   }
 
   val speechLauncher =
@@ -304,6 +309,7 @@ internal fun OpenClawWearApp(
   fun leaveConversationContext() {
     awaitingReply = false
     awaitingReplySessionId = null
+    awaitingReplyRunId = null
     expectedAssistantKey = null
     interaction = WearInteractionState.READY
     speaker.stop()
@@ -360,6 +366,7 @@ internal fun OpenClawWearApp(
     snapshot = snapshot,
     awaitingReply = awaitingReply,
     awaitingReplySessionId = awaitingReplySessionId,
+    awaitingReplyRunId = awaitingReplyRunId,
     expectedAssistantKey = expectedAssistantKey,
   ) { reply ->
     awaitingReply = false
@@ -556,6 +563,7 @@ internal fun WearReplyCompletionEffect(
   awaitingReply: Boolean,
   awaitingReplySessionId: String?,
   expectedAssistantKey: String?,
+  awaitingReplyRunId: String? = null,
   onCompleted: (WearChatMessage?) -> Unit,
 ) {
   val complete by rememberUpdatedState(onCompleted)
@@ -563,6 +571,7 @@ internal fun WearReplyCompletionEffect(
     snapshot?.activeSessionId,
     state.messages,
     state.activeRunId,
+    state.streamText,
     state.sending,
     state.failure,
     state.pendingReply,
@@ -570,6 +579,7 @@ internal fun WearReplyCompletionEffect(
     awaitingReply,
     awaitingReplySessionId,
     expectedAssistantKey,
+    awaitingReplyRunId,
   ) {
     if (!awaitingReply) return@LaunchedEffect
     if (
@@ -585,13 +595,18 @@ internal fun WearReplyCompletionEffect(
     // history must reconcile the transcript before choosing text to confirm or speak.
     if (state.replyTerminal != null && state.replyTerminal.history == null) return@LaunchedEffect
     val terminal = state.replyTerminal
+    if (awaitingReplyRunId != null && terminal?.runId != null && terminal.runId != awaitingReplyRunId) {
+      complete(null)
+      return@LaunchedEffect
+    }
+    val confirmationRunId = awaitingReplyRunId ?: terminal?.runId
     val ownedMessage =
-      if (terminal == null) {
+      if (terminal == null && confirmationRunId == null) {
         snapshot.latestAssistantMessage()
       } else {
-        terminal.runId?.let { runId ->
+        confirmationRunId?.let { runId ->
           snapshot.messages.lastOrNull { it.replyOutcomeForRun(runId) != null }
-        } ?: terminal.message?.takeIf { it.role == "assistant" }
+        } ?: terminal?.message?.takeIf { it.role == "assistant" }
       }
     val reply =
       newAssistantReplyForSession(
