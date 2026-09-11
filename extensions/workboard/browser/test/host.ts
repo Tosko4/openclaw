@@ -105,6 +105,9 @@ export function createWorkboardTestHost() {
       mountAppearanceGlyph: () => {
         throw new Error("This test did not install DOM components");
       },
+      mountSessionSummary: () => {
+        throw new Error("This test did not install DOM components");
+      },
       mountDashboard: () => {
         throw new Error("This test did not install DOM components");
       },
