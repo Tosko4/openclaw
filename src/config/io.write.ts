@@ -471,6 +471,7 @@ export async function writeConfigFileFromContext(
   let rollbackStatus: ConfigWriteRollbackStatus = "not-restored";
   try {
     const beforeCommit = options.beforeCommit;
+    const withCommit = options.withCommit;
     const guardedFs = createGuardedConfigFileSystem(
       configPath,
       deps.fs,
@@ -484,16 +485,25 @@ export async function writeConfigFileFromContext(
       tempPrefix: path.basename(configPath),
       // fs-safe's copy fallback has no final authority hook. Guarded operations
       // must publish by rename so a failed attempt cannot continue under stale authority.
-      copyFallbackOnPermissionError: !beforeCommit,
-      fileSystem: beforeCommit
+      copyFallbackOnPermissionError: !beforeCommit && !withCommit,
+      fileSystem: beforeCommit || withCommit
         ? {
             promises: {
               ...guardedFs.promises,
               rename: async (source, destination) => {
-                await beforeCommit();
+                await beforeCommit?.();
                 options.assertConfigPathForWrite?.();
                 if (options.baseSnapshot) {
                   assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
+                }
+                if (withCommit) {
+                  return withCommit(() => {
+                    options.assertConfigPathForWrite?.();
+                    if (options.baseSnapshot) {
+                      assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
+                    }
+                    guardedFs.renameSync(source, destination);
+                  });
                 }
                 return guardedFs.promises.rename(source, destination);
               },

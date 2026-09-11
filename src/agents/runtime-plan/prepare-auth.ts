@@ -262,6 +262,8 @@ export function prepareAgentRuntimeAuth(
   const providerUseBinding =
     providerUseAdmission.get(normalizeProviderId(input.provider)) ??
     (harnessOwnsOpenAIAuth ? providerUseAdmission.get("openai") : undefined);
+  const boundEnvVar =
+    providerUseBinding?.kind === "environment" ? providerUseBinding.envVar : undefined;
   if (userPinnedProfileId) {
     const eligibility = store
       ? resolveAuthProfileEligibility({
@@ -567,6 +569,7 @@ export function prepareAgentRuntimeAuth(
       return buildAgentRuntimeAuthPlan({
         provider: params.provider,
         modelId: params.modelId,
+        boundEnvVar,
         authProfileProvider: profile?.provider,
         authProfileMode:
           profile?.mode ??
@@ -645,6 +648,7 @@ export function prepareAgentRuntimeAuth(
     const plan = buildAgentRuntimeAuthPlan({
       provider: params.provider,
       modelId: params.modelId,
+      boundEnvVar,
       config: params.config,
       env: params.env,
       workspaceDir: params.workspaceDir,
@@ -674,6 +678,7 @@ export function prepareAgentRuntimeAuth(
     return buildAgentRuntimeAuthPlan({
       provider: params.provider,
       modelId: params.modelId,
+      boundEnvVar,
       authProfileProvider: profile?.provider,
       authProfileMode:
         profile?.mode ??
