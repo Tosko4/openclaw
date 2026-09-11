@@ -316,7 +316,6 @@ function createDefaultState(): WorkboardUiState {
     donePeriod: "all",
     agentFilter: "all",
     boardFilter: "__all__",
-    viewPreset: "all",
     activeHealthHighlight: null,
     showArchived: false,
     layout: "compact",

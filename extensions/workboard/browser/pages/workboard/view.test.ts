@@ -95,15 +95,6 @@ function changeWorkboardSelect(select: Element | null | undefined, value: string
   Reflect.deleteProperty(control, "value");
 }
 
-function selectWorkboardAgent(select: Element | null | undefined, value: string) {
-  const control = select as
-    | (HTMLElement & { onSelect: (value: string) => void })
-    | null
-    | undefined;
-  expect(control).not.toBeNull();
-  control?.onSelect(value);
-}
-
 function filterPicker(container: Element, label: string) {
   return expectDefined(
     [
