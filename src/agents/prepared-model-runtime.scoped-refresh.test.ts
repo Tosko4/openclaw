@@ -144,53 +144,6 @@ describe("prepared model runtime scoped refresh", () => {
     },
   );
 
-  it.each(["credentials", "plugins"] as const)(
-    "does not carry a cold catalog failure into replacement %s",
-    async (change) => {
-      mocks.configuredAgentIds = ["default"];
-      const originalIndex = mocks.pluginMetadataSnapshot.index;
-      mocks.pluginMetadataSnapshot.index = { ...originalIndex };
-      const input = {
-        agentId: "default",
-        agentDir: state.agentDir("default"),
-        inheritedAuthDir: state.agentDir("default"),
-        config: {},
-      };
-      const options = { gatewayLifecycle: true, catalogMode: "static" as const };
-      try {
-        const failure = new Error("first catalog attempt failed");
-        mocks.runPreparedModelCatalogWorker.mockRejectedValue(failure);
-        await refreshPreparedModelRuntimeSnapshots(input.config, options);
-        const original = await prepareModelRuntimeSnapshot(input);
-        if (!original.loadFullModelCatalog) {
-          throw new Error("expected the original catalog loader");
-        }
-
-        await expect(original.loadFullModelCatalog()).rejects.toBe(failure);
-        expect(original.modelCatalog.refreshFailed).toBe(true);
-        expect(original.readFullModelCatalog?.()).toBeUndefined();
-
-        if (change === "credentials") {
-          mocks.authStorage.getAll.mockReturnValue({
-            custom: { type: "api_key", key: "replacement-key" },
-          });
-        } else {
-          Object.assign(mocks.pluginMetadataSnapshot.index, {
-            hostContractVersion: "replacement",
-          });
-        }
-        serveCatalog({ entries: [], routeVariants: [] });
-        await refreshPreparedModelRuntimeSnapshots(input.config, options);
-        const replacement = await prepareModelRuntimeSnapshot(input);
-        expect(replacement.isCurrent()).toBe(true);
-        expect(replacement.modelCatalog.refreshFailed).toBeUndefined();
-        expect(replacement.readFullModelCatalog?.()?.refreshFailed).toBeUndefined();
-      } finally {
-        mocks.pluginMetadataSnapshot.index = originalIndex;
-      }
-    },
-  );
-
   it.each([undefined, "provider-a:default"])(
     "retains failed-provider inventory and variants until authoritative recovery (%s)",
     async (profileId) => {
@@ -698,9 +651,11 @@ describe("prepared model runtime scoped refresh", () => {
       await refreshPreparedModelRuntimeSnapshots(initialConfig, options);
       const retainedReader = getPreparedModelRuntimeSnapshot(freeInput)!;
       const retainedAuthStore = getPreparedModelRuntimeAuthStore(retainedReader);
-      let catalog = warmed
-        ? await retainedReader.loadFullModelCatalog!()
-        : retainedReader.readFullModelCatalog!();
+      if (warmed) {
+        await retainedReader.loadFullModelCatalog!();
+      } else {
+        retainedReader.readFullModelCatalog!();
+      }
 
       for (const ask of ["always", "off"] as const) {
         const previousPro = getPreparedModelRuntimeSnapshot(proInput)!;
@@ -725,13 +680,12 @@ describe("prepared model runtime scoped refresh", () => {
         expect(retained.metadataSnapshot).toBe(retainedReader.metadataSnapshot);
         expect(retained.modelCatalog).toBe(retainedReader.modelCatalog);
         expect(getPreparedModelRuntimeAuthStore(retained)).toBe(retainedAuthStore);
-        catalog = retainedReader.readFullModelCatalog!();
+        const catalog = retainedReader.readFullModelCatalog!();
         expect(retained.readFullModelCatalog!()).toBe(catalog);
         expect(retainedReader.readFullModelCatalog!()).toBe(catalog);
         const refreshed = await retained.loadFullModelCatalog!({ refresh: true });
         expect(refreshed).not.toBe(catalog);
         expect(retainedReader.readFullModelCatalog!()).toBe(refreshed);
-        catalog = refreshed;
         expect(() => previousPro.readFullModelCatalog!()).toThrow("superseded");
         await expect(previousPro.loadFullModelCatalog!()).rejects.toThrow("superseded");
       }

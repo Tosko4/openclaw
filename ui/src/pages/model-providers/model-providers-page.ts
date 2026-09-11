@@ -98,7 +98,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         : initialState,
     onComplete: ({ client, data }) => {
       this.loadClient = null;
-      this.catalogDiscovery.reset();
+      this.catalogDiscovery.reset({ preservePublication: true });
       this.supplemental.adoptCoreData(client, data);
     },
     onError: () => (this.loadClient = null),
@@ -129,7 +129,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     getData: () => this.data,
     setData: (data) => (this.data = data),
     requestUpdate: () => this.requestUpdate(),
-    readPublished: () => this.refresh({ force: false }),
+    cancelCoreRefresh: () => this.cancelCoreRefresh(),
+    isCoreLoading: () => this.loadClient !== null,
+    readPublished: () => this.refresh({ force: false, publication: true }),
   });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -331,7 +333,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.ensureInitialData();
   }
 
-  private refresh(opts: { force: boolean }): Promise<void> {
+  private refresh(opts: { force: boolean; publication?: boolean }): Promise<void> {
     if (!this.selectedAgentId) {
       return Promise.resolve();
     }
@@ -341,7 +343,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       return Promise.resolve();
     }
     // Core replacement retires picker and supplemental work even on the same client and agent.
-    this.catalogDiscovery.reset();
+    if (!opts.publication) {
+      this.catalogDiscovery.reset();
+    }
     this.supplemental.beginCoreRefresh(opts.force);
     if (opts.force) {
       this.querySelectorAll<ModelAccountUsage>("openclaw-model-account-usage").forEach((account) =>
@@ -349,7 +353,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       );
     }
     this.loadClient = client;
-    return this.refreshTask.run([client, this.selectedAgentId, opts.force]);
+    return this.refreshTask
+      .run([client, this.selectedAgentId, opts.force])
+      .then(() => this.catalogDiscovery.flushPublication());
   }
 
   private mutationBlockedReason(): string | null {

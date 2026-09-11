@@ -14,6 +14,7 @@ import {
   configuredOwnersAreRequestVisible,
   registerPreparedRuntimeAuthMaterializationPublisher,
 } from "./prepared-model-runtime-materializations.js";
+import { refreshCommittedProviderCatalogs } from "./prepared-model-runtime.catalog-access.js";
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import {
   capturePreparedModelRuntimeLifetime,
@@ -55,6 +56,7 @@ import {
   retainPublishedModelRuntimeOwner,
 } from "./prepared-model-runtime.published-owner.js";
 import {
+  collectPreparedModelRuntimeInventories,
   isPreparedModelRuntimeOwnerInRefreshScope,
   listConfiguredRefreshInputs,
   resolveSafeRefreshAgentIds,
@@ -506,19 +508,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   const catalogMode = options.catalogMode ?? "live";
   gatewayLifecycleActive ||= options.gatewayLifecycle === true;
   const staleError = new Error("prepared model runtime owner is stale after config publication");
-  // Provider inventory outlives runtime selection; rebuilding checks each provider's source/auth.
-  const inventories = new Map(
-    [...owners.values()].flatMap((owner) =>
-      owner.provenance === "configured" && owner.catalogInventory
-        ? [
-            [
-              ownerKey({ ...owner.input, runtimePluginSelections: undefined }),
-              owner.catalogInventory,
-            ] as const,
-          ]
-        : [],
-    ),
-  );
+  const inventories = collectPreparedModelRuntimeInventories(owners.values());
   updateOwnersForScopedRefresh(owners, options.agentIds, staleError, {
     retainedConfig: config,
   });
@@ -629,7 +619,7 @@ export function refreshPreparedModelRuntimeSnapshots(
     // Publication listeners may synchronously read the committed owner. Clear the lifecycle
     // gate before announcing availability so they cannot observe a false missing generation.
     notifyPreparedModelRuntimePublication({ phase: "published" });
-    refreshCommittedProviderCatalogs();
+    refreshCommittedProviderCatalogs(owners.values());
   };
   return enqueuePreparedModelRuntimePublication(async () => {
     if (!isPublicationCurrent()) {
@@ -669,17 +659,6 @@ function enqueuePreparedModelRuntimePublication(task: () => Promise<void>): Prom
     () => undefined,
   );
   return publication;
-}
-
-function refreshCommittedProviderCatalogs(): void {
-  for (const owner of owners.values()) {
-    if (owner.provenance !== "configured" || owner.pending || owner.needsRefresh) continue;
-    void owner.snapshot?.loadFullModelCatalog?.({ changedOnly: true }).catch((error: unknown) => {
-      if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
-        log.warn(`provider catalog refresh failed: ${String(error)}`);
-      }
-    });
-  }
 }
 
 async function drainPendingAuthMutations(commit?: () => void): Promise<void> {
@@ -749,7 +728,7 @@ function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): voi
       }
       if (configuredOwnersAreRequestVisible(owners)) {
         notifyPreparedModelRuntimePublication({ phase: "published" });
-        refreshCommittedProviderCatalogs();
+        refreshCommittedProviderCatalogs(owners.values());
       }
     });
   });

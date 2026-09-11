@@ -10,7 +10,10 @@ import {
 } from "../agent-scope.js";
 import { DEFAULT_PROVIDER } from "../defaults.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../model-catalog.types.js";
-import { resolveModelRefFromString } from "../model-selection-shared.js";
+import {
+  buildConfiguredModelCatalog,
+  resolveModelRefFromString,
+} from "../model-selection-shared.js";
 import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
 import { collectPreparedModelRuntimeConfiguredRefs } from "../prepared-model-runtime.configured.js";
 import type { PreparedModelRuntimeInput } from "../prepared-model-runtime.types.js";
@@ -118,7 +121,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   pluginRegistry?: PluginRegistry | null;
   isCurrent?: () => boolean;
   observationConfig?: OpenClawConfig;
-  providerIds?: readonly string[];
+  includesProvider?: (provider: string) => boolean;
   onDiscoveryStarted?: (provider: string) => void;
   onDiscoveryCompleted?: (rows: readonly ModelCatalogEntry[]) => void;
   onError?: (error: unknown) => void;
@@ -137,7 +140,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   if (!ref) {
     return params.snapshot;
   }
-  if (params.providerIds && !params.providerIds.includes(ref.provider)) {
+  if (params.includesProvider && !params.includesProvider(ref.provider)) {
     return params.snapshot;
   }
   const refKey = resolveModelCatalogIdentityKey({ provider: ref.provider, id: ref.model });
@@ -197,15 +200,36 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     ) {
       return params.snapshot;
     }
-    if (listedRows.length === 0) {
-      return params.snapshot;
-    }
-    params.onDiscoveryCompleted?.(listedRows);
-    const rows = enrichHarnessRows(listedRows, params.snapshot);
+    const includesProvider = params.includesProvider;
+    const scopedRows = includesProvider
+      ? listedRows.filter((entry) => includesProvider(entry.provider))
+      : listedRows;
+    params.onDiscoveryCompleted?.(scopedRows);
+    const rows = enrichHarnessRows(scopedRows, params.snapshot);
+    const configuredKeys = new Set([
+      ...configuredModelRefs.map(({ provider, model }) =>
+        resolveModelCatalogIdentityKey({ provider, id: model }),
+      ),
+      ...buildConfiguredModelCatalog({
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+      }).map(resolveModelCatalogIdentityKey),
+    ]);
+    // Successful discovery replaces its native scope; authored membership survives an empty list.
+    const retain = (entry: ModelCatalogEntry) =>
+      entry.nativeRuntime !== runtime ||
+      configuredKeys.has(resolveModelCatalogIdentityKey(entry)) ||
+      (includesProvider !== undefined && !includesProvider(entry.provider));
     return {
       ...params.snapshot,
-      entries: dedupeByKey([...rows, ...params.snapshot.entries], resolveModelCatalogIdentityKey),
-      routeVariants: dedupeByKey([...rows, ...params.snapshot.routeVariants], routeVariantKey),
+      entries: dedupeByKey(
+        [...rows, ...params.snapshot.entries.filter(retain)],
+        resolveModelCatalogIdentityKey,
+      ),
+      routeVariants: dedupeByKey(
+        [...rows, ...params.snapshot.routeVariants.filter(retain)],
+        routeVariantKey,
+      ),
     };
   } catch (error) {
     params.onError?.(error);
@@ -218,7 +242,7 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
   snapshot: ModelCatalogSnapshot;
   pluginRegistry?: PluginRegistry;
   isCurrent?: () => boolean;
-  providerIds?: readonly string[];
+  includesProvider?: (provider: string) => boolean;
   onDiscoveryStarted?: (provider: string) => void;
   onDiscoveryCompleted?: (rows: readonly ModelCatalogEntry[]) => void;
 }): Promise<ModelCatalogSnapshot> {
@@ -237,7 +261,7 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
     pluginRegistry: params.pluginRegistry,
     isCurrent: params.isCurrent,
     observationConfig: params.input.config,
-    providerIds: params.providerIds,
+    includesProvider: params.includesProvider,
     onDiscoveryStarted: params.onDiscoveryStarted,
     onDiscoveryCompleted: params.onDiscoveryCompleted,
   });

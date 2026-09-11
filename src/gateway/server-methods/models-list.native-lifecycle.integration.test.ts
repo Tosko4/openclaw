@@ -25,6 +25,7 @@ it.each([false, true])(
     const harness = "native-lifecycle-runtime";
     const requests: string[] = [];
     let nativeModelId = "native-account-only";
+    let emptyNativeCatalog = false;
     let noteNativeRequested!: () => void;
     const nativeRequested = new Promise<void>((resolve) => {
       noteNativeRequested = resolve;
@@ -49,9 +50,47 @@ it.each([false, true])(
         noteNativeRequested();
         void nativeReleased.then(() =>
           response.end(
-            JSON.stringify([
-              { provider, id: nativeModelId, name: "Native account model", nativeRuntime: harness },
-            ]),
+            JSON.stringify(
+              emptyNativeCatalog
+                ? []
+                : [
+                    {
+                      provider,
+                      id: nativeModelId,
+                      name: "Native account model",
+                      nativeRuntime: harness,
+                    },
+                    {
+                      provider,
+                      id: "configured-native",
+                      name: "Configured native model",
+                      nativeRuntime: harness,
+                    },
+                    ...(withProviderCredentials
+                      ? [
+                          {
+                            provider: "unrelated-native-fixture",
+                            id: "unrelated-native-model",
+                            name:
+                              nativeModelId === "native-account-only"
+                                ? "Unrelated native model"
+                                : "Outside-scope replacement",
+                            nativeRuntime: harness,
+                          },
+                          ...(nativeModelId === "native-account-only"
+                            ? []
+                            : [
+                                {
+                                  provider: "unrelated-native-fixture",
+                                  id: "outside-scope-new",
+                                  name: "Outside-scope new model",
+                                  nativeRuntime: harness,
+                                },
+                              ]),
+                        ]
+                      : []),
+                  ],
+            ),
           ),
         );
       } else if (request.url === "/provider/models" || request.url === "/other/models") {
@@ -143,7 +182,10 @@ it.each([false, true])(
             [provider]: {
               baseUrl,
               api: "openai-completions",
-              models: [{ id: "static-model", name: "Static model" }],
+              models: [
+                { id: "static-model", name: "Static model" },
+                { id: "configured-native", name: "Configured native model" },
+              ],
             },
             ...(withProviderCredentials
               ? {
@@ -252,6 +294,12 @@ it.each([false, true])(
           expect((await list()).models.find((row) => row.id === nativeModelId)?.available).toBe(
             true,
           );
+          expect((await list()).models).toContainEqual(
+            expect.objectContaining({
+              provider: "unrelated-native-fixture",
+              id: "unrelated-native-model",
+            }),
+          );
           nativeModelId = "native-new-release";
           const beforeScoped = requests.length;
           await client.request("models.list", { agentId: "main", provider, refresh: true });
@@ -259,6 +307,54 @@ it.each([false, true])(
           expect((await list()).models.find((row) => row.id === nativeModelId)?.available).toBe(
             true,
           );
+          const withdrawn = await list();
+          expect
+            .soft(withdrawn.models)
+            .not.toContainEqual(expect.objectContaining({ provider, id: "native-account-only" }));
+          expect(withdrawn.models).toContainEqual(
+            expect.objectContaining({
+              provider: "unrelated-native-fixture",
+              id: "unrelated-native-model",
+              name: "Unrelated native model",
+            }),
+          );
+          expect(withdrawn.models).not.toContainEqual(
+            expect.objectContaining({
+              provider: "unrelated-native-fixture",
+              id: "outside-scope-new",
+            }),
+          );
+          emptyNativeCatalog = true;
+          const beforeEmpty = requests.length;
+          await client.request("models.list", { agentId: "main", provider, refresh: true });
+          expect(requests.slice(beforeEmpty)).toEqual(["/provider/models", "/native/models"]);
+          const emptied = await list();
+          expect
+            .soft(emptied.models)
+            .not.toContainEqual(expect.objectContaining({ provider, id: "native-new-release" }));
+          expect
+            .soft(emptied.models)
+            .not.toContainEqual(expect.objectContaining({ provider, id: "native-account-only" }));
+          expect(emptied.models).toContainEqual(
+            expect.objectContaining({ provider, id: "static-model" }),
+          );
+          expect(emptied.models).toContainEqual(
+            expect.objectContaining({ provider, id: "configured-native" }),
+          );
+          expect(emptied.models).toContainEqual(
+            expect.objectContaining({
+              provider: "unrelated-native-fixture",
+              id: "unrelated-native-model",
+            }),
+          );
+          expect(emptied.models).toContainEqual(
+            expect.objectContaining({
+              provider: "unrelated-native-fixture",
+              id: "provider-account",
+            }),
+          );
+          emptyNativeCatalog = false;
+          await client.request("models.list", { agentId: "main", provider, refresh: true });
           const beforeReloadNative = requests.filter((path) => path === "/native/models").length;
           const config = await client.request<{ hash: string }>("config.get", {});
           await client.request("config.patch", {

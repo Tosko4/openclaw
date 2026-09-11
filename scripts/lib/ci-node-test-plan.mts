@@ -2454,7 +2454,14 @@ const WHOLE_CONFIG_SPLIT_FILE_LISTERS = new Map<string, () => string[]>([
   ],
   [
     "agentic-gateway-methods",
-    () => [...listTestFiles("src/gateway/server-methods"), ...gatewayPluginTestFiles],
+    () => [
+      ...listScopedOwnerTestFiles({
+        root: "src/gateway/server-methods",
+        include: ["src/gateway/server-methods/**/*.test.ts"],
+        exclude: [],
+      }),
+      ...gatewayPluginTestFiles,
+    ],
   ],
   ["core-runtime-config", () => listTestFiles("src/config")],
   // isolate:true gives every file a fresh module graph, so file stripes

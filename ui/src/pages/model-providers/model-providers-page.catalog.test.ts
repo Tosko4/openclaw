@@ -94,6 +94,45 @@ function createCatalogHarness() {
 }
 
 describe("Models page catalog publication", () => {
+  it.each(["Refresh", "Retry"] as const)(
+    "Models page completes explicit %s before reading a publication that arrives during it",
+    async (action) => {
+      const { context, discover, readPublished, publishEvent, deferNextAuthStatus } =
+        createCatalogHarness();
+      readPublished.mockReturnValue({ ...preparedCatalog, refreshFailed: true });
+      const page = appendPage(context);
+      await waitForFast(() => expect(page.data?.config).toEqual(savedModelConfig));
+      const pending = deferred<ModelCatalogResult>();
+      discover.mockReturnValue(pending.promise);
+      const releaseAuth = action === "Refresh" ? deferNextAuthStatus() : undefined;
+      if (action === "Refresh") {
+        page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
+      } else {
+        await retryCatalog(page);
+      }
+      const published: ModelCatalogResult = {
+        models: [{ id: "published", name: "Published model", provider: "openai", available: true }],
+      };
+      readPublished.mockReturnValue(published);
+      for (const event of ["chat.metadata.changed", "config.changed", "chat.metadata.changed"]) {
+        publishEvent({ type: "event", event, payload: {} });
+      }
+      await drainPageUpdates(page);
+      expect(readPublished).toHaveBeenCalledTimes(1);
+      expect(page.data?.models).toEqual(preparedCatalog.models);
+      releaseAuth?.();
+      await waitForFast(() => expect(discover).toHaveBeenCalledOnce());
+      pending.resolve({
+        models: [{ id: "refreshed", name: "Refreshed model", provider: "openai", available: true }],
+      });
+      await waitForFast(() => expect(page.data?.models).toEqual(published.models));
+      await drainPageUpdates(page);
+      expect(discover).toHaveBeenCalledOnce();
+      expect(readPublished).toHaveBeenCalledTimes(2);
+      expect(page.data?.config).toEqual(savedModelConfig);
+    },
+  );
+
   it.each([
     { picker: "primary", index: 0 },
     { picker: "utility", index: 1 },

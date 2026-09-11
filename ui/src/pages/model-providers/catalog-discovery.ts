@@ -19,6 +19,7 @@ type DiscoveryGateway = {
 
 export type CatalogDiscoveryController = {
   subscribe: (gateway: ApplicationGateway) => () => void;
+  flushPublication: () => void;
   /** Whether a discovery request is currently in flight. */
   readonly discovering: boolean;
   /** A user-facing retry hint when discovery failed; null while clean. */
@@ -26,7 +27,7 @@ export type CatalogDiscoveryController = {
   /** Retries a failed discovery. */
   retry: () => void;
   /** Resets request history and pending/error state when core data or its owner changes. */
-  reset: () => void;
+  reset: (params?: { preservePublication?: boolean }) => void;
 };
 
 type CreateOptions = {
@@ -36,6 +37,8 @@ type CreateOptions = {
   getData: () => ModelProvidersData | null;
   setData: (data: ModelProvidersData) => void;
   requestUpdate: () => void;
+  cancelCoreRefresh: () => void;
+  isCoreLoading: () => boolean;
   readPublished: () => Promise<void>;
 };
 
@@ -44,10 +47,26 @@ export function createCatalogDiscoveryController(
 ): CatalogDiscoveryController {
   let pending: AbortController | null = null;
   let error: string | null = null;
+  let publicationPending = false;
+
+  const flushPublication = () => {
+    // Core Task callbacks run before that Task completes its own settlement.
+    queueMicrotask(() => {
+      if (!publicationPending || pending || options.isCoreLoading()) {
+        return;
+      }
+      publicationPending = false;
+      void options.readPublished();
+    });
+  };
 
   const controller: CatalogDiscoveryController = {
     subscribe: (gateway) =>
-      subscribeModelCatalogChanges(gateway, () => void options.readPublished()),
+      subscribeModelCatalogChanges(gateway, () => {
+        publicationPending = true;
+        flushPublication();
+      }),
+    flushPublication,
     get discovering() {
       return pending !== null;
     },
@@ -57,7 +76,10 @@ export function createCatalogDiscoveryController(
     retry() {
       void discover();
     },
-    reset() {
+    reset({ preservePublication = false } = {}) {
+      if (!preservePublication) {
+        publicationPending = false;
+      }
       const retired = pending;
       pending = null;
       error = null;
@@ -76,6 +98,7 @@ export function createCatalogDiscoveryController(
     if (!gateway.connected || !client) {
       return;
     }
+    options.cancelCoreRefresh();
     const agentEpoch = options.getAgentEpoch();
     const clientEpoch = gateway.epoch;
     const request = new AbortController();
@@ -114,6 +137,7 @@ export function createCatalogDiscoveryController(
       if (pending === request) {
         pending = null;
         options.requestUpdate();
+        flushPublication();
       }
     }
   }

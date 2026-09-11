@@ -1,5 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import pLimit from "p-limit";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -24,7 +25,10 @@ import type {
   PreparedModelRuntimeCatalogFacts,
 } from "./prepared-model-runtime.catalog-contract.js";
 import { prepareConfiguredRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
-import { assertPreparedModelRuntimeInputCurrent } from "./prepared-model-runtime.errors.js";
+import {
+  assertPreparedModelRuntimeInputCurrent,
+  PreparedModelRuntimePublicationSupersededError,
+} from "./prepared-model-runtime.errors.js";
 import {
   fingerprintPreparedRuntimeFacts,
   preparedModelInventoryKey,
@@ -49,6 +53,22 @@ import type {
 export const MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS = 1;
 const limitFullModelCatalogBuild = pLimit(MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS);
 const MODEL_CATALOG_FOREGROUND_WAIT_MS = 5_000;
+const log = createSubsystemLogger("agents/prepared-model-runtime");
+
+export function refreshCommittedProviderCatalogs(
+  owners: Iterable<PreparedModelRuntimeOwner>,
+): void {
+  for (const owner of owners) {
+    if (owner.provenance !== "configured" || owner.pending || owner.needsRefresh) {
+      continue;
+    }
+    void owner.snapshot?.loadFullModelCatalog?.({ changedOnly: true }).catch((error: unknown) => {
+      if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
+        log.warn(`provider catalog refresh failed: ${String(error)}`);
+      }
+    });
+  }
+}
 
 function preparedProviderCatalogSource(
   facts: PreparedModelRuntimeAgentFacts,
@@ -330,8 +350,9 @@ export function createFullModelCatalogAccess(params: {
       !options.changedOnly &&
       fullCatalog &&
       isPreparedModelCatalogFull(fullCatalog)
-    )
+    ) {
       return fullCatalog;
+    }
     const requestedProviders = [
       ...new Set(
         (
@@ -354,7 +375,9 @@ export function createFullModelCatalogAccess(params: {
         ? requestedProviders
         : undefined
       : [];
-    if (!providers.length && !includeNative && !fullRefresh) return fullCatalog ?? staticCatalog;
+    if (!providers.length && !includeNative && !fullRefresh) {
+      return fullCatalog ?? staticCatalog;
+    }
     if (pending) {
       const current = pending;
       const pendingProviders = current.providers;
@@ -386,7 +409,7 @@ export function createFullModelCatalogAccess(params: {
       const scopes: Array<readonly string[] | undefined> = fullRefresh
         ? [undefined]
         : providers.map((provider) => [provider]);
-      for (const providerIds of scopes)
+      for (const providerIds of scopes) {
         await limitFullModelCatalogBuild(async () => {
           assertCurrent();
           const { modelCatalog: workerCatalog, configuredRuntimeModels } =
@@ -402,8 +425,9 @@ export function createFullModelCatalogAccess(params: {
             ).map(normalizeProvider),
           );
           const discoveredAuth = getPreparedModelFullCatalogAuth(workerCatalog);
-          if (!discoveredAuth)
+          if (!discoveredAuth) {
             throw new Error("prepared model catalog worker omitted its auth generation");
+          }
           const retainedAuth =
             getPreparedModelFullCatalogAuth(fullCatalog ?? staticCatalog) ?? currentAuth;
           const retainOther = <T>(values: Readonly<Record<string, T>>) =>
@@ -514,6 +538,7 @@ export function createFullModelCatalogAccess(params: {
               : catalog;
           attempt.published(providerIds);
         });
+      }
       if (includeNative) {
         const current = fullCatalog ?? staticCatalog;
         let nativeDiscoveryStarted = false;
@@ -524,7 +549,9 @@ export function createFullModelCatalogAccess(params: {
           snapshot: current,
           pluginRegistry: params.pluginGeneration.pluginRegistry,
           isCurrent: params.isCurrent,
-          providerIds: options.providerIds?.map(normalizeProvider),
+          includesProvider: options.providerIds
+            ? (provider) => requestedProviders.includes(normalizeProvider(provider))
+            : undefined,
           onDiscoveryStarted: (provider) => {
             nativeDiscoveryStarted = true;
             nativeCatalogAcquired = false;
