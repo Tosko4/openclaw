@@ -15,10 +15,7 @@ export {
   type WorkboardTemplateId,
   type WorkboardUiState,
 } from "./types.ts";
-export {
-  filterWorkboardCards,
-  workboardCardMatchesHealthKey,
-} from "./derived.ts";
+export { filterWorkboardCards, workboardCardMatchesHealthKey } from "./derived.ts";
 export { getWorkboardDependencyState, resetDraftState } from "./card-state.ts";
 export { loadWorkboard, refreshWorkboard } from "./loading.ts";
 export {
