@@ -44,7 +44,10 @@ describe("plugin update publication authority", () => {
     { timeout: 180_000 },
     async (firstAction) => {
       await withOpenClawTestState(
-        { label: `retained-updater-${firstAction}`, env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+        {
+          label: `retained-updater-${firstAction}`,
+          env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+        },
         async (state) => {
           const packageName = `retained-owner-${crypto.randomUUID()}`;
           const versions = await packPlugins(state.path("packages"), [{ packageName }]);
