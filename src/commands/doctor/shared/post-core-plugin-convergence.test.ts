@@ -141,9 +141,9 @@ describe("runPostCorePluginConvergence", () => {
   it.each(["authority", "filesystem"] as const)(
     "joins admitted peer repairs before reporting a %s failure",
     async (kind) => {
-      const firstStarted = createDeferred<void>();
-      const secondStarted = createDeferred<void>();
-      const releaseSibling = createDeferred<void>();
+      const firstStarted = createDeferred();
+      const secondStarted = createDeferred();
+      const releaseSibling = createDeferred();
       const refusal = new Error("one-shot peer repair refusal");
       const laterWrite = vi.fn();
       let refuse = false;

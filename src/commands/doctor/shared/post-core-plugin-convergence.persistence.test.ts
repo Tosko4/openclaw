@@ -203,6 +203,80 @@ describe("post-core plugin persistence cancellation", () => {
     });
   });
 
+  it.each(["missing-modules", "stale-link", "package-copy"] as const)(
+    "submits real host-link effects in the synchronous admission turn: %s",
+    async (layout) => {
+      await withOpenClawTestState({ label: `plugin-sync-admission-${layout}` }, async (state) => {
+        const packageDir = state.statePath("npm", "node_modules", "peer-plugin");
+        const nodeModules = path.join(packageDir, "node_modules");
+        const linkPath = path.join(nodeModules, "openclaw");
+        fs.mkdirSync(packageDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(packageDir, "package.json"),
+          JSON.stringify({ name: "peer-plugin", peerDependencies: { openclaw: "*" } }),
+        );
+        if (layout !== "missing-modules") {
+          fs.mkdirSync(nodeModules);
+          if (layout === "stale-link") {
+            fs.symlinkSync(state.root, linkPath, "junction");
+          } else {
+            fs.mkdirSync(linkPath);
+            fs.writeFileSync(path.join(linkPath, "package.json"), '{"name":"openclaw"}');
+          }
+        }
+        let inAdmissionTurn = false;
+        const observations: Array<{ effect: string; admitted: boolean }> = [];
+        const observe = (effect: string, target: unknown) => {
+          if (target === nodeModules || target === linkPath) {
+            observations.push({ effect, admitted: inAdmissionTurn });
+          }
+        };
+        const mkdir = fs.promises.mkdir.bind(fs.promises);
+        vi.spyOn(fs.promises, "mkdir").mockImplementation((...args) => {
+          observe("mkdir", args[0]);
+          return mkdir(...args);
+        });
+        const unlink = fs.promises.unlink.bind(fs.promises);
+        vi.spyOn(fs.promises, "unlink").mockImplementation((...args) => {
+          observe("unlink", args[0]);
+          return unlink(...args);
+        });
+        const rm = fs.promises.rm.bind(fs.promises);
+        vi.spyOn(fs.promises, "rm").mockImplementation((...args) => {
+          observe("rm", args[0]);
+          return rm(...args);
+        });
+        const symlink = fs.promises.symlink.bind(fs.promises);
+        vi.spyOn(fs.promises, "symlink").mockImplementation((...args) => {
+          observe("symlink", args[1]);
+          return symlink(...args);
+        });
+        await runPostCorePluginConvergence({
+          cfg: { plugins: { enabled: false } },
+          env: state.env,
+          baselineInstallRecords: {},
+          beforePersistentEffect: () => {
+            // Observe the submission turn; no lease, filesystem result or clock is mocked.
+            inAdmissionTurn = true;
+            queueMicrotask(() => {
+              inAdmissionTurn = false;
+            });
+          },
+        });
+        expect(observations).toEqual([
+          {
+            effect:
+              layout === "missing-modules" ? "mkdir" : layout === "stale-link" ? "unlink" : "rm",
+            admitted: true,
+          },
+          { effect: "symlink", admitted: true },
+        ]);
+        expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+        expect(fs.realpathSync(linkPath)).not.toBe(fs.realpathSync(state.root));
+      });
+    },
+  );
+
   it.each([
     ["managed", "mkdir"],
     ["managed", "unlink"],
