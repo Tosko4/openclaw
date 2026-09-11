@@ -814,6 +814,30 @@ export interface GithubRepositoryPublicationRequests {
   workspace_tree: string | null;
 }
 
+export interface LocalSessionEnrollments {
+  agent_id: string;
+  confirmed_at_ms: number | null;
+  device_id: string;
+  ended_at_ms: number | null;
+  enrollment_id: string;
+  expires_at_ms: number;
+  owner_label: string;
+  owner_profile_id: string;
+  plugin_id: string;
+  reason: string | null;
+  requested_at_ms: number;
+  source_id: string;
+  state: string;
+}
+
+export interface LocalSessionExclusions {
+  device_id: string;
+  excluded_at_ms: number;
+  excluded_by_profile_id: string;
+  source_id: string;
+  thread_id: string;
+}
+
 export interface MacosPortGuardianRecords {
   command: string;
   mode: string;
@@ -1768,6 +1792,8 @@ export interface DB {
   github_publication_requests: GithubPublicationRequests;
   github_publication_session_lifecycles: GithubPublicationSessionLifecycles;
   github_repository_publication_requests: GithubRepositoryPublicationRequests;
+  local_session_enrollments: LocalSessionEnrollments;
+  local_session_exclusions: LocalSessionExclusions;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
   mcp_oauth_pending_authorizations: McpOauthPendingAuthorizations;

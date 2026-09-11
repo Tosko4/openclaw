@@ -113,10 +113,22 @@ export function projectChatTranscript(
           timestamp: activeSession.archivedAt,
         } satisfies Extract<ChatItem, { kind: "notice" }>)
       : undefined;
+  const localSource = activeSession?.localSource;
+  const historyNotice =
+    localSource?.earliestSeq !== undefined
+      ? ({
+          kind: "notice",
+          key: `local-history:${activeSession?.key ?? props.sessionKey}:${localSource.earliestSeq}`,
+          text: t("chat.localSession.earlierHistory", { owner: localSource.ownerLabel }),
+          // Sorts ahead of every timestamped row: the laptop holds what came before.
+          timestamp: 0,
+        } satisfies Extract<ChatItem, { kind: "notice" }>)
+      : undefined;
   const chatItems = buildCachedChatItems({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
     archiveNotice,
+    historyNotice,
     runId: props.runId ?? null,
     compactionStatus: props.compactionStatus,
     locale,

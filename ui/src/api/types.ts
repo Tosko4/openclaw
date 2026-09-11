@@ -14,6 +14,7 @@ import type {
 import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
 import type {
   SessionEntryArchiveReason,
+  SessionLocalSource,
   SessionRow,
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type {

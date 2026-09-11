@@ -21,7 +21,6 @@ import { readPresenceEntries } from "../../app/user-profile.ts";
 import { showSecretRevealDialog } from "../../components/secret-reveal-dialog.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { t } from "../../i18n/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -48,6 +47,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { DevicesDialogController } from "./devices-dialogs.ts";
+import { LocalSessionSharingController } from "./local-sessions-controller.ts";
 import { renderDevices } from "./view.ts";
 
 const DEVICES_DOCS_URL = "https://docs.openclaw.ai/nodes";
@@ -170,6 +170,10 @@ class DevicesPage extends OpenClawLightDomElement {
       this.desktopEnvironments = [];
     },
   });
+  private readonly localSessions = new LocalSessionSharingController(this, () => ({
+    gateway: this.gateway,
+    requestGeneration: this.requestGeneration,
+  }));
   private readonly systemInfoPolling = new PollController(
     this,
     SYSTEM_INFO_POLL_INTERVAL_MS,
@@ -222,6 +226,7 @@ class DevicesPage extends OpenClawLightDomElement {
               void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
             }
           }
+          this.localSessions.handleGatewayEvent(event);
           if (
             event.event === "node.pair.requested" ||
             event.event === "node.pair.resolved" ||
@@ -422,6 +427,7 @@ class DevicesPage extends OpenClawLightDomElement {
     // A replacement source or reconnect must retire callbacks before its data can arrive.
     void this.systemInfoTask.run([null, null]);
     void this.environmentsTask.run([null, null]);
+    this.localSessions.reset();
     this.systemInfoPolling.stop();
     this.gatewaySystemInfo = null;
     this.desktopEnvironments = [];
@@ -462,28 +468,9 @@ class DevicesPage extends OpenClawLightDomElement {
         scopes,
       }),
     );
-    if (!outcome) {
-      return;
+    if (outcome) {
+      await showSecretRevealDialog(rotationOutcomeDialog(device, role, outcome));
     }
-    await (outcome.delivery === "in-band"
-      ? showSecretRevealDialog({
-          title: t("devices.inventory.rotatePromptTitle", { role }),
-          message: t("devices.inventory.rotatePromptBody"),
-          secret: outcome.token,
-          acknowledgeLabel: t("devices.inventory.rotateAcknowledge"),
-          dismissHint: t("devices.inventory.rotateDismissHint"),
-        })
-      : showSecretRevealDialog({
-          // The title carries the announcement and the device, so the body is only the
-          // reassurance. Naming the transient disconnect here would raise an alarm the
-          // very next line has to walk back.
-          title: t("devices.inventory.rotateWithheldTitle", { device: device.name }),
-          status: "success",
-          message: t("devices.inventory.rotateWithheldNext"),
-          callout: t("devices.inventory.rotateWithheldException"),
-          acknowledgeLabel: t("common.close"),
-          note: t("devices.inventory.rotateWithheldNote"),
-        }));
   }
 
   private resolveExecApprovalsTarget(): ExecApprovalsTarget {
@@ -538,6 +525,7 @@ class DevicesPage extends OpenClawLightDomElement {
           execApprovalsSelectedAgent: devices.execApprovalsSelectedAgent,
           execApprovalsTarget: this.execApprovalsTarget,
           execApprovalsTargetNodeId: this.execApprovalsTargetNodeId,
+          localSessions: this.localSessions.props(gatewaySnapshot),
           onDevicePairSetupOpen: () => {
             if (this.canAdmin) {
               void this.context.overlays.openDevicePairSetup();

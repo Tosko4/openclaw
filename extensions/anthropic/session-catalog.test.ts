@@ -11,6 +11,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { SessionCatalogProvider as RegisteredSessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CLAUDE_LOCAL_SESSION_SOURCE_COMMAND } from "./local-session-source.js";
 import { adoptedSourceKey } from "./session-catalog-adoption.js";
 import { listClaudeSessions } from "./session-catalog-discovery.js";
 import {
@@ -2969,6 +2970,7 @@ describe("Claude session catalog", () => {
       CLAUDE_SESSION_READ_COMMAND,
       CLAUDE_TERMINAL_RESUME_COMMAND,
       CLAUDE_TERMINAL_START_COMMAND,
+      CLAUDE_LOCAL_SESSION_SOURCE_COMMAND,
     ]);
     expect(commands.every((command) => command.dangerous === false)).toBe(true);
     await expect(commands[0]?.handle(JSON.stringify({ cursor: " wrapped " }))).rejects.toThrow(

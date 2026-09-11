@@ -111,6 +111,21 @@ export function ensureSecretStoreSchema(database: DatabaseSync): void {
   ensureColumn(database, "secret_store_entries", "allowed_hosts TEXT");
 }
 
+const LOCAL_SESSION_SCHEMA_START = "CREATE TABLE IF NOT EXISTS local_session_enrollments (";
+const LOCAL_SESSION_SCHEMA_END = "  PRIMARY KEY (device_id, source_id, thread_id)\n) STRICT;";
+
+/** Lazily install live local session enrollment and exclusion tables on first feature use. */
+export function ensureLocalSessionSchema(database: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(LOCAL_SESSION_SCHEMA_START);
+  const endMarkerStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(LOCAL_SESSION_SCHEMA_END, start);
+  if (start < 0 || endMarkerStart < start) {
+    throw new Error("OpenClaw local session schema marker is missing.");
+  }
+  database.exec(
+    OPENCLAW_STATE_SCHEMA_SQL.slice(start, endMarkerStart + LOCAL_SESSION_SCHEMA_END.length),
+  ); // sqlite-allow-raw -- Canonical additive DDL only.
+}
+
 /** Lazily install durable MCP OAuth callback correlation on first feature use. */
 export function ensureMcpOAuthPendingSchema(database: DatabaseSync): void {
   const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(MCP_OAUTH_PENDING_SCHEMA_START);
