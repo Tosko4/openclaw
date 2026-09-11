@@ -92,7 +92,11 @@ export type WorkboardUiState = {
   lastDispatchSummary: WorkboardDispatchSummary | null;
   dispatching: boolean;
   query: string;
-  priorityFilter: "all" | WorkboardPriority;
+  searchOpen: boolean;
+  priorityFilter: Set<WorkboardPriority>;
+  statusFilter: Set<WorkboardStatus>;
+  attentionFilter: Set<"stale" | "missingProof">;
+  donePeriod: "all" | "week";
   agentFilter: string;
   boardFilter: string;
   viewPreset: WorkboardViewPresetId;

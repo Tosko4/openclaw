@@ -18,6 +18,7 @@ export {
   type WorkboardUiState,
 } from "./types.ts";
 export {
+  filterWorkboardCards,
   filterWorkboardCardsForPreset,
   summarizeWorkboardHealth,
   workboardCardMatchesHealthKey,
