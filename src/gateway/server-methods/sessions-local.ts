@@ -10,11 +10,14 @@ import {
   validateSessionsLocalEnrollmentsParams,
   validateSessionsLocalRevokeParams,
   validateSessionsLocalSourcesParams,
+  validateSessionsLocalConnectCodeParams,
   validateSessionsLocalUnshareParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { quoteCliArg } from "../../cli/quote-cli-arg.js";
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { resolveHostAccountName } from "../../infra/host-account-name.js";
 import {
+  createLocalSessionConnectIntent,
   createLocalSessionEnrollment,
   listLocalSessionEnrollments,
   readLocalSessionEnrollment,
@@ -29,6 +32,7 @@ import {
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { isGatewayAdmin } from "../session-sharing-policy.js";
 import { loadSessionEntry } from "../session-utils.js";
+import { mintNodeJoinUrl } from "./device-pair-setup.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -186,6 +190,70 @@ export const sessionsLocalHandlers: GatewayRequestHandlers = {
     });
     publishEnrollment(context, enrollment);
     respond(true, { enrollment });
+  },
+  "sessions.local.connectCode": async ({ params, respond, context, client }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSessionsLocalConnectCodeParams,
+        "sessions.local.connectCode",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const request = params;
+    const profile = await requireProfile(client, context, respond);
+    if (!profile) {
+      return;
+    }
+    const registered = listRegisteredLocalSessionSources();
+    const sources = request.sourceIds.map((sourceId) =>
+      registered.find((candidate) => candidate.sourceId === sourceId),
+    );
+    const missing = request.sourceIds.filter((_, index) => !sources[index]);
+    if (missing.length > 0) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `unknown local session source: ${missing.join(", ")}`,
+        ),
+      );
+      return;
+    }
+    const cfg = context.getRuntimeConfig?.();
+    if (cfg) {
+      const agentError = authorizeGatewaySessionCreation({ cfg, client, agentId: request.agentId });
+      if (agentError) {
+        respond(false, undefined, agentError);
+        return;
+      }
+    }
+    const minted = await mintNodeJoinUrl(context);
+    if (!minted.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, minted.error));
+      return;
+    }
+    const resolvedSources = sources.filter((source) => source !== undefined);
+    createLocalSessionConnectIntent({
+      setupId: minted.setupId,
+      ownerProfileId: profile.profileId,
+      ownerLabel: profile.displayName,
+      agentId: request.agentId,
+      sourceIds: resolvedSources.map((source) => source.sourceId),
+      createdAtMs: Date.now(),
+      expiresAtMs: minted.expiresAtMs,
+    });
+    const shareFlags = resolvedSources.map((source) => `--share ${source.sourceId}`).join(" ");
+    respond(true, {
+      setupId: minted.setupId,
+      joinUrl: minted.joinUrl,
+      command: `npx openclaw connect ${quoteCliArg(minted.joinUrl)} ${shareFlags} --share-request ${minted.setupId}`,
+      expiresAtMs: minted.expiresAtMs,
+      sources: resolvedSources,
+    });
   },
   "sessions.local.revoke": async ({ params, respond, context, client }) => {
     if (

@@ -54,7 +54,15 @@ export async function runSessionsShareCli(opts: SessionsShareCliOptions): Promis
     runtime.log(JSON.stringify(state, null, 2));
     return;
   }
-  if (state.offers.length === 0 && state.consents.length === 0) {
+  if (state.preconsents.length > 0) {
+    runtime.log(theme.heading("Accepted in advance"));
+    for (const entry of state.preconsents) {
+      runtime.log(
+        `  ${entry.sourceId}  the next sharing request for this source is accepted automatically ${theme.muted(`(from openclaw connect --share, ${formatAge(entry.decidedAtMs)})`)}`,
+      );
+    }
+  }
+  if (state.offers.length === 0 && state.consents.length === 0 && state.preconsents.length === 0) {
     runtime.log(
       `${theme.muted("No sharing requests.")} Ask a teammate to open the team Gateway's Devices page and choose "Share sessions" for this device; the request appears here.`,
     );

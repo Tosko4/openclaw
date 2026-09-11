@@ -5,6 +5,7 @@
 import os from "node:os";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { LocalSessionSourceDefinition } from "openclaw/plugin-sdk/local-session-source";
+import { enableClaudeLocalSharing } from "./local-session-setup.js";
 import type { ClaudeLocalSessionSourceRuntimeOptions } from "./local-session-source.runtime.js";
 import { claudeProjectsAvailable } from "./session-catalog-home.js";
 
@@ -27,6 +28,7 @@ export function createClaudeLocalSessionSource(
     inputModes: ["followup"],
     // Same gate as the catalog commands: this machine must own a Claude session store.
     isAvailable: ({ env }) => claudeProjectsAvailable(env),
+    enableSharing: ({ env }) => enableClaudeLocalSharing({ env }),
     start: async (host, options) =>
       (await loadClaudeLocalSessionSourceRuntime()).startClaudeLocalSessionSource(
         host,

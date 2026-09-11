@@ -36,6 +36,7 @@ export const LocalSessionEnrollmentSchema = closedObject({
   confirmedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   endedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   reason: Type.Optional(Type.String()),
+  setupId: Type.Optional(NonEmptyString),
 });
 export type LocalSessionEnrollment = Static<typeof LocalSessionEnrollmentSchema>;
 
@@ -87,3 +88,19 @@ export const SessionLocalInputEventSchema = closedObject({
   reason: Type.Optional(Type.String()),
 });
 export type SessionLocalInputEvent = Static<typeof SessionLocalInputEventSchema>;
+
+/** A signed-in person mints their own connect link that shares the named sources. */
+export const SessionsLocalConnectCodeParamsSchema = closedObject({
+  sourceIds: Type.Array(NonEmptyString, { minItems: 1, maxItems: 8 }),
+  agentId: NonEmptyString,
+});
+export const SessionsLocalConnectCodeResultSchema = closedObject({
+  setupId: NonEmptyString,
+  joinUrl: NonEmptyString,
+  /** Pasteable on the laptop: `npx openclaw connect <joinUrl> --share <source>...`. */
+  command: NonEmptyString,
+  expiresAtMs: Type.Integer({ minimum: 0 }),
+  sources: Type.Array(LocalSessionSourceDescriptorSchema),
+});
+export type SessionsLocalConnectCodeParams = Static<typeof SessionsLocalConnectCodeParamsSchema>;
+export type SessionsLocalConnectCodeResult = Static<typeof SessionsLocalConnectCodeResultSchema>;

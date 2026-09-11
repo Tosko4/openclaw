@@ -124,6 +124,8 @@ export function ensureLocalSessionSchema(database: DatabaseSync): void {
   database.exec(
     OPENCLAW_STATE_SCHEMA_SQL.slice(start, endMarkerStart + LOCAL_SESSION_SCHEMA_END.length),
   ); // sqlite-allow-raw -- Canonical additive DDL only.
+  // Enrollments created before profile-minted connect links lack the setup binding.
+  ensureColumn(database, "local_session_enrollments", "setup_id TEXT");
 }
 
 /** Lazily install durable MCP OAuth callback correlation on first feature use. */

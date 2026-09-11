@@ -140,6 +140,8 @@ const enrollmentSummarySchema = z
     agentId: nonEmpty,
     requester: z.object({ profileId: nonEmpty, displayName: nonEmpty }).strict(),
     audienceLabel: nonEmpty,
+    /** Set when a profile-minted connect link created the enrollment; pre-consents bind to it. */
+    setupId: nonEmpty.optional(),
   })
   .strict();
 export type LocalSessionEnrollmentSummary = z.infer<typeof enrollmentSummarySchema>;

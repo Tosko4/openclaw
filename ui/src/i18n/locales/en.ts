@@ -3601,6 +3601,28 @@ export const en: TranslationMap & {
     manageCommon: "Manage connections in Profile",
   },
   profilePage: {
+    localSessions: {
+      title: "Share my local sessions",
+      description:
+        "Let the team read and send into the Codex or Claude Code sessions running on your laptop. Everything still runs on your machine.",
+      sourcesLabel: "Sessions to share",
+      getCommand: "Connect my laptop",
+      minting: "Minting your connect command…",
+      commandHint:
+        "Paste this on your laptop. It pairs the machine, shares the selected sessions under your name, and needs no further approval.",
+      commandExpires: "Single use; expires {time}.",
+      freshCommand: "Mint a fresh command",
+      failed: "Could not mint a connect command.",
+      noSources: "This Gateway has no local session sources installed.",
+      sharedTitle: "Your shared devices",
+      sharedNone: "Nothing shared yet.",
+      sharedRow: "{source} on device {device} → agent {agent}",
+      statePending: "waiting for the laptop",
+      stateActive: "live",
+      stopSharing: "Stop sharing",
+      writeRequired: "Sharing sessions requires operator.write access.",
+      profileRequired: "Sign in with a team profile to share your sessions.",
+    },
     offline: "Connect to the gateway to meet your agent.",
     usageStatistics: "Usage statistics",
     usageStatisticsDescription: "View activity, costs, and usage trends.",

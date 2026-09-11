@@ -8,8 +8,10 @@ import {
   type LocalSessionSourceFrame,
 } from "../sessions/local-session-source-protocol.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { configureNodeHost } from "./config.js";
 import {
   decideLocalSessionOffer,
+  recordLocalSessionPreconsent,
   readLocalSessionConsentState,
 } from "./local-session-consent-store.js";
 import {
@@ -137,6 +139,69 @@ describe("local session source node command", () => {
 
     fake.close();
     await expect(done).resolves.toContain('"ok":true');
+  });
+
+  it("accepts an offer covered by connect --share and runs the source enablement", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", makeTempDir(tempDirs, "local-session-source-"));
+    // The connect command paired this node with the Gateway that will offer.
+    await configureNodeHost({
+      fallbackDisplayName: "test-node",
+      gateway: { host: "gw.test", port: 18789, contextPath: "" },
+    });
+    recordLocalSessionPreconsent({
+      sourceId: "codex",
+      gateway: { host: "gw.test", port: 18789, contextPath: "" },
+      setupId: "setup-1",
+    });
+    let enabled = 0;
+    let started = 0;
+    const command = createLocalSessionSourceNodeCommand({
+      id: "codex",
+      command: "codex.localSessions.source.v1",
+      inputModes: ["steer"],
+      enableSharing: async () => {
+        enabled += 1;
+        return ["installed"];
+      },
+      start: async () => {
+        started += 1;
+        return { submitInput: async () => {}, unshare: () => {}, stop: async () => {} };
+      },
+    });
+    const fake = createFakeIo();
+    const done = command.handle(null, fake.io);
+    await flush();
+    // An offer for someone else's request (another setup) still prompts.
+    await fake.deliver({
+      type: "offer",
+      enrollment: { ...enrollment, enrollmentId: "enroll-other", setupId: "setup-9" },
+    });
+    await fake.deliver({ type: "offer", enrollment: { ...enrollment, setupId: "setup-1" } });
+    // Only the minted request was accepted; the other offer still waits for a person.
+    expect(
+      readLocalSessionConsentState().offers.map((offer) => offer.enrollment.enrollmentId),
+    ).toEqual(["enroll-other"]);
+    expect(readLocalSessionConsentState().preconsents).toEqual([]);
+    expect(enabled).toBe(1);
+    await vi.waitFor(
+      () =>
+        expect(
+          fake.sent.some((frame) => frame.type === "consent" && frame.decision === "accepted"),
+        ).toBe(true),
+      { timeout: 5000 },
+    );
+    await fake.deliver({ type: "resume", enrollment, cursors: {}, excludedThreadIds: [] });
+    expect(started).toBe(1);
+    // A second offer for the same source is a normal prompt again.
+    await fake.deliver({
+      type: "offer",
+      enrollment: { ...enrollment, enrollmentId: "enroll-2", setupId: "setup-1" },
+    });
+    expect(
+      readLocalSessionConsentState().offers.map((offer) => offer.enrollment.enrollmentId),
+    ).toEqual(["enroll-other", "enroll-2"]);
+    fake.close();
+    await done;
   });
 
   it("drops an invalid Gateway frame without stopping the source", async () => {

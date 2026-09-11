@@ -39,8 +39,10 @@ import {
 import type { NodeSession } from "../node-registry.js";
 import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import { createGatewayNodesRuntime } from "../server-plugins.js";
+import { loadSessionEntry } from "../session-utils.js";
 import {
   appendMirroredRecords,
+  buildLocalSessionKey,
   ensureLocalSessionThread,
   type LiveThread,
 } from "./bridge-mirror.js";
@@ -81,6 +83,7 @@ function enrollmentSummary(enrollment: LocalSessionEnrollment): LocalSessionEnro
     agentId: enrollment.agentId,
     requester: { profileId: enrollment.ownerProfileId, displayName: enrollment.ownerLabel },
     audienceLabel: "everyone on this Gateway with write access",
+    ...(enrollment.setupId ? { setupId: enrollment.setupId } : {}),
   };
 }
 
@@ -539,13 +542,24 @@ export class LocalSessionBridgeRuntime implements LocalSessionBridge {
     // (still empty) connection: a reconnect must replay exactly what the
     // Gateway has not committed, or a backlog beyond the bootstrap window is
     // skipped for good when appendRecords advances past it.
-    const { agentId } = connection.enrollment;
+    const { agentId, ownerProfileId } = connection.enrollment;
     const cursors: Record<string, number> = {};
     for (const checkpoint of listLocalSessionMirrorCheckpoints(
       { agentId, sessionKey: `agent:${agentId}:main` },
       { deviceId: connection.deviceId },
     )) {
-      cursors[checkpoint.threadId] = checkpoint.acceptedSeq;
+      // Rows are owner-scoped; a checkpoint left by another owner's row for the
+      // same thread must not suppress the replay into this owner's row.
+      const sessionKey = buildLocalSessionKey({
+        agentId,
+        sourceId: connection.source.sourceId,
+        deviceId: connection.deviceId,
+        ownerProfileId,
+        threadId: checkpoint.threadId,
+      });
+      if (loadSessionEntry(sessionKey, { agentId }).entry?.sessionId === checkpoint.sessionId) {
+        cursors[checkpoint.threadId] = checkpoint.acceptedSeq;
+      }
     }
     for (const [threadId, thread] of connection.threads) {
       cursors[threadId] = Math.max(cursors[threadId] ?? 0, thread.acceptedSeq);

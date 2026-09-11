@@ -39,6 +39,22 @@ openclaw sessions share
 openclaw sessions share --accept <enrollmentId>
 ```
 
+### The one-step way: from your profile
+
+Open **Profile** on the Gateway and choose **Connect my laptop**. Pick the
+sources to share (Codex, Claude Code) and the agent, and the page mints a
+single-use command such as:
+
+```bash
+npx openclaw connect https://gateway.example/j/<shortcode> --share codex --share-request <id>
+```
+
+Paste it on your laptop. Pairing, the sharing enrollment under your profile,
+and the device-side consent all happen from that one command; nothing else to
+approve. The link expires with the pairing setup (about ten minutes) and can be
+used once. Your shared devices and a **Stop sharing** action stay on the same
+Profile page.
+
 The node host delivers the decision within a few seconds while it is connected. From then on every future session in that source on that device is published automatically; sessions that existed before are published too when the harness still has them loaded. Use **Stop sharing** on the Devices page to revoke the whole source, or **Stop sharing this session** in a session's menu to keep one thread off the Gateway for good.
 
 Accepting means teammates who can send into the session drive your local tools with your local permissions. Approval prompts stay on your terminal.

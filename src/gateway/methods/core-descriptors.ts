@@ -468,6 +468,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.local.enroll", "sessions-local", "operator.write", "2026.9"],
   ["sessions.local.revoke", "sessions-local", "operator.write", "2026.9"],
   ["sessions.local.unshare", "sessions-local", "operator.write", "2026.9"],
+  ["sessions.local.connectCode", "sessions-local", "operator.write", "2026.9"],
   ["approval.get", null, "operator.approvals", "2026.7"],
   ["approval.resolve", null, "operator.approvals", "2026.7"],
   ["sessions.search", "sessions-read", "operator.read", "<=2026.7"],

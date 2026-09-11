@@ -21,6 +21,7 @@ import {
   type LocalSessionSourceInputResultFrame,
   type LocalSessionSourceSessionFrame,
 } from "../sessions/local-session-source-protocol.js";
+import { loadNodeHostConfigReadOnly } from "./config.js";
 import {
   markLocalSessionConsentDelivered,
   readLocalSessionConsentState,
@@ -73,6 +74,12 @@ export type LocalSessionSourceDefinition = {
   hostLabel?: string;
   inputModes: LocalSessionInputMode[];
   prepare?: OpenClawPluginNodeHostCommand["prepare"];
+  /**
+   * One-time machine-side enablement when the person pre-consented with
+   * `openclaw connect --share <id>` (e.g. installing harness hooks). Returns
+   * operator-facing notes; failures are reported, never fatal.
+   */
+  enableSharing?: (context: { env: NodeJS.ProcessEnv }) => Promise<string[]>;
   isAvailable?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => boolean;
   watchAvailability?: OpenClawPluginNodeHostCommand["watchAvailability"];
   start(
@@ -238,10 +245,40 @@ async function runLocalSessionSourceChannel(
       return;
     }
     switch (frame.type) {
-      case "offer":
-        recordLocalSessionOffer({ sourceId: definition.id, enrollment: frame.enrollment });
+      case "offer": {
+        const paired = (await loadNodeHostConfigReadOnly())?.gateway;
+        const recorded = recordLocalSessionOffer({
+          sourceId: definition.id,
+          enrollment: frame.enrollment,
+          ...(paired?.host && paired.port
+            ? {
+                gateway: {
+                  host: paired.host,
+                  port: paired.port,
+                  contextPath: paired.contextPath ?? "",
+                },
+              }
+            : {}),
+        });
+        if (recorded.autoAccepted) {
+          console.error(
+            `local session source ${definition.id}: sharing with ${frame.enrollment.requester.displayName}'s team accepted from your connect command`,
+          );
+          if (definition.enableSharing) {
+            try {
+              for (const note of await definition.enableSharing({ env: process.env })) {
+                console.error(`local session source ${definition.id}: ${note}`);
+              }
+            } catch (error) {
+              console.error(
+                `local session source ${definition.id}: enablement failed: ${String(error)}`,
+              );
+            }
+          }
+        }
         ensureConsentWatcher();
         return;
+      }
       case "resume": {
         // The Gateway side can open this duplex on its own; only a consent the
         // person recorded here (openclaw sessions share --accept) may publish.

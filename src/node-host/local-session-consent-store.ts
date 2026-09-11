@@ -16,6 +16,7 @@ const enrollmentSummarySchema = z
     agentId: z.string().min(1),
     requester: z.object({ profileId: z.string().min(1), displayName: z.string().min(1) }),
     audienceLabel: z.string().min(1),
+    setupId: z.string().min(1).optional(),
   })
   .strict();
 
@@ -38,17 +39,42 @@ const consentSchema = z
   })
   .strict();
 
+/**
+ * `openclaw connect --share <source>`: the person already said yes on this
+ * machine, so the first offer for that source is accepted without a prompt.
+ */
+const gatewayOriginSchema = z
+  .object({ host: z.string().min(1), port: z.number().int().positive(), contextPath: z.string() })
+  .strict();
+
+const preconsentSchema = z
+  .object({
+    sourceId: z.string().min(1),
+    /** The Gateway `openclaw connect` paired with; an offer from any other Gateway still prompts. */
+    gateway: gatewayOriginSchema,
+    /** The pairing setup the minted command names; only that setup's enrollment is accepted. */
+    setupId: z.string().min(1),
+    decidedAtMs: z.number().int().nonnegative(),
+    expiresAtMs: z.number().int().nonnegative(),
+  })
+  .strict();
+
 const stateSchema = z
   .object({
     version: z.literal(1),
     offers: z.array(offerSchema),
     consents: z.array(consentSchema),
+    preconsents: z.array(preconsentSchema).optional(),
   })
   .strict();
 
 export type LocalSessionOffer = z.infer<typeof offerSchema>;
 export type LocalSessionConsent = z.infer<typeof consentSchema>;
-type LocalSessionConsentState = z.infer<typeof stateSchema>;
+export type LocalSessionPreconsent = z.infer<typeof preconsentSchema>;
+export type LocalSessionGatewayOrigin = z.infer<typeof gatewayOriginSchema>;
+type LocalSessionConsentState = z.infer<typeof stateSchema> & {
+  preconsents: LocalSessionPreconsent[];
+};
 
 function normalizeState(raw: unknown, now: number): LocalSessionConsentState {
   const parsed = stateSchema.safeParse(raw);
@@ -56,7 +82,39 @@ function normalizeState(raw: unknown, now: number): LocalSessionConsentState {
   return {
     ...state,
     offers: state.offers.filter((offer) => now - offer.receivedAtMs < OFFER_TTL_MS),
+    preconsents: (state.preconsents ?? []).filter((entry) => entry.expiresAtMs > now),
   };
+}
+
+/** Consent given up front on this machine; consumed by the first matching offer. */
+export function recordLocalSessionPreconsent(
+  params: { sourceId: string; gateway: LocalSessionGatewayOrigin; setupId: string },
+  options: OpenClawStateDatabaseOptions = {},
+): LocalSessionPreconsent {
+  const now = Date.now();
+  const { sourceId, gateway, setupId } = params;
+  const preconsent = {
+    sourceId,
+    gateway,
+    setupId,
+    decidedAtMs: now,
+    expiresAtMs: now + OFFER_TTL_MS,
+  };
+  updateConfigMachineState<LocalSessionConsentState>(
+    LOCAL_SESSION_CONSENT_STATE_KEY,
+    (current) => {
+      const state = normalizeState(current, now);
+      return {
+        ...state,
+        preconsents: [
+          ...state.preconsents.filter((entry) => entry.sourceId !== sourceId),
+          preconsent,
+        ],
+      };
+    },
+    options,
+  );
+  return preconsent;
 }
 
 export function readLocalSessionConsentState(
@@ -68,12 +126,22 @@ export function readLocalSessionConsentState(
   );
 }
 
-/** Record a Gateway offer; repeated offers for one enrollment refresh the row. */
+/**
+ * Record a Gateway offer; repeated offers for one enrollment refresh the row. An
+ * offer covered by a pre-consent is accepted on the spot (the pre-consent is
+ * spent) and reported so the runtime can finish source-side enablement.
+ */
 export function recordLocalSessionOffer(
-  params: { sourceId: string; enrollment: LocalSessionEnrollmentSummary },
+  params: {
+    sourceId: string;
+    enrollment: LocalSessionEnrollmentSummary;
+    /** The Gateway this offer arrived from; absent means no pre-consent can apply. */
+    gateway?: LocalSessionGatewayOrigin;
+  },
   options: OpenClawStateDatabaseOptions = {},
-): void {
+): { autoAccepted: boolean } {
   const now = Date.now();
+  let autoAccepted = false;
   updateConfigMachineState<LocalSessionConsentState>(
     LOCAL_SESSION_CONSENT_STATE_KEY,
     (current) => {
@@ -84,18 +152,52 @@ export function recordLocalSessionOffer(
       if (alreadyDecided) {
         return state;
       }
+      const offers = state.offers.filter(
+        (offer) => offer.enrollment.enrollmentId !== params.enrollment.enrollmentId,
+      );
+      const origin = params.gateway;
+      const offeredSetup = params.enrollment.setupId;
+      // The person consented to one minted request: same source, same Gateway,
+      // and the setup that request named. Anything else is an ordinary prompt.
+      const preconsent =
+        origin && offeredSetup
+          ? state.preconsents.find(
+              (entry) =>
+                entry.sourceId === params.sourceId &&
+                entry.setupId === offeredSetup &&
+                entry.gateway.host === origin.host &&
+                entry.gateway.port === origin.port &&
+                entry.gateway.contextPath === origin.contextPath,
+            )
+          : undefined;
+      if (preconsent) {
+        autoAccepted = true;
+        return {
+          ...state,
+          offers,
+          preconsents: state.preconsents.filter((entry) => entry !== preconsent),
+          consents: [
+            ...state.consents,
+            {
+              sourceId: params.sourceId,
+              enrollment: params.enrollment,
+              decision: "accepted",
+              decidedAtMs: now,
+            },
+          ],
+        };
+      }
       return {
         ...state,
         offers: [
-          ...state.offers.filter(
-            (offer) => offer.enrollment.enrollmentId !== params.enrollment.enrollmentId,
-          ),
+          ...offers,
           { sourceId: params.sourceId, enrollment: params.enrollment, receivedAtMs: now },
         ],
       };
     },
     options,
   );
+  return { autoAccepted };
 }
 
 /** The person's decision, taken by the local CLI. Moves the offer into consents. */

@@ -15,7 +15,7 @@ import {
 
 type LocalSessionDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "local_session_enrollments" | "local_session_exclusions"
+  "local_session_enrollments" | "local_session_exclusions" | "local_session_connect_intents"
 >;
 type EnrollmentRow = Selectable<OpenClawStateKyselyDatabase["local_session_enrollments"]>;
 
@@ -34,7 +34,8 @@ export type LocalSessionEnrollment = {
   expiresAtMs: number;
   confirmedAtMs?: number;
   endedAtMs?: number;
-  reason?: string;
+  reason?: string /** Pairing setup of the profile-minted connect link that created this row. */;
+  setupId?: string;
 };
 
 /** A pending offer the device never answered expires; the row stays as a visible outcome. */
@@ -60,6 +61,7 @@ function rowToEnrollment(row: EnrollmentRow): LocalSessionEnrollment {
     ...(row.confirmed_at_ms === null ? {} : { confirmedAtMs: row.confirmed_at_ms }),
     ...(row.ended_at_ms === null ? {} : { endedAtMs: row.ended_at_ms }),
     ...(row.reason === null ? {} : { reason: row.reason }),
+    ...(row.setup_id === null ? {} : { setupId: row.setup_id }),
   };
 }
 
@@ -112,6 +114,7 @@ export function createLocalSessionEnrollment(
     pluginId: string;
     sourceId: string;
     agentId: string;
+    setupId?: string;
   },
   options: OpenClawStateDatabaseOptions = {},
 ): LocalSessionEnrollment {
@@ -152,6 +155,7 @@ export function createLocalSessionEnrollment(
           confirmed_at_ms: null,
           ended_at_ms: null,
           reason: null,
+          setup_id: input.setupId ?? null,
         }),
       );
     },
@@ -290,4 +294,84 @@ export function setLocalSessionExclusion(
     options,
     { operationLabel: "local-session-exclusions.set" },
   );
+}
+
+export type LocalSessionConnectIntent = {
+  setupId: string;
+  ownerProfileId: string;
+  ownerLabel: string;
+  agentId: string;
+  sourceIds: string[];
+  createdAtMs: number;
+  expiresAtMs: number;
+};
+
+/** Remember what a profile-minted connect link is meant to share once its device pairs. */
+export function createLocalSessionConnectIntent(
+  intent: LocalSessionConnectIntent,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    ensureLocalSessionSchema(db);
+    executeSqliteQuerySync(
+      db,
+      kysely(db)
+        .insertInto("local_session_connect_intents")
+        .values({
+          setup_id: intent.setupId,
+          owner_profile_id: intent.ownerProfileId,
+          owner_label: intent.ownerLabel,
+          agent_id: intent.agentId,
+          source_ids_json: JSON.stringify(intent.sourceIds),
+          created_at_ms: intent.createdAtMs,
+          expires_at_ms: intent.expiresAtMs,
+          activated_device_id: null,
+          activated_at_ms: null,
+        }),
+    );
+  }, options);
+}
+
+/**
+ * Claim the intent for the device that redeemed its setup: exactly one device
+ * activates it, and only while the link's own deadline still holds.
+ */
+export function activateLocalSessionConnectIntent(
+  params: { setupId: string; deviceId: string },
+  options: OpenClawStateDatabaseOptions = {},
+): LocalSessionConnectIntent | undefined {
+  const now = Date.now();
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    ensureLocalSessionSchema(db);
+    const store = kysely(db);
+    const row = executeSqliteQuerySync(
+      db,
+      store
+        .selectFrom("local_session_connect_intents")
+        .selectAll()
+        .where("setup_id", "=", params.setupId),
+    ).rows[0];
+    if (!row || row.activated_at_ms !== null || row.expires_at_ms <= now) {
+      return undefined;
+    }
+    executeSqliteQuerySync(
+      db,
+      store
+        .updateTable("local_session_connect_intents")
+        .set({ activated_device_id: params.deviceId, activated_at_ms: now })
+        .where("setup_id", "=", params.setupId),
+    );
+    const parsed: unknown = JSON.parse(row.source_ids_json);
+    return {
+      setupId: row.setup_id,
+      ownerProfileId: row.owner_profile_id,
+      ownerLabel: row.owner_label,
+      agentId: row.agent_id,
+      sourceIds: Array.isArray(parsed)
+        ? parsed.filter((id): id is string => typeof id === "string")
+        : [],
+      createdAtMs: row.created_at_ms,
+      expiresAtMs: row.expires_at_ms,
+    };
+  }, options);
 }

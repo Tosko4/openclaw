@@ -82,6 +82,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "worker_environment_ssh_fallback_ports",
   "worker_session_placement_moves",
   "local_session_enrollments",
+  "local_session_connect_intents",
   "local_session_exclusions",
 ] as const;
 export const LAZY_ADDITIVE_STATE_INDEXES = [

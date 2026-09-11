@@ -690,11 +690,26 @@ CREATE TABLE IF NOT EXISTS local_session_enrollments (
   expires_at_ms INTEGER NOT NULL,
   confirmed_at_ms INTEGER,
   ended_at_ms INTEGER,
-  reason TEXT
+  reason TEXT,
+  setup_id TEXT
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_local_session_enrollments_device
   ON local_session_enrollments(device_id, source_id, state);
+
+-- A profile-minted connect link: which sources the person asked to share, bound
+-- to the pairing setup so the paired device enrolls under that profile at once.
+CREATE TABLE IF NOT EXISTS local_session_connect_intents (
+  setup_id TEXT NOT NULL PRIMARY KEY,
+  owner_profile_id TEXT NOT NULL,
+  owner_label TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  source_ids_json TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL,
+  activated_device_id TEXT,
+  activated_at_ms INTEGER
+) STRICT;
 
 -- Per-thread unshare survives enrollment recreation until the owner reshares explicitly.
 CREATE TABLE IF NOT EXISTS local_session_exclusions (
