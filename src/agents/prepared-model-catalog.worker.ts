@@ -2,10 +2,7 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  copyConfigResolutionFacts,
-  restoreConfigResolutionFacts,
-} from "../config/resolution-facts.js";
+import { restoreConfigResolutionFacts } from "../config/resolution-facts.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { serveWorkerTasks } from "../infra/worker-task-pool.js";
 import { listRuntimePluginIdsFromRegistry } from "../plugins/active-runtime-registry.js";
@@ -93,14 +90,10 @@ function refreshAuthStore(params: {
 }
 
 async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
-  // Restore the captured pair before discovery, including known-empty facts and shared identity.
+  // Restore each captured config's complete provenance before discovery, including known-empty facts.
   // Without loader facts, decoded literal strings can be reparsed as references.
   restoreConfigResolutionFacts(value.input.config, value.configResolutionFacts);
-  if (value.sourceConfigResolutionFacts === value.configResolutionFacts) {
-    copyConfigResolutionFacts(value.input.config, value.sourceConfigForSecrets);
-  } else {
-    restoreConfigResolutionFacts(value.sourceConfigForSecrets, value.sourceConfigResolutionFacts);
-  }
+  restoreConfigResolutionFacts(value.sourceConfigForSecrets, value.sourceConfigResolutionFacts);
   setRuntimeConfigSnapshot(value.input.config, value.sourceConfigForSecrets);
   const { prepareWorkspaceBuildGroup } = await import("./prepared-model-runtime.facts.js");
   // Rediscovery under agent workspaces or runtime activation overlays loses the owner's

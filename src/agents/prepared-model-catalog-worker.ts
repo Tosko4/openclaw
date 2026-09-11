@@ -1,8 +1,5 @@
 /** Runs complete model-catalog discovery outside the Gateway event loop. */
-import {
-  getConfigResolutionFacts,
-  serializeConfigResolutionFacts,
-} from "../config/resolution-facts.js";
+import { serializeConfigResolutionFacts } from "../config/resolution-facts.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -168,10 +165,7 @@ export function createPreparedModelCatalogWorkerInput(params: {
   // Capture the authored pair now; structured cloning cannot carry process-local Ref provenance.
   const sourceConfigForSecrets = projectConfigOntoRuntimeSourceSnapshot(source.config);
   const configResolutionFacts = serializeConfigResolutionFacts(source.config);
-  const sourceConfigResolutionFacts =
-    getConfigResolutionFacts(source.config) === getConfigResolutionFacts(sourceConfigForSecrets)
-      ? configResolutionFacts
-      : serializeConfigResolutionFacts(sourceConfigForSecrets);
+  const sourceConfigResolutionFacts = serializeConfigResolutionFacts(sourceConfigForSecrets);
   const authStore = cloneAuthProfileStore(params.agentFacts.authStore);
   const providerIds = [...params.agentFacts.providerIds];
   const { normalizePluginId: _normalizePluginId, ...pluginMetadataSnapshot } =
