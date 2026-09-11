@@ -12,6 +12,7 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
+import { isForeignBundledPluginRoot } from "./bundled-dir.js";
 import {
   isPluginCandidateInstallOwnerAmbiguous,
   resolvePluginCandidateInstallOwner,
@@ -704,6 +705,7 @@ function resolveDuplicatePrecedenceRank(params: {
   }
   if (
     params.candidate.origin === "global" &&
+    !isForeignBundledPluginRoot(params.candidate.rootDir) &&
     matchesInstalledPluginRecord({
       pluginId: params.pluginId,
       candidate: params.candidate,
@@ -748,9 +750,11 @@ function isIntentionalInstalledBundledDuplicate(params: {
   });
   return (
     (leftIsInstalled &&
+      !isForeignBundledPluginRoot(params.left.rootDir) &&
       params.right.origin === "bundled" &&
       !isBundledPluginInsideDevSourceRoot({ rootDir: params.right.rootDir, env: params.env })) ||
     (rightIsInstalled &&
+      !isForeignBundledPluginRoot(params.right.rootDir) &&
       params.left.origin === "bundled" &&
       !isBundledPluginInsideDevSourceRoot({ rootDir: params.left.rootDir, env: params.env }))
   );
