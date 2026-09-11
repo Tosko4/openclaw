@@ -296,7 +296,6 @@ export async function runWriteConfigHealth(
     // after the atomic write succeeds so later failures cannot mark volatile state durable.
     ctx.cfgForPersistence = structuredClone(ctx.cfg);
     delete ctx.configResult.sourceConfigForWrite;
-    delete ctx.configResult.unsetPaths;
     if (ctx.configResult.shouldWriteConfig === true) {
       ctx.configResultWriteCommitted = true;
       delete ctx.configResult.confirmedConfigSource;
