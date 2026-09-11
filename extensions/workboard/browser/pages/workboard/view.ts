@@ -611,7 +611,7 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
           : nothing
       }
       ${
-        dispatchSummaryMessage(state)
+        !dialogOpen && dispatchSummaryMessage(state)
           ? html`<div class="callout">${dispatchSummaryMessage(state)}</div>`
           : nothing
       }
