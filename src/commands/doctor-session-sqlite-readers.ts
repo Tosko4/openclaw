@@ -20,10 +20,10 @@ import {
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
 } from "../config/sessions/session-entry-codec.js";
+import { resolveTargetSqlitePath } from "../config/sessions/targets-existing.js";
 import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-targets.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
 

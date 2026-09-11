@@ -11,6 +11,7 @@ import { resolveSessionFilePathCore } from "../config/sessions/paths.js";
 import { importSqliteSessionRowsBatch } from "../config/sessions/session-accessor.sqlite-import.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
+import { resolveTargetSqlitePath } from "../config/sessions/targets-existing.js";
 import {
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreCandidateTargetsSync,
@@ -76,7 +77,6 @@ import {
 import { recoverDoctorSessionSqliteTargets } from "./doctor-session-sqlite-recover-report.js";
 import { restoreDoctorSessionSqliteTargets } from "./doctor-session-sqlite-restore-report.js";
 import { reconcileSessionSqliteMigrationPublications } from "./doctor-session-sqlite-restore.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-targets.js";
 import {
   createDoctorSessionSqliteTotals,
   createDoctorSessionSqliteTargetReport,

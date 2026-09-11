@@ -24,6 +24,7 @@ import { isSetupCredentialAccessActive } from "../auth-profiles/setup-access.js"
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
 import { resolveProviderDirectAuthPlanningEvidence } from "../model-auth-env.js";
+import { assertStartupProviderUseBindingCurrent } from "../model-auth-runtime-config.js";
 import { ProviderAuthError } from "../model-auth-runtime-shared.js";
 import {
   hasUsableCustomProviderApiKey,
@@ -230,6 +231,11 @@ function resolvePreparedProviderEntryApiKeyProfileReference(
 export function prepareAgentRuntimeAuth(
   input: PrepareAgentRuntimeAuthPlanParams,
 ): PreparedAgentRuntimeAuth {
+  assertStartupProviderUseBindingCurrent({
+    ...input,
+    cfg: input.config,
+    store: input.authProfileStore,
+  });
   const params = { ...input, config: resolveModelProviderAuthConfig(input) };
   const providerEnvVars = resolveProviderBindingEnvVarCandidates(input);
   // Route projection may add a provider entry; only authored config grants use.
