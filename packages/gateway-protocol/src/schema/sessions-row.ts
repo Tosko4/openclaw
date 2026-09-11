@@ -96,7 +96,7 @@ const SessionSwarmSummarySchema = closedObject({
   otherActiveGroups: Type.Integer({ minimum: 0 }),
 });
 /** Live local session projection: the paired device's harness owns execution. */
-export const SessionLocalSourceSchema = closedObject({
+const SessionLocalSourceSchema = closedObject({
   sourceId: Type.String(),
   sourceLabel: Type.String(),
   deviceId: Type.String(),

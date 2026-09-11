@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 // Boundary proof for the shipped Claude channel artifacts: the real MCP server
 // process speaks the channel contract to a real MCP client, and the hook script
 // reports its session to the bridge socket.
@@ -11,9 +12,11 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createClaudeChannelBridge, type ClaudeChannelBridge } from "./local-session-bridge.js";
-import { resolveClaudeChannelArtifact } from "./local-session-setup.js";
 
 const SESSION_ID = "12345678-aaaa-4bbb-8ccc-1234567890ab";
+// The shipped artifacts live next to the plugin source; the test runs the real files.
+const channelArtifact = (fileName: string) =>
+  fileURLToPath(new URL(`./claude-channel/${fileName}`, import.meta.url));
 const channelNotificationSchema = z.object({
   method: z.literal("notifications/claude/channel"),
   params: z.object({ content: z.string(), meta: z.record(z.string(), z.string()) }),
@@ -62,15 +65,11 @@ describe("Claude channel artifacts", () => {
 
   function runHook(event: string): Promise<number | null> {
     return new Promise((resolve, reject) => {
-      const child = spawn(
-        process.execPath,
-        [resolveClaudeChannelArtifact("openclaw-channel-hook.mjs")],
-        {
-          cwd,
-          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-          stdio: ["pipe", "ignore", "inherit"],
-        },
-      );
+      const child = spawn(process.execPath, [channelArtifact("openclaw-channel-hook.mjs")], {
+        cwd,
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        stdio: ["pipe", "ignore", "inherit"],
+      });
       child.on("error", reject);
       child.on("exit", (code) => resolve(code));
       child.stdin.end(
@@ -93,7 +92,7 @@ describe("Claude channel artifacts", () => {
     await client.connect(
       new StdioClientTransport({
         command: process.execPath,
-        args: [resolveClaudeChannelArtifact("openclaw-channel-server.mjs")],
+        args: [channelArtifact("openclaw-channel-server.mjs")],
         cwd,
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
         stderr: "inherit",

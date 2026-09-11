@@ -69,7 +69,6 @@ const stateSchema = z
   })
   .strict();
 
-export type LocalSessionOffer = z.infer<typeof offerSchema>;
 export type LocalSessionConsent = z.infer<typeof consentSchema>;
 export type LocalSessionPreconsent = z.infer<typeof preconsentSchema>;
 export type LocalSessionGatewayOrigin = z.infer<typeof gatewayOriginSchema>;

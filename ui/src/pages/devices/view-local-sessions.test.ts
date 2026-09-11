@@ -4,7 +4,6 @@ import type { LocalSessionEnrollment } from "../../../../packages/gateway-protoc
 import { i18n } from "../../i18n/index.ts";
 import { renderDevicesContainer } from "../../test-helpers/devices-view.ts";
 import type { LocalSessionSharingProps } from "./view-local-sessions.ts";
-import { resolveLocalSessionEnrollmentView } from "./view-local-sessions.ts";
 
 const codexSource = {
   pluginId: "codex",
@@ -204,20 +203,18 @@ describe("live local session sharing rows", () => {
       enrollment({ enrollmentId: "live", state: "active", requestedAtMs: 0 }),
       enrollment({ enrollmentId: "other-device", state: "active", deviceId: "mac-2" }),
     ];
-    expect(resolveLocalSessionEnrollmentView(rows, "mac-1", "codex")).toMatchObject({
-      kind: "active",
-      enrollment: { enrollmentId: "live" },
-    });
-    expect(resolveLocalSessionEnrollmentView(rows.slice(0, 2), "mac-1", "codex")).toMatchObject({
-      kind: "pending",
-      enrollment: { enrollmentId: "pending" },
-    });
-    expect(resolveLocalSessionEnrollmentView(rows.slice(0, 1), "mac-1", "codex")).toMatchObject({
-      kind: "none",
-      last: { enrollmentId: "old" },
-    });
-    expect(resolveLocalSessionEnrollmentView(rows, "mac-1", "claude-code")).toEqual({
-      kind: "none",
-    });
+    const codexRow = (enrollments: LocalSessionEnrollment[]) =>
+      sourceRow(
+        renderDevicesContainer({
+          nodes: [connectedNode],
+          localSessions: localSessions({ enrollments }),
+        }),
+        "codex",
+      );
+    expect(codexRow(rows).dataset.state).toBe("active");
+    expect(codexRow(rows.slice(0, 2)).dataset.state).toBe("pending");
+    const ended = codexRow(rows.slice(0, 1));
+    expect(ended.dataset.state).toBe("none");
+    expect(ended.textContent).toContain("expired");
   });
 });

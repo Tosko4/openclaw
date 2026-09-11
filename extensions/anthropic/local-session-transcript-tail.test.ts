@@ -2,10 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  convertClaudeTranscriptLine,
-  createClaudeTranscriptTailer,
-} from "./local-session-transcript-tail.js";
+import { createClaudeTranscriptTailer } from "./local-session-transcript-tail.js";
 
 const SESSION_ID = "11111111-2222-4333-8444-555555555555";
 const TS = "2026-09-10T20:07:11.304Z";
@@ -27,9 +24,25 @@ function assistantLine(uuid: string, content: unknown, stopReason = "tool_use") 
   });
 }
 
-const convert = (text: string) => convertClaudeTranscriptLine(Buffer.from(text.trimEnd()), 7);
+describe("transcript line conversion", () => {
+  let dir: string;
 
-describe("convertClaudeTranscriptLine", () => {
+  beforeEach(async () => {
+    dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "claude-line-")));
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  // One line through the real tailer: the first emitted record carries seq 1.
+  const convert = async (text: string) => {
+    const filePath = path.join(dir, `${SESSION_ID}.jsonl`);
+    await fs.writeFile(filePath, `${text.trimEnd()}\n`);
+    const { records } = await createClaudeTranscriptTailer(filePath).bootstrap(0);
+    return records[0];
+  };
+
   it.each([
     ["user string", userLine("u1", "hello"), { kind: "user", text: "hello" }],
     [
@@ -68,8 +81,8 @@ describe("convertClaudeTranscriptLine", () => {
       ),
       { kind: "user", clientId: "in_123" },
     ],
-  ])("converts %s", (_label, raw, expected) => {
-    expect(convert(raw)).toMatchObject({ seq: 7, ts: TS_MS, ...expected });
+  ])("converts %s", async (_label, raw, expected) => {
+    expect(await convert(raw)).toMatchObject({ seq: 1, ts: TS_MS, ...expected });
   });
 
   it.each([
@@ -79,8 +92,8 @@ describe("convertClaudeTranscriptLine", () => {
     ["hook summaries", line({ type: "system", subtype: "stop_hook_summary", uuid: "h1" })],
     ["records without a uuid", line({ type: "user", message: { role: "user", content: "x" } })],
     ["malformed JSON", "{not json\n"],
-  ])("skips %s", (_label, raw) => {
-    expect(convert(raw)).toBeUndefined();
+  ])("skips %s", async (_label, raw) => {
+    expect(await convert(raw)).toBeUndefined();
   });
 });
 

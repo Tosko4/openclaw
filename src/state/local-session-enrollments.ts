@@ -39,7 +39,7 @@ export type LocalSessionEnrollment = {
 };
 
 /** A pending offer the device never answered expires; the row stays as a visible outcome. */
-export const LOCAL_SESSION_ENROLLMENT_PENDING_TTL_MS = 24 * 60 * 60 * 1000;
+const LOCAL_SESSION_ENROLLMENT_PENDING_TTL_MS = 24 * 60 * 60 * 1000;
 
 function kysely(db: Parameters<typeof getNodeSqliteKysely>[0]) {
   return getNodeSqliteKysely<LocalSessionDatabase>(db);

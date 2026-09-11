@@ -9,8 +9,8 @@ import { enableClaudeLocalSharing } from "./local-session-setup.js";
 import type { ClaudeLocalSessionSourceRuntimeOptions } from "./local-session-source.runtime.js";
 import { claudeProjectsAvailable } from "./session-catalog-home.js";
 
-export const CLAUDE_LOCAL_SESSION_SOURCE_ID = "claude";
-export const CLAUDE_LOCAL_SESSION_SOURCE_COMMAND = "anthropic.claude.localSessions.source.v1";
+const CLAUDE_LOCAL_SESSION_SOURCE_ID = "claude";
+const CLAUDE_LOCAL_SESSION_SOURCE_COMMAND = "anthropic.claude.localSessions.source.v1";
 
 const loadClaudeLocalSessionSourceRuntime = createLazyRuntimeModule(
   () => import("./local-session-source.runtime.js"),

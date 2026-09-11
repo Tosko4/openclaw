@@ -31,12 +31,12 @@ export type LocalSessionSharingProps = {
   onStopSharing: (enrollmentId: string) => void;
 };
 
-export type LocalSessionEnrollmentView =
+type LocalSessionEnrollmentView =
   | { kind: "none"; last?: LocalSessionEnrollment }
   | { kind: "pending"; enrollment: LocalSessionEnrollment }
   | { kind: "active"; enrollment: LocalSessionEnrollment };
 
-export function offeredLocalSessionSources(
+function offeredLocalSessionSources(
   sources: LocalSessionSourceDescriptor[],
   commands: readonly string[],
 ): LocalSessionSourceDescriptor[] {
@@ -45,7 +45,7 @@ export function offeredLocalSessionSources(
 }
 
 /** One live row wins: active over pending; otherwise the latest ended request explains itself. */
-export function resolveLocalSessionEnrollmentView(
+function resolveLocalSessionEnrollmentView(
   enrollments: readonly LocalSessionEnrollment[],
   deviceId: string,
   sourceId: string,
@@ -67,7 +67,7 @@ export function resolveLocalSessionEnrollmentView(
   return last ? { kind: "none", last } : { kind: "none" };
 }
 
-export function localSessionAcceptCommand(enrollmentId: string): string {
+function localSessionAcceptCommand(enrollmentId: string): string {
   return `openclaw sessions share --accept ${enrollmentId}`;
 }
 

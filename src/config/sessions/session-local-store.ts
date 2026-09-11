@@ -255,20 +255,3 @@ export function readLocalSessionInput(
     return row ? rowToInput(row) : undefined;
   });
 }
-
-export function listLocalSessionInputs(
-  scope: SessionAccessScope,
-  params: { sessionKey: string; limit?: number },
-): LocalSessionInputRecord[] {
-  return read(scope, [], (database) =>
-    executeSqliteQuerySync(
-      database.db,
-      kysely(database)
-        .selectFrom("session_local_inputs")
-        .selectAll()
-        .where("session_key", "=", params.sessionKey)
-        .orderBy("accepted_at", "desc")
-        .limit(params.limit ?? 50),
-    ).rows.map(rowToInput),
-  );
-}

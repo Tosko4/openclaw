@@ -7,18 +7,17 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { localInputFooterLabel, readLocalInputFooter } from "./chat-local-input-footer.ts";
 import {
   applyLocalInputEvent,
-  readRejectedLocalInput,
   recordLocalInputSubmission,
   resolveActiveRunSend,
+  resolveLocalSessionComposer,
   retireLocalInputsForMessages,
-  takeRejectedLocalInput,
 } from "./chat-local-input.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 
 const sessionKey = "agent:main:live-local";
 
-function makeHost(inputModes: Array<"steer" | "followup"> = ["steer"]) {
-  const localSource: SessionLocalSource = {
+function makeLocalSource(inputModes: Array<"steer" | "followup"> = ["steer"]): SessionLocalSource {
+  return {
     sourceId: "codex",
     sourceLabel: "Codex",
     deviceId: "mac-1",
@@ -30,6 +29,10 @@ function makeHost(inputModes: Array<"steer" | "followup"> = ["steer"]) {
     canInput: true,
     inputModes,
   };
+}
+
+function makeHost(inputModes: Array<"steer" | "followup"> = ["steer"]) {
+  const localSource = makeLocalSource(inputModes);
   const host = makeChatHost({
     sessionKey,
     sessionsResult: sessionsResult(
@@ -142,12 +145,19 @@ describe("live local input receipts", () => {
         reason: "thread closed",
       },
     ]);
-    expect(readRejectedLocalInput(host)?.inputId).toBe("in-1");
-    expect(takeRejectedLocalInput(host, "missing")).toBeNull();
-    const receipt = takeRejectedLocalInput(host, "in-1");
-    expect(receipt?.message.text).toBe("hello in-1");
+    const source = makeLocalSource();
+    const sends: string[] = [];
+    const sender = Object.assign(host, {
+      handleSendChat: async (text?: string) => {
+        sends.push(text ?? "");
+      },
+    });
+    const composer = resolveLocalSessionComposer(sender, source);
+    expect(composer?.retry?.id).toBe("in-1");
+    composer?.retry?.onRetry();
+    expect(sends).toEqual(["hello in-1"]);
     expect(getChatSessionProjection(host).messages).toEqual([]);
-    expect(readRejectedLocalInput(host)).toBeUndefined();
+    expect(resolveLocalSessionComposer(sender, source)?.retry).toBeUndefined();
   });
 
   it("labels each receipt state for the reader", () => {

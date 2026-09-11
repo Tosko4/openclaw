@@ -60,7 +60,7 @@ const MAX_TRACKED_LOCAL_INPUTS = 32;
 const localInputReceipts = new WeakMap<object, Map<string, LocalInputReceipt>>();
 
 /** The live local source behind a session key, from the shared session roster. */
-export function readLocalSessionSource(
+function readLocalSessionSource(
   host: { sessions?: Partial<SessionCapability> },
   sessionKey: string,
 ): SessionLocalSource | undefined {
@@ -277,7 +277,7 @@ export function retireLocalInputsForMessages(host: ChatState, messages: readonly
 }
 
 /** The rejected input whose bubble offers Retry; newest rejection wins. */
-export function readRejectedLocalInput(host: ChatState): LocalInputReceipt | undefined {
+function readRejectedLocalInput(host: ChatState): LocalInputReceipt | undefined {
   const receipts = localInputReceipts.get(host);
   if (!receipts) {
     return undefined;
@@ -286,7 +286,7 @@ export function readRejectedLocalInput(host: ChatState): LocalInputReceipt | und
 }
 
 /** Remove a rejected input so its text can be resubmitted as a fresh send. */
-export function takeRejectedLocalInput(host: ChatState, inputId: string): LocalInputReceipt | null {
+function takeRejectedLocalInput(host: ChatState, inputId: string): LocalInputReceipt | null {
   const receipts = localInputReceipts.get(host);
   const receipt = receipts?.get(inputId);
   if (!receipt || receipt.state !== "rejected") {

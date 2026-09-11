@@ -9,7 +9,7 @@ import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 type ChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error" | "submitted";
 
 // Lead follow-up: replace with the gateway-protocol export once the chat.send ack schema carries it.
-export type ChatSendAckLocalInput = { inputId: string; state: "accepted" };
+type ChatSendAckLocalInput = { inputId: string; state: "accepted" };
 
 type ChatSendAckServerTiming = {
   receivedToAckMs?: number;

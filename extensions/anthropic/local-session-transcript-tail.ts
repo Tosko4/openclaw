@@ -18,7 +18,7 @@ import { collectTranscriptText } from "./session-catalog-transcript.js";
 
 const READ_CHUNK_BYTES = 256 * 1024;
 /** Matches the catalog transcript reader: larger transcripts are not projected live. */
-export const MAX_TAILED_TRANSCRIPT_BYTES = 64 * 1024 * 1024;
+const MAX_TAILED_TRANSCRIPT_BYTES = 64 * 1024 * 1024;
 /** Tool inputs are JSON; keep the model-visible call bounded well under the record ceiling. */
 const TOOL_INPUT_MAX_CHARS = 8 * 1024;
 /** Channel deliveries land in the transcript as `<channel source="openclaw" … openclaw_input_id="…">`. */
@@ -86,7 +86,7 @@ function transcriptText(content: unknown): string {
  * Callers assign `seq`; the conversion itself is pure so a rescan reproduces
  * the same records for the same bytes.
  */
-export function convertClaudeTranscriptLine(
+function convertClaudeTranscriptLine(
   line: Buffer,
   seq: number,
 ): ClaudeTranscriptRecord | undefined {

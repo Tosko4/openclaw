@@ -13,14 +13,14 @@ import {
   readNonEmptyStringPreservingWhitespace,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export const CLAUDE_CHANNEL_SOCKET_NAME = "claude-channel.sock";
+const CLAUDE_CHANNEL_SOCKET_NAME = "claude-channel.sock";
 /** Claude Code waits for hooks; a channel that never acks must not stall the Gateway input path. */
 const INPUT_ACK_TIMEOUT_MS = 5_000;
 /** Hook and MCP startup race at session start; keep an unmatched hello/hook around this long. */
 const PAIRING_WINDOW_MS = 60_000;
 const MAX_LINE_BYTES = 256 * 1024;
 
-export type ClaudeHookEvent = "SessionStart" | "UserPromptSubmit" | "Stop" | "SessionEnd";
+type ClaudeHookEvent = "SessionStart" | "UserPromptSubmit" | "Stop" | "SessionEnd";
 
 export type ClaudeChannelBridgeEvents = {
   /** A channel process is now paired with (or unpaired from) a Claude session. */

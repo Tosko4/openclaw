@@ -175,12 +175,14 @@ export class ChatPane extends ChatPaneLayoutRender {
       isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.list") === true;
     // Placement progress explains this gate; other gates need a reason or sessionDisabledBanner.
     const modelUnavailableMessage = chatModelUnavailableMessage(modelUnavailableReason);
-    const disabledReason =
-      localSource?.blockedReason ??
-      modelUnavailableMessage ??
-      (sessionParticipationBlocked && !suggestionViewer
-        ? t("chat.sessionSharing.readOnlyNotice")
-        : null);
+    // A live local session runs on the sharer's laptop with its own model; the
+    // Gateway's model availability says nothing about whether it can take input.
+    const disabledReason = localSource
+      ? localSource.blockedReason
+      : (modelUnavailableMessage ??
+        (sessionParticipationBlocked && !suggestionViewer
+          ? t("chat.sessionSharing.readOnlyNotice")
+          : null));
     const typingEnabled =
       multiIdentity &&
       hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null) &&

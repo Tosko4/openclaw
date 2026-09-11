@@ -13,19 +13,18 @@ export const LOCAL_SESSION_BOOTSTRAP_MAX_BYTES = 512 * 1024;
 const nonEmpty = z.string().trim().min(1);
 const timestampMs = z.number().int().nonnegative();
 
-export const localSessionInputModeSchema = z.enum(["steer", "followup"]);
+const localSessionInputModeSchema = z.enum(["steer", "followup"]);
 export type LocalSessionInputMode = z.infer<typeof localSessionInputModeSchema>;
 
-export const localSessionRecordKindSchema = z.enum([
+const localSessionRecordKindSchema = z.enum([
   "user",
   "assistant",
   "reasoning",
   "toolCall",
   "toolResult",
 ]);
-export type LocalSessionRecordKind = z.infer<typeof localSessionRecordKindSchema>;
 
-export const localSessionRecordSchema = z
+const localSessionRecordSchema = z
   .object({
     /** Stable native identity; doubles as the transcript idempotency key. */
     id: nonEmpty,
@@ -43,7 +42,7 @@ export const localSessionRecordSchema = z
   .strict();
 export type LocalSessionRecord = z.infer<typeof localSessionRecordSchema>;
 
-export const localSessionThreadStateSchema = z.enum(["idle", "active", "closed", "unavailable"]);
+const localSessionThreadStateSchema = z.enum(["idle", "active", "closed", "unavailable"]);
 export type LocalSessionThreadState = z.infer<typeof localSessionThreadStateSchema>;
 
 const sourceHelloFrameSchema = z
@@ -107,8 +106,7 @@ const sourceTurnFrameSchema = z
   })
   .strict();
 
-export const localSessionInputOutcomeSchema = z.enum(["committed", "submitted", "rejected"]);
-export type LocalSessionInputOutcome = z.infer<typeof localSessionInputOutcomeSchema>;
+const localSessionInputOutcomeSchema = z.enum(["committed", "submitted", "rejected"]);
 
 const sourceInputResultFrameSchema = z
   .object({
@@ -121,7 +119,7 @@ const sourceInputResultFrameSchema = z
   })
   .strict();
 
-export const localSessionSourceFrameSchema = z.discriminatedUnion("type", [
+const localSessionSourceFrameSchema = z.discriminatedUnion("type", [
   sourceHelloFrameSchema,
   sourceConsentFrameSchema,
   sourceSessionFrameSchema,
@@ -182,7 +180,7 @@ const gatewayUnshareFrameSchema = z
 
 const gatewayRevokeFrameSchema = z.object({ type: z.literal("revoke") }).strict();
 
-export const localSessionGatewayFrameSchema = z.discriminatedUnion("type", [
+const localSessionGatewayFrameSchema = z.discriminatedUnion("type", [
   gatewayOfferFrameSchema,
   gatewayResumeFrameSchema,
   gatewayAckFrameSchema,

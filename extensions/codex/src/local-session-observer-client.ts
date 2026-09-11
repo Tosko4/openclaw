@@ -34,7 +34,7 @@ export class CodexObserverUncertainError extends Error {
   }
 }
 
-export class CodexObserverRpcError extends Error {
+class CodexObserverRpcError extends Error {
   constructor(
     method: string,
     readonly code: number | undefined,

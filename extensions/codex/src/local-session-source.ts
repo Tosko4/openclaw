@@ -37,7 +37,7 @@ import {
 } from "./local-session-observer-client.js";
 import { projectCodexThreadHistory, projectCodexThreadItem } from "./local-session-records.js";
 
-export const CODEX_LOCAL_SESSION_SOURCE_COMMAND = "codex.localSessions.source.v1";
+const CODEX_LOCAL_SESSION_SOURCE_COMMAND = "codex.localSessions.source.v1";
 
 /** Recent stored threads offered as resumable; older ones stay reachable by the user's own `codex resume`. */
 const LOADED_THREAD_PAGE_LIMIT = 100;

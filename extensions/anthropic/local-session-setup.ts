@@ -10,7 +10,7 @@ import { promisify } from "node:util";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveClaudeChannelBridgeEndpoint } from "./local-session-bridge.js";
 
-export const CLAUDE_CHANNEL_SERVER_NAME = "openclaw";
+const CLAUDE_CHANNEL_SERVER_NAME = "openclaw";
 const CLAUDE_CHANNEL_HOOK_EVENTS = [
   "SessionStart",
   "UserPromptSubmit",
@@ -31,7 +31,7 @@ export type ClaudeLocalSessionSetup = {
 };
 
 /** Resolve a shipped channel artifact next to this module (source tree or dist). */
-export function resolveClaudeChannelArtifact(fileName: string): string {
+function resolveClaudeChannelArtifact(fileName: string): string {
   return fileURLToPath(new URL(`./claude-channel/${fileName}`, import.meta.url));
 }
 
