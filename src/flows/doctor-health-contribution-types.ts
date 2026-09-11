@@ -34,6 +34,7 @@ type DoctorConfigResult = {
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
   explicitSetPaths?: readonly (readonly string[])[];
+  unsetPaths?: string[][];
   persistCanonicalAgentRoster?: boolean;
   skipWizardMetadataForIncludeWrite?: boolean;
   preservedLegacyRootKeys?: readonly string[];

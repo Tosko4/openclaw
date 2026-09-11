@@ -724,6 +724,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     sourceConfigValid: snapshot.valid,
     ...(legacyStep.partiallyValid === true ? { skipPluginValidationOnWrite: true } : {}),
     ...(shouldWriteConfig && explicitSetPaths.length > 0 ? { explicitSetPaths } : {}),
+    ...(shouldWriteConfig && providerUseBindingMigration.unsetPaths
+      ? { unsetPaths: providerUseBindingMigration.unsetPaths }
+      : {}),
     ...(shouldWriteConfig && persistCanonicalAgentRoster
       ? { persistCanonicalAgentRoster: true }
       : {}),

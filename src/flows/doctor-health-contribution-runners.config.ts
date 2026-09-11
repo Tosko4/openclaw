@@ -161,6 +161,12 @@ export async function runWriteConfigHealth(
             ...(ctx.configResult.explicitSetPaths
               ? { explicitSetPaths: ctx.configResult.explicitSetPaths }
               : {}),
+            unsetPaths: ctx.configResult.unsetPaths?.filter((path) => {
+              const value = getConfigValueAtPath(ctx.cfg, path);
+              return path.at(-1) === "baseUrl"
+                ? value === ""
+                : Array.isArray(value) && value.length === 0;
+            }),
             persistCanonicalAgentRoster: configResultWritePending
               ? ctx.configResult.persistCanonicalAgentRoster
               : undefined,
@@ -290,6 +296,7 @@ export async function runWriteConfigHealth(
     // after the atomic write succeeds so later failures cannot mark volatile state durable.
     ctx.cfgForPersistence = structuredClone(ctx.cfg);
     delete ctx.configResult.sourceConfigForWrite;
+    delete ctx.configResult.unsetPaths;
     if (ctx.configResult.shouldWriteConfig === true) {
       ctx.configResultWriteCommitted = true;
       delete ctx.configResult.confirmedConfigSource;
