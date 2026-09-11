@@ -1008,7 +1008,7 @@ describe("registerSlackMessageEvents", () => {
     expect(handleSlackMessage).toHaveBeenCalledOnce();
     expect(handleSlackMessage).toHaveBeenCalledWith(
       expect.objectContaining({ channel: testCase.channel }),
-      expect.objectContaining({ source: "app_mention", wasMentioned: true }),
+      expect.objectContaining({ source: "app_mention" }),
     );
   });
 

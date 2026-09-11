@@ -12,7 +12,6 @@ import type {
   GroupPolicy,
 } from "openclaw/plugin-sdk/config-contracts";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
-import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { logVerbose, getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -94,9 +93,7 @@ export type SlackMonitorContext = {
   apiAppId: string;
   installationIdentity: SlackInstallationIdentity;
 
-  historyLimit: number;
   dmHistoryLimit: number;
-  channelHistories: Map<string, HistoryEntry[]>;
   sessionScope: SessionScope;
   mainKey: string;
 
@@ -114,7 +111,6 @@ export type SlackMonitorContext = {
   reactionMode: SlackReactionNotificationMode;
   reactionAllowlist: Array<string | number>;
   replyToMode: "off" | "first" | "all" | "batched";
-  threadHistoryScope: "thread" | "channel";
   threadInheritParent: boolean;
   slashCommand: Required<import("openclaw/plugin-sdk/config-contracts").SlackSlashCommandConfig>;
   textLimit: number;
@@ -199,7 +195,6 @@ export function createSlackMonitorContext(params: {
   apiAppId: string;
   installationIdentity?: SlackInstallationIdentity;
 
-  historyLimit: number;
   dmHistoryLimit?: number;
   sessionScope: SessionScope;
   mainKey: string;
@@ -217,14 +212,12 @@ export function createSlackMonitorContext(params: {
   reactionMode: SlackReactionNotificationMode;
   reactionAllowlist: Array<string | number>;
   replyToMode: SlackMonitorContext["replyToMode"];
-  threadHistoryScope: SlackMonitorContext["threadHistoryScope"];
   threadInheritParent: SlackMonitorContext["threadInheritParent"];
   slashCommand: SlackMonitorContext["slashCommand"];
   textLimit: number;
   typingReaction: string;
   mediaMaxBytes: number;
 }): SlackMonitorContext {
-  const channelHistories = new Map<string, HistoryEntry[]>();
   const logger = getChildLogger({ module: "slack-auto-reply" });
   const channelCache = new Map<string, SlackChannelCacheEntry>();
   const userCache = new Map<string, { name?: string; imageUrl?: string }>();
@@ -607,9 +600,7 @@ export function createSlackMonitorContext(params: {
       kind: "degraded",
       reason: "auth_test_failed",
     },
-    historyLimit: params.historyLimit,
     dmHistoryLimit: Math.max(0, params.dmHistoryLimit ?? 0),
-    channelHistories,
     sessionScope: params.sessionScope,
     mainKey: params.mainKey,
     dmEnabled: params.dmEnabled,
@@ -626,7 +617,6 @@ export function createSlackMonitorContext(params: {
     reactionMode: params.reactionMode,
     reactionAllowlist: params.reactionAllowlist,
     replyToMode: params.replyToMode,
-    threadHistoryScope: params.threadHistoryScope,
     threadInheritParent: params.threadInheritParent,
     slashCommand: params.slashCommand,
     textLimit: params.textLimit,

@@ -14,8 +14,8 @@ export type GroupChatConfig = {
   mentionPatterns?: string[];
   historyLimit?: number;
   /**
-   * Controls how unmentioned always-on group chatter is submitted.
-   * Default: "user_request".
+   * Legacy inbound classification retained for configuration compatibility.
+   * Discord, Slack, and Telegram ignore it and require native addressing.
    */
   unmentionedInbound?: "user_request" | "room_event";
   /**

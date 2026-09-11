@@ -372,7 +372,7 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
     user_id: "bot-user",
     bot_id: "bot-id",
     app_id: "A_TEST",
-    team_id: "T_TEST",
+    team_id: "TTEST",
     is_enterprise_install: false,
   });
   client.conversations.info.mockReset().mockResolvedValue({

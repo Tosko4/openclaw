@@ -61,6 +61,9 @@ describe("resolveSlackThreadContextData", () => {
     };
     allowFromLower: string[];
     allowNameMatching: boolean;
+    isRootSenderAllowed?: Parameters<
+      typeof resolveSlackThreadContextData
+    >[0]["isRootSenderAllowed"];
     sessionState?: "missing" | "fresh" | "stale";
     sessionLastInteractionAt?: number;
     sessionUpdatedAt?: number;
@@ -113,6 +116,7 @@ describe("resolveSlackThreadContextData", () => {
       sessionKey: "thread-session",
       allowFromLower: params.allowFromLower,
       allowNameMatching: params.allowNameMatching,
+      isRootSenderAllowed: params.isRootSenderAllowed,
       contextVisibilityMode: "allowlist",
       envelopeOptions: resolveEnvelopeFormatOptions({} as OpenClawConfig),
       effectiveDirectMedia: null,
@@ -344,6 +348,17 @@ describe("resolveSlackThreadContextData", () => {
     expect(result.threadLabel).toContain("starter from Alice");
     expect(result.threadHistoryBody).toContain("starter from Alice");
     expect(result.threadHistoryBody).not.toContain("blocked follow-up");
+  });
+
+  it("resolves the root name for room visibility without a channel user allowlist", async () => {
+    const { result } = await resolveAllowlistedThreadContext({
+      repliesMessages: [],
+      threadStarter: { text: "Alice's root context", userId: "U1", ts: "100.000" },
+      allowFromLower: [],
+      allowNameMatching: true,
+      isRootSenderAllowed: async ({ userName }) => userName === "Alice",
+    });
+    expect(result.threadStarterBody).toBe("Alice's root context");
   });
 
   it("keeps a user-started thread label UTF-16 safe at the snippet limit", async () => {

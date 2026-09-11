@@ -38,6 +38,32 @@ describe("slack doctor", () => {
     mocks.probeSlack.mockReset();
   });
 
+  it.each([
+    {
+      slack: { implicitMentions: { replyToBot: false } },
+      defaults: undefined,
+      path: "channels.slack.implicitMentions",
+    },
+    {
+      slack: { accounts: { work: { implicitMentions: { threadParticipation: true } } } },
+      defaults: undefined,
+      path: "channels.slack.accounts.work.implicitMentions",
+    },
+    {
+      slack: {},
+      defaults: { implicitMentions: { replyToBot: false } },
+      path: "channels.defaults.implicitMentions",
+    },
+  ])(
+    "warns that $path no longer controls Slack room activation",
+    async ({ slack, defaults, path }) => {
+      const warnings = await collectSlackWarnings(slack, defaults);
+      expect(warnings).toEqual([expect.stringContaining(path)]);
+      expect(warnings[0]).toContain("native bot mentions, replies to the bot");
+      expect(warnings[0]).toContain("config cleanup is optional");
+    },
+  );
+
   it("validates and reports the resolved human for user identity", async () => {
     mocks.probeSlack.mockResolvedValue({
       ok: true,

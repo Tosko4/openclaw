@@ -11,10 +11,16 @@ import {
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { recordConversationObservation } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { compileSafeRegexDetailed } from "openclaw/plugin-sdk/security-runtime";
-import { upsertSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getSessionEntry,
+  upsertSessionEntry,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { slackPlugin } from "../../channel.js";
@@ -26,6 +32,7 @@ import {
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
+import { createSlackMessageHandler } from "../message-handler.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
 import { prepareSlackMessage } from "./prepare.js";
 import {
@@ -53,6 +60,17 @@ const {
 const mediaFetchMock = vi.hoisted(() =>
   vi.fn<typeof import("../media.runtime.js").fetchWithRuntimeDispatcher>(),
 );
+
+const dispatchObservedMessage = vi.hoisted(() =>
+  vi.fn<(message: import("./types.js").PreparedSlackMessage) => Promise<void>>(async () => {}),
+);
+
+vi.mock("openclaw/plugin-sdk/reply-history", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-history")>();
+  return { ...actual, recordConversationObservation: vi.fn(actual.recordConversationObservation) };
+});
+
+vi.mock("./dispatch.js", () => ({ dispatchPreparedSlackMessage: dispatchObservedMessage }));
 
 vi.mock("../media.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../media.runtime.js")>()),
@@ -116,6 +134,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   beforeEach(() => {
+    vi.mocked(recordConversationObservation).mockClear();
     clearSlackThreadParticipationCache();
     enqueueSystemEventMock.mockClear();
     logVerboseMock.mockClear();
@@ -134,7 +153,22 @@ describe("slack prepareSlackMessage inbound contract", () => {
     storeFixture.cleanup();
   });
 
-  const createInboundSlackCtx = createInboundSlackTestContext;
+  function createInboundSlackCtx(params: Parameters<typeof createInboundSlackTestContext>[0]) {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    return createInboundSlackTestContext({
+      ...params,
+      cfg: {
+        ...params.cfg,
+        session: { ...params.cfg.session, store: params.cfg.session?.store ?? storePath },
+      },
+    });
+  }
+
+  function observedMessages() {
+    return vi
+      .mocked(recordConversationObservation)
+      .mock.calls.map(([, observation]) => observation.message);
+  }
 
   async function seedSessionEntries(
     storePath: string,
@@ -189,12 +223,161 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
   const createSlackAccount = createSlackTestAccount;
 
+  it("retains observed room text across monitor recreation with historyLimit zero", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const cfg: OpenClawConfig = {
+      session: { store: storePath },
+      channels: { slack: { enabled: true, historyLimit: 0 } },
+    };
+    const sessionKey = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: "default",
+      teamId: "T1",
+      peer: { kind: "channel", id: "C001OBSERVED" },
+    }).sessionKey;
+    await seedSessionEntries(storePath, {
+      [sessionKey]: { sessionId: "slack-observed-session", updatedAt: Date.now() },
+    });
+    const makeContext = () => {
+      const ctx = createInboundSlackCtx({ cfg });
+      ctx.resolveUserName = async () => ({ name: "Alice" });
+      ctx.resolveChannelName = async () => ({ name: "room", type: "channel" });
+      return ctx;
+    };
+    const message = createSlackMessage({
+      channel: "C001OBSERVED",
+      channel_type: "channel",
+      text: "The room decision is violet.",
+      ts: "701.001",
+    });
+    expect(
+      await prepareSlackMessage({
+        ctx: makeContext(),
+        account: defaultAccount,
+        message,
+        opts: { source: "message" },
+      }),
+    ).toBeNull();
+    const prepared = await prepareSlackMessage({
+      ctx: makeContext(),
+      account: defaultAccount,
+      message: { ...message, text: "<@B1> What did we decide?", ts: "701.002" },
+      opts: { source: "message" },
+    });
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.SessionKey).toBe(sessionKey);
+    const capture = expectDefined(prepared.ctxPayload.ConversationHistory, "durable room capture");
+    expect(capture.requestSourceIds).toEqual(["701.002"]);
+    const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+    const recorder = createRecorder({
+      input: { text: "What did we decide?", idempotencyKey: "slack-observed-turn" },
+      target: {
+        agentId: "main",
+        storePath,
+        sessionKey,
+        sessionId: "slack-observed-session",
+        sessionEntry: getSessionEntry({ agentId: "main", storePath, sessionKey }),
+      },
+    });
+    const stageApproved = expectDefined(recorder.stageApproved, "durable input staging");
+    await stageApproved({
+      runId: "slack-observed-turn",
+      conversationHistory: capture,
+      assertCurrent: () => {},
+    });
+    expect(recorder.message?.content).toContain("The room decision is violet.");
+    recorder.finishPendingInput?.("cancelled");
+  });
+
+  it.each([
+    {
+      followup: "<@B1> Second part",
+      channelId: "C001BUFFEREDTAG",
+      requestSourceIds: ["702.001", "702.002"],
+    },
+    { followup: "Second part", channelId: "C001BUFFEREDCHAT", requestSourceIds: ["702.001"] },
+  ])(
+    "keeps native source identities when buffered room requests combine: $followup",
+    async ({ followup, channelId, requestSourceIds }) => {
+      const { storePath } = storeFixture.makeTmpStorePath();
+      const ctx = createInboundSlackCtx({
+        cfg: {
+          session: { store: storePath },
+          messages: { inbound: { debounceMs: 10 } },
+          channels: { slack: { enabled: true, historyLimit: 0 } },
+        },
+        appClient: {
+          conversations: { replies: vi.fn().mockResolvedValue({ ok: true, messages: [] }) },
+        } as App["client"],
+      });
+      ctx.resolveUserName = async () => ({ name: "Alice" });
+      ctx.resolveChannelName = async () => ({ name: "room", type: "channel" });
+      dispatchObservedMessage.mockClear();
+      const handler = createSlackMessageHandler({ ctx, account: defaultAccount });
+      const message = createSlackMessage({
+        type: "message",
+        channel: channelId,
+        channel_type: "channel",
+        thread_ts: "702.000",
+        parent_user_id: "U2",
+        text: "<@B1> First part",
+        ts: "702.001",
+      });
+      await Promise.all([
+        handler(message, { source: "message", awaitDispatch: true }),
+        handler(
+          { ...message, text: followup, ts: "702.002" },
+          { source: "message", awaitDispatch: true },
+        ),
+      ]);
+      expect(dispatchObservedMessage).toHaveBeenCalledTimes(1);
+      const prepared = expectDefined(
+        dispatchObservedMessage.mock.lastCall?.[0],
+        "buffered dispatch",
+      );
+      expect(prepared.ctxPayload.ConversationHistory?.requestSourceIds).toEqual(requestSourceIds);
+      if (requestSourceIds.length === 1) {
+        expect(prepared.ctxPayload.MessageSid).toBe("702.001");
+        expect(prepared.ctxPayload.BodyForAgent).not.toContain("Second part");
+      }
+    },
+  );
+
+  it("observes unaddressed room chatter without preparing a turn when requireMention is false", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const ctx = createInboundSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, requireMention: false } },
+      },
+      defaultRequireMention: false,
+    });
+    ctx.resolveUserName = async () => ({ name: "Alice" });
+    ctx.resolveChannelName = async () => ({ name: "room", type: "channel" });
+    expect(
+      await prepareSlackMessage({
+        ctx,
+        account: defaultAccount,
+        message: createSlackMessage({
+          channel: "C001QUIET",
+          channel_type: "channel",
+          text: "chatter",
+          ts: "703.001",
+        }),
+        opts: { source: "message" },
+      }),
+    ).toBeNull();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+  });
+
   function createSlackMessage(overrides: Partial<SlackMessageEvent>): SlackMessageEvent {
     return {
       channel: "D123",
       channel_type: "im",
       user: "U1",
-      text: "hi",
+      text: overrides.channel && !overrides.channel.startsWith("D") ? "<@B1> hi" : "hi",
       ts: "1.000",
       ...overrides,
     } as SlackMessageEvent;
@@ -208,7 +391,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       bot_id: "B0AGV8EQYA3",
       subtype: "bot_message",
       username: "deploy-bot",
-      text: "Readiness probe failed",
+      text: "<@B1> Readiness probe failed",
       ...overrides,
     });
   }
@@ -239,12 +422,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
     return ctx;
   }
 
-  it.each([
-    ["message", undefined],
-    ["app_mention", true],
-  ] as const)(
+  it.each(["message", "app_mention"] as const)(
     "sends an ephemeral allowlist notice for an explicit bot mention from %s",
-    async (source, wasMentioned) => {
+    async (source) => {
       const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
       const ctx = createAllowlistDeniedRoomCtx({ postEphemeral });
 
@@ -257,7 +437,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
           user: "U1",
           text: "<@B1> hello",
         }),
-        opts: { source, ...(wasMentioned ? { wasMentioned } : {}) },
+        opts: { source },
       });
 
       expect(prepared).toBeNull();
@@ -306,7 +486,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
           user: "U1",
           text: "<@B1> hello",
         }),
-        opts: { source: "app_mention", wasMentioned: true },
+        opts: { source: "app_mention" },
       }),
     ).resolves.toBeNull();
 
@@ -333,7 +513,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
           user: "U1",
           text: "<@B1> hello",
         }),
-        opts: { source: "app_mention", wasMentioned: true },
+        opts: { source: "app_mention" },
       }),
     ).resolves.toBeNull();
 
@@ -493,7 +673,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       ctx,
       account: defaultAccount,
       message: createSlackMessage({ channel: "C123", channel_type: "channel", user: "U1" }),
-      opts: { source: "app_mention", wasMentioned: true },
+      opts: { source: "app_mention" },
     });
 
     assertPrepared(direct, "Slack DM avatar");
@@ -603,7 +783,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
         channel: "C123CHANNEL",
         channel_type: "channel",
         user: "U123",
-        text: "hello",
+        text: "<@B1> hello",
       }),
       opts: { source: "message", eventScope },
     });
@@ -647,7 +827,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       channel: "C123CHANNEL",
       channel_type: "channel",
       user: "U123",
-      text: "hello",
+      text: "<@B1> hello",
     });
 
     const allowed = await prepareSlackMessage({
@@ -673,7 +853,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(blocked).toBeNull();
   });
 
-  it("applies workspace-qualified Enterprise mention pattern policy", async () => {
+  it("does not invoke from Enterprise mention patterns in either workspace", async () => {
     const cfg = {
       messages: { groupChat: { mentionPatterns: ["\\bbill\\b"] } },
       channels: { slack: { enabled: true, groupPolicy: "open" } },
@@ -715,7 +895,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       },
     });
 
-    assertPrepared(allowed, "workspace-qualified mention policy");
+    expect(allowed).toBeNull();
     expect(otherWorkspace).toBeNull();
   });
 
@@ -748,7 +928,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
         channel: "C123CHANNEL",
         channel_type: "channel",
         user: "U123",
-        text: "hello",
+        text: "<@B1> hello",
       }),
       opts: {
         source: "message",
@@ -1309,7 +1489,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
       userTokenSource: "none",
       config: {
         replyToMode: "all",
-        thread: { initialHistoryLimit: 20 },
       },
       replyToMode: "all",
     };
@@ -1325,61 +1504,44 @@ describe("slack prepareSlackMessage inbound contract", () => {
   }
 
   function prepareThreadMessage(ctx: SlackMonitorContext, overrides: Partial<SlackMessageEvent>) {
-    return prepareMessageWith(ctx, createThreadAccount(), createThreadReplyMessage(overrides));
+    return prepareMessageWith(
+      ctx,
+      createThreadAccount(),
+      createThreadReplyMessage({ ...overrides, text: `<@B1> ${overrides.text ?? "hi"}` }),
+    );
   }
 
   type ThreadRouteScenario = {
     name: string;
     source: "app_mention" | "message";
-    mentionType: "explicit" | "implicit" | "regex";
     bindingOwner: "none" | "plugin" | "runtime";
     enterpriseTeamId?: string;
-    expectRootMentioned?: boolean;
-    expectFollowUpMentioned?: boolean;
   };
 
   let threadRouteScenarioSequence = 0;
 
   async function runThreadRouteScenario(scenario: ThreadRouteScenario) {
-    const implicit = scenario.mentionType === "implicit";
-    const channelId = implicit ? "C0AGG76CP1S" : "C0AHZFCAS1K";
-    const userId = implicit ? "U_TRAJCHE" : "U_BEK";
+    const channelId = "C0AHZFCAS1K";
+    const userId = "U_BEK";
     threadRouteScenarioSequence += 1;
-    const rootTs = `${implicit ? "1778073105" : "1777244692"}.${String(
-      700_000 + threadRouteScenarioSequence,
-    ).padStart(6, "0")}`;
-    const replyToMode = implicit ? "first" : "all";
-    const rootText = implicit
-      ? "What day is it?"
-      : scenario.bindingOwner === "runtime"
-        ? "reviewbot please review GitHub issue #50621"
-        : scenario.mentionType === "explicit"
-          ? "<@B1> send a subagent to review GitHub issue #50621"
-          : "Bill send a subagent to review GitHub issue #50621";
+    const rootTs = `1777244692.${String(700_000 + threadRouteScenarioSequence).padStart(6, "0")}`;
+    const replyToMode = "all";
+    const rootText = "<@B1> please review the reported issue";
     const expectedSessionKey =
       scenario.bindingOwner === "runtime"
         ? "agent:review:slack:channel:c0ahzfcas1k"
         : `agent:main:slack:channel:${scenario.enterpriseTeamId ? `team:${scenario.enterpriseTeamId.toLowerCase()}:channel:` : ""}${channelId.toLowerCase()}:thread:${rootTs}`;
     const { storePath } = storeFixture.makeTmpStorePath();
-    const channelsConfig = implicit
-      ? { [channelId]: { enabled: true, requireMention: false } }
-      : undefined;
     const replies = vi.fn().mockResolvedValue({
       messages: [{ text: rootText, user: userId, ts: rootTs }],
       response_metadata: { next_cursor: "" },
     });
     const cfg = {
       session: { store: storePath },
-      ...(scenario.mentionType === "regex" && scenario.bindingOwner !== "runtime"
-        ? { messages: { groupChat: { mentionPatterns: ["\\bbill\\b"] } } }
-        : {}),
       ...(scenario.bindingOwner === "runtime"
         ? {
             agents: {
-              list: [
-                { id: "main", default: true },
-                { id: "review", groupChat: { mentionPatterns: ["\\breviewbot\\b"] } },
-              ],
+              list: [{ id: "main", default: true }, { id: "review" }],
             },
           }
         : {}),
@@ -1388,7 +1550,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
           enabled: true,
           replyToMode,
           groupPolicy: "open",
-          ...(channelsConfig ? { channels: channelsConfig } : {}),
         },
       },
     } as OpenClawConfig;
@@ -1397,16 +1558,15 @@ describe("slack prepareSlackMessage inbound contract", () => {
       appClient: { conversations: { replies } } as unknown as App["client"],
       defaultRequireMention: true,
       replyToMode,
-      ...(channelsConfig ? { channelsConfig } : {}),
     });
     if (scenario.enterpriseTeamId) {
       Object.assign(slackCtx, { botUserId: "" });
     }
     slackCtx.resolveChannelName = async () => ({
-      name: implicit ? "genai" : "proj-openclaw",
+      name: "proj-openclaw",
       type: "channel",
     });
-    slackCtx.resolveUserName = async () => ({ name: implicit ? "Trajche" : "Bek" });
+    slackCtx.resolveUserName = async () => ({ name: "Bek" });
 
     const bindingTarget =
       scenario.bindingOwner === "runtime"
@@ -1463,7 +1623,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
         } as SlackMessageEvent,
         opts: {
           source: scenario.source,
-          ...(scenario.source === "app_mention" ? { wasMentioned: true } : {}),
           ...(scenario.enterpriseTeamId
             ? {
                 eventScope: {
@@ -1474,9 +1633,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
             : {}),
         },
       });
-      recordSlackThreadParticipation("default", channelId, rootTs, {
-        teamId: scenario.enterpriseTeamId,
-      });
       const followUp = await prepareSlackMessage({
         ctx: slackCtx,
         account,
@@ -1485,12 +1641,12 @@ describe("slack prepareSlackMessage inbound contract", () => {
           channel: channelId,
           channel_type: "channel",
           user: userId,
-          text: implicit ? "and the time?" : "https://github.com/openclaw/openclaw/issues/50621",
+          text: "<@B1> https://github.com/openclaw/openclaw/issues/50621",
           ts: "1777244714.000100",
           thread_ts: rootTs,
         } as SlackMessageEvent,
         opts: {
-          source: "message",
+          source: scenario.enterpriseTeamId ? "app_mention" : "message",
           ...(scenario.enterpriseTeamId
             ? {
                 eventScope: {
@@ -1590,6 +1746,22 @@ describe("slack prepareSlackMessage inbound contract", () => {
       ctx.resolveChannelName = params.resolveChannelName;
     }
 
+    if (params.channelType !== "im") {
+      await prepareSlackMessage({
+        ctx,
+        account: createSlackAccount({ replyToMode: "all" }),
+        message: createSlackMessage({
+          channel: params.channel,
+          channel_type: params.channelType,
+          user: historyUser,
+          text: params.followUpText,
+          ts: params.followUpTs,
+          thread_ts: params.startTs,
+        }),
+        opts: { source: "message" },
+      });
+    }
+
     const prepared = await prepareSlackMessage({
       ctx,
       account: createSlackAccount({
@@ -1600,7 +1772,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
         channel: params.channel,
         channel_type: params.channelType,
         user: params.user,
-        text: "current message",
+        text: params.channelType === "im" ? "current message" : "<@B1> current message",
         ts: params.currentTs,
         thread_ts: params.startTs,
       } as SlackMessageEvent,
@@ -1610,7 +1782,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     return { prepared, replies };
   }
 
-  function expectThreadContextAllowsHumanHistory(
+  async function expectThreadContextAllowsHumanHistory(
     prepared: Awaited<ReturnType<typeof prepareSlackMessage>>,
     replies: ReturnType<typeof vi.fn>,
     starterText: string,
@@ -1618,6 +1790,18 @@ describe("slack prepareSlackMessage inbound contract", () => {
     options?: { expectStarterBody?: boolean; expectAssistantHistory?: boolean },
   ) {
     assertPrepared(prepared);
+    if (prepared.isRoomish) {
+      const capture = expectDefined(prepared.ctxPayload.ConversationHistory, "room observation");
+      const history = expectDefined(
+        observedMessages().find((message) => message.text === followUpText),
+        "observed follow-up",
+      );
+      expect(await capture.includeMessage?.(history)).toBe(true);
+      expect(history.replyTo?.text).toBe(starterText);
+      expect(prepared.ctxPayload.ThreadHistoryBody).toBeUndefined();
+      expect(replies).toHaveBeenCalledTimes(1);
+      return;
+    }
     if (options?.expectStarterBody === false) {
       expect(prepared.ctxPayload.ThreadStarterBody).toBeUndefined();
     } else {
@@ -1881,13 +2065,11 @@ describe("slack prepareSlackMessage inbound contract", () => {
       ts: "1.000",
     } as SlackMessageEvent);
 
-    assertPrepared(prepared);
-    expect(prepared.ctxPayload.InboundEventKind).toBe("room_event");
-    expect(prepared.ackReactionMessageTs).toBe("1.000");
-    expect(prepared.ackReactionPromise).toBeNull();
+    expect(prepared).toBeNull();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
-  it("sends Slack ack reactions for room events when ack scope is all", async () => {
+  it("keeps unaddressed room messages quiet even when ack scope is all", async () => {
     const reactionAdd = vi.fn().mockResolvedValue({ ok: true });
     const slackCtx = createInboundSlackCtx({
       cfg: {
@@ -1921,20 +2103,12 @@ describe("slack prepareSlackMessage inbound contract", () => {
       ts: "1.000",
     } as SlackMessageEvent);
 
-    assertPrepared(prepared);
-    expect(prepared.ctxPayload.InboundEventKind).toBe("room_event");
-    expect(prepared.ackReactionMessageTs).toBe("1.000");
-    expect(prepared.ackReactionValue).toBe("eyes");
-    expect(prepared.ackReactionPromise).toBeInstanceOf(Promise);
-    expect(await prepared.ackReactionPromise).toBe(true);
-    expect(reactionAdd).toHaveBeenCalledWith({
-      channel: "C123",
-      name: "eyes",
-      timestamp: "1.000",
-    });
+    expect(prepared).toBeNull();
+    expect(reactionAdd).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
-  it("keeps unmentioned abort requests as user requests when room events are enabled", async () => {
+  it("observes unaddressed abort text without preparing a room turn", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
         messages: {
@@ -1962,9 +2136,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
       ts: "1.000",
     } as SlackMessageEvent);
 
-    assertPrepared(prepared);
-    expect(prepared.ctxPayload.InboundEventKind).toBe("user_request");
-    expect(prepared.ctxPayload.CommandBody).toBe("please stop");
+    expect(prepared).toBeNull();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(observedMessages()).toMatchObject([{ text: "please stop" }]);
   });
 
   it("includes forwarded shared attachment text in raw body", async () => {
@@ -2417,7 +2591,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(members).not.toHaveBeenCalled();
   });
 
-  it("records skipped no-mention room images as pending history media", async () => {
+  it("keeps unaddressed room images inspectable when a later native mention stages history", async () => {
     mediaFetchMock.mockImplementation(async () => {
       return new Response(Buffer.from("image data"), {
         status: 200,
@@ -2425,11 +2599,15 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       });
     });
 
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const cfg: OpenClawConfig = {
+      session: { store: storePath },
+      channels: { slack: { enabled: true } },
+    };
     const slackCtx = createInboundSlackCtx({
-      cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+      cfg,
       defaultRequireMention: true,
     });
-    slackCtx.historyLimit = 5;
     slackCtx.resolveUserName = async () => ({ name: "Alice" });
 
     const prepared = await prepareMessageWith(
@@ -2452,19 +2630,67 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     );
 
     expect(prepared).toBeNull();
-    const entries = Array.from(slackCtx.channelHistories.values()).flat();
+    const entries = observedMessages();
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.body).toBe("[Slack file: diagram.png (image/png, fileId: F1)]");
     expect(entries[0]?.media).toHaveLength(1);
     expect(entries[0]?.media?.[0]).toMatchObject({
       contentType: "image/png",
       kind: "image",
+      fileName: "diagram.png",
       messageId: "500.000",
     });
-    expect(entries[0]?.media?.[0]?.path).toEqual(expect.any(String));
+    const imagePath = expectDefined(entries[0]?.media?.[0]?.path, "observed image path");
+    const resumedCtx = createInboundSlackCtx({ cfg });
+    resumedCtx.resolveUserName = async () => ({ name: "Alice" });
+    const request = await prepareMessageWith(
+      resumedCtx,
+      createSlackAccount(),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "<@B1> inspect that diagram",
+        ts: "500.001",
+      }),
+    );
+    assertPrepared(request);
+    const sessionKey = expectDefined(request.ctxPayload.SessionKey, "image request session");
+    await seedSessionEntries(storePath, {
+      [sessionKey]: { sessionId: "slack-observed-image-session", updatedAt: Date.now() },
+    });
+    const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+    const recorder = createRecorder({
+      input: { text: "inspect that diagram", idempotencyKey: "slack-image-turn" },
+      target: {
+        agentId: "main",
+        storePath,
+        sessionKey,
+        sessionId: "slack-observed-image-session",
+        sessionEntry: getSessionEntry({ agentId: "main", storePath, sessionKey }),
+      },
+    });
+    const stageApproved = expectDefined(recorder.stageApproved, "image input staging");
+    try {
+      await stageApproved({
+        runId: "slack-image-turn",
+        conversationHistory: request.ctxPayload.ConversationHistory,
+        assertCurrent: () => {},
+      });
+      expect(recorder.message?.content).toContain(imagePath);
+      expect(recorder.message?.["__openclaw"]).toMatchObject({
+        media: [
+          { path: imagePath, messageId: "500.000", contextOnly: true, hydrationSuppressed: true },
+        ],
+      });
+      expect(await fs.readFile(imagePath, "utf8")).toBe("image data");
+      expect(mediaFetchMock).toHaveBeenCalledTimes(1);
+      expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+    } finally {
+      recorder.finishPendingInput?.("cancelled");
+      await fs.rm(imagePath);
+    }
   });
 
-  it("records skipped no-mention shared images as pending history media", async () => {
+  it("retains unaddressed shared images as durable history media", async () => {
     mediaFetchMock.mockImplementation(async () => {
       return new Response(Buffer.from("shared image data"), {
         status: 200,
@@ -2476,7 +2702,6 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
       defaultRequireMention: true,
     });
-    slackCtx.historyLimit = 5;
     slackCtx.resolveUserName = async () => ({ name: "Alice" });
 
     const prepared = await prepareMessageWith(
@@ -2497,9 +2722,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     );
 
     expect(prepared).toBeNull();
-    const entries = Array.from(slackCtx.channelHistories.values()).flat();
+    const entries = observedMessages();
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.body).toBe("[Slack media attachment]");
     expect(entries[0]?.media).toHaveLength(1);
     expect(entries[0]?.media?.[0]).toMatchObject({
       contentType: "image/png",
@@ -2534,7 +2758,6 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       appClient: { conversations: { replies } } as unknown as App["client"],
       defaultRequireMention: true,
     });
-    slackCtx.historyLimit = 5;
     slackCtx.resolveUserName = async () => ({ name: "Alice" });
 
     const prepared = await prepareMessageWith(
@@ -2564,10 +2787,10 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       limit: 1,
       inclusive: true,
     });
-    const entries = Array.from(slackCtx.channelHistories.values()).flat();
+    const entries = observedMessages();
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.body).toBe("[Slack file: parent.png (image/png, fileId: F-parent)]");
-    expect(entries[0]?.media).toBeUndefined();
+    expect(entries[0]?.text).toBe("[Slack file: parent.png (image/png, fileId: F-parent)]");
+    expect(entries[0]?.media).toEqual([]);
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
@@ -2648,7 +2871,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       threadTs: "10.000",
     },
     {
-      name: "drops a user-group mention when the bot is not a member",
+      name: "observes a user-group mention without a membership lookup",
       text: "<!subteam^S123|team> hey",
       accepted: false,
       resolveUserGroup: true,
@@ -2665,20 +2888,20 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       directMessage: true,
     },
     {
-      name: "does not drop channel message with no user mentions when ignoreOtherMentions=true",
+      name: "observes channel chatter even when ignoreOtherMentions=true",
       text: "hello team",
-      accepted: true,
+      accepted: false,
     },
     {
-      name: "does not drop when botUserId is unresolved (no native identity)",
+      name: "observes without invoking when botUserId is unresolved (no native identity)",
       text: "<@U456> hey",
-      accepted: true,
+      accepted: false,
       unresolvedBot: true,
     },
     {
-      name: "does not drop when botUserId is unresolved even with mention regexes configured",
+      name: "observes without invoking when botUserId is unresolved even with mention regexes configured",
       text: "<@U456> hey",
-      accepted: true,
+      accepted: false,
       unresolvedBot: true,
       mentionPatterns: ["\\bmy-bot\\b"],
     },
@@ -2701,11 +2924,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       defaultRequireMention: false,
       channelsConfig: { "*": { ignoreOtherMentions: true } },
     });
-    if (testCase.recordHistory) {
-      slackCtx.historyLimit = 5;
-    }
     if (testCase.unresolvedBot) {
-      slackCtx.botUserId = undefined as unknown as string;
+      slackCtx.botUserId = "";
     }
     if (testCase.threadTs) {
       recordSlackThreadParticipation("default", "C123", testCase.threadTs);
@@ -2728,12 +2948,12 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       expect(prepared).toBeNull();
     }
     if (testCase.recordHistory) {
-      expect(Array.from(slackCtx.channelHistories.values()).flat()).toMatchObject([
-        { body: testCase.text, sender: "U1" },
+      expect(observedMessages()).toMatchObject([
+        { text: expect.stringContaining(testCase.text), sender: { id: "U1" } },
       ]);
     }
     if (testCase.resolveUserGroup) {
-      expect(usergroupsUsersList).toHaveBeenCalledWith({ usergroup: "S123", team_id: "T1" });
+      expect(usergroupsUsersList).not.toHaveBeenCalled();
     }
   });
 
@@ -2988,7 +3208,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
         channel: "C0MPDM42",
         channel_type: "mpim",
         user: "U1",
-        text: "hello from a human",
+        text: "<@B1> hello from a human",
       }),
     );
     assertPrepared(humanPrepared);
@@ -3005,7 +3225,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
         bot_id: "B_OTHER",
         subtype: "bot_message",
         username: "other-agent",
-        text: "same room, bot ingress without channel_type",
+        text: "<@B1> same room, bot ingress without channel_type",
         ts: "2.000",
       }),
     );
@@ -3046,7 +3266,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
         channel: "G0PRIVATE1",
         channel_type: "group",
         user: "U1",
-        text: "human in private channel",
+        text: "<@B1> human in private channel",
       }),
     );
     const botPrepared = await prepareMessageWith(
@@ -3059,7 +3279,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
         bot_id: "B_OTHER",
         subtype: "bot_message",
         username: "other-agent",
-        text: "bot in same private channel",
+        text: "<@B1> bot in same private channel",
         ts: "2.000",
       }),
     );
@@ -3077,7 +3297,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       message: createSlackMessage({
         channel: "C0AJUGWG5L6",
         channel_type: "channel",
-        text: "strategy ping",
+        text: "<@B1> strategy ping",
       }),
       expectedSessionKey: "agent:strategist:slack:channel:c0ajugwg5l6",
     },
@@ -3169,7 +3389,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
   });
 
-  it("marks first thread turn and injects thread history for a new thread session", async () => {
+  it("retains the native thread root as a quote without fetching room backfill", async () => {
     const { storePath } = storeFixture.makeTmpStorePath();
     const replies = vi
       .fn()
@@ -3204,11 +3424,12 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     });
 
     assertPrepared(prepared);
-    expect(prepared.ctxPayload.IsFirstThreadTurn).toBe(true);
-    expect(prepared.ctxPayload.ThreadHistoryBody).toContain("follow-up question");
-    expect(prepared.ctxPayload.ThreadHistoryBody).not.toContain("assistant reply");
-    expect(prepared.ctxPayload.ThreadHistoryBody).not.toContain("current message");
-    expect(replies).toHaveBeenCalledTimes(2);
+    expect(prepared.ctxPayload.ConversationHistory?.requestSourceIds).toEqual(["101.000"]);
+    expect(prepared.ctxPayload.ThreadHistoryBody).toBeUndefined();
+    expect(observedMessages()).toMatchObject([
+      { replyTo: { text: "starter", messageId: "100.000", sender: { id: "U2" } } },
+    ]);
+    expect(replies).toHaveBeenCalledTimes(1);
   });
 
   it("injects Slack DM history for new top-level DM sessions", async () => {
@@ -3348,7 +3569,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       resolveChannelName: async () => ({ name: "general", type: "channel" }),
     });
 
-    expectThreadContextAllowsHumanHistory(
+    await expectThreadContextAllowsHumanHistory(
       prepared,
       replies,
       "starter from room user",
@@ -3376,7 +3597,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       resolveChannelName: async () => ({ name: "general", type: "channel" }),
     });
 
-    expectThreadContextAllowsHumanHistory(
+    await expectThreadContextAllowsHumanHistory(
       prepared,
       replies,
       "starter from open room",
@@ -3399,7 +3620,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       allowFrom: ["*"],
     });
 
-    expectThreadContextAllowsHumanHistory(
+    await expectThreadContextAllowsHumanHistory(
       prepared,
       replies,
       "starter from open dm",
@@ -3408,33 +3629,39 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     );
   });
 
-  it("does not apply the owner allowlist to MPIM thread context", async () => {
-    const { prepared, replies } = await prepareThreadContextAllowlistCase({
-      channel: "G400",
-      channelType: "mpim",
-      user: "U4",
-      historyUser: "U5",
-      userName: "Evan",
-      starterText: "starter from mpim",
-      followUpText: "mpim follow-up",
-      startTs: "400.000",
-      replyTs: "400.500",
-      followUpTs: "400.800",
-      currentTs: "401.000",
-      allowFrom: ["U4"],
-      outboundOnlySessionKey: "agent:main:slack:group:g400:thread:400.000",
-    });
+  it.each([
+    { historyUser: "U4", allowed: true },
+    { historyUser: "U5", allowed: false },
+  ])(
+    "filters MPIM observed history from $historyUser using the owner allowlist",
+    async ({ historyUser, allowed }) => {
+      const { prepared, replies } = await prepareThreadContextAllowlistCase({
+        channel: `G400${historyUser}`,
+        channelType: "mpim",
+        user: "U4",
+        historyUser,
+        userName: "Evan",
+        starterText: "starter from mpim",
+        followUpText: "mpim follow-up",
+        startTs: "400.000",
+        replyTs: "400.500",
+        followUpTs: "400.800",
+        currentTs: "401.000",
+        allowFrom: ["U4"],
+        outboundOnlySessionKey: `agent:main:slack:group:g400${historyUser.toLowerCase()}:thread:400.000`,
+      });
 
-    expectThreadContextAllowsHumanHistory(
-      prepared,
-      replies,
-      "starter from mpim",
-      "mpim follow-up",
-      {
-        expectAssistantHistory: true,
-      },
-    );
-  });
+      assertPrepared(prepared);
+      const capture = expectDefined(prepared.ctxPayload.ConversationHistory, "MPIM capture");
+      const history = expectDefined(
+        observedMessages().find((message) => message.text === "mpim follow-up"),
+        "MPIM observed follow-up",
+      );
+      expect(await capture.includeMessage?.(history)).toBe(allowed);
+      expect(prepared.ctxPayload.ThreadHistoryBody).toBeUndefined();
+      expect(replies).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("keeps unavailable thread-root files visible beside hydrated media", async () => {
     mediaFetchMock.mockImplementation(async (input: RequestInfo | URL) =>
@@ -3502,6 +3729,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       expect(prepared.ctxPayload.media?.[0]).toMatchObject({
         contentType: "image/png",
         fileName: "available.png",
+        messageId: "760.000",
+        contextOnly: true,
       });
       expect(prepared.ctxPayload.ThreadStarterBody).toMatch(/^\[slack attachment unavailable\]/);
       expect(prepared.ctxPayload.ThreadStarterBody).toContain(
@@ -3510,11 +3739,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       expect(prepared.ctxPayload.ThreadStarterBody).toContain("HTTP 404");
       expect(prepared.ctxPayload.ThreadStarterBody).toContain("Inspect both attachments");
       expect(prepared.ctxPayload.ThreadStarterBody?.slice(0, 2_000)).toContain("missing.pdf");
-      expect(prepared.ctxPayload.ThreadHistoryBody).toContain(
-        "missing.pdf (application/pdf, fileId: FMISSING) unavailable (",
-      );
-      expect(prepared.ctxPayload.ThreadHistoryBody).toContain("HTTP 404");
-      expect(prepared.ctxPayload.ThreadHistoryBody?.match(/\[slack message id:/g)).toHaveLength(20);
+      expect(prepared.ctxPayload.ThreadHistoryBody).toBeUndefined();
+      expect(replies).toHaveBeenCalledTimes(1);
       expect(prepared.ctxPayload.RawBody).not.toContain("missing.pdf");
       expect(prepared.ctxPayload.CommandBody).toBe("Please use the files from the root");
     } finally {
@@ -3627,7 +3853,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(replies).toHaveBeenCalledTimes(1);
   });
 
-  it("loads bounded thread history for existing thread sessions stale under reset policy", async () => {
+  it("keeps stale room sessions on durable observations without Slack backfill", async () => {
     const { storePath } = storeFixture.makeTmpStorePath();
     const now = Date.now();
     const cfg = {
@@ -3682,10 +3908,10 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       slackCtx,
       createSlackAccount({
         replyToMode: "all",
-        thread: { initialHistoryLimit: 10, inheritParent: true },
+        thread: { inheritParent: true },
       }),
       createThreadReplyMessage({
-        text: "current post-reset message",
+        text: "<@B1> current post-reset message",
         ts: "301.000",
         thread_ts: "300.000",
       }),
@@ -3695,17 +3921,10 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.SessionKey).toBe(threadKeys.sessionKey);
     expect(prepared.ctxPayload.IsFirstThreadTurn).toBe(true);
     expect(prepared.ctxPayload.ThreadStarterBody).toBe("starter");
-    expect(prepared.ctxPayload.ThreadHistoryBody).toContain("prior human context");
-    expect(prepared.ctxPayload.ThreadHistoryBody).not.toContain("assistant prior output");
-    expect(prepared.ctxPayload.ThreadHistoryBody).not.toContain("current post-reset message");
+    expect(prepared.ctxPayload.ThreadHistoryBody).toBeUndefined();
+    expect(prepared.ctxPayload.ConversationHistory?.requestSourceIds).toEqual(["301.000"]);
     expect(prepared.ctxPayload.ParentSessionKey).toBe(route.sessionKey);
-    expect(replies).toHaveBeenCalledTimes(2);
-    expect(replies).toHaveBeenLastCalledWith({
-      channel: "C123",
-      ts: "300.000",
-      limit: 200,
-      inclusive: true,
-    });
+    expect(replies).toHaveBeenCalledTimes(1);
   });
 
   it("keeps provider-owned thread sessions existing when reset policy is implicit", async () => {
@@ -3750,10 +3969,9 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       slackCtx,
       createSlackAccount({
         replyToMode: "all",
-        thread: { initialHistoryLimit: 10 },
       }),
       createThreadReplyMessage({
-        text: "reply after implicit reset boundary",
+        text: "<@B1> reply after implicit reset boundary",
         ts: "351.000",
         thread_ts: "350.000",
       }),
@@ -3762,63 +3980,6 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     assertPrepared(prepared);
     expect(prepared.ctxPayload.IsFirstThreadTurn).toBeUndefined();
     expect(prepared.ctxPayload.ThreadStarterBody).toBeUndefined();
-    expect(prepared.ctxPayload.ThreadHistoryBody).toBeUndefined();
-    expect(replies).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps initialHistoryLimit zero as a hard disable for stale thread sessions", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
-    const now = Date.now();
-    const cfg = {
-      session: {
-        store: storePath,
-        resetByType: { thread: { mode: "idle", idleMinutes: 60 } },
-      },
-      channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
-    } as OpenClawConfig;
-    const route = resolveAgentRoute({
-      cfg,
-      channel: "slack",
-      accountId: "default",
-      teamId: "T1",
-      peer: { kind: "channel", id: "C123" },
-    });
-    const threadKeys = resolveThreadSessionKeys({
-      baseSessionKey: route.sessionKey,
-      threadId: "400.000",
-    });
-    await seedSessionEntries(storePath, {
-      [threadKeys.sessionKey]: {
-        sessionId: "stale-zero-history-thread-session",
-        updatedAt: now,
-        sessionStartedAt: now - 2 * 24 * 60 * 60 * 1000,
-        lastInteractionAt: now - 2 * 24 * 60 * 60 * 1000,
-      },
-    });
-
-    const replies = vi.fn().mockResolvedValueOnce({
-      messages: [{ text: "starter", user: "U2", ts: "400.000" }],
-    });
-    const slackCtx = createThreadSlackCtx({ cfg, replies });
-    slackCtx.resolveUserName = async () => ({ name: "Alice" });
-    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
-
-    const prepared = await prepareMessageWith(
-      slackCtx,
-      createSlackAccount({
-        replyToMode: "all",
-        thread: { initialHistoryLimit: 0 },
-      }),
-      createThreadReplyMessage({
-        text: "current post-reset message",
-        ts: "401.000",
-        thread_ts: "400.000",
-      }),
-    );
-
-    assertPrepared(prepared);
-    expect(prepared.ctxPayload.IsFirstThreadTurn).toBe(true);
-    expect(prepared.ctxPayload.ThreadStarterBody).toBe("starter");
     expect(prepared.ctxPayload.ThreadHistoryBody).toBeUndefined();
     expect(replies).toHaveBeenCalledTimes(1);
   });
@@ -4180,7 +4341,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       createThreadAccount("foundation"),
       createThreadReplyMessage({
         channel: "CFOUNDATIONTHREAD1",
-        text: "bound thread reply",
+        text: "<@B1> bound thread reply",
         ts: "101.000",
         thread_ts: "100.000",
       }),
@@ -4193,54 +4354,29 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
   const threadRouteScenarios = [
     {
-      name: "keeps a root app mention and URL-only Slack thread follow-up on one parent session",
+      name: "keeps native app mentions on one thread session",
       source: "app_mention",
-      mentionType: "explicit",
       bindingOwner: "none",
-      expectFollowUpMentioned: true,
     },
     {
-      name: "keeps a Grid root app mention and unmentioned thread follow-up on one parent session",
+      name: "keeps Grid app mentions on one thread session",
       source: "app_mention",
-      mentionType: "explicit",
       bindingOwner: "none",
       enterpriseTeamId: "T123ENTERPRISE",
-      expectFollowUpMentioned: true,
     },
     {
-      name: "keeps a message-first root mention and URL-only Slack thread follow-up on one parent session",
+      name: "keeps message-first native mentions on one thread session",
       source: "message",
-      mentionType: "explicit",
-      bindingOwner: "none",
-      expectRootMentioned: true,
-      expectFollowUpMentioned: true,
-    },
-    {
-      name: "keeps an implicit-conversation root and its Slack thread follow-up on one parent session in `requireMention: false` channels (#78505)",
-      source: "message",
-      mentionType: "implicit",
       bindingOwner: "none",
     },
     {
-      name: "keeps a regex-mentioned Slack thread root and URL-only follow-up on one parent session",
+      name: "keeps native mentions on the runtime-bound parent session",
       source: "message",
-      mentionType: "regex",
-      bindingOwner: "none",
-      expectRootMentioned: true,
-      expectFollowUpMentioned: true,
-    },
-    {
-      name: "keeps runtime-bound regex mentions on the bound parent session",
-      source: "message",
-      mentionType: "regex",
       bindingOwner: "runtime",
-      expectRootMentioned: true,
-      expectFollowUpMentioned: true,
     },
     {
-      name: "still seeds regex mentions when plugin-owned bindings do not rewrite the route",
+      name: "seeds native mentions when plugin bindings do not rewrite the route",
       source: "message",
-      mentionType: "regex",
       bindingOwner: "plugin",
     },
   ] satisfies ThreadRouteScenario[];
@@ -4261,12 +4397,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     if (expectedAgentId) {
       expect(root.route.agentId).toBe(expectedAgentId);
     }
-    if (scenario.expectRootMentioned !== undefined) {
-      expect(root.ctxPayload.WasMentioned).toBe(scenario.expectRootMentioned);
-    }
-    if (scenario.expectFollowUpMentioned !== undefined) {
-      expect(followUp.ctxPayload.WasMentioned).toBe(scenario.expectFollowUpMentioned);
-    }
+    expect(root.ctxPayload.WasMentioned).toBe(true);
+    expect(followUp.ctxPayload.WasMentioned).toBe(true);
   });
 
   it("preserves explicit Slack mention targets when an implicit thread wake mentions someone else", async () => {
@@ -4375,10 +4507,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       opts: { source: "message" },
     });
 
-    assertPrepared(prepared);
-    expect(prepared.ctxPayload.ExplicitlyMentionedBot).toBe(false);
-    expect(prepared.ctxPayload.MentionedUserIds).toEqual(["B1"]);
-    expect(prepared.ctxPayload.MentionSource).not.toBe("explicit_bot");
+    expect(prepared).toBeNull();
   });
 
   function createUnavailableMentionCtx(
@@ -4413,7 +4542,6 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
   it("drops required-mention channel messages when bot mention detection is unavailable", async () => {
     const slackCtx = createUnavailableMentionCtx();
-    slackCtx.historyLimit = 5;
     const prepared = await prepareMessageWith(
       slackCtx,
       createSlackAccount(),
@@ -4421,9 +4549,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     );
 
     expect(prepared).toBeNull();
-    expect(Array.from(slackCtx.channelHistories.values()).flat()).toMatchObject([
-      { body: "WWDC notes look useful later" },
-    ]);
+    expect(observedMessages()).toMatchObject([{ text: "WWDC notes look useful later" }]);
   });
 
   it.each([
@@ -4434,10 +4560,9 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       params.mentionPatterns ? { mentionPatterns: params.mentionPatterns } : {},
     );
     const info = vi.spyOn(slackCtx.logger, "info").mockImplementation(() => undefined);
-    slackCtx.historyLimit = 5;
     const message = createUnavailableMentionMessage("<@B1> trying again");
     expect(await prepareMessageWith(slackCtx, createSlackAccount(), message)).toBeNull();
-    expect(Array.from(slackCtx.channelHistories.values()).flat()).toHaveLength(1);
+    expect(observedMessages()).toHaveLength(1);
     const prepared = await prepareSlackMessage({
       ctx: slackCtx,
       account: createSlackAccount(),
@@ -4448,19 +4573,18 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     assertPrepared(prepared);
     expect(info).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        reason: params.mentionPatterns ? "missing-mention" : "mention-detection-unavailable",
+        reason: "missing-mention",
         source: "message",
       }),
       "Slack inbound event rejected during preparation",
     );
     expect(prepared.ctxPayload.MentionSource).toBe("explicit_bot");
-    expect(prepared.ctxPayload.InboundHistory).toEqual([]);
-    expect(Array.from(slackCtx.channelHistories.values()).flat()).toEqual([]);
+    expect(prepared.ctxPayload.InboundHistory).toBeUndefined();
+    expect(prepared.ctxPayload.ConversationHistory?.requestSourceIds).toEqual([message.ts]);
   });
 
-  it("does not record a message copy that loses the app_mention preparation race", async () => {
+  it("keeps one native identity when message and app_mention preparation race", async () => {
     const slackCtx = createUnavailableMentionCtx();
-    slackCtx.historyLimit = 5;
     let signalSenderResolutionStarted: (() => void) | undefined;
     const senderResolutionStarted = new Promise<void>((resolve) => {
       signalSenderResolutionStarted = resolve;
@@ -4478,7 +4602,6 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       }
       return { name: "Bek" };
     };
-    let appMentionWon = false;
     const message = createUnavailableMentionMessage("<@B1> racing mention");
 
     const droppedMessage = prepareSlackMessage({
@@ -4487,7 +4610,6 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       message,
       opts: {
         source: "message",
-        shouldRecordDroppedHistory: () => !appMentionWon,
       },
     });
     await senderResolutionStarted;
@@ -4498,16 +4620,19 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       opts: { source: "app_mention" },
     });
     assertPrepared(preparedMention);
-    appMentionWon = true;
     releaseSenderResolution?.();
 
     expect(await droppedMessage).toBeNull();
-    expect(Array.from(slackCtx.channelHistories.values()).flat()).toEqual([]);
+    expect(preparedMention.ctxPayload.ConversationHistory?.requestSourceIds).toEqual([message.ts]);
+    expect(vi.mocked(recordConversationObservation).mock.results).toHaveLength(2);
+    const captures = await Promise.all(
+      vi.mocked(recordConversationObservation).mock.results.map((result) => result.value),
+    );
+    expect(captures[0]?.throughSequence).toBe(captures[1]?.throughSequence);
   });
 
   it("retains other-user mentions as pending history when native bot identity is unavailable", async () => {
     const slackCtx = createUnavailableMentionCtx();
-    slackCtx.historyLimit = 5;
 
     const prepared = await prepareMessageWith(
       slackCtx,
@@ -4516,12 +4641,10 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     );
 
     expect(prepared).toBeNull();
-    expect(Array.from(slackCtx.channelHistories.values()).flat()).toMatchObject([
-      { body: "<@U_OTHER> context for later" },
-    ]);
+    expect(observedMessages()).toMatchObject([{ text: "<@U_OTHER> context for later" }]);
   });
 
-  it("allows authorized control commands when bot mention detection is unavailable", async () => {
+  it("observes bare control commands when bot mention detection is unavailable", async () => {
     const slackCtx = createUnavailableMentionCtx();
     slackCtx.allowFrom = ["U_BEK"];
     const prepared = await prepareMessageWith(
@@ -4530,11 +4653,11 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       createUnavailableMentionMessage("/new"),
     );
 
-    assertPrepared(prepared);
-    expect(prepared.ctxPayload.MentionSource).toBe("command_bypass");
+    expect(prepared).toBeNull();
+    expect(observedMessages()).toMatchObject([{ text: "/new" }]);
   });
 
-  it("allows configured mention patterns when native bot identity is unavailable", async () => {
+  it("does not invoke from mention patterns when native bot identity is unavailable", async () => {
     const slackCtx = createUnavailableMentionCtx({ mentionPatterns: ["\\bmy-bot\\b"] });
     const prepared = await prepareMessageWith(
       slackCtx,
@@ -4542,13 +4665,12 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       createUnavailableMentionMessage("my-bot status"),
     );
 
-    assertPrepared(prepared);
-    expect(prepared.ctxPayload.MentionSource).toBe("mention_pattern");
+    expect(prepared).toBeNull();
+    expect(observedMessages()).toMatchObject([{ text: "my-bot status" }]);
   });
 
-  it("does not record a detection failure for denied channel senders", async () => {
+  it("observes denied channel senders without invoking a turn", async () => {
     const slackCtx = createUnavailableMentionCtx({ channelUsers: ["U_OWNER"] });
-    slackCtx.historyLimit = 5;
     const prepared = await prepareMessageWith(
       slackCtx,
       createSlackAccount(),
@@ -4556,10 +4678,10 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     );
 
     expect(prepared).toBeNull();
-    expect(slackCtx.channelHistories.size).toBe(0);
+    expect(observedMessages()).toHaveLength(1);
   });
 
-  it("marks authorized implicit thread control-command wakes as command bypass source", async () => {
+  it("marks control commands addressed to the bot thread root as native replies", async () => {
     const { storePath } = storeFixture.makeTmpStorePath();
     const slackCtx = createInboundSlackCtx({
       cfg: {
@@ -4600,24 +4722,13 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     }
     expect(prepared.ctxPayload.WasMentioned).toBe(true);
     expect(prepared.ctxPayload.ImplicitMentionKinds).toEqual(["reply_to_bot"]);
-    expect(prepared.ctxPayload.MentionSource).toBe("command_bypass");
+    expect(prepared.ctxPayload.MentionSource).toBe("implicit_thread");
   });
 
-  it.each([
-    {
-      name: "treats Slack user-group mentions as explicit mentions when the bot is a member",
-      users: ["U_OTHER", "B1"],
-      admitted: true,
-    },
-    {
-      name: "drops Slack user-group mentions when the bot is not a member",
-      users: ["U_OTHER"],
-      admitted: false,
-    },
-  ])("$name", async ({ users, admitted }) => {
+  it("observes Slack group mentions without checking whether the bot is a member", async () => {
     const usergroupsUsersList = vi.fn().mockResolvedValue({
       ok: true,
-      users,
+      users: ["UOTHER", "B1"],
     });
     const slackCtx = createInboundSlackCtx({
       cfg: {
@@ -4651,19 +4762,10 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       opts: { source: "message" },
     });
 
-    expect(usergroupsUsersList).toHaveBeenCalledWith({
-      usergroup: "S0AGENTS",
-      team_id: "T1",
-    });
-    if (!admitted) {
-      expect(prepared).toBeNull();
-      return;
-    }
-    assertPrepared(prepared);
-    expect(prepared.ctxPayload.WasMentioned).toBe(true);
-    expect(prepared.ctxPayload.ExplicitlyMentionedBot).toBe(true);
-    expect(prepared.ctxPayload.MentionedSubteamIds).toEqual(["S0AGENTS"]);
-    expect(prepared.ctxPayload.MentionSource).toBe("subteam");
+    expect(usergroupsUsersList).not.toHaveBeenCalled();
+    expect(prepared).toBeNull();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(observedMessages()).toMatchObject([{ text: "<!subteam^S0AGENTS|agents> triage this" }]);
   });
 
   function createCaptionlessSlackAudioMessage(
@@ -4734,174 +4836,50 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     return slackCtx;
   }
 
-  it("admits a spoken-name audio root once and keeps its follow-up on the seeded thread session", async () => {
-    const mockFetch = mediaFetchMock.mockImplementation(
-      async (_input: string | URL | Request) =>
-        new Response(Buffer.from("voice clip"), {
-          status: 200,
-          headers: { "content-type": "audio/mp4" },
-        }),
-    );
-    const { storePath } = storeFixture.makeTmpStorePath();
-    const rootTs = "1777244692.409919";
-    const expectedSessionKey = `agent:main:slack:channel:c0ahzfcas1k:thread:${rootTs}`;
-    const replies = vi.fn().mockResolvedValue({
-      messages: [{ text: "voice clip", user: "U_BEK", ts: rootTs }],
-      response_metadata: { next_cursor: "" },
-    });
-    const slackCtx = createAudioMentionSlackCtx({
-      storePath,
-      appClient: { conversations: { replies } } as unknown as App["client"],
-    });
-    let downloadedPath: string | undefined;
-    let downloadedPaths: string[] = [];
-    transcribeFirstAudioMock.mockImplementation(
-      async ({ ctx }: { ctx: { media: Array<{ path?: string }> } }) => {
-        downloadedPath = ctx.media[0]?.path;
-        return "Bill /new please review this";
-      },
-    );
-
-    try {
-      const root = await prepareSlackMessage({
-        ctx: slackCtx,
-        account: createSlackAccount({ replyToMode: "all" }),
-        message: createCaptionlessSlackAudioMessage(),
-        opts: { source: "message" },
-      });
-      recordSlackThreadParticipation("default", "C0AHZFCAS1K", rootTs);
-      const followUp = await prepareSlackMessage({
-        ctx: slackCtx,
-        account: createSlackAccount({ replyToMode: "all" }),
-        message: createSlackMessage({
-          channel: "C0AHZFCAS1K",
-          channel_type: "channel",
-          user: "U_BEK",
-          text: "and summarize the risks",
-          ts: "1777244714.000100",
-          thread_ts: rootTs,
-        }),
-        opts: { source: "message" },
-      });
-
-      assertPrepared(root, "captionless audio root");
-      assertPrepared(followUp, "audio-root follow-up");
-      downloadedPaths =
-        root.ctxPayload.media?.flatMap((fact) => (fact.path ? [fact.path] : [])) ?? [];
-      expect(root.ctxPayload.SessionKey).toBe(expectedSessionKey);
-      expect(followUp.ctxPayload.SessionKey).toBe(expectedSessionKey);
-      expect(root.ctxPayload.MessageThreadId).toBe(rootTs);
-      expect(root.ctxPayload.WasMentioned).toBe(true);
-      expect(root.ctxPayload.MentionSource).toBe("mention_pattern");
-      expect(root.ctxPayload.CommandBody).toBe("");
-      expect(root.ctxPayload.Transcript).toBe("Bill /new please review this");
-      expect(root.ctxPayload.media?.[1]?.transcribed).toBe(true);
-      expect(root.ctxPayload.RawBody).toContain(
-        "[Slack file: voice.mp4 (video/mp4, fileId: FVOICE)]",
+  it.each([
+    { name: "enabled audio understanding", audioEnabled: true, channelUsers: undefined },
+    { name: "disabled audio understanding", audioEnabled: false, channelUsers: undefined },
+    {
+      name: "sender outside the invocation allowlist",
+      audioEnabled: true,
+      channelUsers: ["U_OWNER"],
+    },
+  ])(
+    "retains unaddressed files without transcription with $name",
+    async ({ audioEnabled, channelUsers }) => {
+      mediaFetchMock.mockImplementation(
+        async () =>
+          new Response(Buffer.from("retained attachment"), {
+            status: 200,
+            headers: { "content-type": "application/octet-stream" },
+          }),
       );
-      expect(root.ctxPayload.BodyForAgent).toContain(
-        '[Audio transcript (machine-generated, untrusted)]: "Bill /new please review this"',
-      );
-      expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
-      expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
-        ctx: expect.objectContaining({ SessionKey: expectedSessionKey }),
-        cfg: expect.any(Object),
-      });
-      const fetchedUrls = mockFetch.mock.calls.map(([input]) => resolveFetchInputUrl(input));
-      expect(fetchedUrls).toHaveLength(2);
-      expect(fetchedUrls.filter((url) => url.includes("FVOICE"))).toHaveLength(1);
-      expect(fetchedUrls.filter((url) => url.includes("FPDF"))).toHaveLength(1);
-    } finally {
-      const pathsToRemove = new Set([
-        ...downloadedPaths,
-        ...(downloadedPath ? [downloadedPath] : []),
-      ]);
-      for (const mediaPath of pathsToRemove) {
-        await fs.rm(mediaPath, { force: true });
-      }
-    }
-  });
-
-  it("does not download or transcribe denied senders' captionless audio", async () => {
-    const mockFetch = mediaFetchMock.mockImplementation(async () => {
-      throw new Error("denied audio must not be downloaded");
-    });
-    const slackCtx = createAudioMentionSlackCtx({ channelUsers: ["U_OWNER"] });
-
-    const prepared = await prepareMessageWith(
-      slackCtx,
-      createSlackAccount({ replyToMode: "all" }),
-      createCaptionlessSlackAudioMessage(),
-    );
-
-    expect(prepared).toBeNull();
-    expect(mockFetch).not.toHaveBeenCalled();
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-    expect(slackCtx.channelHistories.size).toBe(0);
-  });
-
-  it("does not download captionless audio when audio understanding is disabled", async () => {
-    const mockFetch = mediaFetchMock.mockImplementation(async () => {
-      throw new Error("disabled audio must not be downloaded");
-    });
-    const slackCtx = createAudioMentionSlackCtx({ audioEnabled: false });
-
-    const prepared = await prepareMessageWith(
-      slackCtx,
-      createSlackAccount({ replyToMode: "all" }),
-      createCaptionlessSlackAudioMessage(),
-    );
-
-    expect(prepared).toBeNull();
-    expect(mockFetch).not.toHaveBeenCalled();
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-  });
-
-  it("drops nonmatching audio transcripts, keeps only the file marker, and removes the download", async () => {
-    const mockFetch = mediaFetchMock.mockImplementation(
-      async (_input: string | URL | Request) =>
-        new Response(Buffer.from("voice clip"), {
-          status: 200,
-          headers: { "content-type": "audio/mp4" },
-        }),
-    );
-    const slackCtx = createAudioMentionSlackCtx({});
-    slackCtx.historyLimit = 5;
-    let downloadedPath: string | undefined;
-    transcribeFirstAudioMock.mockImplementation(
-      async ({ ctx }: { ctx: { media: Array<{ path?: string }> } }) => {
-        downloadedPath = ctx.media[0]?.path;
-        return "please review this";
-      },
-    );
-
-    try {
+      const slackCtx = createAudioMentionSlackCtx({ audioEnabled, channelUsers });
+      transcribeFirstAudioMock.mockResolvedValue("Bill /new please review this");
       const prepared = await prepareMessageWith(
         slackCtx,
         createSlackAccount({ replyToMode: "all" }),
-        createCaptionlessSlackAudioMessage({ ts: "1777244692.409920" }),
+        createCaptionlessSlackAudioMessage(),
       );
 
       expect(prepared).toBeNull();
-      expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      expect(
-        resolveFetchInputUrl(mockFetch.mock.calls[0]?.[0] as string | URL | Request),
-      ).toContain("FVOICE");
-      expect(downloadedPath).toEqual(expect.any(String));
-      await expect(fs.stat(downloadedPath as string)).rejects.toMatchObject({ code: "ENOENT" });
-      const entries = Array.from(slackCtx.channelHistories.values()).flat();
-      expect(entries).toHaveLength(1);
-      expect(entries[0]?.body).toBe("[Slack file: report.pdf (application/pdf, fileId: FPDF)]");
-      expect(entries[0]?.media).toBeUndefined();
-    } finally {
-      if (downloadedPath) {
-        await fs.rm(downloadedPath, { force: true });
+      expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+      expect(sendTranscriptEchoMock).not.toHaveBeenCalled();
+      expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+      const observation = expectDefined(observedMessages()[0], "retained source");
+      expect(observation.media).toHaveLength(2);
+      const fetchedUrls = mediaFetchMock.mock.calls.map(([input]) => resolveFetchInputUrl(input));
+      expect(fetchedUrls.filter((url) => url.includes("FVOICE"))).toHaveLength(1);
+      expect(fetchedUrls.filter((url) => url.includes("FPDF"))).toHaveLength(1);
+      for (const media of observation.media ?? []) {
+        const mediaPath = expectDefined(media.path, "retained attachment path");
+        expect((await fs.stat(mediaPath)).size).toBeGreaterThan(0);
+        await fs.rm(mediaPath);
       }
-    }
-  });
+    },
+  );
 
-  it("keeps per-channel replyToMode during regex mention reroute", async () => {
+  it("keeps per-channel replyToMode for native mentions", async () => {
     const rootTs = "1777244692.409919";
     const slackCtx = createInboundSlackCtx({
       cfg: {
@@ -4928,7 +4906,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
         channel: "C0AHZFCAS1K",
         channel_type: "channel",
         user: "U_BEK",
-        text: "Bill send a subagent to review GitHub issue #50621",
+        text: "<@B1> review the reported issue",
         ts: rootTs,
       } as SlackMessageEvent,
       opts: { source: "message" },
@@ -5022,7 +5000,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
           text: "<@B1> send a subagent to review GitHub issue #50621",
           ts: rootTs,
         } as SlackMessageEvent,
-        opts: { source: "app_mention", wasMentioned: true },
+        opts: { source: "app_mention" },
       });
 
       assertPrepared(prepared);
@@ -5036,6 +5014,9 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 });
 
 describe("prepareSlackMessage sender prefix", () => {
+  const storeFixture = createSlackSessionStoreFixture("slack-sender-prefix-");
+  beforeAll(() => storeFixture.setup());
+  afterAll(() => storeFixture.cleanup());
   const stripPreparedMentions = (ctx: FinalizedMsgContext, text: string): string => {
     const compiled = (slackPlugin.mentions?.stripPatterns?.({ ctx, cfg: undefined }) ?? []).map(
       (pattern) => compileSafeRegexDetailed(pattern, "gi"),
@@ -5057,7 +5038,7 @@ describe("prepareSlackMessage sender prefix", () => {
   }): SlackMonitorContext {
     return {
       cfg: {
-        agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
+        session: { store: storeFixture.makeTmpStorePath().storePath },
         channels: { slack: params.channels },
         messages: { ackReactionScope: "off" },
       },
@@ -5074,9 +5055,7 @@ describe("prepareSlackMessage sender prefix", () => {
       botUserId: "BOT",
       teamId: "T1",
       apiAppId: "A1",
-      historyLimit: 0,
       dmHistoryLimit: 0,
-      channelHistories: new Map(),
       sessionScope: "per-sender",
       mainKey: "agent:main:main",
       dmEnabled: true,
@@ -5090,7 +5069,6 @@ describe("prepareSlackMessage sender prefix", () => {
       reactionMode: "off",
       reactionAllowlist: [],
       replyToMode: "off",
-      threadHistoryScope: "channel",
       threadInheritParent: false,
       slashCommand: params.slashCommand,
       textLimit: 2000,
@@ -5121,7 +5099,7 @@ describe("prepareSlackMessage sender prefix", () => {
         ts,
         event_ts: ts,
       } as never,
-      opts: { source: "message", wasMentioned: true },
+      opts: { source: "message" },
     });
   }
 
@@ -5248,7 +5226,7 @@ describe("prepareSlackMessage sender prefix", () => {
         ts: "1700000000.0004",
         event_ts: "1700000000.0004",
       } as never,
-      opts: { source: "message", wasMentioned: true },
+      opts: { source: "message" },
     });
 
     if (!result) {
@@ -5445,13 +5423,13 @@ describe("slack implicit mention policy", () => {
     });
   }
 
-  it("drops a reply to the bot when replyToBot is disabled", async () => {
+  it("admits a native reply to the bot regardless of the retired replyToBot setting", async () => {
     const ctx = createCtxWithImplicitMentions({ replyToBot: false });
     const result = await prepareThreadMessage({
       ctx,
       message: { parent_user_id: "B1" },
     });
-    expect(result).toBeNull();
+    expect(result?.ctxPayload.MentionSource).toBe("implicit_thread");
   });
 
   it("allows an explicit mention when all implicit thread signals are disabled", async () => {
@@ -5466,7 +5444,7 @@ describe("slack implicit mention policy", () => {
     expect(result?.ctxPayload.MentionSource).toBe("explicit_bot");
   });
 
-  it("controls persisted thread participation independently from replies to the bot", async () => {
+  it("does not invoke from persisted thread participation", async () => {
     const threadTs = "1700000000.000000";
     recordSlackThreadParticipation("default", "C123", threadTs);
     const ctx = createCtxWithImplicitMentions({ threadParticipation: false });
@@ -5477,7 +5455,7 @@ describe("slack implicit mention policy", () => {
     expect(result).toBeNull();
   });
 
-  it("accepts an unmentioned reply more than 24 hours after joining a required-mention thread", async () => {
+  it("does not invoke from old bot participation in a human-rooted thread", async () => {
     const threadTs = "1700000000.000000";
     const initialNow = 1_700_000_000_000;
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(initialNow);
@@ -5491,8 +5469,7 @@ describe("slack implicit mention policy", () => {
       });
       const result = await prepareThreadMessage({ ctx, message: { thread_ts: threadTs } });
 
-      expect(result?.ctxPayload.MentionSource).toBe("implicit_thread");
-      expect(result?.ctxPayload.ImplicitMentionKinds).toEqual(["bot_thread_participant"]);
+      expect(result).toBeNull();
     } finally {
       nowSpy.mockRestore();
     }
@@ -5507,15 +5484,14 @@ describe("slack implicit mention policy", () => {
     expect(await prepareThreadMessage({ ctx })).toBeNull();
   });
 
-  it("preserves explicit channel settings that do not require mentions", async () => {
+  it("requires native addressing even when the channel disables mention requirements", async () => {
     const ctx = createCtxWithImplicitMentions(undefined, {
       channelsConfig: { C123: { requireMention: false } },
     });
 
     const result = await prepareThreadMessage({ ctx });
 
-    expect(result?.ctxPayload.MentionSource).toBe("none");
-    expect(result?.ctxPayload.ImplicitMentionKinds).toBeUndefined();
+    expect(result).toBeNull();
   });
 
   const unauthorizedThreadCases: Array<{
@@ -5541,12 +5517,12 @@ describe("slack implicit mention policy", () => {
   ];
 
   it.each(unauthorizedThreadCases)(
-    "rejects a joined thread when $authorization authorization fails",
+    "rejects a native reply to the bot when $authorization authorization fails",
     async ({ options }) => {
       recordSlackThreadParticipation("default", "C123", "1700000000.000000");
       const ctx = createCtxWithImplicitMentions(undefined, options);
 
-      expect(await prepareThreadMessage({ ctx })).toBeNull();
+      expect(await prepareThreadMessage({ ctx, message: { parent_user_id: "B1" } })).toBeNull();
     },
   );
 

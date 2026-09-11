@@ -19,7 +19,7 @@ To speak to OpenClaw in Slack today, send a Slack audio clip to the OpenClaw app
 
 Audio clips and Slackbot dictation have different privacy semantics: clips follow Slack file-retention policy and OpenClaw downloads them for transcription, while Slack says dictation audio is not stored.
 
-In a channel with `requireMention: true`, a captionless audio clip can satisfy the gate by speaking a configured mention pattern (`agents.entries.*.groupChat.mentionPatterns`, falling back to `messages.groupChat.mentionPatterns`). OpenClaw authorizes the sender before downloading or transcribing the clip, then admits it only when the transcript matches. A failed or nonmatching speculative transcript is discarded with the downloaded clip; it is not retained in channel history. Native Slack `@bot` identity cannot be inferred from speech, so configure a spoken-name pattern or include a typed mention. If transcript echoing is enabled, the echo is sent only after admission.
+In channels and group DMs, include a native bot mention or reply in a thread rooted at the bot's message to start a turn. Speaking the bot's name in an audio clip does not invoke it. Permitted unmentioned clips are retained as background file references without speculative transcription. Addressed clips and direct messages use the normal transcription pipeline; configured transcript echoing happens only after admission.
 
 ## Media, chunking, and delivery
 
@@ -60,6 +60,8 @@ In a channel with `requireMention: true`, a captionless audio clip can satisfy t
 
 Slack can attach downloaded media to the agent turn when Slack file downloads succeed and size limits permit. Audio clips can be transcribed, image files can pass through the media-understanding path or directly to a vision-capable reply model, and other files remain available as downloadable file context.
 
+For unmentioned room messages, OpenClaw retains available files without invoking a model. The next addressed request receives their captions, source metadata, and saved-file references. Background files are context-only, so the agent can inspect a relevant file with its tools. They remain subject to the configured attachment lifetime; expired files produce an unavailable notice.
+
 ### Supported media types
 
 | Media type                     | Source               | Current behavior                                                                  | Notes                                                                     |
@@ -78,7 +80,7 @@ When a Slack message with file attachments arrives:
 1. OpenClaw downloads the file from Slack's private URL using the bot token.
 2. The file is written to the media store on success.
 3. Downloaded media paths and content types are added to the inbound context.
-4. Audio clips are routed to the shared transcription pipeline; image-capable model/tool paths can use image attachments from the same context.
+4. On an addressed request or direct message, audio clips enter the shared transcription pipeline and image-capable model/tool paths can use attached images. Unmentioned room files remain background references until an addressed request needs them.
 5. Other files remain available as file metadata or media references for tools that can handle them.
 
 ### Thread-root attachment inheritance
@@ -110,15 +112,15 @@ When a single Slack message contains multiple file attachments:
 
 ### Known limits
 
-| Scenario                                      | Current behavior                                                                   | Workaround                                                                    |
-| --------------------------------------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| Expired Slack file URL                        | File skipped; no error shown                                                       | Re-upload the file in Slack                                                   |
-| Audio transcription unavailable               | Clip remains attached but no transcript is produced                                | Configure `tools.media.audio` or install a supported local transcription CLI  |
-| Captionless clip does not pass a mention gate | Dropped after private speculative transcription; transcript and download discarded | Configure a spoken-name mention pattern, add a typed bot mention, or use a DM |
-| Vision model not configured                   | Image attachments are stored as media references, but not analyzed as images       | Configure `agents.defaults.imageModel` or use a vision-capable reply model    |
-| Very large images (> 20 MB by default)        | Skipped per size cap                                                               | Increase `channels.slack.mediaMaxMb` if Slack allows                          |
-| Forwarded/shared attachments                  | Text and Slack-hosted image/file media are best-effort                             | Re-share directly in the OpenClaw thread                                      |
-| PDF attachments                               | Stored as file/media context, not automatically routed through image vision        | Use `download-file` for file metadata or the `pdf` tool for PDF analysis      |
+| Scenario                                    | Current behavior                                                             | Workaround                                                                   |
+| ------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Expired Slack file URL                      | File skipped; no error shown                                                 | Re-upload the file in Slack                                                  |
+| Audio transcription unavailable             | Clip remains attached but no transcript is produced                          | Configure `tools.media.audio` or install a supported local transcription CLI |
+| Captionless room clip has no native address | Retained for later context without transcription                             | Add a typed bot mention, reply to the bot's thread root, or use a DM         |
+| Vision model not configured                 | Image attachments are stored as media references, but not analyzed as images | Configure `agents.defaults.imageModel` or use a vision-capable reply model   |
+| Very large images (> 20 MB by default)      | Skipped per size cap                                                         | Increase `channels.slack.mediaMaxMb` if Slack allows                         |
+| Forwarded/shared attachments                | Text and Slack-hosted image/file media are best-effort                       | Re-share directly in the OpenClaw thread                                     |
+| PDF attachments                             | Stored as file/media context, not automatically routed through image vision  | Use `download-file` for file metadata or the `pdf` tool for PDF analysis     |
 
 ### Related documentation
 

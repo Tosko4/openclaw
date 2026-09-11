@@ -72,7 +72,6 @@ describe("Slack message handler thread resolution", () => {
             identityHealth: { lifecycle: "ready", lastError: null },
             teamId: "T111",
             apiAppId: "A111",
-            historyLimit: 0,
             sessionScope: "per-sender",
             mainKey: "main",
             dmEnabled: true,
@@ -86,7 +85,6 @@ describe("Slack message handler thread resolution", () => {
             reactionMode: "off",
             reactionAllowlist: [],
             replyToMode: "off",
-            threadHistoryScope: "thread",
             threadInheritParent: false,
             slashCommand: {
               enabled: false,

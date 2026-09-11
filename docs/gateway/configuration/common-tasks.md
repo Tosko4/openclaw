@@ -86,7 +86,7 @@ read_when:
   </Accordion>
 
   <Accordion title="Set up group chat mention gating">
-    Group messages default to **require mention**. Configure trigger patterns per agent. Normal group/channel replies post automatically; opt into the message-tool path for shared rooms where the agent should decide when to speak:
+    Discord, Slack, and Telegram require native bot addressing and retain permitted unread discussion automatically. Other channels use their configured mention gates. Normal group/channel replies post automatically; opt into the message-tool path when visible replies should require a message-tool call:
 
     ```json5
     {
@@ -94,7 +94,6 @@ read_when:
         visibleReplies: "automatic", // set "message_tool" to require message-tool sends everywhere
         groupChat: {
           visibleReplies: "message_tool", // opt-in; visible output requires message(action=send)
-          unmentionedInbound: "room_event", // unmentioned always-on group chatter is quiet context
         },
       },
       agents: {
@@ -116,7 +115,7 @@ read_when:
     ```
 
     - **Metadata mentions**: native @-mentions (WhatsApp tap-to-mention, Telegram @bot, etc.)
-    - **Text patterns**: safe regex patterns in `mentionPatterns`
+    - **Text patterns**: safe regex patterns in `mentionPatterns`, on channels that support them. Discord, Slack, and Telegram ignore these legacy triggers.
     - **Visible replies**: `messages.visibleReplies` can require message-tool sends globally; `messages.groupChat.visibleReplies` overrides that for groups/channels.
     - See [full reference](/gateway/config-channels#group-chat-mention-gating) for visible reply modes, per-channel overrides, and self-chat mode.
 

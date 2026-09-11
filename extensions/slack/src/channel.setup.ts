@@ -33,6 +33,7 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     nativeCommands: true,
   },
   commands: {
+    groupActivationModes: ["mention"],
     nativeCommandsAutoEnabled: false,
     nativeSkillsAutoEnabled: false,
     resolveNativeCommandName: ({ commandKey, defaultName }) =>

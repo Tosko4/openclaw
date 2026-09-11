@@ -1,158 +1,74 @@
 ---
-summary: "Let supported group rooms provide quiet context unless the agent sends with the message tool"
+summary: "Retired ambient settings and durable context for addressed group turns"
 read_when:
-  - Configuring always-on group or channel rooms
-  - You want the agent to watch room chatter without posting final text automatically
-  - Debugging typing and token usage with no visible room message
+  - Upgrading an always-on Discord, Slack, or Telegram room
+  - You want the bot to remember discussion without interrupting it
+  - Checking what legacy unmentionedInbound settings do
 title: "Ambient room events"
 sidebarTitle: "Ambient room events"
 ---
 
-Ambient room events let OpenClaw process unmentioned group or channel chatter as quiet context. The agent can update memory and session state, but the room stays silent unless the agent explicitly calls the `message` tool.
+Discord, Slack, and Telegram retain permitted room discussion without starting a model turn. A native bot mention, reply to the bot, or explicit bot-owned interaction starts a request with the unread context. Ordinary chatter does not invoke or steer the agent.
 
-For always-on group chats, combine `messages.groupChat.unmentionedInbound: "room_event"` with `messages.groupChat.visibleReplies: "message_tool"`. The agent listens, decides when a reply is useful, and never needs the old prompt pattern of answering `NO_REPLY`.
+The old `messages.groupChat.unmentionedInbound` setting and its agent override remain valid configuration, but these plugins ignore them. `requireMention: false`, mention patterns, and always-on activation no longer enable ambient turns on these channels. Other channels keep their own existing addressing and history behavior.
 
-Supported today: Slack channels, private channels, and multi-person DMs. Other group channels keep their existing group behavior unless their channel page says they support ambient room events.
+## Recommended setup
+
+Keep the room and sender permissions appropriate for your group. No observation setting is needed. Use native addressing when you want a reply; keep `messages.groupChat.visibleReplies: "automatic"` if the agent's final answer should be posted normally.
+
+## Prerequisites
+
+OpenClaw must receive the messages and have permission to retain their context. A bot cannot observe a room the platform does not deliver to it.
+
+For Slack, the app needs the message-event subscriptions and history scopes for the room type. See [Slack setup](/channels/slack/setup). Group DM membership remains a Slack platform requirement.
+
+## What changes
+
+- Permitted unmentioned messages are saved as unread context without a model request.
+- Native addressing captures unread context through that request. Later messages remain unread.
+- The existing queue and steering settings handle addressed requests while a turn is active.
+- Context is marked consumed when the turn's input enters the transcript.
+- Unread context survives a Gateway restart.
+- Direct messages keep their existing behavior.
 
 <a id="discord-example" />
 <a id="telegram-example" />
 
-Discord and Telegram record permitted group discussion without starting the agent. A native bot mention or reply starts a request with unread context. Their legacy ambient settings remain accepted but do not activate unaddressed input. See [Discord history](/channels/discord/threads-and-sessions#session-and-thread-behavior) and [Telegram access control](/channels/telegram/access-control).
-
-## Recommended setup
-
-Set the global group-chat behavior:
-
-```json5
-{
-  messages: {
-    groupChat: {
-      unmentionedInbound: "room_event",
-      visibleReplies: "message_tool",
-      historyLimit: 50,
-    },
-  },
-}
-```
-
-Then make the room always-on by disabling mention gating for that room. The room must still pass its normal `groupPolicy`, room allowlist, and sender allowlist.
-
-## Prerequisites
-
-Two settings silently disable ambient room events even when `unmentionedInbound: "room_event"` is set.
-
-**Mention gating must be off for the room.** `requireMention: true` drops unmentioned messages before routing, so they never become room events. The agent then has no room backlog at all — it only ever sees messages that mentioned it. If the agent reports that it cannot see recent room history, check mention gating before anything else.
-
-**The agent needs the `message` tool.** Room events use strict visible delivery, so posting requires `message(action=send)`. The `message` tool ships in the `messaging` tool profile; the `minimal` and `coding` profiles do not include it. An agent on `tools.profile: "coding"` will listen to room events and can never speak. Grant it explicitly when the profile omits it:
-
-```json5
-{
-  agents: {
-    entries: {
-      "<agent-id>": {
-        tools: { alsoAllow: ["message"] },
-      },
-    },
-  },
-}
-```
-
-Check the effective surface with `openclaw agents list` and a probe turn rather than assuming the profile includes it.
-
-After saving the config, the Gateway hot-applies `messages` settings. With `gateway.reload.mode: "off"`, restart manually to apply the change.
-
-## What changes
-
-With `messages.groupChat.unmentionedInbound: "room_event"`:
-
-- unmentioned allowed group or channel messages become quiet room events
-- mentioned messages stay user requests
-- text control commands and native commands stay user requests
-- abort or stop requests stay user requests
-- direct messages stay user requests
-
-Room events use strict visible delivery. Final assistant text is private. The agent must call `message(action=send)` to post in the room.
-
-Typing and lifecycle status reactions stay suppressed for room events. The one explicit receipt exception is `messages.ackReactionScope: "all"`, which sends the configured ack reaction; use any narrower scope or `"off"` when the room must remain completely silent.
+See [Discord history](/channels/discord/threads-and-sessions#session-and-thread-behavior), [Slack threads](/channels/slack/threads-and-sessions), and [Telegram access control](/channels/telegram/access-control).
 
 ## Slack example
 
-Slack channel allowlists are ID-first. Use channel IDs such as `C12345678`, not `#channel-name`. Listing the channel under `channels.slack.channels` is what allows it (`enabled: false` disables an entry):
+Slack room allowlists use channel IDs or workspace-qualified channel targets. Mention the bot with `<@botId>`, or reply in a thread rooted at the bot's own message. Posting in a thread where the bot previously participated does not by itself address the bot.
 
-```json5
-{
-  messages: {
-    groupChat: {
-      unmentionedInbound: "room_event",
-      visibleReplies: "message_tool",
-      historyLimit: 50,
-    },
-  },
-  channels: {
-    slack: {
-      groupPolicy: "allowlist",
-      channels: {
-        "<SLACK_CHANNEL_ID>": {
-          requireMention: false,
-        },
-      },
-    },
-  },
-}
-```
+A native reset such as `/openclaw /new` clears prior unread context for its target conversation. It preserves later arrivals and other rooms or threads.
 
 ## Agent specific policy
 
-Use an agent override when several agents share the same room but only one should treat unmentioned chatter as ambient context:
-
-```json5
-{
-  messages: {
-    groupChat: {
-      visibleReplies: "message_tool",
-    },
-  },
-  agents: {
-    entries: {
-      main: {
-        default: true,
-        groupChat: {
-          unmentionedInbound: "room_event",
-          mentionPatterns: ["@openclaw", "openclaw"],
-        },
-      },
-    },
-  },
-}
-```
-
-The agent-specific `agents.entries.*.groupChat.unmentionedInbound` value overrides `messages.groupChat.unmentionedInbound` for that agent.
+The agent-specific `agents.entries.*.groupChat.unmentionedInbound` override is also ignored by Discord, Slack, and Telegram. Agent routing and room permissions still determine which agent can receive a conversation's context.
 
 ## Visible reply modes
 
-`messages.groupChat.visibleReplies` defaults to `"automatic"` for normal group/channel user requests. Keep that default when final assistant text should post visibly without an explicit message-tool call.
+`messages.groupChat.visibleReplies` still controls delivery for addressed requests. The default `"automatic"` posts the final answer. `"message_tool"` requires the agent to call the message tool for model-authored visible output; explicit command and plugin-owned replies keep their normal delivery contracts.
 
-For ambient always-on rooms, `messages.groupChat.visibleReplies: "message_tool"` lets the agent decide when to speak by calling the message tool. Use a model that reliably calls tools. If the model returns final text without calling the tool, OpenClaw keeps that final text private and logs suppressed-delivery metadata.
-
-Room events stay strict even when other group requests use automatic replies. Unmentioned ambient room events always require `message(action=send)` for visible output.
+Changing visible reply mode does not enable ambient turns.
 
 ## History
 
-For supported ambient room-event channels, `messages.groupChat.historyLimit` sets the global group history default (50 when unset; must be a positive integer). Channels can override it with `channels.<channel>.historyLimit`, and some channels also support per-account history limits. Set the channel-level `historyLimit: 0` to disable group history context for those channels.
+The shared per-agent `conversation_history` table owns unread messages and their assignment to turns. It is created on first use without a schema-version bump. Existing session transcripts remain in place.
 
-Discord and Telegram use durable unread history instead. Their `historyLimit` settings do not clip or disable observation. In those channels, `/new` clears unread history through the reset request; later messages remain unread.
+Group `historyLimit` settings do not clip or disable this context on Discord, Slack, or Telegram. Slack's initial room-thread history window is also replaced by durable observation. No historical backfill is performed when this feature is first enabled by an upgrade.
+
+Saved attachments follow the existing media lifetime. Context contains file references; unavailable or expired files produce a notice. The agent can inspect an available file when needed.
+
+Consumed originals remain while their session has a live transcript or retained archive. Keeping their full bodies for this period is a storage tradeoff; it is not needed merely to recognize duplicate message IDs. See [Observed group history](/reference/database-schemas/layout#observed-group-history).
 
 ## Troubleshooting
 
-If the room shows typing or token usage but no visible message:
-
-1. Confirm the room is allowed by the channel allowlist and sender allowlist.
-2. Confirm `requireMention: false` is set at the room level you expect.
-3. Check whether `messages.groupChat.unmentionedInbound` or the agent override is `"room_event"`.
-4. Inspect logs for suppressed final payload metadata or `didSendViaMessagingTool: false`.
-5. For normal group requests, keep or restore `messages.groupChat.visibleReplies: "automatic"` if you want final replies posted automatically. For ambient rooms using `message_tool`, use a model/runtime that reliably calls tools.
-
-If Slack ambient rooms do not trigger, verify the channel key is the Slack channel ID and the app has the history scope for that room type: `channels:history` (public), `groups:history` (private), or `mpim:history` (multi-person DMs).
+1. Check room membership, event delivery, room allowlists, and sender permissions when discussion is missing.
+2. Use a native bot mention or reply when a room message gets no response.
+3. Read the retirement warning if an old always-on configuration now waits for native addressing. Removing the ignored settings is optional.
+4. If the unread context exceeds a runtime limit, follow the visible recovery notice and use the channel's reset command to start fresh.
+5. If an addressed turn finishes without a visible reply, check `visibleReplies` and whether the selected tool policy permits message delivery.
 
 ## Related
 

@@ -105,7 +105,6 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     ctx: prepared.ctxPayload,
   });
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
-  const suppressRoomEventTyping = prepared.ctxPayload.InboundEventKind === "room_event";
 
   // Shared context for the `message_sent` plugin hook emitted on each delivered
   // reply (both the `deliverReplies` paths and the native-streaming finalizer).
@@ -127,7 +126,6 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   let didSetStatus = false;
   let didAddTypingReaction = false;
   const statusReactionsEnabled =
-    prepared.ctxPayload.InboundEventKind !== "room_event" &&
     Boolean(prepared.ackReactionPromise) &&
     Boolean(reactionMessageTs) &&
     cfg.messages?.statusReactions?.enabled === true;
@@ -314,7 +312,6 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     replyDeliveryMode,
     sourceReplyDeliveryMode,
     sourceRepliesAreToolOnly,
-    suppressRoomEventTyping,
     messageSentHookTarget,
     messageSentHookContext,
     messageSentDeliveryHookContext,

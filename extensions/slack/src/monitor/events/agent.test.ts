@@ -65,7 +65,6 @@ function createSessionEventHarness(channelType: "im" | "channel" | "mpim" = "im"
     cfg: { session: { store: storePath } },
     accountId: "default",
     threadInheritParent: false,
-    threadHistoryScope: "thread",
     useAccessGroups: false,
     textLimit: 4000,
     runtime: { error: vi.fn() },

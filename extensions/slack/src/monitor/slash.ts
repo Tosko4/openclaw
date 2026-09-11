@@ -12,6 +12,7 @@ import {
   resolveAgentDir,
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveTextCommand } from "openclaw/plugin-sdk/command-auth";
 import {
   formatCommandArgMenuTitle,
   resolveEffectiveAgentRuntime,
@@ -45,6 +46,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
+import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
 import { requireSlackPostMessageTimestamp } from "../client-delivery.js";
@@ -58,6 +60,7 @@ import {
   resolveSlackChatType,
   type SlackMonitorContext,
 } from "./context.js";
+import { recordSlackConversationSources } from "./conversation-observation.js";
 import { resolveSlackDeferredActionTarget } from "./deferred-action-routing.js";
 import { authorizeSlackDirectMessage } from "./dm-auth.js";
 import { resolveSlackListenerEventScope, type SlackEventScope } from "./event-scope.js";
@@ -94,7 +97,9 @@ const SLACK_COMMAND_ARG_ACTION_BLOCKS_MAX = SLACK_MAX_BLOCKS - SLACK_COMMAND_ARG
 
 type SlackCommandHandlerArgs = SlackCommandMiddlewareArgs &
   Pick<AllMiddlewareArgs, "context" | "client">;
-type SlackArgActionHandlerArgs = SlackActionMiddlewareArgs<BlockAction> &
+// Bolt omits respond for App Home actions without response_url despite its required middleware type.
+type SlackArgActionHandlerArgs = Omit<SlackActionMiddlewareArgs<BlockAction>, "respond"> &
+  Partial<Pick<SlackActionMiddlewareArgs<BlockAction>, "respond">> &
   Pick<AllMiddlewareArgs, "context" | "client">;
 type SlackArgOptionsHandlerArgs = SlackOptionsMiddlewareArgs<"block_suggestion"> &
   Pick<AllMiddlewareArgs, "context" | "client">;
@@ -415,7 +420,7 @@ export function createSlackCommandHandler(params: {
     ctx.slashCommand ?? account.config.slashCommand,
   );
 
-  return async (p: {
+  const handleCommand = async (p: {
     command: Pick<
       SlackCommandMiddlewareArgs["command"],
       "user_id" | "user_name" | "channel_id" | "channel_name"
@@ -876,6 +881,42 @@ export function createSlackCommandHandler(params: {
               NON_PLUGIN_COMMAND_DISPATCH,
           }
         : undefined;
+      const resetCommand = commandDefinition ?? resolveTextCommand(prompt, cfg)?.command;
+      if (
+        isRoomish &&
+        commandAuthorized &&
+        (resetCommand?.key === "new" || resetCommand?.key === "reset")
+      ) {
+        const interactionId = command.trigger_id ?? p.eventTs;
+        if (!interactionId) {
+          throw new Error("Slack native reset requires an interaction identity");
+        }
+        ctxPayload.ConversationHistory = await recordSlackConversationSources({
+          agentId: route.agentId,
+          storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
+          accountId: route.accountId,
+          teamId: eventScope?.teamId ?? ctx.teamId,
+          channelId: command.channel_id,
+          kind: isGroupDm ? "group" : "channel",
+          threadTs: p.threadTs,
+          senderName,
+          sources: [
+            {
+              isRequest: true,
+              sourceId: `interaction:${interactionId}`,
+              message: {
+                type: "message",
+                channel: command.channel_id,
+                channel_type: channelType,
+                user: command.user_id,
+                text: prompt,
+                ts: p.eventTs,
+                thread_ts: p.threadTs,
+              },
+            },
+          ],
+        });
+      }
       if (commandAuthorized) {
         if (isCurrentSession?.() === false || p.onAdmitted?.() === false) {
           await respond({
@@ -979,6 +1020,9 @@ export function createSlackCommandHandler(params: {
     }
     return false;
   };
+  // Bolt's acknowledgement releases the HTTP request before command dispatch completes.
+  // Reserve its continuation first so queue work remains tracked through response delivery.
+  return (p: Parameters<typeof handleCommand>[0]) => runDetachedWebhookWork(() => handleCommand(p));
 }
 
 export async function registerSlackMonitorSlashCommands(params: {
@@ -1221,17 +1265,8 @@ export async function registerSlackMonitorSlashCommands(params: {
   }
 
   const registerArgAction = (actionId: string | RegExp) => {
-    (
-      ctx.app as unknown as {
-        action: NonNullable<(typeof ctx.app & { action?: unknown })["action"]>;
-      }
-    ).action(actionId, async (args: SlackArgActionHandlerArgs) => {
-      const { ack, body } = args;
-      const respond = (
-        args as unknown as {
-          respond?: SlackCommandMiddlewareArgs["respond"];
-        }
-      ).respond;
+    const handleArgAction = async (args: SlackArgActionHandlerArgs) => {
+      const { ack, body, respond } = args;
       const action = args.action as { value?: string; selected_option?: { value?: string } };
       await ack();
       const eventScope = resolveEventScope(args);
@@ -1325,7 +1360,11 @@ export async function registerSlackMonitorSlashCommands(params: {
           ? { [pluginCommandRuntimeModule.PLUGIN_COMMAND_DISPATCH]: NON_PLUGIN_COMMAND_DISPATCH }
           : undefined,
       });
-    });
+    };
+    // Argument clicks acknowledge before loading their command; reserve that whole continuation.
+    ctx.app.action<BlockAction>(actionId, (args) =>
+      runDetachedWebhookWork(() => handleArgAction(args)),
+    );
   };
   registerArgAction(SLACK_COMMAND_ARG_ACTION_LISTENER);
   return registration;

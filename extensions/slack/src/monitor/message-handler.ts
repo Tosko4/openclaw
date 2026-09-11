@@ -38,7 +38,6 @@ export type SlackMessageHandler = (
   message: SlackMessageEvent,
   opts: {
     source: "message" | "app_mention";
-    wasMentioned?: boolean;
     relayIdentity?: SlackSendIdentity;
     /** Non-serializable listener scope for a validated enterprise event. */
     eventScope?: SlackEventScope;
@@ -201,7 +200,6 @@ export function createSlackMessageHandler(params: {
                         ...(existing?.opts.source === "app_mention"
                           ? { source: "app_mention" as const }
                           : {}),
-                        ...(existing?.opts.wasMentioned ? { wasMentioned: true } : {}),
                       },
                     };
                     surviving[existingIndex] = merged;
@@ -241,9 +239,6 @@ export function createSlackMessageHandler(params: {
                         .map((entry) => entry.message.text ?? "")
                         .filter(Boolean)
                         .join("\n");
-                const combinedMentioned = surviving.some((entry) =>
-                  Boolean(entry.opts.wasMentioned),
-                );
                 const syntheticMessage: SlackMessageEvent = {
                   ...last.message,
                   text: combinedText,
@@ -264,9 +259,12 @@ export function createSlackMessageHandler(params: {
                     ctx: runtimeContext,
                     account,
                     message: syntheticMessage,
+                    sourceMessages: surviving.map((entry) => ({
+                      message: entry.message,
+                      source: entry.opts.source,
+                    })),
                     opts: {
                       ...lastOpts,
-                      wasMentioned: combinedMentioned || last.opts.wasMentioned,
                       onVisibleDrop: () => {
                         visibleDrop = true;
                       },
@@ -321,11 +319,11 @@ export function createSlackMessageHandler(params: {
                   };
                   onPrepared?.(prepared);
                   if (surviving.length > 1) {
-                    const ids = surviving
-                      .map((entry) => entry.message.ts)
-                      .filter(Boolean) as string[];
+                    const ids =
+                      prepared.ctxPayload.ConversationHistory?.requestSourceIds ??
+                      surviving.flatMap((entry) => (entry.message.ts ? [entry.message.ts] : []));
                     if (ids.length > 0) {
-                      prepared.ctxPayload.MessageSids = ids;
+                      prepared.ctxPayload.MessageSids = [...ids];
                       prepared.ctxPayload.MessageSidFirst = ids[0];
                       prepared.ctxPayload.MessageSidLast = ids[ids.length - 1];
                     }

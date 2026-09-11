@@ -66,7 +66,7 @@ describe("auth.test event identity recovery", () => {
     client.auth.test.mockResolvedValue({
       user_id: "bot-user",
       bot_id: "bot-id",
-      team_id: "T_TEST",
+      team_id: "TTEST",
       is_enterprise_install: false,
     });
     client.conversations.info.mockResolvedValueOnce({
@@ -79,7 +79,7 @@ describe("auth.test event identity recovery", () => {
     const context = {
       botUserId: "bot-user",
       botId: "bot-id",
-      teamId: "T_TEST",
+      teamId: "TTEST",
       isEnterpriseInstall: false,
     };
     const event = {
@@ -91,13 +91,13 @@ describe("auth.test event identity recovery", () => {
       channel_type: "channel",
     };
 
-    await handler({ event, context, body: { api_app_id: "A_HTTP", team_id: "T_TEST" } });
+    await handler({ event, context, body: { api_app_id: "A_HTTP", team_id: "TTEST" } });
     await vi.waitFor(() => expect(sendMock).toHaveBeenCalledTimes(1));
 
     await runSlackHandlerWithDispatch(handler, {
       event: { ...event, ts: "1700000100.000002" },
       context,
-      body: { api_app_id: "A_OTHER", team_id: "T_TEST" },
+      body: { api_app_id: "A_OTHER", team_id: "TTEST" },
     });
     expect.soft(sendMock).toHaveBeenCalledTimes(1);
 
@@ -105,10 +105,10 @@ describe("auth.test event identity recovery", () => {
     await agentHandler({
       event: { type: "app_context_changed", user: "U_OTHER", context: { entities: [] } },
       context,
-      body: { api_app_id: "A_HTTP", team_id: "T_TEST" },
+      body: { api_app_id: "A_HTTP", team_id: "TTEST" },
     });
     expect(register).toHaveBeenCalledWith(
-      JSON.stringify(["workspace", "default", "T_TEST", "A_HTTP"]),
+      JSON.stringify(["workspace", "default", "TTEST", "A_HTTP"]),
       { experience: "agent", observedAt: expect.any(Number) },
     );
     await stopSlackMonitor(monitor);
@@ -125,7 +125,7 @@ describe("auth.test event identity recovery", () => {
     client.auth.test.mockResolvedValue({
       user_id: "bot-user",
       bot_id: "bot-id",
-      team_id: "T_TEST",
+      team_id: "TTEST",
       is_enterprise_install: false,
     });
     client.conversations.info.mockResolvedValueOnce({
@@ -142,7 +142,7 @@ describe("auth.test event identity recovery", () => {
     const context = {
       botUserId: "bot-user",
       botId: "bot-id",
-      teamId: "T_TEST",
+      teamId: "TTEST",
       isEnterpriseInstall: false,
     };
     const event = {
@@ -157,14 +157,14 @@ describe("auth.test event identity recovery", () => {
     await runSlackHandlerWithDispatch(handler, {
       event,
       context,
-      body: { api_app_id: "A_OTHER", team_id: "T_TEST" },
+      body: { api_app_id: "A_OTHER", team_id: "TTEST" },
     });
     expect(sendMock).not.toHaveBeenCalled();
 
     await runSlackHandlerWithDispatch(handler, {
       event: { ...event, ts: "1700000300.000002" },
       context,
-      body: { api_app_id: "A0TOKEN", team_id: "T_TEST" },
+      body: { api_app_id: "A0TOKEN", team_id: "TTEST" },
     });
     await vi.waitFor(() => expect(sendMock).toHaveBeenCalledTimes(1));
     await stopSlackMonitor(monitor);

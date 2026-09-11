@@ -1,8 +1,7 @@
 // Slack tests cover monitor.tool result plugin behavior.
-import { CURRENT_MESSAGE_MARKER } from "openclaw/plugin-sdk/channel-mention-gating";
 import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { HISTORY_CONTEXT_MARKER } from "openclaw/plugin-sdk/reply-history";
+import type { ConversationHistoryCapture } from "openclaw/plugin-sdk/reply-history";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import {
   clearRuntimeConfigSnapshot,
@@ -146,7 +145,7 @@ describe("monitorSlackProvider tool results", () => {
   async function runChannelThreadReplyEvent() {
     await runSlackMessageOnce(monitorSlackProvider, {
       event: makeSlackMessageEvent({
-        text: "thread reply",
+        text: "<@bot-user> thread reply",
         ts: "123.456",
         thread_ts: "111.222",
         channel_type: "channel",
@@ -195,7 +194,7 @@ describe("monitorSlackProvider tool results", () => {
     const { controller, run } = startSlackMonitor(monitorSlackProvider);
     const handler = await getSlackHandlerOrThrow("message");
     for (const event of events) {
-      await handler({ event });
+      await runSlackHandlerWithDispatch(handler, { event });
     }
     await stopSlackMonitor({ controller, run });
   }
@@ -396,25 +395,26 @@ describe("monitorSlackProvider tool results", () => {
     expect(replyMock).not.toHaveBeenCalled();
   });
 
-  it("includes recent channel history in Body when requireMention is false", async () => {
+  it("passes a durable capture only when channel chatter is followed by a native request", async () => {
     setHistoryCaptureConfig({ "*": { requireMention: false } });
     const capturedCtx = captureReplyContexts<{
-      Body?: string;
-      RawBody?: string;
+      ConversationHistory?: ConversationHistoryCapture;
       CommandBody?: string;
     }>();
     await runMonitoredSlackMessages([
       makeSlackMessageEvent({ user: "U1", text: "first", ts: "123", channel_type: "channel" }),
       makeSlackMessageEvent({ user: "U2", text: "second", ts: "124", channel_type: "channel" }),
+      makeSlackMessageEvent({
+        user: "U2",
+        text: "<@bot-user> summarize",
+        ts: "125",
+        channel_type: "channel",
+      }),
     ]);
 
-    expect(replyMock).toHaveBeenCalledTimes(2);
-    const latestCtx = capturedCtx.at(-1) ?? {};
-    expect(latestCtx.Body).toContain(HISTORY_CONTEXT_MARKER);
-    expect(latestCtx.Body).toContain("first");
-    expect(latestCtx.Body).toContain(CURRENT_MESSAGE_MARKER);
-    expect(latestCtx.RawBody).toBe("second");
-    expect(latestCtx.CommandBody).toBe("second");
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(capturedCtx[0]?.ConversationHistory?.requestSourceIds).toEqual(["125"]);
+    expect(capturedCtx[0]?.CommandBody).toBe("summarize");
   });
 
   it("surfaces forwarded image download failures through the monitor dispatch boundary", async () => {
@@ -455,9 +455,11 @@ describe("monitorSlackProvider tool results", () => {
     }
   });
 
-  it("scopes thread history to the thread by default", async () => {
+  it("keeps durable captures scoped to the native Slack thread", async () => {
     setHistoryCaptureConfig({ C1: { allow: true, requireMention: true } });
-    const capturedCtx = captureReplyContexts<{ Body?: string }>();
+    const capturedCtx = captureReplyContexts<{
+      ConversationHistory?: ConversationHistoryCapture;
+    }>();
     await runMonitoredSlackMessages([
       makeSlackMessageEvent({
         user: "U1",
@@ -483,9 +485,11 @@ describe("monitorSlackProvider tool results", () => {
     ]);
 
     expect(replyMock).toHaveBeenCalledTimes(2);
-    expect(capturedCtx[0]?.Body).toContain("thread-a-one");
-    expect(capturedCtx[1]?.Body).not.toContain("thread-a-one");
-    expect(capturedCtx[1]?.Body).not.toContain("thread-a-two");
+    const firstCapture = capturedCtx[0]?.ConversationHistory;
+    const secondCapture = capturedCtx[1]?.ConversationHistory;
+    expect(firstCapture?.requestSourceIds).toEqual(["201"]);
+    expect(secondCapture?.requestSourceIds).toEqual(["301"]);
+    expect(firstCapture?.conversationRef).not.toBe(secondCapture?.conversationRef);
   });
 
   it("updates session status when replies start", async () => {
@@ -517,28 +521,18 @@ describe("monitorSlackProvider tool results", () => {
     });
   });
 
-  async function expectMentionPatternMessageAccepted(text: string): Promise<void> {
-    setRequireMentionChannelConfig(["\\bopenclaw\\b"]);
-    replyMock.mockResolvedValue({ text: "hi" });
+  it.each(["openclaw: hello", "openclaw: hello <@U2>"])(
+    "does not invoke from the configured mention pattern in %s",
+    async (text) => {
+      setRequireMentionChannelConfig(["\\bopenclaw\\b"]);
+      replyMock.mockResolvedValue({ text: "hi" });
 
-    await runSlackMessageOnce(monitorSlackProvider, {
-      event: makeSlackMessageEvent({
-        text,
-        channel_type: "channel",
-      }),
-    });
+      await runChannelMessageEvent(text);
 
-    expect(replyMock).toHaveBeenCalledTimes(1);
-    expect(firstReplyCtx().WasMentioned).toBe(true);
-  }
-
-  it("accepts channel messages when mentionPatterns match", async () => {
-    await expectMentionPatternMessageAccepted("openclaw: hello");
-  });
-
-  it("accepts channel messages when mentionPatterns match even if another user is mentioned", async () => {
-    await expectMentionPatternMessageAccepted("openclaw: hello <@U2>");
-  });
+      expect(replyMock).not.toHaveBeenCalled();
+      expect(sendMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("treats replies to bot threads as implicit mentions", async () => {
     setRequireMentionChannelConfig();
@@ -558,7 +552,7 @@ describe("monitorSlackProvider tool results", () => {
     expect(firstReplyCtx().WasMentioned).toBe(true);
   });
 
-  it("accepts channel messages without mention when channels.slack.requireMention is false", async () => {
+  it("observes channel chatter without invoking when channels.slack.requireMention is false", async () => {
     slackTestState.config = {
       messages: {
         groupChat: { visibleReplies: "automatic" },
@@ -581,12 +575,11 @@ describe("monitorSlackProvider tool results", () => {
       }),
     });
 
-    expect(replyMock).toHaveBeenCalledTimes(1);
-    expect(firstReplyCtx().WasMentioned).toBe(false);
-    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
   });
 
-  it("keeps always-on channel messages private when group visible replies use message_tool", async () => {
+  it("keeps unmentioned channel chatter quiet when group visible replies use message_tool", async () => {
     slackTestState.config = {
       messages: {
         ackReaction: "👀",
@@ -615,17 +608,17 @@ describe("monitorSlackProvider tool results", () => {
     });
     await flush();
 
-    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(replyMock).not.toHaveBeenCalled();
     expect(sendMock).not.toHaveBeenCalled();
     expect(reactMock).not.toHaveBeenCalled();
   });
 
-  it("treats control commands as mentions for group bypass", async () => {
+  it("observes bare channel commands without invoking", async () => {
     replyMock.mockResolvedValue({ text: "ok" });
     await runChannelMessageEvent("/elevated off");
 
-    expect(replyMock).toHaveBeenCalledTimes(1);
-    expect(firstReplyCtx().WasMentioned).toBe(true);
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
   });
 
   it("threads replies when incoming message is in a thread", async () => {
@@ -938,6 +931,7 @@ describe("monitorSlackProvider tool results", () => {
 
     await runSlackMessageOnce(monitorSlackProvider, {
       event: makeSlackMessageEvent({
+        text: "<@bot-user> continue",
         thread_ts: "111.222",
         channel_type: "channel",
       }),
@@ -986,6 +980,7 @@ describe("monitorSlackProvider tool results", () => {
     if (client?.auth?.test) {
       client.auth.test.mockResolvedValue({
         user_id: "bot-user",
+        bot_id: "bot-id",
         team_id: "T1",
       });
     }

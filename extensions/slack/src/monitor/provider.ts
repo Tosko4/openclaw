@@ -13,7 +13,6 @@ import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runti
 import type { SessionScope } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
-import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
 import {
   warn,
@@ -40,6 +39,7 @@ import {
   resolveSlackWebClientOptions,
 } from "../client-options.js";
 import { createSlackStartupAuthClient, createSlackWebClient } from "../client.js";
+import { collectSlackLegacyGroupContextWarnings } from "../group-context-config.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { registerSlackInstallationState } from "../installation-identity-state.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
@@ -273,6 +273,9 @@ function resolveSlackRelayConfig(params: { relay: unknown; accountId: string }):
 export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const cfg = opts.config ?? getRuntimeConfig();
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
+  for (const warning of collectSlackLegacyGroupContextWarnings(cfg)) {
+    runtime.log?.(warn(warning));
+  }
 
   const account = resolveSlackAccount({
     cfg,
@@ -292,12 +295,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     return;
   }
 
-  const historyLimit = Math.max(
-    0,
-    account.config.historyLimit ??
-      cfg.messages?.groupChat?.historyLimit ??
-      DEFAULT_GROUP_HISTORY_LIMIT,
-  );
   const dmHistoryLimit = Math.max(0, account.config.dmHistoryLimit ?? 0);
 
   const sessionCfg = cfg.session;
@@ -387,7 +384,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const reactionMode = slackCfg.reactionNotifications ?? "own";
   const reactionAllowlist = slackCfg.reactionAllowlist ?? [];
   const replyToMode = slackCfg.replyToMode ?? "off";
-  const threadHistoryScope = slackCfg.thread?.historyScope ?? "thread";
   const threadInheritParent = slackCfg.thread?.inheritParent ?? false;
   const slashCommand = resolveSlackSlashCommandConfig(opts.slashCommand ?? slackCfg.slashCommand);
   const allowNameMatching = isDangerousNameMatchingEnabled(slackCfg);
@@ -595,7 +591,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     teamId,
     apiAppId,
     installationIdentity,
-    historyLimit,
     dmHistoryLimit,
     sessionScope,
     mainKey,
@@ -612,7 +607,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     reactionMode,
     reactionAllowlist,
     replyToMode,
-    threadHistoryScope,
     threadInheritParent,
     slashCommand,
     textLimit,
@@ -1049,7 +1043,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       durableIngress.attachRelayDispatch(async (message, turnAdoptionLifecycle) => {
         await handleSlackMessage(message as Parameters<typeof handleSlackMessage>[0], {
           source: "message",
-          wasMentioned: true,
           awaitDispatch: true,
           turnAdoptionLifecycle,
         });

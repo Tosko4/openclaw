@@ -37,7 +37,6 @@ it("updates Slack delay and flushes newly buffered top-level keys before immedia
       identityHealth: { lifecycle: "ready", lastError: null },
       teamId: "TEAM",
       apiAppId: "APP",
-      historyLimit: 0,
       sessionScope: "per-sender",
       mainKey: "main",
       dmEnabled: true,
@@ -51,7 +50,6 @@ it("updates Slack delay and flushes newly buffered top-level keys before immedia
       reactionMode: "off",
       reactionAllowlist: [],
       replyToMode: "off",
-      threadHistoryScope: "thread",
       threadInheritParent: false,
       slashCommand: {
         enabled: false,

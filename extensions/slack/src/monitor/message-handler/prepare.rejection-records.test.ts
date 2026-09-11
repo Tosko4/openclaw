@@ -95,10 +95,9 @@ describe("Slack preparation rejection records", () => {
   });
 
   it("records the unmentioned attempt while its app_mention twin still prepares", async () => {
-    const { ctx, message, info, prepare } = fixture();
+    const { message, info, prepare } = fixture();
     message.channel = "C123";
     message.channel_type = "channel";
-    ctx.historyLimit = 5;
     expect(await prepare()).toBeNull();
     expect(info).toHaveBeenCalledExactlyOnceWith(
       {

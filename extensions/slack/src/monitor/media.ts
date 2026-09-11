@@ -332,7 +332,6 @@ export async function resolveSlackMedia(params: {
   readIdleTimeoutMs?: number;
   totalTimeoutMs?: number;
   abortSignal?: AbortSignal;
-  preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
   unavailableFiles?: Map<SlackFile, string>;
 }): Promise<SlackMediaResult[] | null> {
   const govSlack = isGovSlackClient(params.client);
@@ -351,12 +350,6 @@ export async function resolveSlackMedia(params: {
 
   const { results } = await runTasksWithConcurrency({
     tasks: limitedFiles.map((file) => async (): Promise<SlackMediaResult | null> => {
-      // Audio preflight keys the original event file object so admission can
-      // reuse that exact download without turning this into a persistent cache.
-      const preloaded = params.preloadedMedia?.get(file);
-      if (preloaded) {
-        return preloaded;
-      }
       const eventUrl = file.url_private_download ?? file.url_private;
       let url = eventUrl ?? (await refreshFileUrl(file));
       let reason = "no private download URL";
@@ -393,7 +386,6 @@ export async function resolveSlackAttachmentContent(params: {
   readIdleTimeoutMs?: number;
   totalTimeoutMs?: number;
   abortSignal?: AbortSignal;
-  preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
 }): Promise<{
   text: string;
   media: SlackMediaResult[];
@@ -429,16 +421,6 @@ export async function resolveSlackAttachmentContent(params: {
         return file;
       }
       const fileId = normalizeOptionalString(file.id);
-      const preloaded =
-        fileId &&
-        candidates.find(
-          (candidate) =>
-            normalizeOptionalString(candidate.id) === fileId &&
-            params.preloadedMedia?.has(candidate),
-        );
-      if (preloaded) {
-        return preloaded;
-      }
       if (!fileId || file.url_private_download || file.url_private) {
         return file;
       }

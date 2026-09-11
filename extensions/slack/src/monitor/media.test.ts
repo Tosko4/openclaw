@@ -1226,7 +1226,6 @@ describe("Slack message file intake", () => {
     direct?: SlackFile[];
     forwarded?: SlackFile[][];
     attachments?: Array<{ is_share?: boolean; files?: SlackFile[]; image_url?: string }>;
-    preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult[number]>;
   }) {
     return await resolveSlackMessageContent({
       message: {
@@ -1243,7 +1242,6 @@ describe("Slack message file intake", () => {
       isBotMessage: false,
       botToken: "xoxb-test-token",
       mediaMaxBytes: 1024,
-      preloadedMedia: params.preloadedMedia,
     });
   }
 
@@ -1282,37 +1280,29 @@ describe("Slack message file intake", () => {
     expect(result?.rawBody).toContain("FRICH.png (image/png, fileId: FRICH)");
   });
 
-  it.each(["direct", "forwarded"] as const)(
-    "reuses the exact preloaded %s voice-file object across forwarded duplicates",
-    async (source) => {
-      const voice = file("FVOICE");
-      const direct = source === "direct" ? voice : file(" FVOICE ");
-      const forwarded = source === "forwarded" ? voice : file("FVOICE");
-      const preloaded = {
-        path: "/tmp/preloaded-voice.ogg",
-        contentType: "audio/ogg",
-        placeholder: "[Slack file: voice.ogg (fileId: FVOICE)]",
-      };
-
-      const result = await resolveMessageFiles({
-        direct: [direct],
-        forwarded: [[forwarded]],
-        preloadedMedia: new Map([[voice, preloaded]]),
-      });
-
-      expect(mockFetch).not.toHaveBeenCalled();
-      expect(result?.effectiveDirectMedia).toEqual([preloaded]);
-      expect(result?.effectiveDirectMedia?.[0]).toBe(preloaded);
-      expect(result?.rawBody.match(/fileId: FVOICE/g)).toHaveLength(1);
-    },
-  );
-
   it("keeps failed file identities beside renamed, overlapping, and ID-less downloads", async () => {
     const downloaded = file("F11");
     const unavailable = { id: "F1", name: "missing-contract.pdf", mimetype: "application/pdf" };
-    const downloadedWithoutId = { name: "available.png", mimetype: "image/png" };
-    const unavailableWithSameMetadata = { ...downloadedWithoutId };
+    const downloadedWithoutId = {
+      name: "available.png",
+      mimetype: "image/png",
+      url_private_download: "https://files.slack.com/available.png",
+    };
+    const unavailableWithSameMetadata = {
+      name: downloadedWithoutId.name,
+      mimetype: downloadedWithoutId.mimetype,
+    };
     const unavailableWithoutId = { name: "missing.png", mimetype: "image/png" };
+
+    saveRemoteMediaMock
+      .mockResolvedValueOnce({
+        ...createSavedMedia("/tmp/renamed.png", "image/png"),
+        fileName: "renamed.png",
+      })
+      .mockResolvedValueOnce({
+        ...createSavedMedia("/tmp/server-renamed.png", "image/png"),
+        fileName: "server-renamed.png",
+      });
 
     const result = await resolveMessageFiles({
       direct: [
@@ -1322,24 +1312,6 @@ describe("Slack message file intake", () => {
         unavailableWithSameMetadata,
         unavailableWithoutId,
       ],
-      preloadedMedia: new Map([
-        [
-          downloaded,
-          {
-            path: "/tmp/renamed.png",
-            fileName: "renamed.png",
-            placeholder: "[Slack file: renamed.png (fileId: F11)]",
-          },
-        ],
-        [
-          downloadedWithoutId,
-          {
-            path: "/tmp/server-renamed.png",
-            fileName: "server-renamed.png",
-            placeholder: "[Slack file: server-renamed.png (image/png)]",
-          },
-        ],
-      ]),
     });
 
     expect(result?.effectiveDirectMedia).toHaveLength(2);

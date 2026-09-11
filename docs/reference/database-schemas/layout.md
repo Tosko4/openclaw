@@ -17,7 +17,7 @@ The task registry uses the global control-plane database. Runtime trajectory eve
 
 ### Observed group history
 
-Discord and Telegram record permitted group text in the per-agent
+Discord, Slack, and Telegram record permitted group text in the per-agent
 `conversation_history` table. The table is created on first observation without
 changing the database version. Its conversation identity includes the channel,
 account, room, and thread; native source identifiers prevent duplicate records.
@@ -35,7 +35,11 @@ prevent its attachment from expiring. Consumed source records remain
 while their session has a live transcript or retained archive; transcript cleanup
 removes them when both are gone. Older builds ignore this table and do not record
 new observations. Reopening a current build prunes consumed records whose
-transcripts were removed by an older build.
+transcripts were removed by an older build. Consumed rows retain their original
+message bodies as well as processing records; these bodies can duplicate text in
+the transcript. This retention choice preserves the current native-request retry
+checks. Keeping every consumed body for this lifetime is not required merely to
+identify duplicate message IDs.
 
 ### Plugin state listing index
 

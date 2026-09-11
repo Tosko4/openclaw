@@ -30,7 +30,6 @@ type SlackRoutingContextDeps = {
   cfg: OpenClawConfig;
   teamId: string;
   threadInheritParent: boolean;
-  threadHistoryScope: "thread" | "channel";
 };
 
 type SlackRoutingContext = {
@@ -46,7 +45,6 @@ type SlackRoutingContext = {
   isThreadReply: boolean;
   threadKeys: ReturnType<typeof resolveThreadSessionKeys>;
   sessionKey: string;
-  historyKey: string;
 };
 
 function resolveSlackBaseConversationId(params: {
@@ -201,12 +199,6 @@ export function resolveSlackRoutingContext(params: {
             routedThreadId && ctx.threadInheritParent ? route.sessionKey : undefined,
         });
   const sessionKey = threadKeys.sessionKey;
-  const historyKey =
-    isThreadReply && ctx.threadHistoryScope === "thread"
-      ? sessionKey
-      : eventScope
-        ? `${account.accountId}:${eventScope.teamId}:${message.channel}`
-        : message.channel;
 
   return {
     route,
@@ -221,7 +213,6 @@ export function resolveSlackRoutingContext(params: {
     isThreadReply,
     threadKeys,
     sessionKey,
-    historyKey,
   };
 }
 

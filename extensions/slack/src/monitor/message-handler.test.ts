@@ -732,7 +732,7 @@ describe("createSlackMessageHandler", () => {
         ts: twinTs,
         text: "<@UBOT> hello",
       } as never,
-      { source: "app_mention", wasMentioned: true, awaitDispatch: true },
+      { source: "app_mention", awaitDispatch: true },
     );
     await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(2));
     const second = enqueueMock.mock.calls[1]?.[0] as Record<string, unknown>;
@@ -760,7 +760,6 @@ describe("createSlackMessageHandler", () => {
         handler(message as never, {
           source,
           awaitDispatch: true,
-          ...(source === "app_mention" ? { wasMentioned: true } : {}),
         });
 
       const first = handleTwin(firstSource);
@@ -776,7 +775,7 @@ describe("createSlackMessageHandler", () => {
       expect(prepareSlackMessageMock).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           message: expect.objectContaining({ text: message.text, ts: twinTs }),
-          opts: expect.objectContaining({ source: "app_mention", wasMentioned: true }),
+          opts: expect.objectContaining({ source: "app_mention" }),
         }),
       );
       expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
@@ -806,7 +805,6 @@ describe("createSlackMessageHandler", () => {
     });
     const asMention = handler(message as never, {
       source: "app_mention",
-      wasMentioned: true,
       awaitDispatch: true,
     });
     await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(2));
@@ -817,7 +815,7 @@ describe("createSlackMessageHandler", () => {
 
     expect(prepareSlackMessageMock).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        opts: expect.objectContaining({ source: "app_mention", wasMentioned: true }),
+        opts: expect.objectContaining({ source: "app_mention" }),
       }),
     );
     expect(dispatchPreparedSlackMessageMock).not.toHaveBeenCalled();
@@ -848,7 +846,6 @@ describe("createSlackMessageHandler", () => {
 
     const asMention = handler(message as never, {
       source: "app_mention",
-      wasMentioned: true,
       awaitDispatch: true,
     });
     await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(2));

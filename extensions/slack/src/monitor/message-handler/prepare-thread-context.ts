@@ -165,6 +165,12 @@ export async function resolveSlackThreadContextData(params: {
   storePath: string;
   sessionKey: string;
   forceInitialHistory?: boolean;
+  includeInitialHistory?: boolean;
+  isRootSenderAllowed?: (sender: {
+    userId?: string;
+    userName?: string;
+    botId?: string;
+  }) => Promise<boolean>;
   allowFromLower: string[];
   allowNameMatching: boolean;
   contextVisibilityMode: ContextVisibilityMode;
@@ -233,7 +239,9 @@ export async function resolveSlackThreadContextData(params: {
 
   const starter = params.threadStarter;
   const starterSenderName =
-    params.allowNameMatching && params.allowFromLower.length > 0 && starter?.userId
+    params.allowNameMatching &&
+    (params.allowFromLower.length > 0 || params.isRootSenderAllowed !== undefined) &&
+    starter?.userId
       ? (await params.ctx.resolveUserName(starter.userId, params.eventScope))?.name
       : undefined;
   const starterIsCurrentBot = Boolean(
@@ -246,13 +254,19 @@ export async function resolveSlackThreadContextData(params: {
   const starterAllowed =
     !starter ||
     (!starterIsCurrentBot &&
-      isSlackThreadContextSenderAllowed({
-        allowFromLower: params.allowFromLower,
-        allowNameMatching: params.allowNameMatching,
-        userId: starter.userId,
-        userName: starterSenderName,
-        botId: starter.botId,
-      }));
+      (params.isRootSenderAllowed
+        ? await params.isRootSenderAllowed({
+            userId: starter.userId,
+            userName: starterSenderName,
+            botId: starter.botId,
+          })
+        : isSlackThreadContextSenderAllowed({
+            allowFromLower: params.allowFromLower,
+            allowNameMatching: params.allowNameMatching,
+            userId: starter.userId,
+            userName: starterSenderName,
+            botId: starter.botId,
+          })));
   const includeStarterContext =
     !starter ||
     (!starterIsCurrentBot &&
@@ -313,6 +327,10 @@ export async function resolveSlackThreadContextData(params: {
       `slack: omitted thread starter from context (mode=${params.contextVisibilityMode}, sender_allowed=${starterAllowed ? "yes" : "no"})`,
     );
   } else if (includeBotStarterAsRootContext) {
+    // Room backfill is retired; the current reply still references this exact bot root.
+    if (params.includeInitialHistory === false) {
+      threadStarterBody = starter?.text;
+    }
     threadLabel = formatSlackBotStarterThreadLabel({
       roomLabel: params.roomLabel,
       starterText: starter?.text,
@@ -322,7 +340,11 @@ export async function resolveSlackThreadContextData(params: {
 
   const threadInitialHistoryLimit = params.account.config?.thread?.initialHistoryLimit ?? 20;
 
-  if (threadInitialHistoryLimit > 0 && shouldLoadInitialThreadHistory) {
+  if (
+    params.includeInitialHistory !== false &&
+    threadInitialHistoryLimit > 0 &&
+    shouldLoadInitialThreadHistory
+  ) {
     const currentBotRootTs = starter?.ts ?? params.threadTs;
     const threadHistory = await resolveSlackThreadHistory({
       channelId: params.message.channel,

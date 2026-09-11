@@ -18,12 +18,12 @@ How Slack conversations map to OpenClaw sessions, and where replies land.
 - Channel sessions: `agent:<agentId>:slack:channel:<channelId>`.
 - Ordinary top-level channel messages stay on the per-channel session, even when `replyToMode` is non-`off`.
 - Slack channel, MPIM, Agent View, and Assistant View thread replies use the parent Slack `thread_ts` for session suffixes (`:thread:<threadTs>`). Ordinary DM reply threads remain a UI affordance on the base DM session.
-- OpenClaw seeds an eligible top-level channel root into `agent:<agentId>:slack:channel:<channelId>:thread:<rootTs>` when that root is expected to start a visible Slack thread, so the root and later thread replies share one OpenClaw session. This applies to `app_mention` events, explicit bot or configured mention-pattern matches, and `requireMention: false` channels with non-`off` `replyToMode`.
-- `channels.slack.thread.historyScope` default is `thread`; `thread.inheritParent` default is `false`.
-- `channels.slack.thread.initialHistoryLimit` controls how many existing thread messages are fetched when a new thread session starts (default `20`; set `0` to disable).
-- `channels.slack.implicitMentions.replyToBot` controls whether a reply to the bot's own message bypasses mention gating (default `true`).
-- `channels.slack.implicitMentions.threadParticipation` controls whether follow-ups in a thread where the bot has replied bypass mention gating (default `true`). Set it to `false` to require a new explicit mention in those follow-ups. `openclaw doctor --fix` migrates the former `channels.slack.thread.requireExplicitMention` key to this positive canonical flag.
-- Account overrides live at `channels.slack.accounts.<id>.implicitMentions`; shared defaults live at `channels.defaults.implicitMentions`.
+- OpenClaw seeds an addressed top-level channel root into `agent:<agentId>:slack:channel:<channelId>:thread:<rootTs>` when that root is expected to start a visible Slack thread, so the root and later addressed thread replies share one OpenClaw session. This applies to native `app_mention` events and explicit bot mentions with non-`off` `replyToMode`.
+- `thread.inheritParent` defaults to `false` and controls parent transcript inheritance. Room observation always follows the native channel/thread boundary; `thread.historyScope` no longer changes room context.
+- Room context comes from durable observations, scoped by account, workspace, channel, and native thread. A reply-session ID does not move observations between the parent channel and its threads.
+- `channels.slack.thread.initialHistoryLimit` continues to control initial DM thread context (default `20`; set `0` to disable). Room threads use unread observations instead.
+- A native reply to the bot's own thread root addresses the bot. A reply to a human-owned thread needs a native bot mention, even if the bot previously participated.
+- Legacy `implicitMentions`, mention patterns, and always-on settings remain valid configuration but do not expand room admission. Ordinary and managed DM views retain their existing behavior.
 
 Reply threading controls:
 

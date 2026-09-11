@@ -397,8 +397,6 @@ function createPreparedSlackMessage(params?: {
       botId: "B_OPENCLAW",
       textLimit: 4000,
       typingReaction: params?.typingReaction ?? "",
-      historyLimit: 0,
-      channelHistories: new Map(),
       allowFrom: [],
       dispatchReplyFromConfig: params?.dispatchReplyFromConfig,
       setSlackSessionStatus: params?.setSlackSessionStatus ?? (async () => undefined),
@@ -433,7 +431,6 @@ function createPreparedSlackMessage(params?: {
     replyToMode: params?.replyToMode ?? "all",
     isDirectMessage: params?.isDirectMessage ?? false,
     isRoomish: false,
-    historyKey: "history-key",
     preview: "",
     ackReactionValue: "eyes",
     ackReactionMessageTs: params?.ackReactionMessageTs,
@@ -932,9 +929,7 @@ vi.mock("../../limits.js", () => ({
 }));
 
 vi.mock("../../sent-thread-cache.js", () => ({
-  clearSlackThreadFailureNotice: () => {},
   hasSlackThreadParticipation: () => false,
-  recordSlackThreadFailureNotice: () => true,
   recordSlackThreadParticipation: recordSlackThreadParticipationMock,
 }));
 
@@ -2257,36 +2252,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     });
     expect(statusReactionControllerMock.setQueued).not.toHaveBeenCalled();
     expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
-  });
-
-  it("keeps Slack lifecycle reactions off for ambient room-event acks", async () => {
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        cfg: { messages: { statusReactions: { enabled: true } } },
-        ctxPayload: { ChatType: "channel", InboundEventKind: "room_event" },
-        ackReactionMessageTs: "171234.111",
-        ackReactionPromise: Promise.resolve(true),
-      }),
-    );
-
-    expectRecordFields(requireRecord(capturedStatusReactionOptions, "status reaction options"), {
-      enabled: false,
-      initialEmoji: "eyes",
-    });
-    expect(statusReactionControllerMock.setQueued).not.toHaveBeenCalled();
-    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
-  });
-
-  it("suppresses Slack typing for ambient room events", async () => {
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
-        ctxPayload: { ChatType: "channel", InboundEventKind: "room_event" },
-      }),
-    );
-
-    expect(capturedReplyOptions?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(capturedReplyOptions?.suppressTyping).toBe(true);
   });
 
   it("leaves Slack typing unsuppressed for normal channel turns", async () => {

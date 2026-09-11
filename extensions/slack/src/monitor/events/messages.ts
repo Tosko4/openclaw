@@ -386,7 +386,6 @@ export function registerSlackMessageEvents(params: {
         noteConversationMessage(mention, eventScope);
         await handleSlackMessage(mention as unknown as SlackMessageEvent, {
           source: "app_mention",
-          wasMentioned: true,
           eventScope,
           ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
           ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),

@@ -50,7 +50,6 @@ function createTestContext(params?: {
     identityHealth: { lifecycle: "ready", lastError: null },
     teamId: "T_EXPECTED",
     apiAppId: params?.apiAppId ?? "A_EXPECTED",
-    historyLimit: 0,
     sessionScope: "per-sender",
     mainKey: "main",
     dmEnabled: true,
@@ -66,7 +65,6 @@ function createTestContext(params?: {
     reactionMode: "off",
     reactionAllowlist: [],
     replyToMode: "off",
-    threadHistoryScope: "thread",
     threadInheritParent: false,
     slashCommand: {
       enabled: true,

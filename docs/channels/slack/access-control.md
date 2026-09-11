@@ -141,19 +141,19 @@ Use an entry's `identifier` directly as the `react` emoji; surrounding colons ar
   </Tab>
 
   <Tab title="Mentions and channel users">
-    Channel messages are mention-gated by default.
+    Channel and group DM messages require native addressing. Permitted unread discussion is retained across restarts and included when the next addressed request starts.
 
     Mention sources:
 
-    - explicit app mention (`<@botId>`)
-    - Slack user-group mention (`<!subteam^S...>`) when the bot user is a member of that user group; requires `usergroups:read`
-    - mention regex patterns (`agents.entries.*.groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
-    - replies to the bot's own Slack message (`implicitMentions.replyToBot`)
-    - follow-ups in threads where the bot participated (`implicitMentions.threadParticipation`)
+    - explicit app mention (`<@botId>` or a native `app_mention` event)
+    - replies in a thread rooted at the bot's own Slack message
+    - explicit bot-owned interactions, including native slash commands
+
+    User-group mentions, mention patterns, and prior thread participation do not address the bot. Legacy `requireMention: false`, `unmentionedInbound`, and group history-window settings remain accepted but no longer enable ambient turns or disable unread context.
 
     Per-channel controls (`channels.slack.channels.<id>`; names only via startup resolution or `dangerouslyAllowNameMatching`):
 
-    - `requireMention`
+    - `requireMention` (accepted for compatibility; room addressing is always required)
     - `ignoreOtherMentions`
     - `replyToMode` (`off|first|all|batched`; overrides account/chat-type reply mode for this channel)
     - `users` (allowlist)

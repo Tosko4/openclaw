@@ -11,7 +11,7 @@ How group messages reach the agent: mention gating, visible reply modes, DM hist
 
 ## Group chat mention gating
 
-Group messages default to **require mention** (metadata mention or safe regex patterns). Applies to WhatsApp, Telegram, Discord, Google Chat, and iMessage group chats.
+Discord, Slack, and Telegram require native bot addressing and retain permitted unread discussion automatically. Other group-capable channels use their configured mention gates, including native mentions and supported text patterns.
 
 Visible replies are controlled separately. Normal group, channel, and internal WebChat direct requests default to automatic final delivery: final assistant text posts through the legacy visible reply path. Opt into `messages.visibleReplies: "message_tool"` or `messages.groupChat.visibleReplies: "message_tool"` when model-authored source replies should only post after the agent calls `message(action=send)`. If the model returns a substantive final answer without calling the message tool in an opted-in tool-only mode, that final text stays private, the gateway verbose log records suppressed payload metadata, and OpenClaw enqueues one recovery retry asking the model to deliver the same reply via `message(action=send)`.
 
@@ -34,8 +34,8 @@ Fix: either pick a stronger tool-calling model, remove the explicit `"message_to
 **Mention types:**
 
 - **Metadata mentions**: Native platform @-mentions. Ignored in WhatsApp self-chat mode.
-- **Text patterns**: Safe regex patterns in `agents.entries.*.groupChat.mentionPatterns`. Invalid patterns and unsafe nested repetition are ignored.
-- Mention gating is enforced only when detection is possible (native mentions or at least one pattern).
+- **Text patterns**: Safe regex patterns in `agents.entries.*.groupChat.mentionPatterns` on channels that support them. Discord, Slack, and Telegram ignore these legacy triggers. Invalid patterns and unsafe nested repetition are ignored.
+- Channels with configurable mention gates enforce them when detection is possible. Discord, Slack, and Telegram always require native addressing.
 
 ```json5
 {
@@ -43,7 +43,6 @@ Fix: either pick a stronger tool-calling model, remove the explicit `"message_to
     visibleReplies: "automatic", // force old automatic final replies for direct/source chats
     groupChat: {
       historyLimit: 50,
-      unmentionedInbound: "room_event", // always-on unmentioned room chatter becomes quiet context
       visibleReplies: "message_tool", // opt-in; require message(action=send) for visible room replies
     },
   },
@@ -58,9 +57,9 @@ Fix: either pick a stronger tool-calling model, remove the explicit `"message_to
 }
 ```
 
-`messages.groupChat.historyLimit` sets the global default. Channels can override with `channels.<channel>.historyLimit` (or per-account). Set `0` to disable.
+On channels with a rolling history buffer, `messages.groupChat.historyLimit` sets the global default. Channels can override it with `channels.<channel>.historyLimit` (or per-account); `0` disables that buffer. Discord, Slack, and Telegram ignore this legacy limit and retain permitted unread discussion until an addressed request consumes it.
 
-`messages.groupChat.unmentionedInbound: "room_event"` submits unmentioned always-on group/channel messages as quiet room context on supported channels. Mentioned messages, commands, and direct messages remain user requests. See [Ambient room events](/channels/ambient-room-events) for complete Discord, Slack, and Telegram examples.
+`messages.groupChat.unmentionedInbound` remains valid configuration but has no effect on Discord, Slack, or Telegram. Unmentioned discussion does not start a model turn. See [Ambient room events](/channels/ambient-room-events) for the addressing, retention, and upgrade behavior.
 
 `messages.visibleReplies` is the global source-event default; `messages.groupChat.visibleReplies` overrides it for group/channel source events. When `messages.visibleReplies` is unset, direct/source chats use the selected runtime or harness default, but internal WebChat direct turns use automatic final delivery for Pi/Codex prompt parity. Set `messages.visibleReplies: "message_tool"` to intentionally require `message(action=send)` for visible output. Channel allowlists and mention gating still decide whether an event is processed.
 

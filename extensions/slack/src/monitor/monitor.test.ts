@@ -287,7 +287,6 @@ const baseParams = () => ({
   identityHealth: { lifecycle: "ready" as const, lastError: null },
   teamId: "T1",
   apiAppId: "A1",
-  historyLimit: 0,
   sessionScope: "per-sender" as const,
   mainKey: "main",
   dmEnabled: true,
@@ -311,7 +310,6 @@ const baseParams = () => ({
   textLimit: 4000,
   typingReaction: "",
   mediaMaxBytes: 1,
-  threadHistoryScope: "thread" as const,
   threadInheritParent: false,
 });
 

@@ -7,20 +7,20 @@ title: "Groups"
 sidebarTitle: "Groups"
 ---
 
-OpenClaw applies the same group rules across group-capable channels, including Discord, iMessage, Matrix, Microsoft Teams, QQBot, Signal, Slack, Telegram, WhatsApp, and Zalo.
+OpenClaw supports groups across Discord, iMessage, Matrix, Microsoft Teams, QQBot, Signal, Slack, Telegram, WhatsApp, and Zalo. Room access, native addressing, and history behavior depend on the channel.
 
-For always-on rooms that should provide quiet context unless the agent explicitly sends a visible message, see [Ambient room events](/channels/ambient-room-events).
+For durable room context and the retirement of ambient model turns, see [Ambient room events](/channels/ambient-room-events).
 
 ## Beginner intro (2 minutes)
 
 OpenClaw "lives" on your own messaging accounts. There is no separate WhatsApp bot user: if **you** are in a group, OpenClaw can see that group and respond there.
 
-Discord and Telegram retain permitted unread group text and start conversational input only for a native bot mention or reply. They keep legacy ambient settings valid for upgrades, with warnings; those settings no longer enable ambient turns on these two channels. See [Discord access control](/channels/discord/access-control) and [Telegram access control](/channels/telegram/access-control). The window and activation settings below continue to apply to channels that have not adopted durable text history.
+Discord, Slack, and Telegram retain permitted unread group text and start conversational input only for native addressing. They keep legacy ambient settings valid for upgrades, with warnings; those settings no longer enable ambient turns on these channels. See [Discord access control](/channels/discord/access-control), [Slack access control](/channels/slack/access-control), and [Telegram access control](/channels/telegram/access-control). The window and activation settings below continue to apply to channels that have not adopted durable text history.
 
 Default behavior:
 
 - Groups are restricted (`groupPolicy: "allowlist"`); group senders are blocked until allowlisted.
-- Replies require a mention unless you disable mention gating for a group.
+- Replies require native addressing on Discord, Slack, and Telegram. Other channels use their configured mention gates.
 - Final reply text posts to the room automatically (`visibleReplies: "automatic"`).
 
 Translation: allowlisted senders can trigger OpenClaw by mentioning it.
@@ -30,7 +30,7 @@ Translation: allowlisted senders can trigger OpenClaw by mentioning it.
 
 - **DM access** is controlled by `*.allowFrom`.
 - **Group access** is controlled by `*.groupPolicy` + allowlists (`*.groups`, `*.groupAllowFrom`).
-- **Reply triggering** is controlled by mention gating (`requireMention`, `/activation`).
+- **Reply triggering** requires native addressing on Discord, Slack, and Telegram. Other channels use their mention and activation settings.
 
 </Note>
 
@@ -39,9 +39,9 @@ Quick flow (what happens to a group message):
 ```text
 groupPolicy? disabled -> drop
 groupPolicy? allowlist -> group allowed? no -> drop
-requireMention? yes -> mentioned? no -> store for context only
-mention/reply/command/DM -> user request
-always-on group chatter -> user request, or room event when configured
+Discord/Slack/Telegram -> natively addressed? no -> durable context only
+other channels -> configured mention and activation gates
+addressed and authorized -> user request
 ```
 
 ## Visible replies
@@ -60,23 +60,11 @@ Tool-only mode replaces the old pattern of forcing the model to answer `NO_REPLY
 
 Plugin-owned conversation bindings are the exception. Once a plugin binds a thread and claims the inbound turn, the plugin's returned reply is the visible binding response; it does not need `message(action=send)`. That reply is plugin runtime output, not private model final text.
 
-Typing indicators are still sent for direct group requests. Ambient always-on room events, when enabled, stay strict and quiet unless the agent calls the message tool.
+Typing indicators are still sent for addressed group requests. Observing unmentioned Discord, Slack, and Telegram messages does not start typing or a model turn.
 
 Sessions suppress verbose tool/progress summaries by default. Use `/verbose on` (or `/verbose full`) to show them for the current session while debugging, and `/verbose off` to return to final-reply-only behavior. Verbose state is per session and works the same in direct chats, groups, channels, and forum topics.
 
-To submit unmentioned always-on group chatter as quiet room context instead of user requests, use [Ambient room events](/channels/ambient-room-events):
-
-```json5
-{
-  messages: {
-    groupChat: {
-      unmentionedInbound: "room_event",
-    },
-  },
-}
-```
-
-The default is `unmentionedInbound: "user_request"`. Mentioned messages, commands, abort requests, and DMs stay user requests.
+The legacy `unmentionedInbound` field remains accepted but no longer changes Discord, Slack, or Telegram behavior. These channels retain unread discussion automatically; there is no observation toggle. See [Ambient room events](/channels/ambient-room-events) for upgrade details.
 
 To require visible output to go through the message tool for group/channel requests:
 
@@ -462,8 +450,7 @@ Account-level channel configs can set the same policy under `channels.<channel>.
     - Allowlisting a group or sender does not disable mention gating; set that group's `requireMention` to `false` when all messages should trigger.
     - Automatic group chat prompt context carries the resolved silent-reply instruction every turn; workspace files should not duplicate `NO_REPLY` mechanics.
     - Groups where automatic silent replies are allowed treat clean empty or reasoning-only model turns as silent, equivalent to `NO_REPLY`. Direct chats never receive `NO_REPLY` guidance, and message-tool-only group replies stay quiet by not calling `message(action=send)`.
-    - Ambient always-on group chatter uses user-request semantics by default. Set `messages.groupChat.unmentionedInbound: "room_event"` to submit it as quiet context instead. See [Ambient room events](/channels/ambient-room-events) for setup examples.
-    - Room events are not stored as fake user requests, and private assistant text from no-message-tool room events is not replayed as chat history.
+    - Discord, Slack, and Telegram keep permitted room chatter outside the agent transcript until an addressed request captures it. Their legacy `unmentionedInbound`, mention-pattern, and group history-window settings do not change this behavior.
     - Discord defaults live in `channels.discord.guilds."*"` (overridable per guild/channel).
     - Group history context is wrapped uniformly across channels. Mention-gated groups keep pending skipped messages; always-on groups may also retain recent processed room messages when the channel supports it. Use `messages.groupChat.historyLimit` for the global default and `channels.<channel>.historyLimit` (or `channels.<channel>.accounts.*.historyLimit`) for overrides. Set `0` to disable.
 

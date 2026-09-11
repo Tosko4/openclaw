@@ -250,7 +250,7 @@ describe("slack startup user allowlist resolution", () => {
         event: {
           type: "message",
           user: "U123CHANNEL",
-          text: "hello",
+          text: "<@bot-user> hello",
           ts: "101.000",
           channel: "C123",
           channel_type: "channel",

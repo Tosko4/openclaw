@@ -1,8 +1,8 @@
 /**
- * Shared reply-history helpers for plugins that keep short per-thread context windows.
+ * Shared durable room observation and bounded reply-history helpers.
  *
- * Prefer `createChannelHistoryWindow` for message-turn code. The lower-level map helpers are
- * deprecated plugin compatibility exports; core internals still use them behind the facade.
+ * Use `recordConversationObservation` for durable unread context. Unmigrated channels keep
+ * `createChannelHistoryWindow`; the lower-level map helpers are deprecated compatibility exports.
  */
 import type {
   enrichConversationObservationMediaCore,

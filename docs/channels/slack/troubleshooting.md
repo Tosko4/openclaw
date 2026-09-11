@@ -18,10 +18,10 @@ Symptom-first checks for a Slack account that is not behaving.
 
     - `groupPolicy`
     - channel allowlist (`channels.slack.channels`) — **keys must be channel IDs** (`C12345678`) or workspace-qualified channel targets (`team:<team-id>:channel:<channel-id>`), not names (`#channel-name`). Name-based keys silently fail under `groupPolicy: "allowlist"` because channel routing is ID-first by default. To find an ID: right-click the channel in Slack → **Copy link** — the `C...` value at the end of the URL is the channel ID.
-    - `requireMention`
+    - native addressing: mention the bot or reply in a thread rooted at its message
     - per-channel `users` allowlist
     - `messages.groupChat.visibleReplies`: normal group/channel requests default to `"automatic"`. If you opted into `"message_tool"` and logs show assistant text with no `message(action=send)` call, the model missed the visible message-tool path. Final text stays private in this mode; inspect the gateway verbose log for suppressed payload metadata, or set it to `"automatic"` if you want every normal assistant final reply posted through the legacy path.
-    - `messages.groupChat.unmentionedInbound`: if it is `"room_event"`, unmentioned allowed channel chatter is ambient context and stays silent unless the agent calls the `message` tool. See [Ambient room events](/channels/ambient-room-events).
+    - retirement warnings: `requireMention: false` and `messages.groupChat.unmentionedInbound` no longer enable ambient turns. Permitted chatter is retained for the next addressed request. See [Ambient room events](/channels/ambient-room-events).
 
 ```json5
 {

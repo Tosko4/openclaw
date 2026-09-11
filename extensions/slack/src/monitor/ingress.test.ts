@@ -174,7 +174,6 @@ function attachBoltMemberIngress(params: {
     teamId: "T_TEST",
     apiAppId: "A_TEST",
     installationIdentity: { kind: "workspace", teamId: "T_TEST" },
-    historyLimit: 0,
     sessionScope: "per-sender",
     mainKey: "main",
     dmEnabled: true,
@@ -199,7 +198,6 @@ function attachBoltMemberIngress(params: {
     textLimit: 4000,
     typingReaction: "",
     mediaMaxBytes: 1,
-    threadHistoryScope: "thread",
     threadInheritParent: false,
   });
   registerSlackMemberEvents({ ctx, trackEvent: params.trackEvent });

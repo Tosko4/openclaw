@@ -12,6 +12,7 @@ import {
   legacyConfigRules as SLACK_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeSlackCompatibilityConfig,
 } from "./doctor-contract.js";
+import { collectSlackLegacyGroupContextWarnings } from "./group-context-config.js";
 import { probeSlack } from "./probe.js";
 import { isSlackMutableAllowEntry } from "./security-doctor.js";
 import { parseSlackTarget } from "./target-parsing.js";
@@ -246,6 +247,7 @@ export const slackDoctor: ChannelDoctorAdapter = {
   collectPreviewWarnings: async ({ cfg, env }) =>
     await collectSlackUserIdentityWarnings({ cfg, env }),
   collectMutableAllowlistWarnings: ({ cfg }) => [
+    ...collectSlackLegacyGroupContextWarnings(cfg),
     ...collectSlackMutableAllowlistWarnings({ cfg }),
     ...collectSlackNameKeyedChannelWarnings({ cfg }),
   ],

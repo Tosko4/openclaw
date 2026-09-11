@@ -619,7 +619,7 @@ describe("user identity provider transport", () => {
     client.auth.test.mockResolvedValueOnce({
       app_id: "A_TEST",
       user_id: "U_SELF",
-      team_id: "T_TEST",
+      team_id: "TTEST",
       is_enterprise_install: false,
     });
     const controller = new AbortController();
@@ -661,7 +661,7 @@ describe("user identity provider transport", () => {
     client.auth.test.mockResolvedValueOnce({
       app_id: "A_TEST",
       user_id: "U_SELF",
-      team_id: "T_TEST",
+      team_id: "TTEST",
       is_enterprise_install: false,
     });
     client.conversations.info.mockResolvedValueOnce({
@@ -701,7 +701,7 @@ describe("user identity provider transport", () => {
     getSlackClient().auth.test.mockResolvedValueOnce({
       app_id: "A_TEST",
       user_id: "U_SELF",
-      team_id: "T_TEST",
+      team_id: "TTEST",
       is_enterprise_install: false,
     });
     const { replyMock, sendMock } = getSlackTestState();

@@ -41,7 +41,6 @@ export function createInboundSlackTestContext(params: {
     identityHealth: { lifecycle: "ready", lastError: null },
     teamId: "T1",
     apiAppId: "A1",
-    historyLimit: 0,
     dmHistoryLimit: params.dmHistoryLimit,
     sessionScope: "per-sender",
     mainKey: "main",
@@ -58,7 +57,6 @@ export function createInboundSlackTestContext(params: {
     reactionMode: "off",
     reactionAllowlist: [],
     replyToMode: params.replyToMode ?? "off",
-    threadHistoryScope: "thread",
     threadInheritParent: false,
     slashCommand: {
       enabled: false,

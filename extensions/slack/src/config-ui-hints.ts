@@ -16,11 +16,11 @@ export const slackChannelConfigUiHints = {
     configWrites: true,
     mentionPatterns: {
       targetDescription: "Slack channel IDs",
-      policyNote: "Native Slack @mentions still trigger even when regex patterns are denied.",
-      denyNote: "Native @mentions still trigger.",
+      policyNote:
+        "Legacy setting, ignored for rooms. Use a native bot mention or reply to the bot.",
+      denyNote: "Room invocation uses native bot mentions and replies; this setting is ignored.",
     },
     nativeCommands: true,
-    implicitMentions: true,
     streaming: {
       "": 'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress" (default). Legacy boolean/streamMode keys are auto-mapped.',
       mode: 'Canonical Slack preview mode: "off" | "partial" | "block" | "progress" (default).',
@@ -147,7 +147,7 @@ export const slackChannelConfigUiHints = {
   },
   "thread.historyScope": {
     label: "Slack Thread History Scope",
-    help: 'Scope for Slack thread history context ("thread" isolates per thread; "channel" reuses channel history).',
+    help: "Legacy setting, ignored for rooms. Observed room context is always scoped to the native workspace, channel, and thread.",
   },
   "thread.inheritParent": {
     label: "Slack Thread Parent Inheritance",
@@ -155,6 +155,34 @@ export const slackChannelConfigUiHints = {
   },
   "thread.initialHistoryLimit": {
     label: "Slack Thread Initial History Limit",
-    help: "Maximum number of existing Slack thread messages to fetch when starting a new thread session (default: 20, set to 0 to disable).",
+    help: "Maximum existing messages fetched for a new direct-message or managed direct-message thread (default: 20, 0 disables). Rooms use durable observed context and ignore this limit.",
+  },
+  historyLimit: {
+    label: "Slack Legacy Room History Limit",
+    help: "Legacy setting, ignored for rooms. Unread room text remains available until an addressed request consumes it. Direct-message history limits still apply.",
+  },
+  requireMention: {
+    label: "Slack Legacy Mention Requirement",
+    help: "Rooms always require a native bot mention, a reply to the bot, or a bot-owned interaction. This legacy setting no longer changes room invocation.",
+  },
+  "channels.*.requireMention": {
+    label: "Slack Legacy Channel Mention Requirement",
+    help: "Rooms always require native bot addressing; this legacy channel setting is ignored.",
+  },
+  implicitMentions: {
+    label: "Slack Legacy Implicit Mentions",
+    help: "Legacy settings, ignored for rooms. Native replies to the bot's thread root can invoke; prior participation and quoted bot text cannot.",
+  },
+  "implicitMentions.replyToBot": {
+    label: "Slack Legacy Reply Mention Toggle",
+    help: "Native replies to the bot's thread root can invoke regardless of this legacy toggle.",
+  },
+  "implicitMentions.quotedBot": {
+    label: "Slack Legacy Quoted Mention Toggle",
+    help: "Quoted bot text does not invoke a room turn; this legacy toggle is ignored.",
+  },
+  "implicitMentions.threadParticipation": {
+    label: "Slack Legacy Thread Participation Toggle",
+    help: "Prior bot participation does not invoke room turns; this legacy toggle is ignored.",
   },
 } satisfies Record<string, ChannelConfigUiHint>;
