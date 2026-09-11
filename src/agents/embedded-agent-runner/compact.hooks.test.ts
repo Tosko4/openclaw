@@ -29,6 +29,7 @@ import {
 } from "../../plugins/runtime.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
 import { getRegisteredAgentHarness, registerAgentHarness } from "../harness/registry.js";
 import type { AgentHarness } from "../harness/types.js";
@@ -3609,6 +3610,49 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 });
 
 describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
+  async function withOpenAiEnvironmentBinding<T>(run: () => Promise<T>): Promise<T> {
+    const { getCurrentPluginMetadataSnapshot } =
+      await import("../../plugins/current-plugin-metadata-snapshot.js");
+    const currentMetadata = vi.mocked(getCurrentPluginMetadataSnapshot);
+    const current = expectDefined(
+      currentMetadata.getMockImplementation(),
+      "active runtime metadata fixture",
+    );
+    const acquire = expectDefined(
+      acquireAgentRunPreparedModelRuntimeMock.getMockImplementation(),
+      "prepared runtime fixture",
+    );
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "openai",
+          providers: ["openai"],
+          setup: { providers: [{ id: "openai", envVars: ["OPENAI_API_KEY"] }] },
+        },
+      ],
+    });
+    currentMetadata.mockReturnValue(metadataSnapshot);
+    acquireAgentRunPreparedModelRuntimeMock.mockImplementation(async (...args) => {
+      const lease = await acquire(...args);
+      return {
+        ...lease,
+        snapshot: {
+          ...lease.snapshot,
+          metadataSnapshot: { ...metadataSnapshot, workspaceDir: lease.snapshot.workspaceDir },
+        },
+      };
+    });
+    try {
+      return await withEnvAsync(
+        { OPENAI_API_KEY: "direct-env-key", CODEX_API_KEY: undefined },
+        run,
+      );
+    } finally {
+      acquireAgentRunPreparedModelRuntimeMock.mockImplementation(acquire);
+      currentMetadata.mockImplementation(current);
+    }
+  }
+
   async function acquiredPreparedModelRuntime() {
     const pendingLease = acquireAgentRunPreparedModelRuntimeMock.mock.results[0]?.value;
     if (!pendingLease) {
@@ -5013,7 +5057,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
           expires: Date.now() + 60_000,
         },
       },
-      order: { openai: ["openai:subscription"] },
     });
     maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
       ok: true,
@@ -5025,22 +5068,24 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       },
     });
 
-    const result = await compactEmbeddedAgentSession(
-      wrappedCompactionArgs({
-        provider: "openai",
-        model: "gpt-5.5",
-        agentHarnessId: "native",
-        config: {
-          models: {
-            providers: {
-              openai: {
-                apiKey: "literal-key",
-                models: [{ id: "gpt-5.5", contextWindow: 350_000 }],
+    const result = await withOpenAiEnvironmentBinding(() =>
+      compactEmbeddedAgentSession(
+        wrappedCompactionArgs({
+          provider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "native",
+          config: {
+            models: {
+              providers: {
+                openai: {
+                  apiKey: "literal-key",
+                  models: [{ id: "gpt-5.5", contextWindow: 350_000 }],
+                },
               },
             },
           },
-        },
-      }),
+        }),
+      ),
     );
 
     expect(result.ok).toBe(true);
@@ -5077,7 +5122,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
           expires: Date.now() + 60_000,
         },
       },
-      order: { openai: ["openai:subscription"] },
     };
     ensureAuthProfileStoreMock.mockReturnValue(authStore);
     getApiKeyForModelMock.mockImplementation(async (authParams = {}) => {
@@ -5085,7 +5129,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         throw new Error("subscription credential resolution failed");
       }
       if (authParams.allowAuthProfileFallback === false) {
-        return { apiKey: "literal-key", mode: "api-key", source: "models.json" };
+        return { apiKey: "direct-env-key", mode: "api-key", source: "env: OPENAI_API_KEY" };
       }
       throw new Error("unexpected auth lookup");
     });
@@ -5117,21 +5161,28 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       compact: legacyCompact,
     } as never);
 
-    const result = await compactEmbeddedAgentSession(
-      wrappedCompactionArgs({
-        provider: "openai",
-        model: "gpt-5.5",
-        config: {
-          models: {
-            providers: {
-              openai: {
-                apiKey: "literal-key",
-                models: [{ id: "gpt-5.5" }],
+    const result = await withOpenAiEnvironmentBinding(() =>
+      compactEmbeddedAgentSession(
+        wrappedCompactionArgs({
+          provider: "openai",
+          model: "gpt-5.5",
+          config: {
+            models: {
+              providers: {
+                openai: {
+                  apiKey: "literal-key",
+                  models: [{ id: "gpt-5.5" }],
+                },
+              },
+            },
+            agents: {
+              defaults: {
+                models: { "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } } },
               },
             },
           },
-        },
-      }),
+        }),
+      ),
     );
 
     expect(result.ok).toBe(true);
