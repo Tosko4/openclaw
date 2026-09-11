@@ -14,6 +14,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import type { ModelProviderConfigInput } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import {
@@ -144,6 +145,34 @@ module.exports = {
           configSchema: { type: "object", additionalProperties: false, properties: {} },
         });
         const ref = { source: "store", provider: "default", id: "WORKER_CONFIG_KEY" } as const;
+        const providers: Record<string, ModelProviderConfigInput> = {
+          "healthy-fixture": {
+            baseUrl: "https://healthy.example/v1",
+            api: "openai-completions",
+            apiKey: "synthetic-healthy-key",
+            models: [
+              {
+                id: "model",
+                name: "Model",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 4096,
+                maxTokens: 512,
+              },
+            ],
+          },
+          ...(migrated
+            ? {}
+            : {
+                [provider]: {
+                  baseUrl,
+                  api: "openai-completions",
+                  models: [],
+                  ...(owner === "config" ? { apiKey: loader?.authored ?? ref } : {}),
+                },
+              }),
+        };
         const source = {
           plugins: {
             allow: [provider],
@@ -161,36 +190,7 @@ module.exports = {
               modelPolicy: { allow: ["healthy-fixture/model", `${provider}/*`] },
             },
           },
-          models: {
-            providers: {
-              "healthy-fixture": {
-                baseUrl: "https://healthy.example/v1",
-                api: "openai-completions",
-                apiKey: "synthetic-healthy-key",
-                models: [
-                  {
-                    id: "model",
-                    name: "Model",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 4096,
-                    maxTokens: 512,
-                  },
-                ],
-              },
-              ...(migrated
-                ? {}
-                : {
-                    [provider]: {
-                      baseUrl,
-                      api: "openai-completions",
-                      models: [],
-                      ...(owner === "config" ? { apiKey: loader?.authored ?? ref } : {}),
-                    },
-                  }),
-            },
-          },
+          models: { providers },
         } satisfies OpenClawConfig;
         let runtime: OpenClawConfig = {
           ...source,
