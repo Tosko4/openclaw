@@ -275,9 +275,9 @@ Slack-only:
 - Preview streaming is skipped when Discord block streaming is explicitly
   enabled.
 - `progress` is quiet by default: headline, authored commentary and reasoning,
-  plan milestones, and approval or failure lines. The same default applies on
-  every progress-draft channel; `streaming.progress.toolProgress: true` adds
-  the rolling tool log with its icons.
+  plan milestones, and approval or failure lines. `streaming.progress.toolProgress: true` adds
+  the rolling tool log with its icons. Slack quiet progress omits intermediate
+  command failures while preserving approvals, blocked states, and terminal errors.
 - `progress` mode deletes the status draft once the final answer is delivered,
   so busy channels keep no orphaned tool log above the reply. Error finals keep
   the draft as the record of the failed turn.

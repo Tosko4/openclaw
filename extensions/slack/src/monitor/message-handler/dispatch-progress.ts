@@ -32,6 +32,7 @@ import {
 } from "./dispatch-progress-card.js";
 import { createSlackNativeProgressTransport } from "./dispatch-progress-native.js";
 import {
+  buildSlackProgressEventLine,
   combineProgressHeadlineAndExplanation,
   resolveNativeProgressLines,
   resolveNativeProgressNarration,
@@ -340,6 +341,13 @@ export function createSlackProgressRuntime(runtimeParams: {
     mode: slackStreaming.mode,
     active: progressDraftActive,
     seed: progressSeed,
+    buildProgressEventLine: (input, options) =>
+      buildSlackProgressEventLine(
+        account.config,
+        input,
+        options,
+        isProgressMode && !previewToolProgressEnabled,
+      ),
     formatLine: formatSlackProgressDraftLine,
     reasoningLinePrefix: "🧠 ",
     updateOnLineChange: useNativeProgressStreaming || useDraftProgressCard,

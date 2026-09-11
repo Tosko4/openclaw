@@ -1,9 +1,54 @@
 import {
   buildChannelProgressDraftLine,
+  buildChannelProgressDraftLineForEntry,
   type ChannelProgressDraftCompositorLine,
   type ChannelProgressDraftCompositorSnapshot,
   type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+// Keep this policy before the compositor: native task rows cannot be removed
+// after publication, and text-only filtering would miss both card renderers.
+export function buildSlackProgressEventLine(
+  entry: Parameters<typeof buildChannelProgressDraftLineForEntry>[0],
+  input: Parameters<typeof buildChannelProgressDraftLineForEntry>[1],
+  options: Parameters<typeof buildChannelProgressDraftLineForEntry>[2],
+  quietProgress: boolean,
+): ChannelProgressDraftLine | undefined {
+  const line = buildChannelProgressDraftLineForEntry(entry, input, options);
+  if (!quietProgress || (input.event !== "command-output" && input.event !== "item")) {
+    return line;
+  }
+  const command =
+    input.event === "command-output" ||
+    input.commandBearing === true ||
+    normalizeOptionalLowercaseString(input.itemKind) === "command" ||
+    ["bash", "exec", "shell"].includes(normalizeOptionalLowercaseString(input.name) ?? "");
+  if (!command) {
+    return line;
+  }
+  const status = normalizeOptionalLowercaseString(input.status);
+  // Unknown/action-required states are not routine command failures. In
+  // particular, preserve blocked even when an exit code accompanies it.
+  if (
+    status &&
+    !["failed", "error", "completed"].includes(status) &&
+    !/^exit -?\d+$/u.test(status)
+  ) {
+    return line;
+  }
+  if (input.event === "command-output" && input.exitCode != null) {
+    return Number.isSafeInteger(input.exitCode) && input.exitCode !== 0 ? undefined : line;
+  }
+  const exitStatus = status?.match(/^exit (-?\d+)$/u)?.[1];
+  const failed =
+    status === "failed" ||
+    status === "error" ||
+    (exitStatus !== undefined &&
+      Number.isSafeInteger(Number(exitStatus)) &&
+      Number(exitStatus) !== 0);
+  return failed ? undefined : line;
+}
 
 export function resolveStructuredProgressLines(
   lines: readonly ChannelProgressDraftCompositorLine[],

@@ -22,7 +22,9 @@ Checking the streaming behavior and running the focused tests.
 ```
 
 The default draft shows a status headline, authored plan steps, and approval
-or failure lines. Set `streaming.progress.toolProgress: true` to add a rolling
+or failure lines. Slack quiet progress omits intermediate command failures,
+while retaining approvals, blocked states, and terminal errors. Set
+`streaming.progress.toolProgress: true` to add a rolling
 tool log, with rows such as `🛠️ Bash: run tests`.
 
 <Note>
@@ -169,7 +171,8 @@ plans, approvals, command output, patch summaries, and similar agent activity.
 `progress.toolProgress` decides whether ordinary tool calls become rolling
 rows underneath the status headline. It defaults to `false` on every channel,
 which keeps the draft quiet: the headline, enabled commentary and reasoning,
-plan milestones, and any approval request or failed command still appear. Set
+plan milestones, and approval requests still appear. Most channels also retain
+failed commands; Slack quiet progress omits that intermediate telemetry. Set
 it to `true` for the full rolling tool log.
 
 Native subagent spawn and activity events follow the same policy. They start
@@ -362,7 +365,9 @@ With `toolProgress: true`, command exit rows use ordinary tool-log capacity,
 including exits with a code other than `0`. Older exits scroll out as newer
 activity arrives and do not reduce the plan's line budget. Approval requests
 and explicit `failed`, `error`, or `blocked` states still take priority. With
-the tool log hidden, non-zero exits remain visible as attention lines.
+the tool log hidden, most channels retain non-zero exits as attention lines.
+Slack omits intermediate command failures before publishing quiet progress,
+so native task rows do not accumulate a permanent recovered-command log.
 
 Progress lines are compacted automatically to reduce chat-bubble reflow while
 the draft is edited, and OpenClaw truncates long lines so repeated draft edits

@@ -111,13 +111,13 @@ let mockedSourceReplyDelivered = false;
 let mockedDispatchError: Error | undefined;
 
 let mockedProgressEvents: string[] = [];
-let mockedEmptyProgressToolName: string | undefined;
 let mockedReplyOptionEvents: Array<
   | {
       kind: "item";
       itemId?: string;
       toolCallId?: string;
       itemKind?: string;
+      commandBearing?: boolean;
       progressText?: string;
       summary?: string;
       title?: string;
@@ -597,105 +597,6 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
           }
         : undefined;
     },
-    buildChannelProgressDraftLineForEntry: (
-      entry: {
-        streaming?: {
-          progress?: { commandText?: "raw" | "status" };
-          preview?: { commandText?: "raw" | "status" };
-        };
-      },
-      params: {
-        event?: string;
-        itemId?: string;
-        toolCallId?: string;
-        itemKind?: string;
-        args?: Record<string, unknown>;
-        meta?: string;
-        progressText?: string;
-        summary?: string;
-        title?: string;
-        name?: string;
-        status?: string;
-        exitCode?: number | null;
-      },
-    ) => {
-      if (params.event === "command-output") {
-        const status =
-          params.exitCode === 0
-            ? "completed"
-            : params.exitCode != null
-              ? `exit ${params.exitCode}`
-              : params.status;
-        const id = params.toolCallId ? `command:${params.toolCallId}` : params.itemId;
-        const raw =
-          (entry.streaming?.progress?.commandText ?? entry.streaming?.preview?.commandText) ===
-          "raw";
-        return {
-          kind: "command-output",
-          ...(id ? { id } : {}),
-          text: raw && params.title ? params.title : (status ?? params.name ?? "exec"),
-          label: params.name ?? "exec",
-          ...(raw && params.title ? { detail: params.title } : {}),
-          ...(status ? { status } : {}),
-          toolName: params.name ?? "exec",
-        };
-      }
-      if (params.event === "tool") {
-        if (params.name === mockedEmptyProgressToolName) {
-          return undefined;
-        }
-        const text = params.name;
-        return text
-          ? {
-              kind: "tool",
-              ...((params.itemId ?? params.toolCallId)
-                ? { id: params.itemId ?? params.toolCallId }
-                : {}),
-              text,
-              label: params.name ?? "Tool",
-              ...(typeof params.args?.command === "string" ? { detail: params.args.command } : {}),
-              toolName: params.name,
-            }
-          : undefined;
-      }
-      if (
-        params.itemKind === "analysis" &&
-        params.title === "Reasoning" &&
-        !params.meta &&
-        !params.summary &&
-        !params.progressText
-      ) {
-        return undefined;
-      }
-      if (
-        (entry.streaming?.progress?.commandText ?? entry.streaming?.preview?.commandText) ===
-          "status" &&
-        (params.itemKind === "command" || params.name === "exec")
-      ) {
-        const id = params.toolCallId ? `command:${params.toolCallId}` : params.itemId;
-        return {
-          kind: "item",
-          ...(id ? { id } : {}),
-          text: "🛠️ Exec",
-          label: "Exec",
-        };
-      }
-      const text = params.progressText ?? params.summary ?? params.title ?? params.name;
-      const id =
-        params.itemKind === "command" || params.name === "exec"
-          ? params.toolCallId
-            ? `command:${params.toolCallId}`
-            : params.itemId
-          : undefined;
-      return text
-        ? {
-            kind: "item",
-            ...(id ? { id } : {}),
-            text,
-            label: params.title ?? params.name ?? "Update",
-          }
-        : undefined;
-    },
     createChannelProgressDraftGate: (params: { onStart: () => void | Promise<void> }) => {
       let started = false;
       const startNow = async () => {
@@ -1019,6 +920,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
           if (entry.kind === "item") {
             await params.replyOptions?.onItemEvent?.({
               kind: entry.itemKind,
+              commandBearing: entry.commandBearing,
               itemId: entry.itemId,
               toolCallId: entry.toolCallId,
               progressText: entry.progressText,
@@ -1203,7 +1105,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedSourceReplyDelivered = false;
     mockedDispatchError = undefined;
     mockedProgressEvents = [];
-    mockedEmptyProgressToolName = undefined;
     mockedReplyOptionEvents = [];
 
     createSlackDraftStreamMock.mockReturnValue(createDraftStreamStub());
@@ -2977,29 +2878,113 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
   });
 
-  it("settles failed command attention as recovered after a successful final reply", async () => {
-    await dispatchNativeProgressScenario({
-      finalPayload: { text: FINAL_REPLY_TEXT },
-      progress: { style: "card", toolProgress: false, nativeTaskCards: true },
-      events: [
-        { kind: "command_output", phase: "end", name: "Bash", title: "run checks", exitCode: 1 },
-      ],
-    });
-
-    expect(
-      collectNativeTaskUpdates().filter(
-        (task) => typeof task.id === "string" && task.id.startsWith("openclaw-attention-"),
-      ),
-    ).toEqual([
-      taskUpdate(expect.stringMatching(/^openclaw-attention-/u), "Bash — exit 1", "error"),
-      taskUpdate(
-        expect.stringMatching(/^openclaw-attention-/u),
-        "Recovered: Bash — exit 1",
-        "complete",
-      ),
-    ]);
-    expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
-  });
+  it.each(
+    [
+      { surface: "native", toolProgress: undefined },
+      { surface: "native", toolProgress: false },
+      { surface: "block-kit", toolProgress: false },
+      { surface: "native", toolProgress: true },
+    ].flatMap((scenario) =>
+      ["success", "error", "no-reply"].map((outcome) => ({
+        surface: scenario.surface,
+        toolProgress: scenario.toolProgress,
+        outcome,
+      })),
+    ),
+  )(
+    "keeps plans, approvals and terminal state without quiet command rows ($surface, $toolProgress, $outcome)",
+    async ({ surface, toolProgress, outcome }) => {
+      const draftStream = createDraftStreamStub();
+      createSlackDraftStreamMock.mockReturnValue(draftStream);
+      finalizeSlackPreviewEditMock.mockResolvedValue(undefined);
+      mockedNativeStreaming = surface === "native";
+      mockedSlackStreamingMode = "progress";
+      mockedAgentRunTerminalOutcome = outcome === "success" ? "completed" : "failed";
+      mockedDispatchSequence =
+        outcome === "no-reply"
+          ? []
+          : [
+              {
+                kind: "final",
+                payload: {
+                  text: FINAL_REPLY_TEXT,
+                  ...(outcome === "error" ? { isError: true } : {}),
+                },
+              },
+            ];
+      mockedReplyOptionEvents = [
+        {
+          kind: "item",
+          itemKind: "preamble",
+          itemId: "preamble",
+          progressText: "Checking the deployment.",
+        },
+        {
+          kind: "plan",
+          phase: "update",
+          steps: [{ step: "Verify deployment", status: "in_progress" }],
+        },
+        { kind: "approval", phase: "requested", approvalId: "approval-1", command: "Run checks" },
+        { kind: "approval", phase: "resolved", approvalId: "approval-1" },
+        ...["exec", "Bash", "shell"].map((name, index) => ({
+          kind: "command_output" as const,
+          phase: "end",
+          name,
+          toolCallId: "command-" + index,
+          exitCode: index ? 8 : 1,
+        })),
+        { kind: "item", itemKind: "command", itemId: "item-1", status: "failed" },
+        {
+          kind: "item",
+          name: "mcp__openclaw__exec",
+          commandBearing: true,
+          itemId: "item-2",
+          status: "error",
+        },
+        {
+          kind: "command_output",
+          phase: "end",
+          name: "Bash",
+          toolCallId: "command-3",
+          exitCode: 1,
+        },
+      ];
+      await dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          accountConfig: {
+            streaming: {
+              mode: "progress",
+              progress: { style: "card", toolProgress },
+            },
+          },
+        }),
+      );
+      const tasks = collectNativeTaskUpdates();
+      const visible = JSON.stringify(surface === "native" ? tasks : draftStream.update.mock.calls);
+      expect(visible).toContain("Verify deployment");
+      expect(visible).toContain("Approval required:");
+      if (toolProgress !== true) {
+        expect(visible).not.toContain("exit 1");
+        expect(visible).not.toContain("exit 8");
+        expect(visible).not.toContain("Recovered:");
+        expect(visible).not.toContain("Mcp");
+      } else {
+        expect(visible).toContain("exit 1");
+      }
+      if (surface === "block-kit") {
+        expect(JSON.stringify(finalizeSlackPreviewEditMock.mock.calls)).not.toContain("Recovered:");
+        if (outcome === "success") {
+          expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+        } else {
+          expect(JSON.stringify(finalizeSlackPreviewEditMock.mock.calls)).toContain("❌");
+        }
+      } else if (outcome === "success") {
+        expectNativeStreamText("\n" + FINAL_REPLY_TEXT);
+      } else {
+        expect(tasks.some((task) => task.status === "error")).toBe(true);
+      }
+    },
+  );
 
   it("mandatory E2E: streams native Slack progress with the newest meaningful plan title when no explicit label exists", async () => {
     await dispatchNativeProgressScenario({
@@ -3303,8 +3288,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("does not admit an empty non-work tool line into native progress", async () => {
-    mockedEmptyProgressToolName = "update_plan";
-
     await dispatchNativeProgressScenario({
       finalPayload: { text: FINAL_REPLY_TEXT },
       events: [
@@ -4507,7 +4490,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     [undefined, false],
     [undefined, true],
   ] as const)(
-    "keeps compact progress authored text and attention (style=%s, native=%s)",
+    "keeps compact authored progress without command failures (style=%s, native=%s)",
     async (style, native) => {
       const draftStream = createDraftStreamStub();
       createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
@@ -4604,7 +4587,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         "_Checking the current Slack behavior._",
         "🧠 _Considering the transport choice._",
         "_The fix is ready; I’m checking the result._",
-        "🛠️ exit 1",
       ]);
       expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
       expect(deliverRepliesMock).toHaveBeenCalledOnce();
