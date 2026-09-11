@@ -11,9 +11,11 @@ import {
   type CompactNodeTestShard,
   createNodeTestShardBundles,
   createNodeTestShards,
+  createToolingNodeTestShardBundles,
   createVitestCacheWarmGroups,
   isExclusiveCompactShardName,
   isPolicyTestOwnedPath,
+  packNodeTestGroups,
   resolvePolicyTestTargets,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
@@ -942,7 +944,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         job.groups.some((group) => group.shard_name === "agentic-cli"),
       );
       expect(cliJobs).toHaveLength(1);
-      expect(cliJobs[0]).toMatchObject({ planConcurrency: 1 });
+      expect(cliJobs[0]).toMatchObject({
+        planConcurrency: 1,
+        runner: "blacksmith-16vcpu-ubuntu-2404",
+      });
       // The combined bin uses the larger CLI budget, beyond the 150s child limit.
       expect(cliJobs[0]!.predictedSeconds).toBeGreaterThan(150);
       expect(cliJobs[0]!.pretestBuildMode).toBeUndefined();
@@ -1325,8 +1330,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           shard.groups.some((group) =>
             group.configs.includes("test/vitest/vitest.tooling.config.ts"),
           );
+        const nativeFullCli =
+          !githubPullRequestCompact.includes(shard) &&
+          shard.groups.some((group) => group.shard_name === "agentic-cli");
         expect(shard.runner).toBe(
-          blacksmithTooling ? EXTRA_LARGE_NODE_TEST_RUNNER : shard.groups[0]?.runner,
+          blacksmithTooling || shard.groups[0]?.runner === EXTRA_LARGE_NODE_TEST_RUNNER
+            ? EXTRA_LARGE_NODE_TEST_RUNNER
+            : nativeFullCli
+              ? "blacksmith-16vcpu-ubuntu-2404"
+              : shard.groups[0]?.runner,
         );
       }
     }
@@ -2074,6 +2086,18 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(owner?.runner, runnerBackend).toBe(
         runnerBackend === "blacksmith" ? EXTRA_LARGE_NODE_TEST_RUNNER : DEFAULT_NODE_TEST_RUNNER,
       );
+      const precise = createToolingNodeTestShardBundles([compilerFixture], { runnerBackend });
+      const preciseOwner = precise?.find((job) =>
+        job.groups.some((group) => group.includePatterns?.includes(compilerFixture)),
+      );
+      expect(preciseOwner?.runner, runnerBackend).toBe(owner?.runner);
+      expect(preciseOwner?.planConcurrency).toBe(1);
+      expect(preciseOwner?.groups).toEqual([
+        expect.objectContaining({
+          includePatterns: [compilerFixture],
+          env: expect.objectContaining({ OPENCLAW_VITEST_MAX_WORKERS: "2" }),
+        }),
+      ]);
       expect(
         jobs
           .flatMap((job) => job.groups)
@@ -2197,6 +2221,47 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(nonToolingPlacement([changed, split])).not.toEqual(expected);
     }
     expect({ anchor, unsplit, split }).toEqual(original);
+  });
+
+  it("keeps precise tooling selection through hosted overflow refusal", () => {
+    const tooling = defaultShards.filter((shard) => /^core-tooling-\d+$/u.test(shard.shardName));
+    const selected = tooling.flatMap((shard) => shard.includePatterns ?? []).slice(0, 96);
+    expect(selected).toHaveLength(96);
+    vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(
+      Object.fromEntries(tooling.map((shard) => [shard.shardName, 20_000])),
+    );
+    // Every selected file is now indivisible above the admission cap. Overflow
+    // must retain these 96 files plus two dist owners, never resurrect the full suite.
+    expect(() => createToolingNodeTestShardBundles(selected, { runnerBackend: "github" })).toThrow(
+      "exceeds 80 jobs (98 planned)",
+    );
+  });
+
+  it("keeps the private runtime prerequisite on precise tooling readers", () => {
+    const shards = createToolingNodeTestShardBundles([PRIVATE_QA_TOOLING_TEST]);
+    expect(shards).not.toBeNull();
+    const readers = shards?.filter((shard) => !shard.requiresDist) ?? [];
+    expect(readers).toHaveLength(1);
+    expect(readers[0]?.pretestBuildMode).toBe("private-qa");
+    expect(readers[0]?.planConcurrency).toBe(1);
+    expect(readers[0]?.groups.flatMap((group) => group.includePatterns ?? [])).toEqual([
+      PRIVATE_QA_TOOLING_TEST,
+    ]);
+  });
+
+  it("packs serial groups within both the time and group-count budgets", () => {
+    const groups = [34, 33, 33, 32, 32, 32, 10, 21, 17, 17, 15, 10, 8, 7, 7, 7, 6, 5, 5];
+    const bins = packNodeTestGroups(
+      groups,
+      (bin, group) => bin.length < 10 && bin.reduce((sum, value) => sum + value, group) <= 210,
+      true,
+    );
+    expect(bins).toHaveLength(2);
+    expect(bins.flat().toSorted((a, b) => a - b)).toEqual(groups.toSorted((a, b) => a - b));
+    for (const bin of bins) {
+      expect(bin.length).toBeLessThanOrEqual(10);
+      expect(bin.reduce((sum, value) => sum + value, 0)).toBeLessThanOrEqual(210);
+    }
   });
 
   it("keeps hosted tooling within the GitHub job cap when its inventory grows", async () => {
@@ -3022,7 +3087,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         configs: gatewayCoreConfigs,
         includePatterns: [
           "src/gateway/gateway-active-memory.test.ts",
-          "src/gateway/gateway-auth-rewarm.test.ts",
+          "src/gateway/gateway-auth-recovery.test.ts",
           "src/gateway/gateway-concurrent-streams.test.ts",
           "src/gateway/gateway-cron-process-identity.windows.test.ts",
           "src/gateway/gateway-route-model-reuse.test.ts",
