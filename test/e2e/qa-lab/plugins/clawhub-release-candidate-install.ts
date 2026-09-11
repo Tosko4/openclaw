@@ -8,6 +8,10 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/api.js";
+import {
+  parsePlatformList,
+  resolveParallelsProviderAuth,
+} from "../../../../scripts/e2e/parallels/provider-auth-prerequisite.mjs";
 import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { createBoundedChildOutput } from "../../../helpers/bounded-child-output.js";
 import {
@@ -353,12 +357,28 @@ function isBlockedPrerequisiteFailure(message: string) {
   return CLAWHUB_BLOCKED_PREREQUISITE_PATTERNS.some((pattern) => pattern.test(message));
 }
 
+function resolveParallelsEvidenceModel(options: ProducerOptions) {
+  try {
+    // Match the child runner's default OpenAI route without changing its arguments.
+    const models = Array.from(
+      parsePlatformList(options.platform || "all"),
+      (platform) =>
+        resolveParallelsProviderAuth({ provider: "openai", platform }, process.env).auth.modelId,
+    );
+    const [model] = models;
+    return model?.trim() && models.every((value) => value === model) ? model : "";
+  } catch {
+    // Invalid metadata must not replace the producer's blocked or failure result.
+    return "";
+  }
+}
+
 function createClawHubEvidenceWriter(options: ProducerOptions) {
   return createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: "parallels-npm-update.log",
-    primaryModel: "mock-openai/gpt-5.6-luna",
-    providerMode: "mock-openai",
+    primaryModel: resolveParallelsEvidenceModel(options),
+    providerMode: "live-frontier",
     repoRoot: options.repoRoot,
     target: {
       id: SCENARIO_ID,
