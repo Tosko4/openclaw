@@ -3,11 +3,13 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
   requestSessionEventWake,
   requestSessionEventWakeAndWait,
   setSessionEventWakeHandler as setRuntimeSessionEventWakeHandler,
 } from "./session-event-wake.js";
+import { enqueueSystemEventEntry, peekSystemEventEntries } from "./system-events.js";
 
 describe("session event wake preemption retry", () => {
   type SessionEventWakeHandler = Parameters<typeof setRuntimeSessionEventWakeHandler>[0];
@@ -120,6 +122,46 @@ describe("session event wake preemption retry", () => {
     expect(retiredHandler).not.toHaveBeenCalled();
     expect(replacementHandler.mock.calls.map(([request]) => request)).toEqual([pendingWake]);
   });
+
+  it.each(["close", "restart"] as const)(
+    "retires queued wakes with their system events during full %s",
+    async (event) => {
+      const sessionKey = "agent:main:main";
+      const retired = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+      const successor = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+      setSessionEventWakeHandler(retired);
+      try {
+        const queued = enqueueSystemEventEntry("retired task completed", { sessionKey });
+        expect(queued?.id).toBeTruthy();
+        expect(peekSystemEventEntries(sessionKey)).toEqual([queued]);
+        requestSessionEventWake({
+          source: "background-task",
+          intent: "immediate",
+          reason: "background-task",
+          agentId: "main",
+          sessionKey,
+          coalesceMs: 250,
+        });
+        expect(retired).not.toHaveBeenCalled();
+
+        disposeHandler?.();
+        await drainGlobalSingletonLifecycleState(event);
+        expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+        setSessionEventWakeHandler(successor);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(retired).not.toHaveBeenCalled();
+        expect(successor).not.toHaveBeenCalled();
+
+        const freshWake = wake("manual", { agentId: "main", sessionKey });
+        requestSessionEventWake({ ...freshWake, coalesceMs: 0 });
+        await vi.advanceTimersByTimeAsync(1);
+        expect(successor.mock.calls.map(([request]) => request)).toEqual([freshWake]);
+      } finally {
+        disposeHandler?.();
+        await drainGlobalSingletonLifecycleState(event);
+      }
+    },
+  );
 
   it.each(
     ["replace", "dispose"].flatMap((change) => [false, true].map((throws) => ({ change, throws }))),
