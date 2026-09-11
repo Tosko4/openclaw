@@ -646,7 +646,7 @@ describe("update orchestration lifecycle ownership", () => {
       });
       expect(mocks.restart).not.toHaveBeenCalled();
       expect(await events()).toEqual([
-        ...(lane === "repair" || lane === "resume" ? ["pre-attempt", "pre-acquired"] : []),
+        ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
         ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),
         "post-attempt",
         "post-acquired",
