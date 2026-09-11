@@ -11,6 +11,7 @@ import {
 } from "../cli/update-cli/update-command-executor.js";
 import { startGatewayConfigReloader } from "../gateway/config-reload.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import * as tmpDirOwner from "../infra/tmp-openclaw-dir.js";
 import {
   captureManagedUpdateLeaseDatabaseIdentity,
   createManagedHandoffLeaseDatabase,
@@ -152,6 +153,9 @@ describe("config io write", () => {
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
+    vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      await suiteRootTracker.make("coordinator"),
+    );
 
     // Default: return an empty plugin list so existing tests that don't need
     // plugin-owned channel schemas keep working unchanged.
@@ -170,6 +174,7 @@ describe("config io write", () => {
   afterAll(async () => {
     closeOpenClawStateDatabaseForTest();
     resetConfigRuntimeState();
+    vi.mocked(tmpDirOwner.resolvePreferredOpenClawTmpDir).mockRestore();
     await suiteRootTracker.cleanup();
   });
 
@@ -419,7 +424,9 @@ describe("config io write", () => {
             });
           const beforePolicy = policyFor(before.config);
           expect(beforePolicy.allowAny).toBe(modelPolicy !== undefined);
-          expect(beforePolicy.allowsKey("demo/denied")).toBe(modelPolicy !== undefined);
+          expect(beforePolicy.allows({ provider: "demo", model: "denied" })).toBe(
+            modelPolicy !== undefined,
+          );
 
           await io.writeConfigFile({
             ...before.config,
@@ -436,7 +443,9 @@ describe("config io write", () => {
           expect([...afterPolicy.allowedKeys].toSorted()).toEqual(
             [...beforePolicy.allowedKeys].toSorted(),
           );
-          expect(afterPolicy.allowsKey("demo/denied")).toBe(beforePolicy.allowsKey("demo/denied"));
+          expect(afterPolicy.allows({ provider: "demo", model: "denied" })).toBe(
+            beforePolicy.allows({ provider: "demo", model: "denied" }),
+          );
           expect(after.sourceConfig.agents?.defaults?.models).toEqual(models);
           expect(after.sourceConfig.browser?.enabled).toBe(false);
           if (includeAt) {
@@ -3041,8 +3050,8 @@ describe("config io write", () => {
       await withSuiteHome(async (home) => {
         const entry = { alias: "friendly", params: { temperature: 0.2 } };
         const canonicalEntry = canonicalPresent ? { params: { temperature: 0.7 } } : entry;
-        const legacy = "openrouter/openrouter/hunter-alpha";
-        const canonical = "openrouter/hunter-alpha";
+        const legacy = "google/gemini-3-pro-preview";
+        const canonical = "google/gemini-3.1-pro-preview";
         const agents = {
           entries: { main: {} },
           defaults: {

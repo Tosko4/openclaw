@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 
 const mocks = vi.hoisted(() => ({
@@ -140,9 +141,9 @@ describe("runPostCorePluginConvergence", () => {
   it.each(["authority", "filesystem"] as const)(
     "joins admitted peer repairs before reporting a %s failure",
     async (kind) => {
-      const firstStarted = Promise.withResolvers<void>();
-      const secondStarted = Promise.withResolvers<void>();
-      const releaseSibling = Promise.withResolvers<void>();
+      const firstStarted = createDeferred();
+      const secondStarted = createDeferred();
+      const releaseSibling = createDeferred();
       const refusal = new Error("one-shot peer repair refusal");
       const laterWrite = vi.fn();
       let refuse = false;
@@ -191,7 +192,9 @@ describe("runPostCorePluginConvergence", () => {
         });
       try {
         await firstStarted.promise;
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
         expect(completed).toBe(false);
         expect(mocks.runPluginPayloadSmokeCheck).not.toHaveBeenCalled();
       } finally {

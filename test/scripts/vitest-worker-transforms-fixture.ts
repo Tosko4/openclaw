@@ -102,6 +102,7 @@ export function createWorkerTransformsFixture(directory: string, layout: "single
     export const runtimeProcessEntrypoints = {
       process: {currentModuleUrl:import.meta.url,sourceWorkerName:"fixture-worker",distWorkerPath:"infra/fixture-worker.js"},
       thread: {currentModuleUrl:import.meta.url,sourceWorkerName:"fixture-thread",distWorkerPath:"infra/fixture-thread.js"},
+      sqliteReadOnly: {currentModuleUrl:import.meta.url,sourceWorkerName:"fixture-sqlite",distWorkerPath:"infra/fixture-sqlite.js"},
     };
     `,
   );
@@ -114,6 +115,7 @@ export function createWorkerTransformsFixture(directory: string, layout: "single
     'import {parentPort,threadId} from "node:worker_threads"; const value: string = "thread"; parentPort!.postMessage({value,pid:process.pid,threadId});',
   );
   write("src/infra/fixture-sealed-leaf.ts", 'export const value: string = "sealed";');
+  write("src/infra/fixture-sqlite.ts", 'const value: string = "sqlite"; console.log(value);');
   for (const name of ["update-managed-service-handoff", "package-update-activation"]) {
     write(
       `src/infra/${name}-sealed.ts`,
@@ -238,6 +240,7 @@ export function createWorkerTransformsFixture(directory: string, layout: "single
       });
       assert.equal(await (child ? owner.borrow(child,completion) : completion),0);
       const manifest = JSON.parse(fs.readFileSync(path.join(owner.descriptor.directory,"manifest.json"),"utf8"));
+      assert.ok(manifest.outputs["infra/fixture-sqlite.js"]);
       const sealed = ["managed-handoff-runtime.mjs","package-update-activation-recovery.mjs"];
       for (const name of sealed) {
         assert.ok(manifest.outputs[name]);

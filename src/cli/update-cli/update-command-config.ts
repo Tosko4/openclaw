@@ -269,10 +269,14 @@ export async function persistValidatedDowngradeConfig(
       assertCurrent?.();
       await mutateConfigFileWithRetry({
         mutate: () => undefined,
-        writeOptions: withUpdateConfigWriteAuthority(
-          { beforeCommit: assertCurrent },
-          assertCurrent,
-        ),
+        ...(assertCurrent
+          ? {
+              writeOptions: withUpdateConfigWriteAuthority(
+                { beforeCommit: assertCurrent },
+                assertCurrent,
+              ),
+            }
+          : {}),
       });
     });
   }
@@ -294,7 +298,10 @@ export async function persistRequestedUpdateChannel(params: {
 
   const mutation = await mutateConfigFileWithRetry({
     writeOptions: withUpdateConfigWriteAuthority(
-      { skipPluginValidation: true, beforeCommit: params.assertCurrent },
+      {
+        skipPluginValidation: true,
+        ...(params.assertCurrent ? { beforeCommit: params.assertCurrent } : {}),
+      },
       params.assertCurrent,
     ),
     mutate: (draft) => {

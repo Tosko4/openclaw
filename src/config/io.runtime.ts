@@ -509,6 +509,7 @@ async function finalizeCommittedConfigWrite(params: {
     }
     options.assertConfigPathForWrite?.();
     await finalizeRuntimeSnapshotWrite({
+      assertCurrent: params.assertPostCommitCurrent,
       nextSourceConfig: canonicalSourceConfig,
       refreshOptions: options.runtimeRefresh,
       hadRuntimeSnapshot: params.hadRuntimeSnapshot,

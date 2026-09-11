@@ -15,7 +15,6 @@ import { tryWriteCompletionCache } from "./shared.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import {
   assertUpdateCommandPackageFinalization,
   createUpdateCommandFinalizationFence,
@@ -30,6 +29,7 @@ import {
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { UpdateServiceLoadBoundaryError } from "./update-command-service-load.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
@@ -51,7 +51,10 @@ import {
 
 export type { FinishUpdateParams } from "./update-command-finish-types.js";
 
-export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRunResult> {
+export async function finishUpdate(
+  params: FinishUpdateParams,
+  { candidateRuntime = false } = {},
+): Promise<UpdateRunResult> {
   if (params.serviceLoadBoundary && process.platform !== "linux") {
     throw new Error("Deferred native service loading is not supported on this platform.");
   }
@@ -127,15 +130,17 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
 
   let pendingResult = params.result;
   let pendingNotify = true;
+  const writeRestartSentinel = (result: UpdateRunResult) =>
+    writeControlPlaneUpdateRestartSentinelBestEffort({
+      meta: params.controlPlaneUpdateSentinelMeta,
+      result,
+      jsonMode: Boolean(params.opts.json),
+    });
   const publishFinalResult = async (failure?: unknown): Promise<UpdateRunResult> => {
     const settled = await resolveSettledUpdateCommandResult(params, pendingResult, failure);
     const result = completedResult(settled.result);
     if (pendingNotify) {
-      await writeControlPlaneUpdateRestartSentinelBestEffort({
-        meta: params.controlPlaneUpdateSentinelMeta,
-        result,
-        jsonMode: Boolean(params.opts.json),
-      });
+      await writeRestartSentinel(result);
     }
     return publishUpdateCommandTerminalResult(params, result, {
       rolledBack: rolledBack && !settled.settlementFailed,
@@ -329,11 +334,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     recordNextAction(finalResult);
     if (notify && recoverService) {
       pendingNotify = false;
-      await writeControlPlaneUpdateRestartSentinelBestEffort({
-        meta: params.controlPlaneUpdateSentinelMeta,
-        result: finalResult,
-        jsonMode: Boolean(params.opts.json),
-      });
+      await writeRestartSentinel(finalResult);
     }
     // The recovering Gateway reads this notification at startup. Persist once
     // before restarting; rewriting a consumed sentinel could deliver it twice.
@@ -437,7 +438,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
 
     const postUpdateRoot = params.result.root ?? params.root;
     const convergePlugins = async (beforeDoctor?: () => Promise<void>) => {
-      const convergence = await convergeUpdatePlugins({ ...params, beforeDoctor });
+      const pluginParams = { ...params, beforeDoctor, assertCurrent, candidateRuntime };
+      const convergence = await convergeUpdatePlugins(pluginParams);
       if (convergence.resultWithPostUpdate.status === "error") {
         triageAllowed = !convergence.cancelled;
         const reported = await reportResult(convergence.resultWithPostUpdate);
@@ -493,11 +495,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       });
     }
     const notifyRestart = () =>
-      writeControlPlaneUpdateRestartSentinelBestEffort({
-        meta: params.controlPlaneUpdateSentinelMeta,
-        result: buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate),
-        jsonMode: Boolean(params.opts.json),
-      });
+      writeRestartSentinel(buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate));
     if (!params.coreAlreadyCurrent) {
       await notifyRestart();
       await restoreWindowsAutoStart(resultWithPostUpdate);
