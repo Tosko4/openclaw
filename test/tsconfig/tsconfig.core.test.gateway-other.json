@@ -8,5 +8,12 @@
     "../../src/gateway/session-*.test.tsx",
     "../../src/gateway/*/**/*.test.ts",
     "../../src/gateway/*/**/*.test.tsx"
+  ],
+  "exclude": [
+    "../../node_modules",
+    "../../dist",
+    "../../**/dist/**",
+    "../../src/gateway/server/**/*.test.ts",
+    "../../src/gateway/server/**/*.test.tsx"
   ]
 }
