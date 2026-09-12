@@ -206,7 +206,7 @@ export async function assertOriginalServiceStateCompatible(
   return context;
 }
 
-export async function verifyPreviousGateway(params: {
+async function verifyPreviousGateway(params: {
   root: string;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
