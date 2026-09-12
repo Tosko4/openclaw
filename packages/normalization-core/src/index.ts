@@ -7,6 +7,7 @@ export * from "./code-points.js";
 export * from "./error-coercion.js";
 export * from "./expect.js";
 export * from "./format.js";
+export * from "./home-dir.js";
 export * from "./json-coercion.js";
 export * from "./number-coercion.js";
 export * from "./record-coerce.js";
