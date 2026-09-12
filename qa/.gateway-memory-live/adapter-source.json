@@ -1,0 +1,23 @@
+{
+  "sourceCommit": "81a4c771eff6cd4591ae7f9b1745d1ced399d5e6",
+  "sourceTree": "5acf54e9bd3a1c132188309d282579f44dca2a8b",
+  "sourceDiffSha256": "a2630687bdc58e3c3cf187b25ec79e6b678acae190b79eb71fbfcf1f36e181d5",
+  "canonicalSha256": "8c1b4d29c42c957e0fb3202aa2cbb55acf665d3c1730f6990dfed8a85bd44512",
+  "adapterSha256": "bdd74b0bc9a2ca6e857d925edf261efb0ba9d46e64db9974bea0d464284deffe",
+  "canonical": "scripts/bench-gateway-concurrency.ts",
+  "heapCollector": {
+    "owner": "scripts/lib",
+    "commit": "81a4c771eff6cd4591ae7f9b1745d1ced399d5e6",
+    "helpers": {
+      "gateway-bench-heap.ts": "46683354ee28a2157563f1be639b45ca4837036c222c31158b7c0a4adbd86464",
+      "gateway-bench-heap-preload.ts": "af624c59284c9fc3cc76a96531fabb2b68dc7f7b83460573377c1f4dddcdbd90"
+    }
+  },
+  "workload": {
+    "sessions": 1000,
+    "liveTurns": 8,
+    "patches": 100,
+    "samples": 100,
+    "historyRequests": 1200
+  }
+}
