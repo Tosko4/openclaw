@@ -43,7 +43,11 @@ async function runRetainedCatalogScenario(invalidation?: CatalogInvalidation) {
   const accountB = "catalog-retention-B";
   const accountBExpires = Date.now() + 3_600_000;
   const catalogRequests: string[] = [];
-  const inferenceRequests: Array<{ authorization: string; model: string }> = [];
+  const inferenceRequests: Array<{
+    authorization: string;
+    model: string;
+    maxOutputTokens?: number;
+  }> = [];
   const endpointErrors: unknown[] = [];
   let emptyAccountB = false;
   const endpoint = createServer((request, response) => {
@@ -70,8 +74,15 @@ async function runRetainedCatalogScenario(invalidation?: CatalogInvalidation) {
       for await (const chunk of request) {
         chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       }
-      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { model: string };
-      inferenceRequests.push({ authorization, model: body.model });
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+        model: string;
+        max_output_tokens?: number;
+      };
+      inferenceRequests.push({
+        authorization,
+        model: body.model,
+        maxOutputTokens: body.max_output_tokens,
+      });
       if (authorization !== `Bearer ${accountB}` || body.model !== model) {
         response.writeHead(403, { "content-type": "application/json" });
         response.end(
@@ -200,7 +211,12 @@ async function runRetainedCatalogScenario(invalidation?: CatalogInvalidation) {
         expect.objectContaining({ provider, id: model, available: true }),
       );
       expect(await turn()).toMatchObject({ status: "ok" });
-      expect(inferenceRequests).toEqual([{ authorization: `Bearer ${accountB}`, model }]);
+      const expectedRequest = {
+        authorization: `Bearer ${accountB}`,
+        model,
+        maxOutputTokens: 4096,
+      };
+      expect(inferenceRequests).toEqual([expectedRequest]);
 
       await upsertAuthProfileWithLockOrThrow({
         agentDir: state.agentDir(),
@@ -231,10 +247,7 @@ async function runRetainedCatalogScenario(invalidation?: CatalogInvalidation) {
           expect.objectContaining({ provider, model, selectedProfileId: "retained:B" }),
         );
       expect.soft(await turn()).toMatchObject({ status: "ok" });
-      expect(inferenceRequests).toEqual([
-        { authorization: `Bearer ${accountB}`, model },
-        { authorization: `Bearer ${accountB}`, model },
-      ]);
+      expect(inferenceRequests).toEqual([expectedRequest, expectedRequest]);
       const catalogRequestsBeforeInvalidation = catalogRequests.length;
       if (invalidation === "removed") {
         const logout = await client.request<ModelAuthLogoutResult>("models.authLogout", {

@@ -74,7 +74,6 @@ export function refreshCommittedProviderCatalogs(
   }
 }
 
-
 export function createFullModelCatalogAccess(params: {
   agentFacts: PreparedModelRuntimeAgentFacts;
   catalogFacts: PreparedModelRuntimeCatalogFacts;
@@ -270,11 +269,7 @@ export function createFullModelCatalogAccess(params: {
     ),
   };
   if (inventory && previousAuth) {
-    inventory.catalog = retainWorkingModels(
-      inventory.catalog,
-      previousInventory?.catalog,
-      currentAuth,
-    );
+    inventory = retainWorkingModels(inventory, previousInventory, currentAuth);
     setPreparedModelFullCatalogAuth(inventory.catalog, currentAuth);
   }
   let fullCatalog = inventory ? project(inventory.catalog) : undefined;
@@ -435,7 +430,7 @@ export function createFullModelCatalogAccess(params: {
                 ]),
               }
             : discoveredAuth;
-          const publication = prepareModelCatalogPublication(
+          let publication = prepareModelCatalogPublication(
             providerIds
               ? filterPreparedProviderCatalog(workerCatalog, (provider) =>
                   scope.has(normalizeProvider(provider)),
@@ -475,12 +470,7 @@ export function createFullModelCatalogAccess(params: {
               inventory.catalog,
               publication.catalog,
             );
-            publication.catalog = retainWorkingModels(
-              publication.catalog,
-              inventory.catalog,
-              auth,
-              true,
-            );
+            publication = retainWorkingModels(publication, inventory, auth, true);
           }
           setPreparedModelFullCatalogAuth(publication.catalog, auth);
           currentConfiguredRuntimeModels = configuredRuntimeModels;

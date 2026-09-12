@@ -266,15 +266,16 @@ export function createPreparedModelCatalogRetention(params: {
   const preferredAuthSource = capturePreparedModelRuntimePreferredAuthSource(
     params.previousSnapshot,
   );
-  return (
-    catalog: ModelCatalogSnapshot,
-    previous: ModelCatalogSnapshot | undefined,
+  return <T extends Pick<PreparedModelCatalogInventory, "catalog" | "runtimeModels">>(
+    publication: T,
+    previous: Pick<PreparedModelCatalogInventory, "catalog" | "runtimeModels"> | undefined,
     auth: PreparedModelCatalogAuth,
     refreshed = false,
-  ): ModelCatalogSnapshot => {
-    const previousAuth = previous && getPreparedModelFullCatalogAuth(previous);
+  ): T => {
+    const { catalog } = publication;
+    const previousAuth = previous && getPreparedModelFullCatalogAuth(previous.catalog);
     if (!previous || !previousAuth || previousAgentDir !== agentFacts.input.agentDir) {
-      return catalog;
+      return publication;
     }
     let resolver: ReturnType<typeof createModelAuthAvailabilityResolver> | undefined;
     const retain = (entry: ModelCatalogSnapshot["entries"][number]) => {
@@ -329,18 +330,32 @@ export function createPreparedModelCatalogRetention(params: {
         )
       );
     };
-    const retained = previous.routeVariants.filter(retain);
+    const runtimeModels = new Map(publication.runtimeModels);
+    for (const [provider, models] of previous.runtimeModels) {
+      const retained = models.filter((model) => retain(modelCatalogRowToEntry(model)));
+      if (retained.length > 0) {
+        runtimeModels.set(
+          provider,
+          dedupeByKey([...(runtimeModels.get(provider) ?? []), ...retained], (model) => model.id),
+        );
+      }
+    }
     return {
-      ...catalog,
-      entries: dedupeByKey(
-        [...catalog.entries, ...previous.entries.filter(retain)],
-        resolveModelCatalogIdentityKey,
-      ),
-      routeVariants: dedupeByKey([...catalog.routeVariants, ...retained], (entry) =>
-        JSON.stringify([resolveModelCatalogIdentityKey(entry), entry.api, entry.baseUrl]),
-      ),
+      ...publication,
+      catalog: {
+        ...catalog,
+        entries: dedupeByKey(
+          [...catalog.entries, ...previous.catalog.entries.filter(retain)],
+          resolveModelCatalogIdentityKey,
+        ),
+        routeVariants: dedupeByKey(
+          [...catalog.routeVariants, ...previous.catalog.routeVariants.filter(retain)],
+          (entry) =>
+            JSON.stringify([resolveModelCatalogIdentityKey(entry), entry.api, entry.baseUrl]),
+        ),
+      },
+      runtimeModels,
     };
-
   };
 }
 
