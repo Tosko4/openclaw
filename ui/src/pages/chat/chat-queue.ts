@@ -9,7 +9,8 @@ import { generateUUID } from "../../lib/uuid.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
-  admitStoredChatComposerQueueItem,
+  admitStoredChatComposerQueueItemResult,
+  type ChatQueueAdmissionResult,
   listStoredChatOutboxes,
   removeStoredChatComposerQueueItem,
   storedChatOutboxScopeKey,
@@ -20,6 +21,7 @@ import {
   type StoredChatOutbox,
   type StoredChatOutboxScope,
 } from "./composer-persistence.ts";
+import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
 
 type ChatQueueStoreHost = {
   chatQueue: ChatQueueItem[];
@@ -287,15 +289,25 @@ export function admitQueuedMessageForSession(
   item: ChatQueueItem,
   replaces?: StoredChatQueueReplacement,
 ): boolean {
+  return admitQueuedMessageForSessionResult(host, captured, item, replaces) === "admitted";
+}
+
+export function admitQueuedMessageForSessionResult(
+  host: ChatQueueScopedSessionHost,
+  captured: ReturnType<typeof captureChatOutboxAdmission>,
+  item: ChatQueueItem,
+  replaces?: StoredChatQueueReplacement,
+): ChatQueueAdmissionResult {
   const owner = chatOutboxOwner(host);
   owner.keep(host, captured.scope, item);
-  if (!admitStoredChatComposerQueueItem(host, captured, item, replaces)) {
-    return false;
+  const result = admitStoredChatComposerQueueItemResult(host, captured, item, replaces);
+  if (result !== "admitted") {
+    return result;
   }
   if (item.sendState !== "waiting-model") {
     owner.change(host, item.id);
   }
-  return true;
+  return "admitted";
 }
 
 export function removeQueuedMessageWithoutReleasing(
@@ -404,6 +416,16 @@ export function markQueuedChatSendsWaitingForReconnect(host: ChatQueueScopedSess
   const items = chatOutboxOwner(host).allItems(host);
   for (const item of items) {
     if (!item.sendRunId || (item.sendState !== "sending" && item.sendState !== "waiting-idle")) {
+      continue;
+    }
+    // An unsent row held by an editor cannot be in flight. Keep its captured
+    // version valid; the drain still reconciles it after the edit is released.
+    if (
+      item.sendState === "waiting-idle" &&
+      item.sendAttempts === 0 &&
+      item.sendRequestStartedAtMs === undefined &&
+      isQueuedMessageBeingEdited(host, item.id)
+    ) {
       continue;
     }
     if (isVolatileQueuedMessage(host, item.id)) {
