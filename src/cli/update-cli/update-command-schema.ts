@@ -24,6 +24,14 @@ import { handleDryRunPreflightError, printUpdateDryRun } from "./update-command-
 import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
 import type { resolveUpdateCommandTarget } from "./update-command-target.js";
 
+export async function readInstalledUpdateSchemaVersions(
+  root: string,
+): Promise<OpenClawSchemaVersions | undefined> {
+  return parsePackageOpenClawSchemaVersions(
+    await tryReadJson<unknown>(path.join(root, "package.json"), { maxBytes: 1024 * 1024 }),
+  );
+}
+
 /** Render prepared preview facts without initializing runtime state. */
 export async function previewUpdateCommand(params: {
   target: NonNullable<Awaited<ReturnType<typeof resolveUpdateCommandTarget>>>;
@@ -137,11 +145,7 @@ export async function preflightUpdateCommandSchemas(params: {
               // A current core keeps running its installed package; registry metadata
               // for an uninstalled build cannot describe its schema capability.
               schemaVersions: params.packageAlreadyCurrent
-                ? parsePackageOpenClawSchemaVersions(
-                    await tryReadJson<unknown>(path.join(root, "package.json"), {
-                      maxBytes: 1024 * 1024,
-                    }),
-                  )
+                ? await readInstalledUpdateSchemaVersions(root)
                 : packageTargetSchemaVersions,
             };
       if ("metadataUnreadable" in target && target.metadataUnreadable) {

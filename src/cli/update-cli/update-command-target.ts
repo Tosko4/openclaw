@@ -303,7 +303,10 @@ export async function resolveUpdateCommandTarget(
         );
         return undefined;
       }
-      if (!packageAlreadyCurrent) {
+      if (packageAlreadyCurrent) {
+        const { readInstalledUpdateSchemaVersions } = await import("./update-command-schema.js");
+        packageTargetSchemaVersions = await readInstalledUpdateSchemaVersions(root);
+      } else {
         packageTargetSchemaVersions = targetMetadata.schemaVersions;
         // Runtime and schema checks must use the same exact package that will be
         // installed; rereading a mutable dist-tag can inspect a different release.

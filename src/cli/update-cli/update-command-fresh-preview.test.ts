@@ -162,6 +162,36 @@ function writeStoredChannel(channel: "stable" | "beta") {
 }
 
 describe("update command admission with fresh state", () => {
+  it("uses installed schema support when an already-current package initializes a fresh profile", async () => {
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.9.2",
+        openclaw: { schemaVersions: { state: 16, agent: 19 } },
+      }),
+    );
+    vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
+      ...targetMetadata,
+      schemaVersions: undefined,
+    });
+    vi.spyOn(servicePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
+      ok: true,
+      value: {},
+    });
+    const stopped = new Error("Fixture reached the installed target before bootstrap writes");
+    const initialize = vi
+      .spyOn(initialization, "initializeUpdateStateFromTarget")
+      .mockRejectedValue(stopped);
+
+    await expect(
+      updateCommand({ tag: "2026.9.2", yes: true, json: true, restart: false }),
+    ).rejects.toBe(stopped);
+
+    expect(initialize).toHaveBeenCalledWith(expect.objectContaining({ root }));
+    expectFreshStatePreserved();
+  });
+
   it("requires fresh downgrade confirmation without creating a run or exiting before release", async () => {
     await expect(
       updateCommand({ tag: "2026.9.2", json: true, restart: false }),

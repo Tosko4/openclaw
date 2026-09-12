@@ -341,7 +341,6 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     // before restarting; rewriting a consumed sentinel could deliver it twice.
     if (recoverService && finalResult.recovery?.serviceRestartSafe === true) {
       const service = await maybeRestartServiceAfterFailedMutableUpdate({
-        updateRun: params.opts.run,
         recovery: result.recovery,
         updateRun: params.opts.run,
         preManagedServiceStop: params.preManagedServiceStop,

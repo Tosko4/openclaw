@@ -250,8 +250,9 @@ it.each(["healthy", "readiness-missing", "wrong-version", "settlement-failed"] a
         durationMs: 1,
       };
       let capturePath = "";
-      const execution = withUpdateCommandTerminalResult(run, () =>
-        withUpdateCommandExecutor(run.runId, async (executor) => {
+      const execution = withUpdateCommandTerminalResult((registerRun) => {
+        registerRun(run);
+        return withUpdateCommandExecutor(run.runId, async (executor) => {
           run.executorFence = await executor.enter(root);
           const backup = await createUpdateCommandBackup({ opts, root, env: state.env });
           capturePath = backup.directory;
@@ -306,8 +307,8 @@ it.each(["healthy", "readiness-missing", "wrong-version", "settlement-failed"] a
               db.close();
             }
           }
-        }),
-      );
+        });
+      });
       if (scenario === "settlement-failed") {
         await expect(execution).rejects.toThrow();
       } else {
