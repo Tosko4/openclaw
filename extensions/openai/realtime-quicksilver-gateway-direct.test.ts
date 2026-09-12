@@ -326,7 +326,8 @@ describe("GPT-Live Gateway direct transport", () => {
       expect(fetchImpl).not.toHaveBeenCalled();
 
       bridge.sendAudio(Buffer.from([0x01, 0x02]));
-      vi.useFakeTimers();
+      // Keep the integer-second expiry independent of the wall clock's fractional second.
+      vi.useFakeTimers({ now: new Date("2026-01-01T00:00:00.000Z") });
       emitSideband(connectedSocket, {
         type: "session.started",
         session: { expires_at: Math.floor(Date.now() / 1000) + 1 },
@@ -359,6 +360,7 @@ describe("GPT-Live Gateway direct transport", () => {
           parseSent(connectedSocket).filter((event) => event.type === "delegation.context.append"),
         ).toHaveLength(1),
       );
+      expect(onClose).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1_000);
       expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
     } finally {
