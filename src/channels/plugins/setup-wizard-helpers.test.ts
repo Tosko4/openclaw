@@ -653,7 +653,6 @@ describe("patchChannelConfigForAccount", () => {
       patch: { groupPolicy: "disabled" },
       setupSurface: {
         configPromotion: "preserve-root",
-        applyAccountConfig: ({ cfg: nextConfig }) => nextConfig,
       },
     });
     expect(next.channels?.demo).toEqual({

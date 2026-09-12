@@ -384,7 +384,6 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
           channelKey: "demo",
           setupSurface: {
             configPromotion: "preserve-root",
-            applyAccountConfig: ({ cfg: currentConfig }) => currentConfig,
           },
         }),
       ).toBe(cfg);
