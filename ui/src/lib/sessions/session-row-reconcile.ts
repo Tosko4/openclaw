@@ -479,16 +479,19 @@ export function reconcileSessionChangedRow(
     updatedAt: updatedAt ?? null,
     ...(sessionId ? { sessionId } : {}),
   };
+  const fields: string[] = [];
   // Optional wire fields use null as a tombstone; the explicit nullable fields keep null.
   for (const [field, value] of Object.entries(rowFields)) {
     if (value === null && !NULLABLE_SESSION_ROW_FIELDS.has(field)) {
       Reflect.deleteProperty(offered, field);
     }
+    if (value !== undefined) {
+      fields.push(field);
+    }
   }
-  const fields = [
-    ...Object.keys(rowFields).filter((field) => rowFields[field] !== undefined),
-    ...(existingFields !== existing ? thinkingMetadataFields : []),
-  ];
+  if (existingFields !== existing) {
+    fields.push(...thinkingMetadataFields);
+  }
   const reduced = reconcileSessionRow(
     offered,
     existing,
