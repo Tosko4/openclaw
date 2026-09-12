@@ -245,7 +245,11 @@ describe("update plugin lifecycle lease boundaries", () => {
       if (!needsTargetRuntime) {
         vi.mocked(updatePluginsAfterCoreUpdate).mockImplementationOnce(async () => {
           record("plugin-update");
-          return { ...successfulPluginUpdate, changed: false };
+          return {
+            ...successfulPluginUpdate,
+            assessment: { kind: "no-payload-repair" as const },
+            changed: false,
+          };
         });
       }
       vi.mocked(continuePostCoreUpdateInFreshProcess).mockImplementation(async () => {
@@ -358,7 +362,11 @@ describe("update plugin lifecycle lease boundaries", () => {
       vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", "/fixture/plugins.json");
       vi.mocked(updatePluginsAfterCoreUpdate).mockImplementationOnce(async () => {
         record("plugin-update");
-        return { ...successfulPluginUpdate, changed };
+        return {
+          ...successfulPluginUpdate,
+          assessment: { kind: "no-payload-repair" as const },
+          changed,
+        };
       });
       await resumePostCoreUpdate({
         root: "/tmp/openclaw",

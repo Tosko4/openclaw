@@ -105,7 +105,7 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
   const parentPluginInstallRecords = await readPostCorePluginInstallRecordsFile(
     process.env[POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV],
   );
-  let pluginUpdate = await withPluginLifecycleLease({}, async () => {
+  const producedPluginUpdate = await withPluginLifecycleLease({}, async () => {
     // The fresh Doctor committed core migrations with the repaired contracts.
     // Broader channel updates can now consume its normalized config.
     const preparedConfig = await preparePostCorePluginConfig({
@@ -143,13 +143,13 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
   // escape while migrations or target-runtime validation remain incomplete.
   const completed = await completePostCorePluginUpdate({
     root: params.root,
-    pluginUpdate,
-    freshDoctorRequired: pluginUpdate.changed,
+    pluginUpdate: producedPluginUpdate,
+    freshDoctorRequired: producedPluginUpdate.changed,
     yes: params.opts.yes === true,
     json: params.opts.json === true,
     timeoutMs: params.timeoutMs,
   });
-  pluginUpdate = completed.pluginUpdate;
+  const { pluginUpdate } = completed;
   // Only the target process may restamp an unchanged downgrade config. Plugin
   // migrations that still invalidate it will write through the target Doctor later.
   await persistValidatedDowngradeConfig(completed.configSnapshot);

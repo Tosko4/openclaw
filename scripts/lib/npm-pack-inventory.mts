@@ -113,24 +113,24 @@ function controlledNpmEnvironment(
 
 function describeSpawnFailure(
   label: string,
-  result: Pick<ReturnType<typeof spawnSync>, "error" | "stderr" | "status">,
+  result: Pick<ReturnType<typeof spawnSync>, "error" | "signal" | "stderr" | "status">,
   timeoutMs: number,
 ): string {
-  const error = result.error as NodeJS.ErrnoException | undefined;
-  const knownFailure = error?.code
-    ? (
-        {
-          ENOBUFS: "exceeded its output limit",
-          ENOENT: "executable was not found",
-          ETIMEDOUT: `timed out after ${timeoutMs}ms`,
-        } as Record<string, string>
-      )[error.code]
-    : undefined;
-  if (knownFailure) {
-    return `${label} ${knownFailure}`;
+  // Output-limit and timeout errors can also carry the signal used to stop the child.
+  switch ((result.error as NodeJS.ErrnoException | undefined)?.code) {
+    case "ENOBUFS":
+      return `${label} exceeded its output limit`;
+    case "ENOENT":
+      return `${label} executable was not found`;
+    case "ETIMEDOUT":
+      return `${label} timed out after ${timeoutMs}ms`;
+    default: {
+      const stderr = typeof result.stderr === "string" ? result.stderr.trim().slice(0, 2_000) : "";
+      const reason = result.signal ? `signal ${result.signal}` : `status ${String(result.status)}`;
+      const detail = stderr ? `: ${stderr}` : "";
+      return `${label} failed${result.signal || !stderr ? ` with ${reason}` : ""}${detail}`;
+    }
   }
-  const stderr = typeof result.stderr === "string" ? result.stderr.trim().slice(0, 2_000) : "";
-  return `${label} failed${stderr ? `: ${stderr}` : ` with status ${String(result.status)}`}`;
 }
 
 function withoutPackageScripts<T>(packageRoot: string, run: () => T): T {
@@ -185,6 +185,7 @@ export function collectNpmPackInventory(packageRoot: string, options: NpmPackInv
     const ownedShim = process.platform === "win32" && npm.windowsVerbatimArguments === true;
     const result: {
       status: number | null;
+      signal: NodeJS.Signals | null;
       stdout: string;
       stderr: string;
       error?: NodeJS.ErrnoException;
