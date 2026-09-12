@@ -517,7 +517,6 @@ export function buildWorkboardMocks(baseTime: number, actor: { id: string; label
                 }
               : {}),
           })),
-          sessionInfo: cardSessions.find((session) => session.key === key),
         },
       ]),
     ),

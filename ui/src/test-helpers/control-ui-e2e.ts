@@ -2527,13 +2527,24 @@ function installControlUiMockGateway(
           !hasCanonicalSessionsOverride && row.key === sessions.read(scenario.sessionKey).key
             ? scenario.sessionInfo
             : null;
+        const transcript = {
+          ...(scenario.inFlightRun ? { inFlightRun: scenario.inFlightRun } : {}),
+          ...scenario.sessionTranscripts[row.key],
+        };
+        const transcriptRun = transcript.inFlightRun;
+        const inFlightRun =
+          transcriptRun &&
+          Array.isArray(row.activeRunIds) &&
+          !row.activeRunIds.includes(transcriptRun.runId)
+            ? null
+            : transcriptRun;
         return {
           ...(resolution ? { resolution } : {}),
           sessionId: row.sessionId,
           ...(info || override ? { sessionInfo: { ...info, ...override } } : {}),
           thinkingLevel: null,
-          ...(scenario.inFlightRun ? { inFlightRun: scenario.inFlightRun } : {}),
-          ...scenario.sessionTranscripts[row.key],
+          ...transcript,
+          ...(transcriptRun ? { inFlightRun } : {}),
           messages: chatHistoryMessages(row.key),
           ...(method === "chat.startup"
             ? {

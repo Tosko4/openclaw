@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect } from "vitest";
 import {
   createControlUiMockGatewayInitScript,
   type ControlUiMockGatewayScenario,
 } from "./control-ui-e2e.ts";
+import { buildWorkboardMocks } from "./control-ui-workboard-fixtures.ts";
 import { mockGatewayTest } from "./mock-gateway-page.test-support.ts";
 
 type Row = Record<string, unknown>;
@@ -583,6 +585,65 @@ it.for([
     expect(
       (await request("chat.history", { sessionKey: scenario.sessionKey })).payload.sessionInfo,
     ).toMatchObject({ key: scenario.sessionKey, kind });
+  },
+);
+
+it.for(["chat.history", "chat.startup"])(
+  "keeps Workboard session edits when reopening through %s",
+  async (method, { connect }) => {
+    const seed = buildWorkboardMocks(1_800_000_000_000, { id: "operator", label: "Operator" });
+    const key = "agent:main:workboard-onboarding";
+    const transcripts: NonNullable<ControlUiMockGatewayScenario["sessionTranscripts"]> =
+      seed.cardSessionHistories;
+    const history = expectDefined(transcripts[key], "onboarding history");
+    const { request } = await connect({
+      sessions: seed.cardSessions,
+      sessionTranscripts: transcripts,
+    });
+    await request("sessions.patch", { key, label: "Renamed onboarding", pinned: true });
+    const reopened = (await request(method, { sessionKey: key })).payload;
+    expect(reopened.sessionInfo).toMatchObject({ key, label: "Renamed onboarding", pinned: true });
+    expect(reopened.messages).toEqual(history.messages);
+  },
+);
+
+it.for(
+  ["chat.history", "chat.startup"].flatMap((method) =>
+    ["transcript", "scenario"].map((source) => ({ method, source })),
+  ),
+)(
+  "does not replay a stopped $source Workboard run through $method",
+  async ({ method, source }, { connect }) => {
+    const seed = buildWorkboardMocks(1_800_000_000_000, { id: "operator", label: "Operator" });
+    const key = "agent:main:workboard-onboarding";
+    const transcripts: NonNullable<ControlUiMockGatewayScenario["sessionTranscripts"]> =
+      seed.cardSessionHistories;
+    const history = expectDefined(transcripts[key], "onboarding history");
+    const runId = "workboard-onboarding-run";
+    const preview = expectDefined(history.inFlightRun, "onboarding run preview");
+    const { request } = await connect({
+      sessions: seed.cardSessions,
+      sessionTranscripts:
+        source === "transcript" ? transcripts : { [key]: { messages: history.messages } },
+      ...(source === "scenario" ? { inFlightRun: preview } : {}),
+    });
+    expect((await request(method, { sessionKey: key })).payload.inFlightRun).toMatchObject({
+      runId,
+      text: "Checking first-task navigation and recovery after a validation error…",
+    });
+    expect((await request("chat.abort", { sessionKey: key, runId })).payload).toEqual({
+      aborted: true,
+      runIds: [runId],
+    });
+    const reopened = (await request(method, { sessionKey: key })).payload;
+    expect(reopened.inFlightRun).toBeNull();
+    expect(reopened.sessionInfo).toMatchObject({
+      key,
+      status: "killed",
+      hasActiveRun: false,
+      activeRunIds: [],
+    });
+    expect(reopened.messages).toEqual(history.messages);
   },
 );
 
