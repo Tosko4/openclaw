@@ -414,7 +414,7 @@ it.each([
     const actualRun = execCommands.runCommandWithTimeout;
     vi.spyOn(execCommands, "runCommandWithTimeout").mockImplementation(async (...args) => {
       const result = await actualRun(...args);
-      if (args[0].at(-1) === "check") {
+      if (args[0][args[0].indexOf("--update-executor") + 1] === "check") {
         probes.push(result);
       }
       return result;
