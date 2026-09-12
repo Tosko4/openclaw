@@ -3753,6 +3753,11 @@ export const en: TranslationMap & {
       kindHtml: "HTML",
       kindPlugin: "Plugin",
       kindReport: "Report",
+      kindWebsite: "Website",
+      websiteOpen: "Open website",
+      websiteEmbedHint: "If this site does not load here, open it in a new tab.",
+      websiteSameOrigin:
+        "Open this website in a new tab. Gateway and Control UI pages cannot be embedded in a website widget.",
       pluginLoading: "Loading plugin widget…",
       disabledPlugin: "Widget from disabled plugin {pluginId}",
     },
@@ -5054,6 +5059,8 @@ export const en: TranslationMap & {
       sessionMenuMany: "Actions for {count} sessions",
       toolActivity: "Using {tool}",
       catalogDiscoveryHelp: "{error}. Configure native session discovery in Settings > Plugins.",
+      catalogPaginationFailed: "Session catalog returned a repeated page cursor",
+      catalogPageMissingHost: "Session catalog page did not include the requested host",
     },
     welcome: {
       hintBeforeShortcut: "Type a message below ·",
@@ -5425,7 +5432,6 @@ export const en: TranslationMap & {
         "Use arrow keys or Home and End to choose a marker, Enter or Space to jump, and Escape to return to the conversation. Tab leaves the rail.",
     },
     pendingInputs: {
-      waitingForAgent: "Queued · waiting for the agent",
       waitingForWorkspaceSync: "Received · waiting for workspace sync",
       waitingForWorkerSetup: "Received · waiting for worker setup",
       resuming:
