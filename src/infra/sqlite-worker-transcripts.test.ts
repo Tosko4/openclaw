@@ -125,10 +125,12 @@ it("returns complete stored reads and typed library errors through close and reo
       ),
     ).toEqual({ session, inputRevision: revision });
     expect(await store.readUtterancesForSession(session)).toEqual(
-      utterances.map((utterance) => ({ ...utterance, sessionId: session.sessionId })),
+      utterances.map((utterance) => Object.assign({}, utterance, { sessionId: session.sessionId })),
     );
     expect(await store.readUtterancesForSession(session, { maxUtterances: 3 })).toEqual(
-      utterances.slice(-3).map((utterance) => ({ ...utterance, sessionId: session.sessionId })),
+      utterances
+        .slice(-3)
+        .map((utterance) => Object.assign({}, utterance, { sessionId: session.sessionId })),
     );
     expect((await store.readSummary(session)).summary).toEqual(summary);
     const { transcript: _transcript, ...notes } = summary;

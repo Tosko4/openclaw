@@ -616,20 +616,6 @@ it.for([
       );
       const first = providers.first[0]!;
       const sibling = providers.sibling[0]!;
-      const captured = async (
-        provider: ReturnType<typeof registerTranscriptFixture>,
-        count: number,
-      ) => {
-        // Gateway readiness precedes deferred capture startup and its session write.
-        await provider.waitForCapture(count, signal);
-        await vi.waitFor(() => {
-          expect(provider.captures).toHaveLength(count);
-          expect(activeSessions.get(provider.captures[count - 1]!.session.sessionId)?.phase).toBe(
-            "active",
-          );
-        });
-        return provider.captures[count - 1]!;
-      };
       const acceptedConfig = {
         ...config,
         transcripts: { autoStart: [entry("first", "replacement-room"), entry("sibling")] },
@@ -646,8 +632,8 @@ it.for([
           expect(receipt).toMatchObject({ runtime: { pluginIds: ["first"] } });
           startupReady!.resolve();
           const current = providers.first[1]!;
-          await captured(current, 1);
-          await captured(sibling, 1);
+          await current.waitForActiveCapture(1, signal);
+          await sibling.waitForActiveCapture(1, signal);
           expect(first.watches).toHaveLength(0);
           expect(first.captures).toHaveLength(0);
           expect(current.watches[0]?.cfg).toEqual(acceptedConfig);
@@ -658,8 +644,8 @@ it.for([
           expect(sibling.unwatch).toHaveBeenCalledOnce();
           return;
         }
-        const oldCapture = await captured(first, 1);
-        const siblingCapture = await captured(sibling, 1);
+        const oldCapture = await first.waitForActiveCapture(1, signal);
+        const siblingCapture = await sibling.waitForActiveCapture(1, signal);
         const oldOwner = activeSessions.get(oldCapture.session.sessionId);
         const siblingOwner = activeSessions.get(siblingCapture.session.sessionId);
         if (outcome === "stop refused") {
@@ -774,7 +760,10 @@ it.for([
         );
         expect(first.stop).toHaveBeenCalledTimes(outcome === "stop refused" ? 2 : 1);
         const current = outcome === "rollback" ? first : providers.first.at(-1)!;
-        const currentCapture = await captured(current, outcome === "rollback" ? 2 : 1);
+        const currentCapture = await current.waitForActiveCapture(
+          outcome === "rollback" ? 2 : 1,
+          signal,
+        );
         expect(current.watches.at(-1)?.source.channelId).toBe(
           outcome === "rollback" ? "original-room" : "replacement-room",
         );
@@ -812,7 +801,7 @@ it.for([
           expect(sibling.watches).toHaveLength(1);
           await fixture.reload(acceptedConfig);
           const enabled = providers.first[2]!;
-          await captured(enabled, 1);
+          await enabled.waitForActiveCapture(1, signal);
           expect(enabled.watches[0]?.source.channelId).toBe("replacement-room");
           expect(sibling.watches).toHaveLength(1);
           expect(activeSessions.get(siblingCapture.session.sessionId)).toBe(siblingOwner);

@@ -207,6 +207,8 @@ export function openExistingSqliteWorkerBackend(
           });
           return executeTranscriptRead(open().db, command);
         }
+        default:
+          break;
       }
       const { db } = open();
       return runSqliteDeferredTransactionSync(db, () => {
