@@ -58,7 +58,7 @@ export async function runOperatorTriage(params: {
     updateRunId = failure && "result" in failure ? failure.result.runId : undefined;
     signal.throwIfAborted();
     const savedFailure = failure
-      ? await writeTriageUpdateFailure(failure, { env: targetEnv })
+      ? await writeTriageUpdateFailure(failure, { env: targetEnv }).catch(() => undefined)
       : undefined;
     const selected = await resolveOpenClawPackageRoot({
       moduleUrl: import.meta.url,
@@ -84,7 +84,12 @@ export async function runOperatorTriage(params: {
       root,
       commandArgv,
       target,
-      operator: { kind: "operator", installationRoot: root, gateway: "preserve" },
+      operator: {
+        kind: "operator",
+        installationRoot: root,
+        gateway: "preserve",
+        ...(failure ? { updateFailure: failure } : {}),
+      },
       signal,
       output: (text) => {
         diagnostics = (diagnostics + text).slice(-32 * 1024);
@@ -116,8 +121,8 @@ export async function runOperatorTriage(params: {
       if (result.result.status === "repaired" && !result.result.finalValidation.ok) {
         throw new Error("Repair claimed success without passing independent validation.");
       }
-      const { settleTriageRepairTask } = await import("./triage-task-result.js");
-      settleTriageRepairTask({
+      const projection = await import("./triage-task-result.js").catch(() => undefined);
+      projection?.settleTriageRepairTask({
         taskId: parsed.repairTaskId,
         outcome,
         root,
@@ -128,7 +133,18 @@ export async function runOperatorTriage(params: {
         isCurrent: params.isCurrent,
       });
       report = { installationRoot: root, updateRunId, repair: result.result };
-      summary = `Repair incomplete: ${redactSupportString(result.result.reason ?? result.result.finalValidation.summary, redaction, { maxLength: 1024 })}`;
+      const reason = redactSupportString(
+        result.result.reason ?? result.result.finalValidation.summary,
+        redaction,
+        { maxLength: 1024 },
+      );
+      summary = `Repair incomplete: ${reason}`;
+      if (result.result.status === "unavailable") {
+        summary +=
+          result.result.reason === "exec-denied-by-policy"
+            ? " Use `openclaw triage` for an external handoff."
+            : " Run `openclaw onboard` or use a suggested handoff command.";
+      }
       code =
         result.result.status === "repaired" && result.result.finalValidation.ok
           ? 0
@@ -139,19 +155,24 @@ export async function runOperatorTriage(params: {
     }
   } catch (error) {
     failedTransport = true;
+    const reason = redactSupportString(
+      error instanceof Error ? error.message : String(error),
+      redaction,
+      { maxLength: 1024 },
+    );
+    summary = `Repair unavailable: ${reason}`;
     report = {
       updateRunId,
       repair: {
         status: "unavailable",
-        reason: redactSupportString(
-          error instanceof Error ? error.message : String(error),
-          redaction,
-          { maxLength: 1024 },
-        ),
+        reason,
       },
     };
   } finally {
     bridge.dispose();
+  }
+  if (signal.aborted || params.isCurrent?.() === false) {
+    return;
   }
   if (params.json) {
     writeRuntimeJson(params.runtime, report);

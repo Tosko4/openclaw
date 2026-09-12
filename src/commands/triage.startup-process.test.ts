@@ -18,7 +18,7 @@ import {
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const source = (file: string) => pathToFileURL(path.resolve(file)).href;
-it.each(["repair", "no-effect", "already-healthy"])(
+it.each(["repair", "no-effect", "already-healthy", "preserve"])(
   "joins real current-main startup %s and returns independent original-parent result",
   async (mode) => {
     const root = await fs.realpath(dirs.make("startup-native-"));
@@ -94,7 +94,7 @@ const root=${JSON.stringify(root)},mode=${JSON.stringify(mode)};
 export async function agentExecCommand(prompt,options,runtime,deps){
  deps.assertSourceCurrent();
  await fs.writeFile(path.join(root,"agent-input.json"),JSON.stringify({prompt,cwd:options.cwd}));
- if(mode!=="no-effect"){
+ if(mode!=="no-effect" && mode!=="preserve"){
   const changes=watch(root);
   try{
    execFileSync(process.execPath,["-e",${JSON.stringify(effectCode)},path.join(root,"effect")]);
@@ -122,7 +122,7 @@ await triageCommand(defaultRuntime,{noExport:true});
       parent,
       `
 import {triageAfterFailure} from ${JSON.stringify(source("src/commands/triage-failure.ts"))};
-const report=await triageAfterFailure({log:console.log,error:console.error,exit:code=>{throw new Error('unexpected parent exit '+code)}},{kind:'gateway-startup',phase:'startup',error:'original startup failure',installationRoot:${JSON.stringify(root)},expectedVersion:'2026.9.11',gateway:'verify-running'});
+const report=await triageAfterFailure({log:console.log,error:console.error,exit:code=>{throw new Error('unexpected parent exit '+code)}},{kind:'gateway-startup',phase:'startup',error:'original startup failure',installationRoot:${JSON.stringify(root)},expectedVersion:'2026.9.11',gateway:${JSON.stringify(mode === "preserve" ? "preserve" : "verify-running")}});
 const {reloadTaskRegistryFromStore,listTaskRecords}=await import(${JSON.stringify(source("src/tasks/task-registry.ts"))});
 reloadTaskRegistryFromStore();
 const tasks=listTaskRecords().map(({taskId,status,terminalSummary})=>({taskId,status,terminalSummary}));
@@ -170,6 +170,15 @@ process.stdout.write(JSON.stringify({report,tasks})+'\\n');
       }
       const output = await running;
       const parsed = JSON.parse(output.stdout);
+      if (mode === "preserve") {
+        expect(parsed.report).toBeUndefined();
+        expect(parsed.tasks).toEqual([]);
+        const input = JSON.parse(await fs.readFile(path.join(root, "agent-input.json"), "utf8"));
+        expect(input.prompt).toContain("original startup failure");
+        expect(input.cwd).toBe(root);
+        expect(server.listening).toBe(false);
+        return;
+      }
       expect(parsed.report, output.stderr).toMatchObject({
         kind: "startup-repair",
         installationRoot: root,

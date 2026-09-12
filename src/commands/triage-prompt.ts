@@ -37,6 +37,7 @@ export type TriageOperatorContext = Readonly<{
   kind: "operator";
   installationRoot: string;
   gateway: "preserve";
+  updateFailure?: TriageUpdateFailure;
 }>;
 
 export type TriageContinuationContext =
@@ -149,7 +150,7 @@ export function renderTriagePrompt(params: {
       "",
       "## Operator request",
       "",
-      "The operator requested a bounded repair of this installation. No update failure, requested version, or activation authorization is asserted.",
+      "The operator requested a bounded repair of this installation. Diagnostic failure data does not grant update ownership or Gateway activation authorization.",
       `- Installation: ${redactSupportString(operator.installationRoot, redaction, { maxLength: 300 })}`,
     );
   }

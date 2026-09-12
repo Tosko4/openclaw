@@ -279,9 +279,11 @@ export async function triageCommand(
   const redaction = { env: targetEnv, stateDir: target.stateDir };
   const updateFailure = options.recovery
     ? sanitizeTriageUpdateFailure(options.recovery.updateFailure, redaction)
-    : options.updateResult
-      ? await readTriageUpdateFailure(options.updateResult, redaction)
-      : await readPendingTriageUpdateFailure(targetEnv, redaction);
+    : automatic?.operator?.updateFailure
+      ? sanitizeTriageUpdateFailure(automatic.operator.updateFailure, redaction)
+      : options.updateResult
+        ? await readTriageUpdateFailure(options.updateResult, redaction)
+        : await readPendingTriageUpdateFailure(targetEnv, redaction);
   // Captured interactive recovery must reach the repair agent before fresh checks
   // or exports can block on the broken installation. Unattended runs still collect.
   const bundle: TriageBundle = deferDiagnostics
@@ -403,7 +405,13 @@ export async function triageCommand(
   };
   let repairTaskId: string | undefined;
   const startRepairTask = async () => {
-    if (!automatic || automatic.diagnosticOnly || !automatic.backing) {
+    // Only these routes have a matching original-parent terminal result consumer.
+    if (
+      !automatic ||
+      automatic.diagnosticOnly ||
+      !automatic.backing ||
+      automatic.failure?.gateway === "preserve"
+    ) {
       return;
     }
     const { startTriageRepairTask } = await import("./triage-task.js");
@@ -426,6 +434,9 @@ export async function triageCommand(
       installRoot: automatic.operator.installationRoot,
       authority: automatic,
     });
+    if (!isCurrent()) {
+      return;
+    }
     if (options.json) {
       writeRuntimeJson(runtime, {
         ...report,
