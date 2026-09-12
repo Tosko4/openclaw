@@ -263,12 +263,15 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it.each([false, true])(
-    "createSubsystemLogger.warn keeps form and Digest protections with pinned strings (extra=%s)",
-    (extra) => {
+  it.each(["current", "current-extra", "custom-only"])(
+    "createSubsystemLogger.warn keeps structural protections with %s patterns",
+    (variant) => {
       vi.stubEnv("OPENCLAW_TEST_CONSOLE", "1");
-      const patterns = getDefaultRedactPatterns().filter((pattern) => typeof pattern === "string");
-      if (extra) {
+      const patterns =
+        variant === "custom-only"
+          ? []
+          : getDefaultRedactPatterns().filter((pattern) => typeof pattern === "string");
+      if (variant !== "current") {
         patterns.push("/project-private/g");
       }
       applyLoggingConfig({ level: "silent", consoleLevel: "warn", redactPatterns: patterns });
@@ -276,12 +279,30 @@ describe("createSubsystemLogger().isEnabled", () => {
       const input =
         'body: client_se+cret=opaque-value-123&safe=1\nAuthorization: Digest username="alice", realm="example", response="digest-response-1234567890abcdef"; status=401';
 
-      createSubsystemLogger("gateway").warn(input);
+      const secret = "Ab9Q".repeat(10);
+      createSubsystemLogger("gateway").warn(
+        `${input}\n${secret} s3://user:${secret}@bucket project-private`,
+      );
 
+      expect(String(mockCall(warn)[0])).not.toContain(secret);
+      expect(String(mockCall(warn)[0])).toContain("s3://user:Ab9QAb…Ab9Q@bucket");
+      if (variant !== "current") {
+        expect(String(mockCall(warn)[0])).not.toContain("project-private");
+      }
       expect(String(mockCall(warn)[0])).toContain("body: client_se+cret=***&safe=1");
       expect(String(mockCall(warn)[0])).toContain("Authorization: Digest ***; status=401");
     },
   );
+
+  it("createSubsystemLogger.warn masks slash-containing database passwords with default patterns", () => {
+    vi.stubEnv("OPENCLAW_TEST_CONSOLE", "1");
+    applyLoggingConfig({ level: "silent", consoleLevel: "warn" });
+    const warn = installConsoleMethodSpy("warn");
+    createSubsystemLogger("gateway").warn(
+      `postgres://user:${"a".repeat(40)}/b@db.example.test/app`,
+    );
+    expect(String(mockCall(warn)[0])).toContain("postgres://user:aaaaaa…aa/b@db.example.test/app");
+  });
 
   it("getLogger.info preserves every public URL in the final file message", async () => {
     const url = "https://x.com/EliXPampa/status/2097727549400871286";
