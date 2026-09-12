@@ -1545,7 +1545,11 @@ describe("channel progress presentation through an isolated Gateway", () => {
         expect(progressText).not.toMatch(toolRow);
       }
       if (failTool) {
-        expect(progressText).toContain("exit 1");
+        if (tools) {
+          expect(progressText).toContain("exit 1");
+        } else {
+          expect(progressText).not.toContain("exit 1");
+        }
       }
       const reactionAdds = writes.filter((write) =>
         channel === "discord"
