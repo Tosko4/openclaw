@@ -223,7 +223,7 @@ internal fun OpenClawWearApp(
       interaction = WearInteractionState.READY
       return
     }
-    if (state.sending || !state.streamText.isNullOrBlank()) {
+    if (!state.canSubmitReply) {
       interaction = WearInteractionState.READY
       view.performHapticFeedback(HapticFeedbackConstants.REJECT)
       return
@@ -443,7 +443,7 @@ internal fun OpenClawWearApp(
     when {
       state.conversationFailure != null || speechFailed -> WearInteractionState.ERROR
       state.sending -> WearInteractionState.SENDING
-      state.activeRunId != null -> WearInteractionState.AGENT_WORKING
+      state.hasActiveStream || state.pendingReply?.retryable == false -> WearInteractionState.AGENT_WORKING
       else -> interaction
     }
 
@@ -476,13 +476,12 @@ internal fun OpenClawWearApp(
             state.sending ||
             state.talkBusy ||
             state.controlBusy ||
-            state.activeRunId != null ||
-            !state.streamText.isNullOrBlank() ||
+            state.hasActiveStream ||
             state.realtimeTalk.active ||
             state.realtimeCapturing ||
             state.realtimePlaying,
-        inputEnabled = state.connected && snapshot?.activeSessionId != null,
-        canAbort = state.activeRunId != null || !state.streamText.isNullOrBlank(),
+        inputEnabled = state.connected && snapshot?.activeSessionId != null && state.canSubmitReply,
+        canAbort = state.hasActiveStream || state.pendingReply != null,
         themeMode = themeMode,
         autoSpeak = autoSpeak,
         notificationsGranted = notificationsGranted,
@@ -524,10 +523,6 @@ internal fun OpenClawWearApp(
         },
         onRealtimeTalk = ::toggleRealtimeTalk,
         onAbort = {
-          awaitingReply = false
-          awaitingReplySessionId = null
-          expectedAssistantKey = null
-          interaction = WearInteractionState.READY
           speaker.stop()
           viewModel.abort()
         },
@@ -622,25 +617,37 @@ internal fun WearReplyCompletionEffect(
     state.failure,
     state.pendingReply,
     state.replyTerminal,
+    state.replyCompletion,
+    state.pendingAbortRunId,
     awaitingReply,
     awaitingReplySessionId,
     expectedAssistantKey,
     awaitingReplyRunId,
   ) {
     if (!awaitingReply) return@LaunchedEffect
-    if (
-      state.failure != null ||
-      snapshot == null ||
-      snapshot.activeSessionId != awaitingReplySessionId
-    ) {
+    if (snapshot == null || snapshot.activeSessionId != awaitingReplySessionId) {
       complete(null)
       return@LaunchedEffect
     }
-    if (state.sending || state.activeRunId != null || state.pendingReply != null) return@LaunchedEffect
+    // Gateway can emit the terminal before replying to the matching Abort RPC.
+    // Wait for that recorded operation result, without discarding reply ownership.
+    if (awaitingReplyRunId != null && state.pendingAbortRunId == awaitingReplyRunId) return@LaunchedEffect
+    val terminal = state.replyCompletion ?: state.replyTerminal
+    val ownsPending = awaitingReplyRunId != null && state.pendingReply?.runId == awaitingReplyRunId
+    val ownsTerminal = awaitingReplyRunId != null && terminal?.runId == awaitingReplyRunId
+    if (ownsTerminal && terminal.outcome == WearReplyOutcome.Canceled) {
+      complete(null)
+      return@LaunchedEffect
+    }
+    // An Abort/history/control failure does not end the still-owned logical send.
+    if (state.failure != null && !ownsPending && !ownsTerminal) {
+      complete(null)
+      return@LaunchedEffect
+    }
+    if (state.sending || state.hasActiveStream || state.pendingReply != null) return@LaunchedEffect
     // Preserved foreign finals are not evidence for this reply. The terminal
     // history must reconcile the transcript before choosing text to confirm or speak.
-    if (state.replyTerminal != null && state.replyTerminal.history == null) return@LaunchedEffect
-    val terminal = state.replyTerminal
+    if (terminal != null && terminal.history == null) return@LaunchedEffect
     if (awaitingReplyRunId != null && terminal?.runId != null && terminal.runId != awaitingReplyRunId) {
       complete(null)
       return@LaunchedEffect
@@ -661,7 +668,7 @@ internal fun WearReplyCompletionEffect(
         expectedAssistantKey = expectedAssistantKey,
         latestAssistantMessage = ownedMessage,
       )
-    if (reply != null || state.replyTerminal?.history != null) complete(reply)
+    if (reply != null || terminal?.history != null) complete(reply)
   }
 }
 
