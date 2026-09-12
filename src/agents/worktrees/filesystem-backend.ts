@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { extractErrorCode, isMissingPathError } from "../../infra/errors.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import { WORKTREE_CHECKOUT_TIMEOUT_MS } from "./git.js";
@@ -76,12 +78,63 @@ const btrfsBackend: WorktreeFilesystemBackend = {
   },
 };
 
+async function cloneRefsDirectory(
+  source: string,
+  destination: string,
+  options: WorktreeFilesystemOptions,
+  cloneFile: (source: string, destination: string) => void,
+): Promise<void> {
+  const stats = await fs.lstat(source);
+  if (!stats.isDirectory()) {
+    throw new Error(`Worktree template is not a directory: ${source}`);
+  }
+  const entries = await fs.readdir(source, { withFileTypes: true });
+  assertActive(options);
+  await fs.mkdir(destination, { mode: 0o700 });
+  for (const entry of entries) {
+    const sourcePath = path.join(source, entry.name);
+    const destinationPath = path.join(destination, entry.name);
+    if (entry.isDirectory()) {
+      await cloneRefsDirectory(sourcePath, destinationPath, options, cloneFile);
+    } else {
+      assertActive(options);
+      cloneFile(sourcePath, destinationPath);
+      // Native clones are synchronous metadata operations. Yield between files
+      // so cancellation and allocation-lease renewal can run in wide directories.
+      await setImmediate();
+    }
+  }
+  // Populate writable directories before restoring their source permissions.
+  assertActive(options);
+  await fs.chmod(destination, stats.mode & 0o777);
+}
+
 /** Probe without creating artifacts; the caller supplies an existing destination parent. */
 export async function detectWorktreeFilesystemBackend(
   parentPath: string,
   options: WorktreeFilesystemOptions,
 ): Promise<WorktreeFilesystemBackend | null> {
   assertActive(options);
+  if (process.platform === "win32") {
+    const { refsFilesystem } = await import("./filesystem-refs.native.js");
+    assertActive(options);
+    const volume = refsFilesystem.probe(parentPath);
+    if (!volume) {
+      return null;
+    }
+    return {
+      id: "refs",
+      async createTemplate(destination, templateOptions) {
+        assertActive(templateOptions);
+        await fs.mkdir(destination);
+      },
+      async cloneTemplate(source, destination, cloneOptions) {
+        await cloneRefsDirectory(source, destination, cloneOptions, (from, to) =>
+          refsFilesystem.cloneFile(from, to, volume.clusterSize),
+        );
+      },
+    };
+  }
   if (process.platform === "darwin") {
     const { apfsFilesystem } = await import("./filesystem-apfs.native.js");
     const volume = await fs.statfs(parentPath);

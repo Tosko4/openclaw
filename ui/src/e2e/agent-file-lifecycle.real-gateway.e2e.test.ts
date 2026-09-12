@@ -44,12 +44,10 @@ const refreshInventoryArgs = [
   "--params",
   JSON.stringify({ agentId: "main", view: "all", refresh: true }),
 ];
-const waitForInventoryPublication = async (
-  owner: OpenClawTestInstance,
-  initial: Awaited<ReturnType<OpenClawTestInstance["cli"]>>,
-  commands?: unknown[],
-) => {
-  let result = initial;
+const refreshInventory = async (owner: OpenClawTestInstance, commands: unknown[]) => {
+  let result = await owner.cli(refreshInventoryArgs);
+  commands.push({ args: refreshInventoryArgs, ...result });
+  expect(result.code, result.stderr).toBe(0);
   // A refresh reply can still be pending. Passive reads await publication without
   // starting a second acquisition or changing the provider fixture mid-flight.
   await vi.waitFor(
@@ -65,7 +63,7 @@ const waitForInventoryPublication = async (
           JSON.stringify({ agentId: "main", view: "all" }),
         ];
         result = await owner.cli(args);
-        commands?.push({ args, ...result });
+        commands.push({ args, ...result });
         expect(result.code, result.stderr).toBe(0);
       }
       expect((JSON.parse(result.stdout) as ModelCatalogResult).pendingProviders ?? []).toEqual([]);
@@ -135,10 +133,6 @@ const catalogSuite = createControlUiE2eSuite({
     };
     try {
       await catalogInstance.startGateway();
-      let initialInventory = await catalogInstance.cli(refreshInventoryArgs);
-      expect(initialInventory.code, initialInventory.stderr).toBe(0);
-      initialInventory = await waitForInventoryPublication(catalogInstance, initialInventory);
-      expect(initialInventory.stdout).toContain("inventory-before");
       return {
         baseUrl: `http://127.0.0.1:${catalogInstance.port}/`,
         close,
@@ -188,6 +182,8 @@ catalogSuite.define(() => {
       expect(result.code, result.stderr).toBe(0);
     };
     try {
+      const initialInventory = await refreshInventory(owner, commands);
+      expect(initialInventory.stdout).toContain("inventory-before");
       await catalogSuite.withPage(
         {
           locale: "en-US",
@@ -291,10 +287,7 @@ catalogSuite.define(() => {
           }
 
           inventoryModel = "inventory-after";
-          let refreshed = await owner.cli(refreshInventoryArgs);
-          commands.push({ args: refreshInventoryArgs, ...refreshed });
-          expect(refreshed.code, refreshed.stderr).toBe(0);
-          refreshed = await waitForInventoryPublication(owner, refreshed, commands);
+          const refreshed = await refreshInventory(owner, commands);
           expect(refreshed.stdout).toContain("inventory-after");
           await expect
             .poll(() =>
@@ -307,11 +300,11 @@ catalogSuite.define(() => {
 
           holdCatalog = true;
           inventoryModel = "inventory-held";
-          commands.push(await owner.cli(refreshInventoryArgs));
+          await refreshInventory(owner, commands);
           await expect.poll(() => heldCatalogs.length).toBeGreaterThan(0);
           holdCatalog = false;
           inventoryModel = "inventory-latest";
-          commands.push(await owner.cli(refreshInventoryArgs));
+          await refreshInventory(owner, commands);
           await expect
             .poll(() =>
               picker.locator('[role="option"][data-value="ollama/inventory-latest"]').count(),
