@@ -276,9 +276,7 @@ function buildRenderedShell(
   const facts = params.data.allowList;
   if (facts) {
     const lines = [
-      ...(facts.hiddenCount > 0
-        ? [`${facts.hiddenCount} newer models hidden by your allow list`]
-        : []),
+      ...(facts.hiddenCount > 0 ? [`Models hidden by your allow list: ${facts.hiddenCount}`] : []),
       ...(params.data.providers.length === 0 ? ["No models match your allow list."] : []),
       ...(facts.selectedModelBlocked ? ["The pinned model is not in your allow list."] : []),
     ];

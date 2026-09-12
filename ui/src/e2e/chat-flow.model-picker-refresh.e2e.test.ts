@@ -75,9 +75,7 @@ suite.define(() => {
         );
         await picker.locator('[data-chat-model-select="true"]').click();
         const notice = picker.locator("[data-chat-model-allow-list]");
-        await notice
-          .getByText("2 newer models hidden by your allow list", { exact: true })
-          .waitFor();
+        await notice.getByText("Models hidden by your allow list: 2", { exact: true }).waitFor();
         expect(await notice.textContent()).toContain("agents.defaults.modelPolicy.allow");
         await expect
           .poll(() => picker.locator("[data-chat-model-option]").count())

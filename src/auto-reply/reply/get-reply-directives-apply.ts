@@ -26,6 +26,7 @@ import { formatModelSelectionScopeAck } from "./directive-handling.shared.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveContextTokens } from "./model-selection-context.js";
 import type { createModelSelectionState } from "./model-selection.js";
+import { getStandaloneSlashCommandName } from "./reply-inline.js";
 import type { ReplyPreRunRejectionCode } from "./reply-operation-run-state.js";
 import type { TypingController } from "./typing.js";
 
@@ -584,11 +585,20 @@ export async function applyInlineDirectiveOverrides(params: {
     }
   }
 
-  if (modelState.blockedModelOverrideRef && !modelState.modelPolicy.allows({ provider, model })) {
+  const recoveryCommand =
+    allowTextCommands && command.isAuthorizedSender && ctx.CommandInterpretationSuppressed !== true
+      ? getStandaloneSlashCommandName(command.commandBodyNormalized)
+      : null;
+  if (
+    modelState.blockedModelOverrideRef &&
+    !modelState.modelPolicy.allows({ provider, model }) &&
+    recoveryCommand !== "model" &&
+    recoveryCommand !== "models"
+  ) {
     typing.cleanup();
     return directiveRejection(
       "model-selection-rejected",
-      `Your pinned model ${modelState.blockedModelOverrideRef} is not in your allow list, and no usable configured default is available. Add it to ${modelState.modelPolicy.allowRepairConfigPath.replace("entries.*", `entries.${agentId}`)} or choose an allowed model with /model list. Your session pin is unchanged.`,
+      `Your pinned model ${modelState.blockedModelOverrideRef} is not in your allow list, and no usable default is available. Add it to ${modelState.modelPolicy.allowRepairConfigPath.replace("entries.*", `entries.${agentId}`)} or choose an allowed model with /model list. Your session pin is unchanged.`,
     );
   }
 

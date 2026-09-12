@@ -555,11 +555,12 @@ export async function handleInlineActions(params: {
     directives = { ...directives, hasStatusDirective: false };
   }
 
-  const finalizeCommandReply = (reply: ReplyPayload | ReplyPayload[] | undefined) =>
+  const finalizeCommandReply = (result: Awaited<ReturnType<typeof handleCommands>>) =>
     attachModelPolicyCommandNotice({
-      reply,
+      reply: result.reply,
       pinnedModel: params.blockedModelOverrideRef,
-      usesPrimary: params.blockedModelOverrideUsesPrimary,
+      usesPrimary:
+        params.blockedModelOverrideUsesPrimary && result.sessionCompaction?.compacted === true,
       provider,
       model,
       sessionEntry: sessionStore?.[sessionKey] ?? targetSessionEntry,
@@ -631,7 +632,7 @@ export async function handleInlineActions(params: {
     if (inlineResult.reply) {
       if (!cleanedBody) {
         typing.cleanup();
-        return { kind: "reply", reply: finalizeCommandReply(inlineResult.reply) };
+        return { kind: "reply", reply: finalizeCommandReply(inlineResult) };
       }
       await sendInlineReply(inlineResult.reply);
     }
@@ -685,7 +686,7 @@ export async function handleInlineActions(params: {
   notifyInlineCommandSessionMetadataChanges();
   if (!commandResult.shouldContinue) {
     typing.cleanup();
-    return { kind: "reply", reply: finalizeCommandReply(commandResult.reply) };
+    return { kind: "reply", reply: finalizeCommandReply(commandResult) };
   }
   if (command.commandBodyNormalized !== commandBodyBeforeRun) {
     cleanedBody = command.commandBodyNormalized;

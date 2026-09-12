@@ -60,7 +60,7 @@ describe("applyInlineDirectiveOverrides", () => {
     expect(typing.cleanup).toHaveBeenCalledOnce();
     if (body === "hello") {
       expect(result).toMatchObject({
-        reply: { text: expect.stringContaining("no usable configured default is available") },
+        reply: { text: expect.stringContaining("no usable default is available") },
         preRunRejection: "model-selection-rejected",
       });
       expect(mocks.applyModelSelection).not.toHaveBeenCalled();

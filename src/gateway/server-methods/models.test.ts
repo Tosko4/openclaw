@@ -635,7 +635,7 @@ describe("models.list", () => {
   it("preserves mandatory Claude CLI thinking despite a configured reasoning opt-out", () =>
     withClaudeCliBackend(async () => {
       const modelId = "claude-fable-5";
-      const runtimeConfig = {
+      const runtimeConfig: OpenClawConfig = {
         agents: {
           defaults: {
             models: {
@@ -646,11 +646,21 @@ describe("models.list", () => {
         models: {
           providers: {
             anthropic: {
-              models: [{ id: modelId, name: modelId, reasoning: false }],
+              baseUrl: "https://api.anthropic.com",
+              models: [
+                {
+                  id: modelId,
+                  name: modelId,
+                  reasoning: false,
+                  input: ["text"],
+                  maxTokens: 8192,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
             },
           },
         },
-      } as unknown as OpenClawConfig;
+      };
       const materializedCatalog = materializePreparedModelCatalog(
         {
           entries: [{ id: modelId, name: modelId, provider: "anthropic", reasoning: false }],
@@ -665,7 +675,13 @@ describe("models.list", () => {
               name: `${modelId} (Claude CLI)`,
               provider: "claude-cli",
               reasoning: true,
-            } as never,
+              api: "openai-responses",
+              baseUrl: "https://api.anthropic.com",
+              input: ["text"],
+              contextWindow: 200_000,
+              maxTokens: 8192,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
           },
         ],
       ).entries;
@@ -702,7 +718,7 @@ describe("models.list", () => {
   it("publishes a materialized Claude CLI logical row with its configured thinking default", () =>
     withClaudeCliBackend(async () => {
       const modelIds = ["claude-opus-5", "claude-sonnet-5"];
-      const runtimeConfig = {
+      const runtimeConfig: OpenClawConfig = {
         agents: {
           defaults: {
             model: { primary: `anthropic/${modelIds[0]}` },
@@ -716,10 +732,20 @@ describe("models.list", () => {
         },
         models: {
           providers: {
-            anthropic: { models: modelIds.map((id) => ({ id, name: id })) },
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: modelIds.map((id) => ({
+                id,
+                name: id,
+                reasoning: true,
+                input: ["text"],
+                maxTokens: 8192,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              })),
+            },
           },
         },
-      } as unknown as OpenClawConfig;
+      };
       const { request, respond } = requestModelsList({
         view: "configured",
         preparedAuthModes: { "claude-cli": "api_key" },

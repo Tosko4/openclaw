@@ -364,20 +364,31 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   const { prepareDoctorModelPolicyAllowlist } =
     await import("./doctor/shared/model-policy-allowlist-repair.js");
-  applyConfigMutation(
-    await runWithCurrentPluginMetadata(state.candidate, () =>
-      prepareDoctorModelPolicyAllowlist({
-        config: state.candidate,
-        sourceConfig: snapshot.sourceConfigBeforeMigrations ?? snapshot.parsed,
-        repair: params.options.repair === true,
-      }),
-    ),
-    {
-      fixHint: `Run "${doctorFixCommand}" to use provider wildcards.`,
-      emitWarnings: true,
-      sanitize: true,
-    },
+  const allowListOffer = await runWithCurrentPluginMetadata(state.candidate, () =>
+    prepareDoctorModelPolicyAllowlist({
+      config: state.candidate,
+      sourceConfig: snapshot.sourceConfigBeforeMigrations ?? snapshot.parsed,
+    }),
   );
+  emitDoctorNotes({ note, warningNotes: allowListOffer.warnings });
+  if (allowListOffer.changes.length > 0) {
+    note(sanitizeDoctorNote(allowListOffer.changes.join("\n")), "Model allow-list offer");
+    const prompter = params.prompter;
+    if (
+      prompter?.repairMode.canPrompt &&
+      !prompter.repairMode.updateInProgress &&
+      (await prompter.confirmRuntimeRepair({
+        message: "Include this allow-list change in the config repairs?",
+        initialValue: false,
+        requiresInteractiveConfirmation: true,
+      }))
+    ) {
+      applyConfigMutation(allowListOffer, {
+        fixHint: "Run openclaw doctor in an interactive terminal to review the allow-list offer.",
+        sanitize: true,
+      });
+    }
+  }
 
   const { MODEL_METADATA_CORRUPTION_AUDIT_LIMIT, repairGeneratedModelMetadataCorruption } =
     await import("./doctor/shared/model-metadata-corruption-repair.js");

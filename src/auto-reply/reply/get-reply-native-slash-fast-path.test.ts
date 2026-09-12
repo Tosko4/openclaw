@@ -456,6 +456,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         ("transportAuthorized" in testCase ? testCase.transportAuthorized : undefined) ?? true;
       handleCommandsMock.mockResolvedValueOnce({
         shouldContinue: false,
+        sessionCompaction: { compacted: true },
         reply: { text: "compacted" },
       });
       const targetAgentId =
@@ -596,6 +597,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         }
         handleCommandsMock.mockResolvedValueOnce({
           shouldContinue: false,
+          sessionCompaction: { compacted: true },
           reply: { text: "compacted again" },
         });
         expect(await runCompact()).toMatchObject({

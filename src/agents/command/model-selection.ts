@@ -357,10 +357,7 @@ export async function resolveEmbeddedModelSelection(params: {
       !hasStoredAutoFallbackProvenance
     ) {
       const pinnedModel = `${normalizedStored.provider}/${normalizedStored.model}`;
-      if (
-        !configuredPrimary ||
-        !visibilityPolicy.allows({ provider: defaultProvider, model: defaultModel })
-      ) {
+      if (!visibilityPolicy.allows({ provider: defaultProvider, model: defaultModel })) {
         throw new Error(
           `Pinned model ${sanitizeForLog(pinnedModel)} is not in your allow list, and no configured primary is usable. Use /model to change it. Your session pin is unchanged.`,
         );

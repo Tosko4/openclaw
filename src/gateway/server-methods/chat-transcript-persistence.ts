@@ -599,12 +599,13 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
   });
 }
 
-export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(params: {
+export async function rewriteAssistantTranscriptMessageByTurnIdentity(params: {
   afterSeq: number;
-  assistantMessageIndex: number;
+  identity: { kind: "entry"; id: string } | { kind: "stream"; index: number };
   content: AssistantDisplayContentBlock[];
   expectedGeneration: string | null;
   mediaUrls: readonly string[];
+  retainOriginalText: boolean;
   scope: ResolvedAssistantTranscriptScope;
 }): Promise<{ generation: string; messageId: string } | null> {
   if (params.content.length === 0) {
@@ -618,25 +619,23 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
   // The pre-dispatch SQLite sequence is the exact turn boundary; timestamps can collide.
   // Exact-row rewrites preserve that sequence while rotating the generation returned to callers.
   const currentTurnRows = loadTranscriptEventRowsAfterSeqSync(params.scope, params.afterSeq);
-  const target = findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
-    currentTurnRows.map((row) => row.event),
-    params,
-  );
-  if (!target) {
-    return null;
-  }
-  const targetRow = currentTurnRows.find(
-    (row) => transcriptEventId(row.event) === target.messageId,
-  );
-  if (!targetRow) {
+  const messageId =
+    params.identity.kind === "entry"
+      ? params.identity.id
+      : findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
+          currentTurnRows.map((row) => row.event),
+          { assistantMessageIndex: params.identity.index, mediaUrls: params.mediaUrls },
+        )?.messageId;
+  const targetRow = currentTurnRows.find((row) => transcriptEventId(row.event) === messageId);
+  const message = targetRow ? transcriptEventMessage(targetRow.event) : undefined;
+  if (!targetRow || !messageId || message?.role !== "assistant") {
     return null;
   }
   const rewrittenMessage = buildAssistantDisplayRewrite({
-    message: target.message,
+    message,
     displayContent: params.content,
     managedMediaUrls: params.mediaUrls,
-    // Indexed replies can contain earlier chunks; exact final/mirror replacements cannot.
-    ...(params.mediaUrls.length > 0 ? { retainOriginalText: true as const } : {}),
+    ...(params.retainOriginalText ? { retainOriginalText: true as const } : {}),
   });
   const rewrittenEvent = Object.assign({}, targetRow.event as Record<string, unknown>, {
     message: rewrittenMessage,
@@ -652,7 +651,7 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
       },
     ],
   });
-  return rewritten ? { generation: rewritten.generation, messageId: target.messageId } : null;
+  return rewritten ? { generation: rewritten.generation, messageId } : null;
 }
 
 export async function publishAssistantTranscriptRewrite(params: {

@@ -208,6 +208,8 @@ export type ReplyPayloadMetadata = {
   assistantMediaFailures?: ReplyMediaFailure[];
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
+  /** Physical runtime row, distinct from the stream item's assistantMessageIndex. */
+  assistantTranscriptEntryId?: string;
   /** Exact channel/account transform owner that already accepted this payload. */
   channelReplyTransformOwner?: object;
   /** Exact dispatcher that already ran its full normalization before side effects. */

@@ -86,7 +86,7 @@ extension OpenClawChatViewModel {
         var lines: [String] = []
         if allowList.hiddenCount > 0 {
             lines.append(String(
-                format: String(localized: "%lld newer models hidden by your allow list"),
+                format: String(localized: "Models hidden by your allow list: %lld"),
                 allowList.hiddenCount))
         }
         if self.modelChoices.isEmpty {

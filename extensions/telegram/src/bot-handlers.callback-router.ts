@@ -555,7 +555,9 @@ async function handleTelegramModelCallback(params: {
       .join("\n");
     await retryModelAction(() =>
       editMessageWithButtons(
-        withNotice([modelData.refreshWarning, "Select a provider:", notice].filter(Boolean).join("\n\n")),
+        withNotice(
+          [modelData.refreshWarning, "Select a provider:", notice].filter(Boolean).join("\n\n"),
+        ),
         buildTelegramModelsMenuButtons({ providers: providerInfos }),
       ),
     );

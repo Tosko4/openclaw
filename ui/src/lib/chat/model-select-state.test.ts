@@ -733,7 +733,7 @@ describe("chat-model-select-state", () => {
 
   it.each([
     { tags: ["default"], defaultModel: "worker/child", defaultLabel: "Default (Child)" },
-    { tags: ["configured"], defaultModel: "", defaultLabel: "Default model" },
+    { tags: ["configured"], defaultModel: "parent/primary", defaultLabel: "Default (Parent)" },
     { tags: undefined, defaultModel: "parent/primary", defaultLabel: "Default (Parent)" },
   ])(
     "uses published default tags before parent defaults: $tags",

@@ -68,7 +68,7 @@ Full key reference, defaults, and JSON5 examples: [Configuration reference](/gat
 
 Explicit `modelPolicy.allow` restrictions were introduced in v2026.8.1. For directly authored legacy model maps, `openclaw doctor --fix` copies the complete restriction into `modelPolicy.allow` when every ref is valid. If any ref needs provider qualification, Doctor preserves the entire legacy restriction and reports how to set an explicit policy. Until then, model-map edits still change the legacy restriction. No keys are silently dropped, and no empty policy is substituted. Include-owned migrations retain the existing edit-owning-file requirement.
 
-When `meta.migrations.modelPolicyAllowlist` is `true`, Doctor offers to replace upgrade-generated exact entries with `provider/*` if they hide newer catalog models. Only `openclaw doctor --fix` accepts this offer. Ordinary Doctor leaves the list unchanged, and lists without the marker receive no upgrade offer. Doctor also identifies entries for missing models or disabled providers and explains how to repair them.
+When `meta.migrations.modelPolicyAllowlist` is `true`, Doctor offers to replace exact entries with `provider/*` if they hide catalog models. The marker can remain on handwritten or later-edited lists, so Doctor shows the exact proposed change and requires a separate interactive choice. Declining leaves the list unchanged. `--yes`, noninteractive `--fix`, and updates never accept this offer. To review it, run `openclaw doctor` in a terminal. Lists without the marker receive no wildcard offer. Doctor also checks legacy model-map restrictions and identifies missing models or disabled providers.
 
 Doctor reports when the configured primary is omitted from its effective allow list, including an agent primary with an inherited list. It offers the exact `provider/model` entry or `provider/*` as a remedy. This finding does not rewrite the primary or a hand-written list. The primary remains usable and appears as **Default** in model pickers.
 
@@ -168,9 +168,9 @@ Add "provider/model", "provider/*", or a narrower "provider/namespace/*" prefix 
 
 Fix it by adding the model or a provider wildcard to the named `modelPolicy.allow` key, removing/emptying that list, or picking a model from `/model list`. If the rejected command included a runtime override such as `/model openai/gpt-5.5 --runtime codex`, fix the allowlist first, then retry the same command.
 
-Pickers share the Gateway's allowed catalog. The Gateway publishes only the hidden count, blocked-selection flag, and stable config-key path; clients localize their notices and navigation. Pickers show “N newer models hidden by your allow list” with the settings path when policy hides rows. The configured primary remains in the view as **Default**, even when the list omits it. A configured subagent primary gets this exception only in subagent sessions. If no selectable row remains, the picker shows the notice and repair path.
+Pickers share the Gateway's allowed catalog. The Gateway publishes only the hidden count, blocked-selection flag, and stable config-key path; clients localize their notices and navigation. Pickers show “Models hidden by your allow list: N” with the settings path when policy hides rows. The configured primary remains in the view as **Default**, even when the list omits it. A configured subagent primary gets this exception only in subagent sessions. If no selectable row remains, the picker shows the notice and repair path.
 
-An existing session whose pin is now blocked keeps that pin and runs on its configured primary. The reply starts with a notice that the pin is outside the allow list, the default was used, and `/model` changes the selection. The notice appears once per session until the pin changes. `/compact` follows the same rule. These turns do not use another catalog row or automatic model fallback. If the configured primary cannot run, the turn stays blocked with repair guidance.
+An existing session whose pin is now blocked keeps that pin and runs on its effective default. The reply starts with a notice that the pin is outside the allow list, the default was used, and `/model` changes the selection. The notice appears once per session until the pin changes. `/compact` follows the same rule for OpenClaw-owned history. If a native runtime owns the session history, change the model with `/model` before compacting; OpenClaw does not compact a different runtime's history. These turns do not use automatic model fallback. If the default cannot run, the turn stays blocked with repair guidance. `/model` and `/models` remain available for recovery.
 
 For local/GGUF models, the allowlist needs the full provider-prefixed ref, for example `ollama/gemma4:26b` or `lmstudio/Gemma4-26b-a4-it-gguf` — check `openclaw models list --provider <provider>` for the exact string. Bare filenames or display names are not enough once the allowlist is active.
 
@@ -188,7 +188,7 @@ To limit providers without listing every model, use trailing prefix wildcard ent
 }
 ```
 
-`/model`, `/models`, and model pickers then show the discovered catalog for those providers plus the configured primary. New provider models can appear without editing the allowlist. Mix exact `provider/model` entries with `provider/*` entries to pull in one specific model from another provider.
+`/model`, `/models`, and model pickers then show the discovered catalog for those providers plus the effective default. New provider models can appear without editing the allowlist. In chat, `/models list <provider> all` shows every page of allowed models; it does not bypass the allowlist. Mix exact `provider/model` entries with `provider/*` entries to pull in one specific model from another provider.
 
 Example allowlist with aliases and per-model settings:
 

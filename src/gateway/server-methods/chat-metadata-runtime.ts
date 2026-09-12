@@ -187,7 +187,6 @@ function generationFactsMatch(
   });
 }
 
-
 async function defaultBuildCommands(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -329,11 +328,11 @@ export function createGatewayChatMetadataRuntime(params: {
         assertCurrent?.();
         const preparedProjection: PreparedAgentProjection = {
           ...prepared,
-          read: () => {
+          read: (selection) => {
             // Revocation is terminal, not a stale projection for readCurrent to retry forever.
             assertCurrent?.();
             return {
-              ...prepared.read(),
+              ...prepared.read(selection),
               ...(agent.commands !== undefined ? { commands: agent.commands } : {}),
               swarmEnabled: agent.swarmEnabled,
               accountSelection: resolveChatAccountSelection({
@@ -608,7 +607,8 @@ export function createGatewayChatMetadataRuntime(params: {
       );
       return {
         isCurrent: projection.isCurrent,
-        read: () => projectChatSessionMetadata(readParams, projection.read(), deps.getConfig()),
+        read: () =>
+          projectChatSessionMetadata(readParams, projection.read(readParams), deps.getConfig()),
       };
     });
   };
@@ -631,7 +631,13 @@ export function createGatewayChatMetadataRuntime(params: {
       // History consumes stable catalogs only; live readiness stays inside the current-read fence.
       ...(readParams.readPolicy === "ready"
         ? {}
-        : { metadata: projectChatSessionMetadata(readParams, session.read(), deps.getConfig()) }),
+        : {
+            metadata: projectChatSessionMetadata(
+              readParams,
+              session.read(readParams),
+              deps.getConfig(),
+            ),
+          }),
       sessionModelCatalog: session.modelCatalog,
       defaultModelCatalog: neutral.modelCatalog,
     });

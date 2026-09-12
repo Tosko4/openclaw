@@ -996,6 +996,30 @@ function prepareModelPolicy(params: ModelPolicyPreparationParams) {
     catalog: params.catalog,
     manifestPlugins: params.manifestPlugins,
   });
+  const authoredPrimary = resolveConfiguredModelPrimaryValue(params)
+    ? resolveConfiguredModelRef({
+        ...params,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      })
+    : undefined;
+  if (
+    authoredPrimary &&
+    !findModelCatalogEntry(params.catalog, {
+      provider: authoredPrimary.provider,
+      modelId: authoredPrimary.model,
+    }) &&
+    !findModelCatalogEntry(configuredCatalog, {
+      provider: authoredPrimary.provider,
+      modelId: authoredPrimary.model,
+    })
+  ) {
+    configuredCatalog.push({
+      provider: authoredPrimary.provider,
+      id: authoredPrimary.model,
+      name: authoredPrimary.model,
+    });
+  }
   const metadata = buildModelCatalogMetadata({
     configuredCatalog,
     aliasIndex: selectionAliasIndex,
@@ -1009,6 +1033,7 @@ function prepareModelPolicy(params: ModelPolicyPreparationParams) {
     policyAliasIndex,
     selectionAliasIndex,
     configuredCatalog,
+    authoredPrimary,
     metadata,
     catalog,
   };
@@ -1016,7 +1041,13 @@ function prepareModelPolicy(params: ModelPolicyPreparationParams) {
 
 function buildAllowedModelSetFromPrepared(
   params: ModelPolicyPreparationParams,
-  { visibility, policyAliasIndex, metadata, catalog }: ReturnType<typeof prepareModelPolicy>,
+  {
+    visibility,
+    policyAliasIndex,
+    metadata,
+    catalog,
+    authoredPrimary,
+  }: ReturnType<typeof prepareModelPolicy>,
 ): AllowedModelSet {
   const wildcardModelKeys = visibility.wildcardModelKeys;
   const allowAny = !visibility.hasEntries;
@@ -1141,22 +1172,26 @@ function buildAllowedModelSetFromPrepared(
 
   // The operator's primary is usable independently of session-switch restrictions.
   // Read authored config, not the caller's current session selection.
-  const configuredPrimary = resolveConfiguredModelPrimaryValue(params);
-  const primaryRef = configuredPrimary
-    ? resolveConfiguredModelRef({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-        allowManifestNormalization: params.allowManifestNormalization,
-        allowPluginNormalization: params.allowPluginNormalization,
-        manifestPlugins: params.manifestPlugins,
-      })
-    : undefined;
-  const primaryIdentity = primaryRef ? addAllowedCatalogRef(primaryRef) : undefined;
-  if (primaryRef) {
-    allowedKeys.add(modelKey(primaryRef.provider, primaryRef.model));
+  const primaryRef =
+    authoredPrimary ??
+    resolveConfiguredModelRef({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+      allowManifestNormalization: params.allowManifestNormalization,
+      allowPluginNormalization: params.allowPluginNormalization,
+      manifestPlugins: params.manifestPlugins,
+    });
+  const primaryKey = modelKey(primaryRef.provider, primaryRef.model);
+  const primaryAllowed =
+    Boolean(authoredPrimary) ||
+    (visibility.exactModelRefs.length > 0 && wildcardModelKeys.size === 0) ||
+    isModelKeyAllowedBySet(wildcardModelKeys, primaryKey);
+  const primaryIdentity = primaryAllowed ? addAllowedCatalogRef(primaryRef) : undefined;
+  if (primaryAllowed) {
+    allowedKeys.add(primaryKey);
   }
 
   const allowedCatalog = [

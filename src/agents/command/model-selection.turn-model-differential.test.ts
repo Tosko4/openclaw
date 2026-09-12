@@ -11,6 +11,7 @@ import {
   turnModelVerdict,
   type TurnModelDifferentialFixture,
 } from "../../test-utils/turn-model-selection-differential.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
 vi.mock("../agent-scope.js", () => ({
@@ -345,7 +346,15 @@ describe("turn model selection command-path differential", () => {
         if (mode === "request") {
           await expect(selection).rejects.toThrow("not allowed");
         } else if (mode === "no-primary") {
-          await expect(selection).rejects.toThrow("no configured primary is usable");
+          await expect(selection).resolves.toMatchObject({
+            provider: DEFAULT_PROVIDER,
+            model: DEFAULT_MODEL,
+            configuredDefaultAuthProfileId: undefined,
+            allowListPolicyFallback: {
+              pinnedModel: "fixture/child",
+              primaryModel: `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`,
+            },
+          });
         } else {
           await expect(selection).resolves.toMatchObject({
             provider: "fixture",

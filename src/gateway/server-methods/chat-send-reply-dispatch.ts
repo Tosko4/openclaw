@@ -11,6 +11,7 @@ import {
 import {
   deferModelPolicyNoticeAcknowledgment,
   settleModelPolicyNoticePublication,
+  waitForModelPolicyNoticePublication,
 } from "../../auto-reply/reply/model-policy-notice.js";
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import { readSessionTranscriptWatermark } from "../../config/sessions/session-accessor.js";
@@ -51,7 +52,7 @@ import {
   assistantTranscriptScope,
   publishAssistantTranscriptRewrite,
   rewriteAssistantTranscriptMessageByIdempotencyKey,
-  rewriteAssistantTranscriptMessageByTurnIndexAndMedia,
+  rewriteAssistantTranscriptMessageByTurnIdentity,
 } from "./chat-transcript-persistence.js";
 import {
   buildTtsSupplementTranscriptMarker,
@@ -179,6 +180,7 @@ export function createChatSendReplyDispatch(params: {
     const run = params.getReplyDispatchRun?.();
     return Boolean(
       run &&
+      waitForModelPolicyNoticePublication(payload) !== undefined &&
       !run.getResult().assistantTranscript &&
       !payload.isError &&
       !payload.isReasoning &&
@@ -196,6 +198,9 @@ export function createChatSendReplyDispatch(params: {
   };
   const agentMediaTranscriptKey = (payload: ReplyPayload): string => {
     const metadata = getReplyPayloadMetadata(payload);
+    if (metadata?.assistantTranscriptEntryId) {
+      return `entry:${metadata.assistantTranscriptEntryId}`;
+    }
     const ownedIdempotencyKey =
       metadata?.assistantTranscriptOwned === true
         ? metadata.assistantTranscriptIdempotencyKey?.trim()
@@ -222,7 +227,17 @@ export function createChatSendReplyDispatch(params: {
     const replyDispatchRun = params.getReplyDispatchRun?.();
     const transcript = replyDispatchRun?.getResult().assistantTranscript;
     const dispatchOwnsRuntimeText = ownsDispatchedRuntimeText(payload);
-    if (replyDispatchRun && !transcript && !dispatchOwnsRuntimeText) {
+    const payloadMetadata = getReplyPayloadMetadata(payload);
+    const payloadHasTranscriptIdentity =
+      payloadMetadata?.assistantTranscriptEntryId ||
+      (payloadMetadata?.assistantTranscriptOwned &&
+        payloadMetadata.assistantTranscriptIdempotencyKey);
+    if (
+      replyDispatchRun &&
+      !transcript &&
+      !payloadHasTranscriptIdentity &&
+      !dispatchOwnsRuntimeText
+    ) {
       logGateway.warn(
         "webchat runtime-owned media skipped: assistant transcript was not persisted",
       );
@@ -283,7 +298,6 @@ export function createChatSendReplyDispatch(params: {
       mediaMessage?.transcriptText ??
       extractAssistantDisplayText(assistantContent) ??
       buildTranscriptReplyText([transcriptPayload]);
-    const payloadMetadata = getReplyPayloadMetadata(payload);
     const sourceMediaUrls = Array.from(
       new Set(
         payloadMetadata?.assistantTranscriptMediaUrls?.length
@@ -306,11 +320,15 @@ export function createChatSendReplyDispatch(params: {
       agentId,
     });
     if (
-      dispatchOwnsRuntimeText &&
+      (dispatchOwnsRuntimeText || payloadHasTranscriptIdentity) &&
       (assistantTranscriptRewriteState.sessionId !== sessionId ||
         loadSessionEntry(sessionKey, { ...sessionLoadOptions, agentId }).entry?.sessionId !==
           sessionId)
     ) {
+      if (!dispatchOwnsRuntimeText) {
+        logGateway.warn("webchat runtime-owned media skipped: transcript session changed");
+        return;
+      }
       throw new Error(
         "Reply could not be published: its session transcript changed. Please send your message again.",
       );
@@ -362,9 +380,13 @@ export function createChatSendReplyDispatch(params: {
       return;
     }
     const assistantMessageIndex = payloadMetadata?.assistantMessageIndex;
-    if (assistantMessageIndex !== undefined && transcriptScope) {
-      // Embedded runtimes identify their owned turn by message index, not a persisted key.
-      // Require that exact current-turn row and media set so a sibling reply cannot be rewritten.
+    const assistantEntryId = payloadMetadata?.assistantTranscriptEntryId;
+    const transcriptIdentity = assistantEntryId
+      ? { kind: "entry" as const, id: assistantEntryId }
+      : !dispatchOwnsRuntimeText && assistantMessageIndex !== undefined
+        ? { kind: "stream" as const, index: assistantMessageIndex }
+        : undefined;
+    if (transcriptScope && transcriptIdentity) {
       if (assistantTranscriptRewriteState.sessionId !== sessionId) {
         assistantTranscriptRewriteState = {
           sessionId,
@@ -372,12 +394,13 @@ export function createChatSendReplyDispatch(params: {
           afterSeq: 0,
         };
       }
-      const rewritten = await rewriteAssistantTranscriptMessageByTurnIndexAndMedia({
+      const rewritten = await rewriteAssistantTranscriptMessageByTurnIdentity({
         afterSeq: assistantTranscriptRewriteState.afterSeq,
-        assistantMessageIndex,
+        identity: transcriptIdentity,
         content: persistedContentForAppend,
         expectedGeneration: assistantTranscriptRewriteState.generation,
         mediaUrls: sourceMediaUrls,
+        retainOriginalText: !dispatchOwnsRuntimeText && sourceMediaUrls.length > 0,
         scope: transcriptScope,
       });
       if (rewritten) {
@@ -404,6 +427,10 @@ export function createChatSendReplyDispatch(params: {
       throw new Error(
         "Reply could not be published: its session transcript changed. Please send your message again.",
       );
+    }
+    if (assistantEntryId) {
+      logGateway.warn("webchat runtime-owned media skipped: transcript identity not found");
+      return;
     }
     const hasOnlyFailureDisplay =
       persistedContentForAppend.some((block) => block.type === "attachment_error") &&
@@ -478,6 +505,21 @@ export function createChatSendReplyDispatch(params: {
     },
     deliver: async (payload, info) => {
       const payloadMetadata = getReplyPayloadMetadata(payload);
+      if (
+        (payloadMetadata?.assistantTranscriptEntryId ||
+          (payloadMetadata?.assistantTranscriptOwned &&
+            payloadMetadata.assistantTranscriptIdempotencyKey)) &&
+        !payloadMetadata.sessionWriterDeliveryAuthority &&
+        assistantTranscriptRewriteState.sessionId
+      ) {
+        setReplyPayloadMetadata(payload, {
+          sessionWriterDeliveryAuthority: {
+            agentId: session.agentId,
+            sessionKey: session.sessionKey,
+            expectedSessionId: assistantTranscriptRewriteState.sessionId,
+          },
+        });
+      }
       if (
         payloadMetadata?.beforeAgentRunBlocked === true ||
         payloadMetadata?.sourceReplyTranscriptMirror?.transcriptWriteBlocked === true

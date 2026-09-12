@@ -197,6 +197,7 @@ export function prepareEmbeddedRunTerminal(input: {
     assistantTexts: attempt.assistantTexts,
     assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
     assistantTranscriptOwned: attempt.assistantTranscriptOwned,
+    assistantTranscriptEntryId: attempt.assistantTranscriptEntryId,
     assistantTranscriptIdempotencyKey: attempt.assistantTranscriptIdempotencyKey,
     lastAssistant: payloadAssistant,
     currentAssistant: attempt.yieldDetected ? null : (payloadAssistant ?? null),

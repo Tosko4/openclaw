@@ -10,7 +10,6 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
@@ -212,9 +211,6 @@ async function projectPreparedModelsProviderData(
     options.workspaceDir ??
     (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
     resolveDefaultAgentWorkspaceDir();
-  const cliRuntimeProviders = new Set(
-    listCliRuntimeModelBackendBindings().map((binding) => normalizeProviderId(binding.runtime)),
-  );
   const snapshot = owner.modelCatalog;
   const authStore = getPreparedModelRuntimeAuthStore(owner);
   const catalog = snapshot.entries;
@@ -827,7 +823,9 @@ function buildModelsCommandReply(
     const key = `${provider}/${id}`;
     const label = modelNames.get(key);
     const primary = provider === data.resolvedDefault.provider && id === data.resolvedDefault.model;
-    lines.push(`- ${key}${primary ? " (Default)" : ""}${label && label !== data.modelNames.get(key) ? ` (${label})` : ""}`);
+    lines.push(
+      `- ${key}${primary ? " (Default)" : ""}${label && label !== data.modelNames.get(key) ? ` (${label})` : ""}`,
+    );
   }
   lines.push("", "Switch: /model <provider/model>");
   if (!all && safePage < pageCount) {

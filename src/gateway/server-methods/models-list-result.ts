@@ -47,8 +47,8 @@ import {
 } from "../../agents/prepared-model-runtime.errors.js";
 import { isPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.js";
-import { resolveAutomaticUtilityModelRef } from "../../agents/utility-model.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
+import { resolveAutomaticUtilityModelRef } from "../../agents/utility-model.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { createThinkingCatalogResolver } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "../../config/config.js";
@@ -76,7 +76,9 @@ type ApiKeyProviderCapabilities = {
   resolveProvider(provider: string): string;
 };
 type PreparedModelsListResult = {
-  read: () => ModelsListResult;
+  read: (
+    selection?: Pick<ChatMetadataReadParams, "sessionEntry" | "sessionKey">,
+  ) => ModelsListResult;
   isCurrent: () => boolean;
 };
 
@@ -575,12 +577,16 @@ export async function prepareModelsListResult(
     agentId,
     selectedModel: scope
       ? resolveSessionModelRef(cfg, sessionEntry, agentId, {
-          allowPluginNormalization: false,
+          ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+          manifestPlugins: metadataSnapshot,
           sessionKey: scope.sessionKey,
         })
       : undefined,
     workspaceDir,
     view,
+    ...(providerFilter
+      ? { includeProvider: (provider: string) => normalizeProvider(provider) === providerFilter }
+      : {}),
     policy: visibilityPolicy,
     routePolicy: openAIModelCatalogRoutePolicy,
     routeVariants,
@@ -616,10 +622,19 @@ export async function prepareModelsListResult(
   });
   return {
     isCurrent: () => isCurrent() && projector.isCurrent(),
-    read: () => {
+    read: (selection) => {
       const { entries, allowList } = readCatalog();
+      if (allowList && selection) {
+        allowList.selectedModelBlocked = !visibilityPolicy.allows(
+          resolveSessionModelRef(cfg, selection.sessionEntry, agentId, {
+            ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+            manifestPlugins: metadataSnapshot,
+            sessionKey: selection.sessionKey,
+          }),
+        );
+      }
       return {
-        models: entries.filter(matchesProvider).map((entry) => {
+        models: entries.map((entry) => {
           const evaluation = evaluations.get(resolveModelCatalogIdentityKey(entry));
           if (!evaluation) {
             throw new Error("Model catalog publication omitted prepared auth evaluation");

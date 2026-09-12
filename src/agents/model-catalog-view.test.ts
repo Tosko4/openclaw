@@ -8,6 +8,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import { loadPreparedModelCatalogView, prepareModelCatalogView } from "./model-catalog-view.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -69,7 +70,7 @@ describe("prepared model catalog view", () => {
       expected: undefined,
     },
   ])(
-    "retains only the authored primary for $sessionKey (configured=$configured, bare=$bare)",
+    "retains the effective default for $sessionKey (configured=$configured, bare=$bare)",
     ({ sessionKey, configured, bare, expected }) => {
       const cfg: OpenClawConfig = configured
         ? {
@@ -95,17 +96,15 @@ describe("prepared model catalog view", () => {
         allowManifestNormalization: false,
         allowPluginNormalization: false,
       });
-      expect([...policy.retainedKeys]).toEqual(
-        expected ? [JSON.stringify(["fixture", expected])] : [],
-      );
-      expect(view.defaultModel).toBe(expected ? `fixture/${expected}` : undefined);
+      const expectedProvider = configured ? "fixture" : DEFAULT_PROVIDER;
+      const expectedModel = expected ?? DEFAULT_MODEL;
+      expect([...policy.retainedKeys]).toEqual([JSON.stringify([expectedProvider, expectedModel])]);
+      expect(view.defaultModel).toBe(`${expectedProvider}/${expectedModel}`);
       if (configured) {
         expect(policy.selectionAliasIndex.byAlias.get("worker")?.ref).toEqual({
           provider: "fixture",
           model: "child",
         });
-      } else {
-        expect(view.defaultModel).toBeUndefined();
       }
     },
   );

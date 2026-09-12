@@ -298,6 +298,19 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   if (params.sessionStore) {
     params.sessionStore[params.sessionKey] = refreshedEntry;
   }
+  if (params.blockedModelOverrideUsesPrimary) {
+    const pinnedTarget = resolveManualCompactionCliTarget({
+      provider: refreshedEntry.providerOverride ?? refreshedEntry.modelProvider ?? params.provider,
+      entry: refreshedEntry,
+      cfg: params.cfg,
+    });
+    if (pinnedTarget.cliSessionBinding) {
+      return compactionUnavailable(
+        "the native session model is outside the allow list",
+        "The pinned model is not in your allow list. Use /model to choose an allowed model before compacting this native session.",
+      );
+    }
+  }
   const compactionCliTarget = params.blockedModelOverrideUsesPrimary
     ? undefined
     : resolveManualCompactionCliTarget({

@@ -5265,7 +5265,7 @@ export const en: TranslationMap & {
       modelsRefreshFailed: "Some models could not be refreshed. Open Models to try again.",
       checkingProviderModels: "{providers}: checking models…",
       noModelsAvailable: "No models available",
-      allowListHidden: "{count} newer models hidden by your allow list",
+      allowListHidden: "Models hidden by your allow list: {count}",
       allowListEmpty: "No models match your allow list",
       allowListBlocked: "Pinned model is not in your allow list",
       allowListFix: "Update {path}",

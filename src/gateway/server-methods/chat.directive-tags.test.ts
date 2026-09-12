@@ -13,7 +13,7 @@ import {
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
 import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import {
   bindActiveCronCreatorAuthorityResolver,
   runWithCronCreatorAuthorityCapabilityResolver,
@@ -743,7 +743,7 @@ async function appendSourceReplyMirrorEntry(params: {
   now?: number;
 }) {
   const now = params.now ?? 0;
-  await appendTranscriptMessage(transcriptScope(), {
+  return await appendTranscriptMessage(transcriptScope(), {
     idempotencyLookup: "scan",
     now,
     message: {
@@ -3859,11 +3859,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it.each([
     "key",
-    "index",
-    "missing-index",
+    "entry",
+    "missing-entry",
     "absent-identity",
     "rotated-key",
-    "rotated-index",
+    "rotated-entry",
   ] as const)(
     "publishes native policy replies only after exact transcript reconciliation (%s)",
     async (target) => {
@@ -3881,11 +3881,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
               assistantTranscriptOwned: true,
               assistantTranscriptIdempotencyKey: idempotencyKey,
             }
-          : target === "absent-identity"
-            ? {}
-            : {
-                assistantMessageIndex: target === "missing-index" ? 2 : 1,
-              },
+          : {},
       );
       const payload = attachModelPolicyNotice({
         payloads: [original],
@@ -3902,8 +3898,19 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             getResult: () => ({}),
           }),
         ).toBe("reply-dispatch");
-        await appendSourceReplyMirrorEntry({ idempotencyKey, text: "Answer from the primary." });
-        if (target === "rotated-key" || target === "rotated-index") {
+        const appended = await appendSourceReplyMirrorEntry({
+          idempotencyKey,
+          text: "Answer from the primary.",
+        });
+        if (target === "entry" || target === "missing-entry" || target === "rotated-entry") {
+          setReplyPayloadMetadata(payload, {
+            assistantTranscriptOwned: true,
+            assistantTranscriptEntryId:
+              target === "missing-entry" ? "absent-row" : appended.messageId,
+            assistantMessageIndex: 17,
+          });
+        }
+        if (target === "rotated-key" || target === "rotated-entry") {
           await createTranscriptFixture("openclaw-chat-policy-replacement-");
           await appendSourceReplyMirrorEntry({
             idempotencyKey,
@@ -3919,13 +3926,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       });
       const { context, send } = createChatRequestFixture();
       await send({ idempotencyKey: "policy-primary-visible", waitFor: "dedupe" });
-      if (target !== "key" && target !== "index") {
+      if (target !== "key" && target !== "entry") {
         expect(lastBroadcastPayload(context)).toMatchObject({ state: "error" });
         expect(loadSqliteSessionEntry(sessionEntryScope())?.modelPolicyNotice).toBeUndefined();
         const messages = await readActiveAssistantTranscriptMessages();
         expect(messages).toHaveLength(1);
         expect(JSON.stringify(messages)).not.toContain("Use /model");
-        if (target === "rotated-key" || target === "rotated-index") {
+        if (target === "rotated-key" || target === "rotated-entry") {
           expect(JSON.stringify(messages)).toContain("Replacement session answer.");
         }
         return;
@@ -3940,6 +3947,89 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const messages = await readActiveAssistantTranscriptMessages();
       expect(messages).toHaveLength(1);
       expect(JSON.stringify(messages[0])).toContain("Use /model to change it.");
+    },
+  );
+
+  it.each(["entry", "key"] as const)(
+    "chat.send drops post-receipt media when the session rotates during preparation (%s)",
+    async (identity) => {
+      await createTranscriptFixture("openclaw-chat-policy-media-rotation-");
+      const originalSessionId = mockState.sessionId;
+      await upsertSessionEntryCore(sessionEntryScope(), {
+        providerOverride: "fixture",
+        modelOverride: "blocked",
+        modelPolicyNotice: { sessionId: originalSessionId, pinnedModel: "fixture/blocked" },
+      });
+      const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+      const idempotencyKey = "post-receipt-media-row";
+      const payload: ReplyPayload = { text: "Stale media answer.", mediaUrls: [mediaUrl] };
+      dispatchInboundMessageMock.mockImplementationOnce(async (params: TestDispatchParams) => {
+        expect(
+          params.replyOptions?.onAgentRunStart?.("policy-media-run", undefined, {
+            completionSource: "reply-dispatch",
+            getResult: () => ({}),
+          }),
+        ).toBe("reply-dispatch");
+        const appended = await appendSourceReplyMirrorEntry({
+          idempotencyKey,
+          text: `Stale media answer.\nMEDIA:${mediaUrl}`,
+        });
+        setReplyPayloadMetadata(payload, {
+          assistantTranscriptOwned: true,
+          ...(identity === "entry"
+            ? { assistantTranscriptEntryId: appended.messageId }
+            : { assistantTranscriptIdempotencyKey: idempotencyKey }),
+          assistantMessageIndex: 17,
+        });
+        params.dispatcher.sendFinalReply(payload);
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return { ok: true, queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+      });
+
+      const media = await import("./chat-reply-media.js");
+      const normalize = media.normalizeWebchatReplyMediaPathsForDisplay;
+      const preparationStarted = createDeferred();
+      const resumePreparation = createDeferred();
+      const normalization = vi
+        .spyOn(media, "normalizeWebchatReplyMediaPathsForDisplay")
+        .mockImplementationOnce(async (params) => {
+          preparationStarted.resolve();
+          await resumePreparation.promise;
+          return normalize(params);
+        });
+      const { context, send } = createChatRequestFixture();
+      const pending = send({
+        idempotencyKey: `policy-media-rotation-${identity}`,
+        waitFor: "dedupe",
+      });
+      try {
+        await withTestTimeout(preparationStarted.promise, 5_000, "Media preparation did not start");
+        await createTranscriptFixture("openclaw-chat-policy-media-replacement-");
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey,
+          text: "Replacement session answer.",
+        });
+        const replacementBefore = loadTranscriptEventsSync(transcriptScope());
+        resumePreparation.resolve();
+        await pending;
+
+        expect(mockState.sessionId).not.toBe(originalSessionId);
+        expect(loadTranscriptEventsSync(transcriptScope())).toEqual(replacementBefore);
+        expect(loadSqliteSessionEntry(sessionEntryScope())?.modelPolicyNotice).toBeUndefined();
+        expect(
+          context.broadcast.mock.calls
+            .filter(([event]) => event === "chat")
+            .flatMap(([, event]) => {
+              const message = asOptionalRecord(event)?.message;
+              return message ? [message] : [];
+            }),
+        ).toEqual([]);
+      } finally {
+        resumePreparation.resolve();
+        normalization.mockRestore();
+        await pending;
+      }
     },
   );
 

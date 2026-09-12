@@ -107,10 +107,6 @@ function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
   if (publishedDefault) {
     return buildQualifiedChatModelValue(publishedDefault.id, publishedDefault.provider);
   }
-  // Tags are optional on the wire; only tagless catalogs use legacy agent/session defaults.
-  if (catalog.some((entry) => entry.tags !== undefined)) {
-    return "";
-  }
   const agentDefault = resolvePreferredServerChatModelValue(
     state.agentDefaultModel,
     undefined,

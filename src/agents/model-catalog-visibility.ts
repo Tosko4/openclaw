@@ -116,6 +116,7 @@ type LogicalModelCatalogParams = {
   workspaceDir?: string;
   sessionKey?: string;
   view?: ModelCatalogVisibilityView;
+  includeProvider?: (provider: string) => boolean;
   policy?: ModelVisibilityPolicy;
   routePolicy: ModelCatalogRoutePolicy;
   routeVariants?: readonly ModelCatalogEntry[];
@@ -233,7 +234,11 @@ export async function prepareLogicalVisibleModelCatalog(
       return sortModelCatalogEntries(dedupeByKey(projected, resolveModelCatalogIdentityKey));
     };
     if (params.view === "all") {
-      return { entries: projectEntries(params.catalog) };
+      return {
+        entries: projectEntries(params.catalog).filter(
+          (entry) => !params.includeProvider || params.includeProvider(entry.provider),
+        ),
+      };
     }
     const preferred: ModelCatalogEntry[] = [];
     const eligible: ModelCatalogEntry[] = [];
@@ -256,8 +261,10 @@ export async function prepareLogicalVisibleModelCatalog(
     // Selected physical routes must lead dedupe so sibling metadata cannot win.
     return applyModelCatalogAllowList({
       policy,
-      catalog: projectEntries([...preferred, ...eligible]).filter((entry) =>
-        isPickerVisibleCatalogEntry(entry, configuredKeys),
+      catalog: projectEntries([...preferred, ...eligible]).filter(
+        (entry) =>
+          isPickerVisibleCatalogEntry(entry, configuredKeys) &&
+          (!params.includeProvider || params.includeProvider(entry.provider)),
       ),
       agentId: params.agentId,
       selectedModel: params.selectedModel,

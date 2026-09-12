@@ -12,7 +12,6 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../agents/model-fallback.types.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
-import { resolveConfiguredModelPrimaryValue } from "../../agents/model-selection-shared.js";
 import {
   type ModelAliasIndex,
   legacyModelKey,
@@ -468,10 +467,7 @@ export async function createModelSelectionState(params: {
     }
   }
 
-  if (
-    blockedModelOverrideRef &&
-    resolveConfiguredModelPrimaryValue({ cfg, agentId: params.agentId, sessionKey })
-  ) {
+  if (blockedModelOverrideRef) {
     const configuredPrimary = resolveDefaultModelForAgent({
       cfg,
       agentId: params.agentId,

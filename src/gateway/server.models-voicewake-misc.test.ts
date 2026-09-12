@@ -531,6 +531,7 @@ describe("gateway server models + voicewake", () => {
   test("models.list default view uses configured providers instead of the full catalog", async () => {
     await withModelsConfig(
       {
+        agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7-highspeed" } } },
         models: {
           providers: {
             minimax: minimaxProviderConfig(),
@@ -550,7 +551,7 @@ describe("gateway server models + voicewake", () => {
     );
   });
 
-  test("models.list configured view reuses the prepared generation", async () => {
+  test("models.list configured view reuses prepared primary diagnostics", async () => {
     await withEnvAsync(
       {
         ANTHROPIC_API_KEY: undefined,
@@ -558,14 +559,28 @@ describe("gateway server models + voicewake", () => {
         OPENAI_API_KEY: "test-openai-key",
       },
       async () => {
-        await withModelsConfig({}, async () => {
-          await seedAgentModelCatalog();
-          const discoverCallsBefore = agentDiscoveryMock.discoverCalls;
-          const res = await listModels({ view: "configured" });
-          expect(res.ok).toBe(true);
-          expect(res.payload?.models).toStrictEqual([]);
-          expect(agentDiscoveryMock.discoverCalls).toBe(discoverCallsBefore);
-        });
+        await withModelsConfig(
+          {
+            agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+          },
+          async () => {
+            await seedAgentModelCatalog();
+            const discoverCallsBefore = agentDiscoveryMock.discoverCalls;
+            const res = await listModels({ view: "configured" });
+            expect(res.ok).toBe(true);
+            expect(res.payload?.models).toStrictEqual([
+              {
+                id: "claude-opus-4-6",
+                name: "claude-opus-4-6",
+                provider: "anthropic",
+                available: false,
+                unavailableReason: "missing-auth",
+                tags: ["default"],
+              },
+            ]);
+            expect(agentDiscoveryMock.discoverCalls).toBe(discoverCallsBefore);
+          },
+        );
       },
     );
   });
@@ -766,6 +781,7 @@ describe("gateway server models + voicewake", () => {
   test("models.list configured view uses models.providers when no allowlist is configured", async () => {
     await withModelsConfig(
       {
+        agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7-highspeed" } } },
         models: {
           providers: {
             zhipu: {
@@ -895,14 +911,27 @@ describe("gateway server models + voicewake", () => {
     });
   });
 
-  test("models.list hides allowlist entries absent from the catalog", async () => {
-    await expectAllowlistedModels({
-      primary: "openai/not-in-catalog",
-      models: {
-        "openai/not-in-catalog": {},
+  test("models.list hides non-primary allowlist entries absent from the catalog", async () => {
+    await withModelsConfig(
+      {
+        ...fullCatalogProviderConfig(),
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-test-z" },
+            models: { "openai/not-in-catalog": {} },
+            modelPolicy: { allow: ["openai/not-in-catalog"] },
+          },
+        },
       },
-      expected: [],
-    });
+      async () => {
+        await seedAgentModelCatalog();
+        const res = await listModels();
+        expect(res.ok).toBe(true);
+        expect(res.payload?.models.map(({ provider, id }) => ({ provider, id }))).toEqual([
+          { provider: "openai", id: "gpt-test-z" },
+        ]);
+      },
+    );
   });
 
   test.each([

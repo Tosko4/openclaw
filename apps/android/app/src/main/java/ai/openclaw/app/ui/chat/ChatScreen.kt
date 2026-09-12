@@ -3853,7 +3853,7 @@ private fun ChatModelPickerSheet(
                 Text(text = selectedModelLabel, style = ClawTheme.type.label, color = ClawTheme.colors.text)
                 allowList?.takeIf { it.hiddenCount > 0 || it.selectedModelBlocked == true || visibleModelsEmpty }?.let { policy ->
                   if (policy.hiddenCount > 0) {
-                    Text(nativeString("\$count newer models hidden by your allow list", policy.hiddenCount), style = ClawTheme.type.caption)
+                    Text(nativeString("Models hidden by your allow list: \$count", policy.hiddenCount), style = ClawTheme.type.caption)
                   }
                   if (visibleModelsEmpty) {
                     Text(nativeString("No models match your allow list."), style = ClawTheme.type.caption)

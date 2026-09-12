@@ -6,7 +6,6 @@ import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-crede
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { readSessionRuntimeOwnership } from "../../agents/harness/session-runtime-ownership.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
-import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
@@ -30,7 +29,7 @@ export type ChatMetadataProjectionFacts = {
 
 export type PreparedAgentProjection<T = ChatMetadataResult> = {
   modelCatalog: ModelCatalogEntry[];
-  read: () => T;
+  read: (selection?: Pick<ChatMetadataReadParams, "sessionEntry" | "sessionKey">) => T;
   isCurrent: () => boolean;
 };
 
@@ -92,8 +91,8 @@ export async function prepareChatMetadataModelProjection(params: {
   ]);
   return {
     modelCatalog,
-    read: () => {
-      const { models, allowList } = readModels.read();
+    read: (selection) => {
+      const { models, allowList } = readModels.read(selection);
       return { models, ...(allowList ? { allowList } : {}) };
     },
     isCurrent: readModels.isCurrent,
@@ -203,27 +202,8 @@ export function projectChatSessionMetadata(
   if (!metadata.models) {
     return metadata;
   }
-  const selected = resolveSessionModelRef(config, readParams.sessionEntry, readParams.agentId, {
-    allowPluginNormalization: false,
-    sessionKey: readParams.sessionKey,
-  });
-  const policy =
-    metadata.allowList &&
-    createModelVisibilityPolicy({
-      cfg: config,
-      agentId: readParams.agentId,
-      sessionKey: readParams.sessionKey,
-      catalog: metadata.models,
-      defaultProvider: selected.provider,
-      defaultModel: selected.model,
-    });
   return {
     ...metadata,
     models: projectSessionModelCatalog(readParams, metadata.models, config),
-    ...(metadata.allowList && policy
-      ? {
-          allowList: { ...metadata.allowList, selectedModelBlocked: !policy.allows(selected) },
-        }
-      : {}),
   };
 }
