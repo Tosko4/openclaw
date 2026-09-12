@@ -231,7 +231,10 @@ export function countSystemPromptChars(body: unknown): number {
   return total;
 }
 
-export function countOccurrences(haystack: string, needle: string, identifierOnly = false): number {
+const TOOL_IDENTIFIER_CHARACTERS =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
+
+function countOccurrences(haystack: string, needle: string, exactIdentifier = false): number {
   if (!needle) {
     return 0;
   }
@@ -245,13 +248,19 @@ export function countOccurrences(haystack: string, needle: string, identifierOnl
     const before = haystack[next - 1];
     const after = haystack[next + needle.length];
     if (
-      !identifierOnly ||
-      ((!before || !/[A-Za-z0-9_-]/u.test(before)) && (!after || !/[A-Za-z0-9_-]/u.test(after)))
+      !exactIdentifier ||
+      ((before === undefined || !TOOL_IDENTIFIER_CHARACTERS.includes(before)) &&
+        (after === undefined || !TOOL_IDENTIFIER_CHARACTERS.includes(after)))
     ) {
       count += 1;
     }
     offset = next + needle.length;
   }
+}
+
+/** Counts exact ASCII tool identifiers in diagnostic text without interpreting regex syntax. */
+export function countToolIdentifierMentions(text: string, identifier: string): number {
+  return countOccurrences(text, identifier, true);
 }
 
 function createCounts(needles: Record<string, string>): Record<string, number> {
@@ -370,7 +379,9 @@ export async function countSessionLogMentions(params: {
       return;
     }
     for (const [key, needle] of Object.entries(params.needles)) {
-      const count = countOccurrences(scanText, needle, params.identifierKeys?.has(key));
+      const count = params.identifierKeys?.has(key)
+        ? countToolIdentifierMentions(scanText, needle)
+        : countOccurrences(scanText, needle);
       counts[key] = (counts[key] ?? 0) + count;
     }
   });

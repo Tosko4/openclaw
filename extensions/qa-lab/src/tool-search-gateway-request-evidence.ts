@@ -1,8 +1,8 @@
 import path from "node:path";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  countOccurrences,
   countSessionLogMentions,
+  countToolIdentifierMentions,
   subtractMentionCounts,
 } from "./fixture-utils.js";
 import { qaMockRequestsAfterUrl } from "./providers/shared/debug-request-cursor.js";
@@ -20,7 +20,7 @@ function projectToolSearchGatewayLogFacts(logs: string, targetTool: string) {
   return {
     captured: logs.length > 0,
     mentions: Object.fromEntries(
-      safeTargets.map((name) => [name, countOccurrences(logs, name, true) > 0]),
+      safeTargets.map((name) => [name, countToolIdentifierMentions(logs, name) > 0]),
     ),
   };
 }
