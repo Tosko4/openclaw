@@ -34,15 +34,17 @@ it("applies custom emoji with Enter without submitting the enclosing board form"
   await input.fill("🦉");
   await picker.updateComplete;
   // An IME confirmation must not apply the unfinished composition.
-  input.element().dispatchEvent(
-    new KeyboardEvent("keydown", {
+  for (const composition of [{ isComposing: true }, { isComposing: false, keyCode: 229 }]) {
+    const event = new KeyboardEvent("keydown", {
       key: "Enter",
-      isComposing: true,
+      ...composition,
       bubbles: true,
       cancelable: true,
-    }),
-  );
-  expect(onChange).not.toHaveBeenCalled();
+    });
+    input.element().dispatchEvent(event);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  }
   await userEvent.keyboard("{Enter}");
   await picker.updateComplete;
   expect(onChange).toHaveBeenCalledExactlyOnceWith({ icon: "🦉", color: "blue" });

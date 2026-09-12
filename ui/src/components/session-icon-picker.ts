@@ -80,7 +80,7 @@ function renderCustomSessionIconEntry(props: AppearancePickerProps) {
           .value=${props.customIconValue}
           @input=${props.onInput}
           @keydown=${(event: KeyboardEvent) => {
-            if (event.key !== "Enter" || event.isComposing) {
+            if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) {
               return;
             }
             event.preventDefault();

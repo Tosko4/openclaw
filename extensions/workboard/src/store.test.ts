@@ -951,7 +951,7 @@ describe("WorkboardStore", () => {
     const dbPath = path.join(dir, "workboard.sqlite");
     const stores = createWorkboardSqliteStores({ dbPath });
     try {
-      const store = new WorkboardStore(stores.cards, { boards: stores.boards });
+      const store = new WorkboardStore(stores.cards, sqliteTestAuxStores(stores));
       await store.upsertBoard({ id: "planning", name: "Planning", icon: "rocket", color: "blue" });
       expect(await store.upsertBoard({ id: "planning", name: "Renamed" })).toMatchObject({
         name: "Renamed",
@@ -981,7 +981,7 @@ describe("WorkboardStore", () => {
     }
     const reopened = createWorkboardSqliteStores({ dbPath });
     try {
-      const store = new WorkboardStore(reopened.cards, { boards: reopened.boards });
+      const store = new WorkboardStore(reopened.cards, sqliteTestAuxStores(reopened));
       const board = (await store.listBoards()).boards.find((item) => item.id === "planning");
       expect(board).toMatchObject({ name: "Renamed" });
       expect(board?.icon).toBeUndefined();
@@ -994,9 +994,7 @@ describe("WorkboardStore", () => {
   it.each([null, true, "icon", ["name"], [null]].map((clearAppearance) => ({ clearAppearance })))(
     "rejects malformed appearance clearing without modifying the board: $clearAppearance",
     async ({ clearAppearance }) => {
-      const store = new WorkboardStore(createMemoryStore(), {
-        boards: createMemoryStore<PersistedWorkboardBoard>(),
-      });
+      const store = createWorkboardSqliteTestStore();
       await store.upsertBoard({ id: "planning", icon: "rocket", color: "blue" });
       await expect(store.upsertBoard({ id: "planning", clearAppearance })).rejects.toThrow(
         "clearAppearance must be an array",
