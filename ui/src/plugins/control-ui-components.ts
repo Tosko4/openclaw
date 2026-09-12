@@ -253,6 +253,7 @@ export function createControlUiComponents(options: {
           element.session = next.session;
           element.gateway = current().gateway;
           element.agents = current().agents.state.agentsList?.agents ?? [];
+          element.agentIdentity = current().agentIdentity;
           element.presented = next.presented;
           element.requestUpdate();
         },

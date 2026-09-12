@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { ref } from "lit/directives/ref.js";
+import { createRef, ref, type Ref } from "lit/directives/ref.js";
 import {
   renderAgentAvatar,
   renderSessionSummary,
@@ -41,6 +41,7 @@ import {
   renderProofDetails,
   getDetailSections,
 } from "./view-card-detail-records.ts";
+import { renderCardDiscardDialog } from "./view-card-modal.ts";
 import {
   formatEventLabel,
   formatLifecycle,
@@ -59,6 +60,7 @@ import {
   renderInlinePriority,
   renderInlineStatus,
   renderInlineText,
+  type WorkboardInlineText,
 } from "./view-inline-properties.ts";
 import { closeWorkboardPopoverOnAction, workboardPopoverRef } from "./view-popover.ts";
 import { workboardScrollFadeRef } from "./view-scroll-fade.ts";
@@ -68,13 +70,18 @@ export const workboardCardDetailDrawerId = "workboard-card-detail-drawer";
 const workboardCardDetailTitleId = "workboard-card-detail-title";
 const workboardCardDetailDescriptionId = "workboard-card-detail-description";
 
+const detailDrawerRefs = new WeakMap<WorkboardUiState, Ref<HTMLElement>>();
+const inlineDiscardOpen = new WeakMap<WorkboardUiState, () => void>();
+
 export function openCardDetails(state: WorkboardUiState, card: WorkboardCard) {
+  inlineDiscardOpen.delete(state);
   state.detailCardId = card.id;
   state.detailTab = "overview";
   state.detailCommentBody = state.detailCommentDrafts.get(card.id) ?? "";
 }
 
 function closeCardDetails(state: WorkboardUiState) {
+  inlineDiscardOpen.delete(state);
   state.detailCardId = null;
   state.detailTab = "overview";
   state.detailCommentBody = "";
@@ -85,8 +92,17 @@ export function getVisibleDetailCard(state: WorkboardUiState): WorkboardCard | n
     return null;
   }
   const card = state.cards.find((entry) => entry.id === state.detailCardId) ?? null;
-  if (!card || (card.metadata?.archivedAt && !state.showArchived)) {
-    return null;
+  if (card?.metadata?.archivedAt && !state.showArchived) {
+    const editors = detailDrawerRefs
+      .get(state)
+      ?.value?.querySelectorAll<WorkboardInlineText>("workboard-inline-text");
+    const hasDraft = [...(editors ?? [])].some(
+      (editor) =>
+        editor.props.card.id === card.id && (editor.hasUnsavedChanges || editor.pendingSave),
+    );
+    if (!hasDraft) {
+      return null;
+    }
   }
   return card;
 }
@@ -96,8 +112,38 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
   const visibleError = workboardErrorMessage(state, props.pageError);
   const card = getVisibleDetailCard(state);
   if (!card) {
+    inlineDiscardOpen.delete(state);
     return nothing;
   }
+  const drawer = detailDrawerRefs.get(state) ?? createRef<HTMLElement>();
+  detailDrawerRefs.set(state, drawer);
+  const inlineEditors = () => [
+    ...(drawer.value?.querySelectorAll<WorkboardInlineText>("workboard-inline-text") ?? []),
+  ];
+  const requestTransition = (transition: () => void) => {
+    const editors = inlineEditors();
+    if (editors.some((editor) => editor.pendingSave)) {
+      return false;
+    }
+    if (editors.some((editor) => editor.hasUnsavedChanges)) {
+      inlineDiscardOpen.set(state, transition);
+      props.onRequestUpdate?.();
+      return false;
+    }
+    transition();
+    return true;
+  };
+  const dismissDetails = () =>
+    requestTransition(() => {
+      closeCardDetails(state);
+      props.onRequestUpdate?.();
+    });
+  const actionProps = {
+    ...props,
+    onOpenSession: (session: Parameters<WorkboardProps["onOpenSession"]>[0]) => {
+      requestTransition(() => props.onOpenSession(session));
+    },
+  };
   const {
     task,
     busy,
@@ -238,7 +284,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
     <div class="workboard-detail__actions">
       ${
         tab === "overview" && showStartControls
-          ? renderStartExecutionButton(props, card, null, "autonomous")
+          ? renderStartExecutionButton(actionProps, card, null, "autonomous")
           : nothing
       }
       ${
@@ -246,11 +292,11 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
           ? renderStopCardAction(props, card, busy)
           : nothing
       }
-      ${renderOpenSessionCardAction(props, sessionTarget, { quiet: true })}
+      ${renderOpenSessionCardAction(actionProps, sessionTarget, { quiet: true })}
     </div>
   </div>`;
   const visibleAutomationFields = automationDetailFields(automation);
-  return renderDialog(
+  const detailsDialog = renderDialog(
     {
       className: "drawer drawer--floating",
       label: card.title,
@@ -260,19 +306,20 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
           : (lifecycle.session?.displayName ?? formatted.detail),
       style:
         "--openclaw-modal-width: 620px; --openclaw-modal-backdrop-filter: none; --wa-color-overlay-modal: rgba(0, 0, 0, 0.24);",
-      onCancel: () => {
-        closeCardDetails(state);
-        props.onRequestUpdate?.();
-      },
+      onCancel: dismissDetails,
     },
     html`
-      <aside id=${workboardCardDetailDrawerId} class="workboard-detail-drawer">
+      <aside id=${workboardCardDetailDrawerId} class="workboard-detail-drawer" ${ref(drawer)}>
         <div class="workboard-detail">
           <header class="workboard-detail__header">
             <h2 id=${workboardCardDetailTitleId}>
-              <span class="sr-only">${t("workboard.detailTitle")}: </span>${
-                writable && !archived ? renderInlineText(props, card, "title", busy) : card.title
-              }
+              <span class="sr-only">${t("workboard.detailTitle")}: </span>${renderInlineText(
+                props,
+                card,
+                "title",
+                busy,
+                !writable || archived,
+              )}
             </h2>
             <div class="workboard-detail__header-actions">
               ${
@@ -297,9 +344,9 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                         ${ref(workboardPopoverRef("end"))}
                         @click=${closeWorkboardPopoverOnAction}
                       >
-                        ${!archived ? renderEditCardAction(props, card) : nothing}
-                        ${renderArchiveCardAction(props, card, busy, archived)}
-                        ${renderDeleteCardAction(props, card, busy)}
+                        ${!archived ? renderEditCardAction(props, card, { requestAction: requestTransition }) : nothing}
+                        ${renderArchiveCardAction(props, card, busy, archived, { requestAction: requestTransition })}
+                        ${renderDeleteCardAction(props, card, busy, { requestAction: requestTransition })}
                       </div>
                     `
                   : nothing
@@ -308,10 +355,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                 class="btn btn--icon workboard-detail__icon workboard-detail__close"
                 type="button"
                 aria-label=${t("common.close")}
-                @click=${() => {
-                  closeCardDetails(state);
-                  props.onRequestUpdate?.();
-                }}
+                @click=${dismissDetails}
               >
                 ${icons.x}
               </button>
@@ -427,29 +471,13 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                         )
                       : nothing
                   }
-                  ${
-                    (writable && !archived) || card.labels.length
-                      ? html` <div class="workboard-detail__label-group">
-                          <span>${t("workboard.fieldLabels")}</span>
-                          ${
-                            writable && !archived
-                              ? renderInlineText(props, card, "labels", busy)
-                              : html`<div class="workboard-detail__labels">
-                                  ${card.labels.map((label) => html`<span>${label}</span>`)}
-                                </div>`
-                          }
-                        </div>`
-                      : nothing
-                  }
+                  <div class="workboard-detail__label-group">
+                    <span>${t("workboard.fieldLabels")}</span>
+                    ${renderInlineText(props, card, "labels", busy, !writable || archived)}
+                  </div>
                 </aside>
                 <div class="workboard-detail__content">
-                  ${
-                    writable && !archived
-                      ? renderInlineText(props, card, "notes", busy)
-                      : card.notes
-                        ? html`<p class="workboard-detail__description">${card.notes}</p>`
-                        : nothing
-                  }
+                  ${renderInlineText(props, card, "notes", busy, !writable || archived)}
                   <section
                     class="workboard-detail__execution ${
                       sessionEmpty ? "workboard-detail__execution--empty" : ""
@@ -479,14 +507,14 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                                           <span>${t("workboard.detailRunAutomatically")}</span>
                                           <div class="workboard-detail__actions">
                                             ${renderStartExecutionButton(
-                                              props,
+                                              actionProps,
                                               card,
                                               "codex",
                                               "autonomous",
                                               { engineLabelOnly: true },
                                             )}
                                             ${renderStartExecutionButton(
-                                              props,
+                                              actionProps,
                                               card,
                                               "claude",
                                               "autonomous",
@@ -500,12 +528,24 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                                 <div class="workboard-detail__engine-group">
                                   <span>${t("workboard.detailOpenManually")}</span>
                                   <div class="workboard-detail__actions">
-                                    ${renderStartExecutionButton(props, card, "codex", "manual", {
-                                      engineLabelOnly: true,
-                                    })}
-                                    ${renderStartExecutionButton(props, card, "claude", "manual", {
-                                      engineLabelOnly: true,
-                                    })}
+                                    ${renderStartExecutionButton(
+                                      actionProps,
+                                      card,
+                                      "codex",
+                                      "manual",
+                                      {
+                                        engineLabelOnly: true,
+                                      },
+                                    )}
+                                    ${renderStartExecutionButton(
+                                      actionProps,
+                                      card,
+                                      "claude",
+                                      "manual",
+                                      {
+                                        engineLabelOnly: true,
+                                      },
+                                    )}
                                   </div>
                                 </div>
                               </div>
@@ -697,4 +737,27 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
       })}
     `,
   );
+  return html`
+    ${detailsDialog}
+    ${
+      inlineDiscardOpen.has(state)
+        ? renderCardDiscardDialog({
+            title: t("workboard.discardChangesTitle"),
+            onKeepEditing: () => {
+              inlineDiscardOpen.delete(state);
+              props.onRequestUpdate?.();
+            },
+            onDiscard: () => {
+              const transition = inlineDiscardOpen.get(state);
+              inlineDiscardOpen.delete(state);
+              for (const editor of inlineEditors()) {
+                editor.discardDraft();
+              }
+              transition?.();
+              props.onRequestUpdate?.();
+            },
+          })
+        : nothing
+    }
+  `;
 }

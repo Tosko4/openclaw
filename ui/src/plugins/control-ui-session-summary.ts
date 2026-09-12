@@ -4,13 +4,14 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { AgentsListResult } from "../api/types.ts";
-import "../components/agent-avatar.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
+import "../components/agent-avatar.ts";
 import { icons } from "../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../components/markdown.ts";
 import { SessionProgressCardController } from "../components/session-progress-card-controller.ts";
 import { renderSessionProgressCard } from "../components/session-progress-card.ts";
 import { t } from "../i18n/index.ts";
+import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import { extractText } from "../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../lib/chat/sender-label.ts";
@@ -29,6 +30,8 @@ class PluginSessionSummary extends OpenClawLightDomElement {
   @property({ attribute: false }) gateway: ApplicationGateway | null = null;
   @property({ attribute: false }) presented = false;
   @property({ attribute: false }) agents: AgentsListResult["agents"] = [];
+  @property({ attribute: false }) agentIdentity: AgentIdentityCapability | null = null;
+  private readonly avatarAgentIds = new Set<string>();
   @state() private history: ChatHistoryResult | null = null;
   @state() private loading = false;
   @state() private error = false;
@@ -42,8 +45,17 @@ class PluginSessionSummary extends OpenClawLightDomElement {
     super();
     new SubscriptionsController(this)
       .watch(
+        () => (this.presented ? this.agentIdentity : null),
+        (identity, notify) => identity.subscribe(notify),
+      )
+      .watch(
         () => (this.presented ? this.gateway : null),
         (gateway, notify) => gateway.subscribe(notify),
+        (gateway) => {
+          if (gateway === this.gateway) {
+            this.synchronizeHistory();
+          }
+        },
       )
       .effect(
         () => (this.presented ? this.gateway : null),
@@ -82,7 +94,11 @@ class PluginSessionSummary extends OpenClawLightDomElement {
     target: () => (this.presented ? this.session : undefined),
   });
 
-  override updated() {
+  override willUpdate() {
+    this.synchronizeHistory();
+  }
+
+  private synchronizeHistory() {
     const snapshot = this.gateway?.snapshot;
     const client = snapshot?.phase === "connected" ? snapshot.client : null;
     const target = this.session;
@@ -166,7 +182,14 @@ class PluginSessionSummary extends OpenClawLightDomElement {
     this.requestUpdate();
   };
 
+  override updated() {
+    if (this.presented && this.isConnected) {
+      void this.agentIdentity?.ensure([...this.avatarAgentIds]);
+    }
+  }
+
   override render() {
+    this.avatarAgentIds.clear();
     if (!this.presented) {
       return nothing;
     }
@@ -179,7 +202,15 @@ class PluginSessionSummary extends OpenClawLightDomElement {
       if (!isRecord(message) || (message.role !== "user" && message.role !== "assistant")) {
         return [];
       }
-      const text = extractText(message);
+      const selectedText = extractText(message);
+      if (!selectedText) {
+        return [];
+      }
+      // Select the visible assistant phase before normalization drops block signatures.
+      const preview = normalizeMessage({ role: message.role, content: selectedText });
+      const text = preview.content
+        .flatMap((block) => (block.type === "text" && block.text ? [block.text] : []))
+        .join("\n");
       if (!text) {
         return [];
       }
@@ -200,11 +231,15 @@ class PluginSessionSummary extends OpenClawLightDomElement {
         agent?.identity?.name ??
         (agentId || t(message.role === "user" ? "sessionsView.user" : "sessionsView.assistant"));
       // Missing sender metadata never identifies a message as belonging to the current viewer.
+      if (!sender && agentId) {
+        this.avatarAgentIds.add(agentId);
+      }
       const avatar = sender
         ? renderChatAuthorAvatar(sender)
-        : agent
+        : agentId
           ? html`<openclaw-agent-avatar
-              .option=${{ value: agent.id, label, agent }}
+              .option=${{ value: agentId, label, agent: agent ?? { id: agentId } }}
+              .identity=${this.agentIdentity?.get(agentId) ?? null}
             ></openclaw-agent-avatar>`
           : html`<span class="plugin-session-summary__unknown" aria-hidden="true"
               >${message.role === "user" ? icons.users : icons.bot}</span

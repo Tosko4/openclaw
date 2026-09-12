@@ -164,6 +164,7 @@ function renderCardActionButton(params: {
   disabled?: boolean;
   ariaHaspopup?: "dialog";
   onClick: (event: MouseEvent) => void;
+  requestAction?: (action: () => void) => void;
 }) {
   const button = html`
     <button
@@ -176,7 +177,13 @@ function renderCardActionButton(params: {
       aria-label=${params.label}
       aria-haspopup=${params.ariaHaspopup ?? nothing}
       ?disabled=${params.disabled}
-      @click=${params.onClick}
+      @click=${(event: MouseEvent) => {
+        if (params.requestAction) {
+          params.requestAction(() => params.onClick(event));
+        } else {
+          params.onClick(event);
+        }
+      }}
     >
       ${params.icon}${params.iconOnly ? nothing : html`<span>${params.label}</span>`}
     </button>
@@ -187,13 +194,14 @@ function renderCardActionButton(params: {
 export function renderEditCardAction(
   props: WorkboardProps,
   card: WorkboardCard,
-  options: { iconOnly?: boolean } = {},
+  options: { iconOnly?: boolean; requestAction?: (action: () => void) => void } = {},
 ) {
   const state = getWorkboardState(props.host);
   return renderCardActionButton({
     label: t("workboard.editCard"),
     icon: icons.edit,
     iconOnly: options.iconOnly,
+    requestAction: options.requestAction,
     ariaHaspopup: "dialog",
     disabled: state.dispatching,
     onClick: () => {
@@ -208,13 +216,14 @@ export function renderArchiveCardAction(
   card: WorkboardCard,
   busy: boolean,
   archived: boolean,
-  options: { iconOnly?: boolean } = {},
+  options: { iconOnly?: boolean; requestAction?: (action: () => void) => void } = {},
 ) {
   const label = archived ? t("workboard.unarchiveCard") : t("workboard.archiveCard");
   return renderCardActionButton({
     label,
     icon: archived ? icons.archiveRestore : icons.archive,
     iconOnly: options.iconOnly,
+    requestAction: options.requestAction,
     disabled: busy,
     onClick: () => {
       void archiveWorkboardCard({
@@ -280,12 +289,13 @@ export function renderDeleteCardAction(
   props: WorkboardProps,
   card: WorkboardCard,
   busy: boolean,
-  options: { iconOnly?: boolean } = {},
+  options: { iconOnly?: boolean; requestAction?: (action: () => void) => void } = {},
 ) {
   return renderCardActionButton({
     label: t("workboard.deleteCard"),
     icon: icons.trash,
     iconOnly: options.iconOnly,
+    requestAction: options.requestAction,
     className: "workboard-card__delete",
     disabled: busy,
     onClick: () => {

@@ -914,7 +914,6 @@ describe("selection reconciliation", () => {
   });
 });
 
-
 it("saves explicit appearance clearing without sending legacy null values", async () => {
   const page = mountPage({ boardId: "planning" });
   const request = expectDefined(page.request.getMockImplementation(), "request implementation");

@@ -200,9 +200,10 @@ type InlineTextProps = {
   card: WorkboardCard;
   field: InlineTextField;
   disabled: boolean;
+  readOnly: boolean;
 };
 
-class WorkboardInlineText extends LitElement {
+export class WorkboardInlineText extends LitElement {
   static override properties = {
     props: { attribute: false },
     editing: { state: true },
@@ -234,7 +235,26 @@ class WorkboardInlineText extends LitElement {
     }
   }
 
+  discardDraft() {
+    this.finish(false);
+  }
+
+  get pendingSave() {
+    return this.saving;
+  }
+
+  get hasUnsavedChanges() {
+    if (!this.base) {
+      return false;
+    }
+    const field = this.props.field;
+    return field === "labels"
+      ? JSON.stringify(normalizeDraftLabels(this.value)) !== JSON.stringify(this.base.labels)
+      : this.value.trim() !== (this.base[field] ?? "").trim();
+  }
+
   private finish = (restoreFocus = true) => {
+    this.base = undefined;
     const document = this.ownerDocument;
     const previousFocus = document.activeElement;
     this.querySelector<HTMLElement>(".workboard-detail__labels-popover")?.hidePopover();
@@ -300,7 +320,19 @@ class WorkboardInlineText extends LitElement {
   };
 
   override render() {
-    const { card, field, disabled } = this.props;
+    const { card, field, disabled, readOnly } = this.props;
+    if (readOnly && !this.editing && !this.hasUnsavedChanges) {
+      if (field === "labels") {
+        return html`<div class="workboard-detail__labels">
+          ${card.labels.map((label) => html`<span>${label}</span>`)}
+        </div>`;
+      }
+      return field === "title"
+        ? card.title
+        : card.notes
+          ? html`<p class="workboard-detail__description">${card.notes}</p>`
+          : nothing;
+    }
     const label = t(
       field === "title"
         ? "workboard.fieldTitle"
@@ -326,8 +358,10 @@ class WorkboardInlineText extends LitElement {
       aria-expanded=${field === "labels" ? String(this.editing) : nothing}
       ?disabled=${disabled}
       @click=${() => {
-        this.base = card;
-        this.value = field === "labels" ? card.labels.join(", ") : (card[field] ?? "");
+        if (!this.base || !this.hasUnsavedChanges) {
+          this.base = card;
+          this.value = field === "labels" ? card.labels.join(", ") : (card[field] ?? "");
+        }
         this.editing = true;
         void this.updateComplete.then(() => {
           if (!this.isConnected || !this.editing) {
@@ -443,8 +477,9 @@ export function renderInlineText(
   card: WorkboardCard,
   field: InlineTextField,
   disabled: boolean,
+  readOnly = false,
 ) {
   return html`<workboard-inline-text
-    .props=${{ owner, card, field, disabled: disabled || !owner.connected || !owner.client }}
+    .props=${{ owner, card, field, readOnly, disabled: disabled || readOnly || !owner.connected || !owner.client }}
   ></workboard-inline-text>`;
 }

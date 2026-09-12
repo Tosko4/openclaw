@@ -538,49 +538,59 @@ export function renderCardModal(props: WorkboardProps) {
     ${draftDialog}
     ${
       state.draftDiscardOpen
-        ? renderDialog(
-            {
-              label: discardTitle,
-              description: t("workboard.discardDraftHelp"),
-              style:
-                "--openclaw-modal-width: 400px; --openclaw-modal-backdrop-filter: none; --wa-color-overlay-modal: rgba(0, 0, 0, 0.24);",
-              onCancel: () => {
-                keepEditing();
-                return true;
-              },
+        ? renderCardDiscardDialog({
+            title: discardTitle,
+            onKeepEditing: keepEditing,
+            onDiscard: () => {
+              if (state.draftSaving) {
+                return;
+              }
+              resetDraftState(state);
+              props.onRequestUpdate?.();
             },
-            html`
-              <section class="workboard-discard">
-                <h2>${discardTitle}</h2>
-                <p>${t("workboard.discardDraftHelp")}</p>
-                <div class="workboard-discard__actions">
-                  <button class="btn" type="button" autofocus @click=${keepEditing}>
-                    ${t("workboard.keepEditing")}
-                  </button>
-                  <button
-                    class="btn danger"
-                    type="button"
-                    @click=${() => {
-                      if (state.draftSaving) {
-                        return;
-                      }
-                      resetDraftState(state);
-                      props.onRequestUpdate?.();
-                    }}
-                  >
-                    ${t("workboard.discardDraft")}
-                  </button>
-                </div>
-              </section>
-              ${renderWorkboardToast({
-                owner: state,
-                message: visibleError ?? "",
-                key: visibleError,
-                tone: "error",
-              })}
-            `,
-          )
+            error: renderWorkboardToast({
+              owner: state,
+              message: visibleError ?? "",
+              key: visibleError,
+              tone: "error",
+            }),
+          })
         : nothing
     }
   `;
+}
+
+export function renderCardDiscardDialog(props: {
+  title: string;
+  onKeepEditing: () => void;
+  onDiscard: () => void;
+  error?: unknown;
+}) {
+  return renderDialog(
+    {
+      label: props.title,
+      description: t("workboard.discardDraftHelp"),
+      style:
+        "--openclaw-modal-width: 400px; --openclaw-modal-backdrop-filter: none; --wa-color-overlay-modal: rgba(0, 0, 0, 0.24);",
+      onCancel: () => {
+        props.onKeepEditing();
+        return true;
+      },
+    },
+    html`
+      <section class="workboard-discard">
+        <h2>${props.title}</h2>
+        <p>${t("workboard.discardDraftHelp")}</p>
+        <div class="workboard-discard__actions">
+          <button class="btn" type="button" autofocus @click=${props.onKeepEditing}>
+            ${t("workboard.keepEditing")}
+          </button>
+          <button class="btn danger" type="button" @click=${props.onDiscard}>
+            ${t("workboard.discardDraft")}
+          </button>
+        </div>
+      </section>
+      ${props.error ?? nothing}
+    `,
+  );
 }
