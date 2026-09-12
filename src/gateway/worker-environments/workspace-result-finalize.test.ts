@@ -212,8 +212,8 @@ describe("concurrent worker workspace results", () => {
       });
       const retain: NodeWorkerWorkspaceRetainEntry[] = [];
       const retained = createDeferred();
-      // An upload can fail before its siblings subscribe. They still await this
-      // same rejecting barrier; the observer only prevents an unhandled rejection.
+      // A reconciliation can fail before its siblings reach the upload barrier.
+      // Every failed turn releases it; this observer prevents an unhandled rejection.
       void retained.promise.catch(() => undefined);
       let uploadsRemaining = count;
       const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
@@ -373,6 +373,9 @@ describe("concurrent worker workspace results", () => {
             ...job,
             placements,
             workspaceOperations,
+          }).catch((error: unknown) => {
+            retained.reject(error);
+            throw error;
           }),
         ),
       );
