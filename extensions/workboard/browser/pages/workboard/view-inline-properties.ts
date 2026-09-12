@@ -1,4 +1,5 @@
 import { LitElement, html, nothing, type TemplateResult } from "lit";
+import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import { renderAgentPicker } from "../../components/host-components.ts";
 import { icons } from "../../components/icons.ts";
@@ -71,7 +72,7 @@ function renderPropertyPicker<T extends string>(params: {
               type="radio"
               name=${params.id}
               value=${option.value}
-              .checked=${params.value === option.value}
+              .checked=${live(params.value === option.value)}
               ?autofocus=${params.value === option.value}
               ?disabled=${params.disabled}
               @click=${(event: MouseEvent) => {

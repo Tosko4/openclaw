@@ -157,7 +157,10 @@ export function renderBoardAutomationHeading(automation: BoardAutomationState | 
   `;
 }
 
-export function renderBoardAutomation(automation: BoardAutomationState | undefined) {
+export function renderBoardAutomation(
+  automation: BoardAutomationState | undefined,
+  onNavigate?: (event: MouseEvent) => void,
+) {
   return automation
     ? html`
         <section class="workboard-board-draft__automation">
@@ -207,6 +210,7 @@ export function renderBoardAutomation(automation: BoardAutomationState | undefin
               automation.status === "loaded"
                 ? html`
                     <a
+                      @click=${onNavigate ?? nothing}
                       href=${`${workboardHost().basePath}/automations?job=${encodeURIComponent(automation.jobId)}`}
                       aria-label=${t("workboard.openNamedAutomation", {
                         name: automation.job.displayName ?? automation.job.name,

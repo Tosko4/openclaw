@@ -138,6 +138,33 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
       closeCardDetails(state);
       props.onRequestUpdate?.();
     });
+  const navigateAutomation = (event: MouseEvent) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    ) {
+      return;
+    }
+    const link = event.currentTarget;
+    if (!(link instanceof HTMLAnchorElement) || (link.target && link.target !== "_self")) {
+      return;
+    }
+    let requesting = true;
+    const proceed = requestTransition(() => {
+      // Clean clicks retain native navigation. Replay a deferred click only after discard.
+      if (!requesting && link.isConnected) {
+        link.click();
+      }
+    });
+    requesting = false;
+    if (!proceed) {
+      event.preventDefault();
+    }
+  };
   const actionProps = {
     ...props,
     onOpenSession: (session: Parameters<WorkboardProps["onOpenSession"]>[0]) => {
@@ -554,7 +581,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                         : nothing
                     }
                   </section>
-                  ${renderBoardAutomation(props.detailBoardAutomation)}
+                  ${renderBoardAutomation(props.detailBoardAutomation, navigateAutomation)}
                   ${
                     automation?.summary || visibleAutomationFields.length
                       ? html`<section

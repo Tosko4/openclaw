@@ -8,7 +8,7 @@ import type {
   ControlUiComponents,
 } from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { nextWorkboardCardPosition } from "../../lib/workboard/card-state.ts";
 import { getWorkboardState, stopWorkboardLifecycleRefresh } from "../../lib/workboard/index.ts";
@@ -3405,7 +3405,8 @@ describe("renderWorkboard", () => {
     );
     const popup = expectDefined(owner.querySelector<HTMLElement>("[popover]"), "labels popover");
     popup.showPopover = vi.fn();
-    popup.matches = vi.fn(() => false);
+    const matches = vi.spyOn(popup, "matches").mockReturnValue(false);
+    onTestFinished(() => matches.mockRestore());
     trigger.click();
     const input = await waitForFast(() =>
       expectDefined(popup.querySelector<HTMLInputElement>("input"), "labels input"),
@@ -3605,6 +3606,140 @@ describe("renderWorkboard", () => {
       }
     },
   );
+
+  it.each([
+    { field: "priority", original: "normal", next: "high" },
+    { field: "status", original: "todo", next: "ready" },
+  ] as const)(
+    "restores native $field selection after rejection so the same option can retry",
+    async ({ field, original, next }) => {
+      const card = createWorkboardCard({ priority: "normal", status: "todo" });
+      let attempts = 0;
+      const client = createWorkboardTestClient(() => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new GatewayProtocolRequestError({
+            code: "workboard_conflict",
+            message: "Review and retry the property.",
+            details: {
+              type: "workboard_card_conflict",
+              card: { ...card, updatedAt: card.updatedAt + 1 },
+            },
+          });
+        }
+        return { card: { ...card, [field]: next, updatedAt: card.updatedAt + 2 } };
+      });
+      const { state, container, renderView } = createWorkboardView({
+        client,
+        onRequestUpdate: () => renderView(),
+      });
+      state.cards = [card];
+      state.detailCardId = card.id;
+      renderView();
+      const choice = expectDefined(
+        container.querySelector<HTMLInputElement>(
+          `[name="workboard-detail-${field}-${card.id}"][value="${next}"]`,
+        ),
+        "next property option",
+      );
+      const prior = expectDefined(
+        container.querySelector<HTMLInputElement>(
+          `[name="workboard-detail-${field}-${card.id}"][value="${original}"]`,
+        ),
+        "saved property option",
+      );
+      choice.click();
+      await waitForFast(() => expect(state.error).toContain("Review and retry"));
+      await waitForFast(() => expect(choice.disabled).toBe(false));
+      expect(choice.checked).toBe(false);
+      expect(prior.checked).toBe(true);
+      choice.click();
+      await waitForFast(() => expect(state.cards[0]?.[field]).toBe(next));
+      expect(attempts).toBe(2);
+      expect(choice.checked).toBe(true);
+    },
+  );
+
+  it("guards automation navigation while keeping modified clicks native", async () => {
+    const card = createWorkboardCard({ title: "Draft automation card" });
+    const { state, container, renderView } = createWorkboardView({
+      client: createWorkboardTestClient({}),
+      onRequestUpdate: () => renderView(),
+      detailBoardAutomation: {
+        jobId: "job-review",
+        status: "loaded",
+        job: {
+          id: "job-review",
+          name: "Review board",
+          enabled: true,
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          schedule: { kind: "every", everyMs: 60000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "Review the board" },
+          state: {},
+        },
+      },
+    });
+    state.cards = [card];
+    state.detailCardId = card.id;
+    renderView();
+    const link = expectDefined(
+      container.querySelector<HTMLAnchorElement>('.workboard-detail a[href*="/automations?job="]'),
+      "automation link",
+    );
+    const allowed: boolean[] = [];
+    link.addEventListener("click", (event) => {
+      allowed.push(!event.defaultPrevented);
+      event.preventDefault(); // Record navigation admission without leaving the test page.
+    });
+    const click = (init: MouseEventInit = {}) =>
+      link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...init }));
+    click();
+    expect(allowed).toEqual([true]);
+    const trigger = await waitForFast(() =>
+      expectDefined(
+        container.querySelector<HTMLButtonElement>(".workboard-detail__text-trigger--title"),
+        "title trigger",
+      ),
+    );
+    trigger.click();
+    const input = await waitForFast(() =>
+      expectDefined(
+        container.querySelector<HTMLInputElement>(".workboard-detail__text-editor--title input"),
+        "title input",
+      ),
+    );
+    input.value = "Unsaved title";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    for (const modifier of [
+      { ctrlKey: true },
+      { metaKey: true },
+      { shiftKey: true },
+      { altKey: true },
+    ]) {
+      click(modifier);
+      expect(allowed.at(-1)).toBe(true);
+      expect(container.querySelector(".workboard-discard")).toBeNull();
+    }
+    click();
+    expect(allowed.at(-1)).toBe(false);
+    expect(input.isConnected).toBe(true);
+    expectDefined(
+      buttonByText(container.querySelector(".workboard-discard")!, "Keep editing"),
+      "keep title",
+    ).click();
+    expect(input.value).toBe("Unsaved title");
+    click();
+    expect(allowed.at(-1)).toBe(false);
+    expectDefined(
+      buttonByText(container.querySelector(".workboard-discard")!, "Discard"),
+      "discard title",
+    ).click();
+    expect(allowed.at(-1)).toBe(true);
+    expect(allowed.filter(Boolean)).toHaveLength(6);
+  });
 
   it("keeps label pills mounted while editing and preserves failed input until Escape", async () => {
     const card = createWorkboardCard({ title: "Label editing", labels: ["review"] });
