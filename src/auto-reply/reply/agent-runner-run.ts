@@ -104,11 +104,13 @@ export async function runReplyAgent(
     replyThreadingOverride,
     replyOperation: providedReplyOperation,
   } = params;
-  const policyPrimary = followupRun.run.blockedModelOverrideUsesPrimary === true;
-  const opts = policyPrimary
+  const hasModelSelectionNotice =
+    followupRun.run.blockedModelOverrideUsesPrimary === true ||
+    Boolean(followupRun.run.missingConfiguredPrimary);
+  const opts = hasModelSelectionNotice
     ? { ...requestedOpts, onPartialReply: undefined, onBlockReply: undefined }
     : requestedOpts;
-  const blockStreamingEnabled = !policyPrimary && requestedBlockStreamingEnabled;
+  const blockStreamingEnabled = !hasModelSelectionNotice && requestedBlockStreamingEnabled;
   const resolveGatewayContext = providedReplyOperation
     ? getGatewayContextResolver(providedReplyOperation)
     : (readChannelContextGatewayContextResolver(sessionCtx) ??

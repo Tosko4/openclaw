@@ -6,6 +6,7 @@ import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-crede
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { readSessionRuntimeOwnership } from "../../agents/harness/session-runtime-ownership.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import type { ModelManifestNormalizationContext } from "../../agents/model-ref-shared.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
@@ -29,6 +30,8 @@ export type ChatMetadataProjectionFacts = {
 
 export type PreparedAgentProjection<T = ChatMetadataResult> = {
   modelCatalog: ModelCatalogEntry[];
+  modelCatalogSnapshot?: ModelCatalogSnapshot;
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
   read: (selection?: Pick<ChatMetadataReadParams, "sessionEntry" | "sessionKey">) => T;
   isCurrent: () => boolean;
 };
@@ -91,6 +94,8 @@ export async function prepareChatMetadataModelProjection(params: {
   ]);
   return {
     modelCatalog,
+    modelCatalogSnapshot: snapshot,
+    manifestPlugins: params.facts.owner.metadataSnapshot,
     read: (selection) => {
       const { models, allowList } = readModels.read(selection);
       return { models, ...(allowList ? { allowList } : {}) };

@@ -447,6 +447,7 @@ export async function prepareModelsListResult(
   const visibilityPolicy = createModelVisibilityPolicy({
     cfg,
     catalog,
+    modelCatalog: preparedCatalog.snapshot,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel,
     agentId,
@@ -504,6 +505,7 @@ export async function prepareModelsListResult(
     agentId,
     sessionKey: scope?.sessionKey,
     defaultModel,
+    effectiveDefaultRef: preparedCatalog.effectiveDefault.ref,
     canonicalizeRef: (ref) => ({
       ...ref,
       model:

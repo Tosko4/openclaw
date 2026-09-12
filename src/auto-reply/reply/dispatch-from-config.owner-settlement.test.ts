@@ -3,12 +3,14 @@ import { AsyncResource } from "node:async_hooks";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import { captureAssistantTranscriptRewriteStart } from "../../config/sessions/transcript-assistant-rewrite.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import {
   interruptSessionWorkAdmissions,
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
@@ -34,10 +36,10 @@ import {
   setNoAbort,
 } from "./dispatch-from-config.test-harness.js";
 import {
-  attachModelPolicyNotice,
   deferModelPolicyNoticeAcknowledgment,
   settleModelPolicyNoticePublication,
-} from "./model-policy-notice.js";
+} from "./model-notice-publication.js";
+import { attachModelPolicyNotice } from "./model-policy-notice.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -69,12 +71,56 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     "holds followups through deferred Gateway publication (%s)",
     async (delivered) => {
       setNoAbort();
-      const sessionEntry = { sessionId: "policy-session", updatedAt: 1 };
+      const state = await createOpenClawTestState({
+        label: "deferred-policy-publication",
+        applyEnv: false,
+      });
+      const sessions = await import("../../config/sessions/session-accessor.js");
+      const realSessions = await vi.importActual<typeof sessions>(
+        "../../config/sessions/session-accessor.js",
+      );
+      const readEntry = vi
+        .spyOn(sessions, "loadSessionEntryReadOnly")
+        .mockImplementation(realSessions.loadSessionEntryReadOnly);
+      const patchEntry = vi
+        .spyOn(sessions, "patchSessionEntryCore")
+        .mockImplementation(realSessions.patchSessionEntryCore);
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:deferred-policy-notice",
+        sessionId: "policy-session",
+        storePath: state.statePath("openclaw-agent.sqlite"),
+        env: state.env,
+      };
+      const sessionEntry = {
+        sessionId: "policy-session",
+        updatedAt: 1,
+        providerOverride: "openai",
+        modelOverride: "blocked",
+      };
+      sessionStoreMocks.currentEntry = sessionEntry;
+      sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue(scope.storePath);
+      sessions.replaceSessionEntrySync(scope, sessionEntry);
+      const start = captureAssistantTranscriptRewriteStart(scope);
+      const assistant = await sessions.appendTranscriptMessage(scope, {
+        message: { role: "assistant", content: [{ type: "text", text: "Answer" }] },
+      });
       const payload = attachModelPolicyNotice({
-        payloads: [{ text: "Answer" }],
+        payloads: [
+          setReplyPayloadMetadata(
+            { text: "Answer" },
+            {
+              assistantTranscriptOwned: true,
+              assistantTranscriptEntryId: assistant.messageId,
+            },
+          ),
+        ],
         pinnedModel: "openai/blocked",
         primaryModel: "openai/primary",
         sessionEntry,
+        sessionKey: scope.sessionKey,
+        storePath: scope.storePath,
+        transcript: { scope, start, expectedSession: { ...sessionEntry } },
       })[0];
       const afterClear = vi.fn();
       const dispatcher = createReplyDispatcher({
@@ -111,8 +157,17 @@ describe("dispatchReplyFromConfig owner settlement", () => {
         });
         expect(afterClear).toHaveBeenCalledOnce();
         expect(Object.hasOwn(sessionEntry, "modelPolicyNotice")).toBe(delivered);
+        expect(sessions.loadSessionEntryReadOnly(scope)?.modelPolicyNotice).toEqual(
+          delivered ? { sessionId: scope.sessionId, pinnedModel: "openai/blocked" } : undefined,
+        );
       } finally {
-        await settleModelPolicyNoticePublication(payload, false);
+        try {
+          await settleModelPolicyNoticePublication(payload, false);
+        } finally {
+          readEntry.mockRestore();
+          patchEntry.mockRestore();
+          await state.cleanup();
+        }
       }
     },
   );

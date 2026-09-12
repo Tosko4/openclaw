@@ -136,6 +136,7 @@ async function executeAgentTurnInternalLoop(
     run.autoFallbackPrimaryProbe = undefined;
     run.blockedModelOverrideRef = undefined;
     run.blockedModelOverrideUsesPrimary = undefined;
+    run.missingConfiguredPrimary = undefined;
     // Keep runtime paired with the error's model/auth winner even if the
     // active in-memory session snapshot lags the persisted directive write.
     liveModelSwitchRuntimeEntry = { agentRuntimeOverride: err.agentRuntimeOverride };
@@ -234,16 +235,16 @@ async function executeAgentTurnInternalLoop(
     if (params.replyOperation) {
       markReplyOperationExecutionStarted(params.replyOperation);
     }
-    const completionOwner = params.followupRun.run.blockedModelOverrideUsesPrimary
+    const hasModelSelectionNotice =
+      params.followupRun.run.blockedModelOverrideUsesPrimary ||
+      Boolean(params.followupRun.run.missingConfiguredPrimary);
+    const completionOwner = hasModelSelectionNotice
       ? params.opts?.onAgentRunStart?.(runId, admittedRunContext.current?.executionIdentityToken, {
           completionSource: "reply-dispatch",
           getResult: () => ({}),
         })
       : params.opts?.onAgentRunStart?.(runId, admittedRunContext.current?.executionIdentityToken);
-    if (
-      params.followupRun.run.blockedModelOverrideUsesPrimary &&
-      completionOwner === "reply-dispatch"
-    ) {
+    if (hasModelSelectionNotice && completionOwner === "reply-dispatch") {
       registerAgentRunContext(runId, {
         completionSource: "reply-dispatch",
         isControlUiVisible: false,
@@ -501,6 +502,7 @@ async function executeAgentTurnInternalLoop(
     kind: "completed",
     maintenanceAuthProfile: fallbackCycleState.maintenanceAuthProfile,
     compactionRequestBudget: fallbackCycleState.compactionRequestBudget,
+    settledWriter: fallbackCycleState.settledWriter,
     result: runResult,
     fallbackProvider,
     fallbackModel,
@@ -675,6 +677,7 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
         kind: "settled",
         maintenanceAuthProfile: internal.maintenanceAuthProfile,
         compactionRequestBudget: internal.compactionRequestBudget,
+        settledWriter: internal.settledWriter,
         ...terminalStatus,
         result: internal.result,
         resolved: { provider, model },

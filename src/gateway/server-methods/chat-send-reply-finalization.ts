@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { settleModelPolicyNoticePublication } from "../../auto-reply/reply/model-policy-notice.js";
+import { settleModelPolicyNoticePublication } from "../../auto-reply/reply/model-notice-publication.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import {
   appendLocalMediaParentRoots,

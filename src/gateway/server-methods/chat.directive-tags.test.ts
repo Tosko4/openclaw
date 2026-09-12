@@ -45,11 +45,13 @@ import {
   appendTranscriptMessage,
   loadSessionEntry as loadSqliteSessionEntry,
   loadTranscriptEventsSync,
+  readSessionTranscriptWatermark,
   replaceSessionEntry,
   resolveSessionTranscriptActiveLeafEntryId,
   switchSessionBranch,
   type SessionAccessScope,
   type SessionTranscriptReadScope,
+  updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
@@ -3874,6 +3876,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         modelOverride: "blocked-model",
       });
       const entry = expectDefined(loadSqliteSessionEntry(sessionEntryScope()), "session");
+      Object.assign(mockState.sessionEntry, {
+        providerOverride: entry.providerOverride,
+        modelOverride: entry.modelOverride,
+        lifecycleRevision: entry.lifecycleRevision,
+        activeWriterRunId: entry.activeWriterRunId,
+      });
       const original = setReplyPayloadMetadata(
         { text: "Answer from the primary." },
         target === "key" || target === "rotated-key"
@@ -3947,6 +3955,153 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const messages = await readActiveAssistantTranscriptMessages();
       expect(messages).toHaveLength(1);
       expect(JSON.stringify(messages[0])).toContain("Use /model to change it.");
+    },
+  );
+
+  it.each(["allowed", "writer-revoked", "lifecycle-revoked"] as const)(
+    "chat.send revalidates policy reply authority after the SQLite writer queue wait (%s)",
+    async (authority) => {
+      await createTranscriptFixture("openclaw-chat-policy-queued-writer-");
+      const originalAuthority = {
+        activeWriterRunId: "policy-original-writer",
+        lifecycleRevision: "policy-original-lifecycle",
+        providerOverride: "fixture",
+        modelOverride: "blocked-model",
+      };
+      await upsertSessionEntryCore(sessionEntryScope(), originalAuthority);
+      Object.assign(mockState.sessionEntry, originalAuthority);
+      const entry = expectDefined(loadSqliteSessionEntry(sessionEntryScope()), "session");
+      const payload = attachModelPolicyNotice({
+        payloads: [{ text: "Answer from the primary." }],
+        pinnedModel: "fixture/blocked-model",
+        primaryModel: "fixture/primary-model",
+        sessionEntry: entry,
+        sessionKey: "main",
+        storePath: mockState.storePath,
+      })[0];
+      const writerEntered = createDeferred();
+      const releaseWriter = createDeferred();
+      const rewriteQueued = createDeferred();
+      const sqliteScope = await import("../../config/sessions/session-accessor.sqlite-scope.js");
+      const runWrite = sqliteScope.runExclusiveSqliteSessionWrite;
+      const observeWrite: typeof runWrite = (scope, write, operation, diagnostics) => {
+        const result = runWrite(scope, write, operation, diagnostics);
+        if (operation === "session.transcript.rewrite-exact") {
+          rewriteQueued.resolve();
+        }
+        return result;
+      };
+      const writes = vi
+        .spyOn(sqliteScope, "runExclusiveSqliteSessionWrite")
+        .mockImplementation(observeWrite);
+      let ownerChange: ReturnType<typeof updateSessionEntry> | undefined;
+      dispatchInboundMessageMock.mockImplementationOnce(async (params: TestDispatchParams) => {
+        expect(
+          params.replyOptions?.onAgentRunStart?.("policy-run", undefined, {
+            completionSource: "reply-dispatch",
+            getResult: () => ({}),
+          }),
+        ).toBe("reply-dispatch");
+        const userTurnRecorder = expectDefined(
+          params.replyOptions?.userTurnTranscriptRecorder,
+          "chat.send user transcript recorder",
+        );
+        expect((await userTurnRecorder.persistApproved())?.appended).toBe(true);
+        const appended = await appendSourceReplyMirrorEntry({ text: "Answer from the primary." });
+        setReplyPayloadMetadata(payload, {
+          assistantTranscriptOwned: true,
+          assistantTranscriptEntryId: appended.messageId,
+          sessionWriterDeliveryAuthority: {
+            agentId: "main",
+            sessionKey: "main",
+            storePath: mockState.storePath,
+            expectedSessionId: entry.sessionId,
+            expectedLifecycleRevision: originalAuthority.lifecycleRevision,
+            expectedWriterRunId: originalAuthority.activeWriterRunId,
+          },
+        });
+        ownerChange = updateSessionEntry(
+          sessionEntryScope(),
+          async () => {
+            writerEntered.resolve();
+            await releaseWriter.promise;
+            return authority === "writer-revoked"
+              ? { activeWriterRunId: "policy-replacement-writer" }
+              : authority === "lifecycle-revoked"
+                ? { lifecycleRevision: "policy-replacement-lifecycle" }
+                : {};
+          },
+          { preserveActivity: true, skipMaintenance: true },
+        );
+        await writerEntered.promise;
+        params.dispatcher.sendFinalReply(payload);
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return { ok: true, queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+      });
+      const { context, send } = createChatRequestFixture();
+      const pending = send({ idempotencyKey: `policy-queued-${authority}`, waitFor: "dedupe" });
+      try {
+        await withTestTimeout(
+          rewriteQueued.promise,
+          5_000,
+          "Policy rewrite did not enter the writer queue",
+        );
+        const before = loadTranscriptEventsSync(transcriptScope());
+        const watermark = readSessionTranscriptWatermark(transcriptScope());
+        const updatesBefore = mockState.emittedTranscriptUpdates.length;
+        expect(readPersistedUserMessages()).toHaveLength(1);
+        expect(loadSqliteSessionEntry(sessionEntryScope())?.modelPolicyNotice).toBeUndefined();
+        releaseWriter.resolve();
+        await ownerChange;
+        await pending;
+
+        const after = loadTranscriptEventsSync(transcriptScope());
+        expect(after.map((event) => asOptionalRecord(event)?.id)).toEqual(
+          before.map((event) => asOptionalRecord(event)?.id),
+        );
+        if (authority === "allowed") {
+          expect(lastBroadcastPayload(context)).toMatchObject({ state: "final" });
+          expect(extractFirstTextBlock(lastBroadcastPayload(context))).toContain(
+            "Use /model to change it.\n\nAnswer from the primary.",
+          );
+          expect(loadSqliteSessionEntry(sessionEntryScope())?.modelPolicyNotice).toEqual({
+            sessionId: entry.sessionId,
+            pinnedModel: "fixture/blocked-model",
+          });
+          expect(await readActiveAssistantTranscriptMessages()).toHaveLength(1);
+          expect(JSON.stringify(after)).toContain("Use /model to change it.");
+          expect(readSessionTranscriptWatermark(transcriptScope()).maxSeq).toBe(watermark.maxSeq);
+        } else {
+          expect(loadSqliteSessionEntry(sessionEntryScope())).toMatchObject(
+            authority === "writer-revoked"
+              ? {
+                  activeWriterRunId: "policy-replacement-writer",
+                  lifecycleRevision: originalAuthority.lifecycleRevision,
+                }
+              : {
+                  activeWriterRunId: originalAuthority.activeWriterRunId,
+                  lifecycleRevision: "policy-replacement-lifecycle",
+                },
+          );
+          expect(after).toEqual(before);
+          expect(readSessionTranscriptWatermark(transcriptScope())).toEqual(watermark);
+          expect(loadSqliteSessionEntry(sessionEntryScope())?.modelPolicyNotice).toBeUndefined();
+          expect(
+            JSON.stringify(mockState.emittedTranscriptUpdates.slice(updatesBefore)),
+          ).not.toContain("Use /model to change it.");
+          expect(lastBroadcastPayload(context)).toMatchObject({ state: "error" });
+          expect(extractFirstTextBlock(lastBroadcastPayload(context))).toBeUndefined();
+        }
+      } finally {
+        releaseWriter.resolve();
+        try {
+          await ownerChange;
+          await pending;
+        } finally {
+          writes.mockRestore();
+        }
+      }
     },
   );
 

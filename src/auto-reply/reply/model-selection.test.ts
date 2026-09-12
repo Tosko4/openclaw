@@ -163,7 +163,7 @@ const makeConfiguredModel = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("createModelSelectionState catalog loading", () => {
-  it("skips full catalog loading for ordinary allowlist-backed turns", async () => {
+  it("reads only the passive snapshot for ordinary allowlist-backed turns", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
     const cfg = {
       agents: {
@@ -197,7 +197,7 @@ describe("createModelSelectionState catalog loading", () => {
     expect(state.allowedModelKeys.has("openai/gpt-5.4")).toBe(true);
     await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("low");
     await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
-    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+    expect(loadModelCatalogLocal).toHaveBeenCalledExactlyOnceWith({ config: cfg, readOnly: true });
   });
 
   it.each(["high", "ultra"] as const)(
@@ -236,7 +236,10 @@ describe("createModelSelectionState catalog loading", () => {
       });
 
       await expect(state.resolveDefaultThinkingLevel()).resolves.toBe(thinking);
-      expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+      expect(loadModelCatalogLocal).toHaveBeenCalledExactlyOnceWith({
+        config: cfg,
+        readOnly: true,
+      });
     },
   );
 
@@ -274,7 +277,7 @@ describe("createModelSelectionState catalog loading", () => {
     });
 
     await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("off");
-    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+    expect(loadModelCatalogLocal).toHaveBeenCalledExactlyOnceWith({ config: cfg, readOnly: true });
   });
 
   it("uses the implicit model default when no global thinking default is configured", async () => {
@@ -308,7 +311,7 @@ describe("createModelSelectionState catalog loading", () => {
     });
 
     await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("medium");
-    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+    expect(loadModelCatalogLocal).toHaveBeenCalledExactlyOnceWith({ config: cfg, readOnly: true });
   });
 
   it("hydrates runtime catalog metadata when the configured allowlist entry lacks reasoning", async () => {
@@ -345,7 +348,7 @@ describe("createModelSelectionState catalog loading", () => {
     });
 
     await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("medium");
-    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+    expect(loadModelCatalogLocal).toHaveBeenCalledExactlyOnceWith({ config: cfg, readOnly: true });
     expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledWith({
       config: cfg,
       agentId: undefined,
@@ -556,7 +559,7 @@ describe("createModelSelectionState catalog loading", () => {
     ]);
     expect(loadManifestModelCatalog).not.toHaveBeenCalled();
     expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledOnce();
-    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+    expect(loadModelCatalogLocal).toHaveBeenCalledExactlyOnceWith({ config: cfg, readOnly: true });
   });
 
   it("keeps configured compat in published thinking metadata", async () => {
@@ -606,7 +609,7 @@ describe("createModelSelectionState catalog loading", () => {
         compat: { thinkingFormat: "qwen-chat-template" },
       }),
     ]);
-    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+    expect(loadModelCatalogLocal).toHaveBeenCalledExactlyOnceWith({ config: cfg, readOnly: true });
   });
 
   it("uses only configured compat for a custom route when the catalog is loaded", async () => {
@@ -762,37 +765,21 @@ describe("createModelSelectionState catalog loading", () => {
   });
 
   it.each([
-    [
-      "anthropic",
-      "claude-opus-4-5",
-      "openai/*",
-      "gpt-5.5-codex",
-      1,
-      "anthropic",
-      "claude-opus-4-5",
-    ],
-    ["openai/team", "claude-opus-4-5", "openai/*", "gpt-5.5-codex", 1, "openai", "gpt-5.5-codex"],
-    ["openai", "openai/team/Reader", "openai/team/*", "team/Reader", 1, "openai", "team/Reader"],
-    ["openai", "team/Reader", "openai/team/*", "team/Reader", 0, "openai", "team/Reader"],
+    ["anthropic", "claude-opus-4-5", "openai/*", "anthropic", "claude-opus-4-5"],
+    ["openai/team", "claude-opus-4-5", "openai/*", "openai", "team/claude-opus-4-5"],
+    ["openai", "openai/team/Reader", "openai/team/*", "openai", "team/Reader"],
+    ["openai", "team/Reader", "openai/team/*", "openai", "team/Reader"],
   ] as const)(
     "selects %s/%s with wildcard %s",
-    async (
-      defaultProvider,
-      defaultModel,
-      allow,
-      selectedModel,
-      catalogLoads,
-      expectedProvider,
-      expectedModel,
-    ) => {
+    async (defaultProvider, defaultModel, allow, expectedProvider, expectedModel) => {
       vi.mocked(loadModelCatalogLocal).mockClear();
-      if (catalogLoads) {
-        vi.mocked(loadModelCatalogLocal).mockResolvedValueOnce([
-          { provider: defaultProvider, id: defaultModel, name: "Configured primary" },
-          { provider: "openai", id: selectedModel, name: "Allowed model" },
-          { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
-        ]);
-      }
+      vi.mocked(loadModelCatalogLocal).mockResolvedValueOnce([
+        { provider: "anthropic", id: "claude-opus-4-5", name: "Configured primary" },
+        { provider: "openai", id: "team/claude-opus-4-5", name: "Namespaced primary" },
+        { provider: "openai", id: "team/Reader", name: "Namespaced reader" },
+        { provider: "openai", id: "gpt-5.5-codex", name: "Allowed sibling" },
+        { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
+      ]);
       const cfg = {
         agents: {
           defaults: {
@@ -814,7 +801,10 @@ describe("createModelSelectionState catalog loading", () => {
 
       expect(state.provider).toBe(expectedProvider);
       expect(state.model).toBe(expectedModel);
-      expect(loadModelCatalogLocal).toHaveBeenCalledTimes(catalogLoads);
+      expect(loadModelCatalogLocal).toHaveBeenCalledExactlyOnceWith({
+        config: cfg,
+        readOnly: true,
+      });
     },
   );
 
@@ -1093,7 +1083,7 @@ describe("createModelSelectionState parent inheritance", () => {
     expect(state.model).toBe("claude-opus-4-6");
   });
 
-  it("blocks a disallowed inherited parent pin without switching models", async () => {
+  it("preserves a disallowed inherited parent pin while using the allowed default", async () => {
     const cfg = {
       agents: {
         defaults: {
@@ -1116,9 +1106,12 @@ describe("createModelSelectionState parent inheritance", () => {
       parentEntry,
     });
 
-    expect(state.provider).toBe("anthropic");
-    expect(state.model).toBe("claude-opus-4-6");
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-4o-mini");
     expect(state.blockedModelOverrideRef).toBe("anthropic/claude-opus-4-6");
+    expect(state.blockedModelOverrideUsesPrimary).toBe(true);
+    expect(parentEntry.providerOverride).toBe("anthropic");
+    expect(parentEntry.modelOverride).toBe("claude-opus-4-6");
   });
 
   it("applies stored override when heartbeat override was not resolved", async () => {
@@ -2266,6 +2259,11 @@ describe("createModelSelectionState auto-failover overrides", () => {
   });
 
   it("keeps a canonical stored route ahead of a colliding bare alias", async () => {
+    vi.mocked(loadModelCatalogLocal).mockResolvedValueOnce([
+      { provider: "google", id: "gemini-3.1-pro-preview", name: "Primary" },
+      { provider: "google", id: "gemini-2.5-flash-lite", name: "Canonical selection" },
+      { provider: "openrouter", id: "google/gemini-2.5-flash-lite", name: "Aliased sibling" },
+    ]);
     const cfg = {
       agents: {
         defaults: {
@@ -2442,7 +2440,7 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
     await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
     expect(loadManifestModelCatalog).not.toHaveBeenCalled();
     expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledOnce();
-    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+    expect(loadModelCatalogLocal).toHaveBeenCalledExactlyOnceWith({ config: {}, readOnly: true });
   });
 
   it("returns on when catalog model has reasoning true", async () => {
@@ -2477,11 +2475,6 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
 
 describe("createModelSelectionState degraded-catalog override preservation", () => {
   const sessionKey = "agent:main:discord:channel:g1";
-  // The `anthropic/*` wildcard (a non-default provider) forces the live catalog
-  // load path (`needsModelCatalog`), which is the only path where a degraded
-  // catalog can transiently drop a pin. Every test must load the snapshot so its
-  // one-time mock is consumed and cannot leak into a sibling test.
-  //
   // Policy rejects the pin independently of catalog availability.
   const restrictiveCfg = {
     agents: { defaults: { models: { "openai/gpt-4o-mini": {}, "anthropic/*": {} } } },
@@ -2546,7 +2539,9 @@ describe("createModelSelectionState degraded-catalog override preservation", () 
     expect(state.resetModelOverride).toBe(false);
     expect(state.blockedModelOverrideRef).toBe("openai/gpt-4o");
     expect(sessionEntry.modelOverride).toBe("gpt-4o");
-    expect(state.model).toBe("gpt-4o");
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-4o-mini");
+    expect(state.blockedModelOverrideUsesPrimary).toBe(true);
   });
 
   it("keeps a locked pin active without a degraded-catalog fallback notice", async () => {

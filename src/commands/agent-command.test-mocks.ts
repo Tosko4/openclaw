@@ -200,6 +200,7 @@ vi.mock("../agents/model-selection.js", () => {
         );
         const allowsKey = (key: string) => allowAny || isModelKeyAllowedBySet(refs, key);
         return {
+          effectiveDefault: { ref: primary },
           allowAny,
           allowedKeys: refs,
           allowedCatalog: catalog,

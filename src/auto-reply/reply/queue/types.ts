@@ -233,6 +233,7 @@ export type FollowupRun = {
     hasSessionModelOverride?: boolean;
     blockedModelOverrideRef?: string;
     blockedModelOverrideUsesPrimary?: boolean;
+    missingConfiguredPrimary?: string;
     modelOverrideSource?: "auto" | "user";
     hasAutoFallbackProvenance?: boolean;
     autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;

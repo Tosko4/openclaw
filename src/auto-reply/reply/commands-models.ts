@@ -218,6 +218,7 @@ async function projectPreparedModelsProviderData(
     cfg,
     sessionKey: options.sessionKey,
     catalog,
+    modelCatalog: snapshot,
     defaultProvider: resolvedDefault.provider,
     defaultModel: resolvedDefault.model,
     agentId,

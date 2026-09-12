@@ -17,7 +17,9 @@ import {
   type ModelCatalogEntry,
   modelSupportsInput,
 } from "../agents/model-catalog.js";
+import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
+import type { ModelManifestNormalizationContext } from "../agents/model-ref-shared.js";
 import {
   findNormalizedProviderValue,
   isCliProvider,
@@ -26,6 +28,7 @@ import {
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
 import { resolveThinkingDefaultCore } from "../agents/model-thinking-default-core.js";
+import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../agents/prepared-model-catalog-owner.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
@@ -337,23 +340,41 @@ export function getSessionDefaults(
     agentId?: string;
     allowPluginNormalization?: boolean;
     providerPolicySource?: ThinkingProviderPolicySource;
+    modelCatalogSnapshot?: ModelCatalogSnapshot;
+    manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
   },
 ): GatewaySessionsDefaults {
   const agentId = normalizeAgentId(
     options?.agentId ?? tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID,
   );
-  const resolved = options?.agentId
-    ? resolveDefaultModelForAgent({
+  const resolved = options?.modelCatalogSnapshot
+    ? createModelVisibilityPolicy({
         cfg,
         agentId,
-        allowPluginNormalization: options.allowPluginNormalization,
-      })
-    : resolveConfiguredModelRef({
-        cfg,
+        catalog: options.modelCatalogSnapshot.entries,
+        modelCatalog: options.modelCatalogSnapshot,
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: DEFAULT_MODEL,
-        allowPluginNormalization: options?.allowPluginNormalization,
-      });
+        allowPluginNormalization: options.allowPluginNormalization,
+        manifestPlugins: options.manifestPlugins,
+      }).effectiveDefault.ref
+    : options?.agentId
+      ? resolveDefaultModelForAgent({
+          cfg,
+          agentId,
+          allowPluginNormalization: options.allowPluginNormalization,
+          manifestPlugins: options.manifestPlugins,
+        })
+      : resolveConfiguredModelRef({
+          cfg,
+          defaultProvider: DEFAULT_PROVIDER,
+          defaultModel: DEFAULT_MODEL,
+          allowPluginNormalization: options?.allowPluginNormalization,
+          manifestPlugins: options?.manifestPlugins,
+        });
+  if (!resolved) {
+    return { modelProvider: null, model: null, contextTokens: null };
+  }
   const displayModel = resolveSessionDisplayModelIdentityRef({
     cfg,
     provider: resolved.provider,

@@ -128,6 +128,7 @@ export async function handleDirectiveOnly(
     model,
     defaultProvider,
     defaultModel,
+    effectiveDefaultRef: params.modelPolicy?.effectiveDefault.ref,
     aliasIndex,
     policyAliasIndex,
     allowedModelKeys,

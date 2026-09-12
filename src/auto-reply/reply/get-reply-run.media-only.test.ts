@@ -2437,7 +2437,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(getActiveReplyRunCount()).toBe(activeBefore);
   });
 
-it.each([false, true])(
+  it.each([false, true])(
     "validates the configured heartbeat profile before dispatch (fast: %s)",
     async (fast) => {
       const { resolveSessionAuthSelection } =

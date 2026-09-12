@@ -25,7 +25,7 @@ import {
   clearPendingFinalDeliveryAfterSuccess,
   suppressPendingFinalDelivery,
 } from "./dispatch-from-config.pending-final.js";
-import { waitForModelPolicyNoticePublication } from "./model-policy-notice.js";
+import { waitForModelPolicyNoticePublication } from "./model-notice-publication.js";
 
 type ExecuteDispatchReadyState = Extract<
   Awaited<ReturnType<typeof executeDispatch>>,

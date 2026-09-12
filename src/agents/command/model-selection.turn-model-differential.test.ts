@@ -14,15 +14,20 @@ import {
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
-vi.mock("../agent-scope.js", () => ({
-  clearAutoFallbackPrimaryProbeSelection: vi.fn(),
-  hasLegacyAutoFallbackWithoutOrigin: () => false,
-  hasSessionAutoModelFallbackProvenance: () => false,
-  resolveAutoFallbackPrimaryProbe: () => undefined,
-  resolveAgentConfig: () => undefined,
-  resolveAgentEffectiveModelPrimary: () => undefined,
-  resolveAgentModelFallbacksOverride: () => undefined,
-}));
+vi.mock("../agent-scope.js", async () => {
+  const { resolveSessionAgentIds } =
+    await vi.importActual<typeof import("../agent-scope.js")>("../agent-scope.js");
+  return {
+    clearAutoFallbackPrimaryProbeSelection: vi.fn(),
+    hasLegacyAutoFallbackWithoutOrigin: () => false,
+    hasSessionAutoModelFallbackProvenance: () => false,
+    resolveAutoFallbackPrimaryProbe: () => undefined,
+    resolveAgentConfig: () => undefined,
+    resolveAgentEffectiveModelPrimary: () => undefined,
+    resolveAgentModelFallbacksOverride: () => undefined,
+    resolveSessionAgentIds,
+  };
+});
 vi.mock("../../auto-reply/thinking.js", () => ({
   formatThinkingLevels: () => "",
   isThinkingLevelSupported: () => true,
@@ -74,7 +79,21 @@ vi.mock("../harness/runtime-plugin.js", () => ({
 vi.mock("../harness/selection.js", () => ({
   resolveAvailableAgentHarnessPolicy: () => ({ runtime: "openclaw" }),
 }));
-vi.mock("../model-catalog.js", () => ({ loadManifestModelCatalog: () => [] }));
+vi.mock("../prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogSnapshot: vi.fn(async () => {
+    const entries = [
+      { provider: "fixture", id: "parent", name: "Parent" },
+      { provider: "fixture", id: "child", name: "Child" },
+      { provider: DEFAULT_PROVIDER, id: DEFAULT_MODEL, name: "Default" },
+      {
+        provider: TURN_MODEL_DEFAULT_REF.provider,
+        id: TURN_MODEL_DEFAULT_REF.model,
+        name: "Command default",
+      },
+    ];
+    return { entries, routeVariants: entries };
+  }),
+}));
 vi.mock("../model-selection.js", () => ({
   modelKey: (provider: string, model: string) => `${provider}/${model}`,
   resolveDefaultModelForAgent: ({ cfg }: { cfg: OpenClawConfig }) => {
@@ -95,16 +114,20 @@ vi.mock("../model-thinking-default.js", () => ({
   resolveConfiguredThinkingDefault: () => undefined,
 }));
 vi.mock("../model-visibility-policy.js", () => ({
-  createModelVisibilityPolicy: () => ({
+  createModelVisibilityPolicy: ({
+    defaultProvider,
+    defaultModel,
+  }: {
+    defaultProvider: string;
+    defaultModel: string;
+  }) => ({
+    effectiveDefault: { ref: { provider: defaultProvider, model: defaultModel } },
     allowAny: true,
     allowedCatalog: [],
     selectionAliasIndex: { byAlias: new Map(), byKey: new Map() },
     allows: () => true,
     resolveSelection: (ref: { provider: string; model: string }) => ref,
   }),
-}));
-vi.mock("../openai-routing.js", () => ({
-  listOpenAIAuthProfileProvidersForAgentRuntime: ({ provider }: { provider: string }) => [provider],
 }));
 vi.mock("../provider-auth-aliases.js", () => ({
   resolveProviderIdForAuth: (provider: string) => provider,

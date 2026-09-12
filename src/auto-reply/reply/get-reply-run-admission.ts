@@ -418,7 +418,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         sessionKey: context.runtimePolicySessionKey,
       });
   const resolveRuntimeAuthProfile = async () => {
-    if (useFastReplyRuntime && !params.configuredProfileId && !modelState.blockedModelOverrideUsesPrimary) {
+    if (
+      useFastReplyRuntime &&
+      !params.configuredProfileId &&
+      !modelState.blockedModelOverrideUsesPrimary
+    ) {
       return {
         authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
         authProfileIdSource: resolveCollapsedSessionAuthPinSource(
@@ -452,9 +456,13 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       provider,
       modelId: model,
       agentId,
-      configuredProfileId: params.configuredProfileId ?? (modelState.blockedModelOverrideUsesPrimary
-        ? splitTrailingAuthProfile(resolveConfiguredModelPrimaryValue({ cfg, agentId, sessionKey }) ?? "").profile
-        : undefined),
+      configuredProfileId:
+        params.configuredProfileId ??
+        (modelState.blockedModelOverrideUsesPrimary && !modelState.missingConfiguredPrimary
+          ? splitTrailingAuthProfile(
+              resolveConfiguredModelPrimaryValue({ cfg, agentId, sessionKey }) ?? "",
+            ).profile
+          : undefined),
       ...(agentHarnessPolicy ? { harnessRuntime: agentHarnessPolicy.runtime } : {}),
       agentDir,
       sessionEntry: authSessionEntry,

@@ -542,6 +542,7 @@ async function agentCommandInternal(
         suppressVisibleSessionEffects,
         preserveUserFacingSessionModelState: preserveTurnModelState,
         allowListPolicyFallback: embeddedAttempt.allowListPolicyFallback,
+        missingConfiguredPrimary: embeddedAttempt.missingConfiguredPrimary,
         currentRunDeliveryContext,
         sessionOwnership: { runOwnedSessionId, sessionReboundDuringRun },
         trackInternalModelRunTarget,

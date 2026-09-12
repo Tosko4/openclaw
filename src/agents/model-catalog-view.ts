@@ -33,7 +33,6 @@ import {
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { hasAuthoredProviderRequestParams } from "./model-extra-params.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
-import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import {
   createModelVisibilityPolicy,
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
@@ -107,27 +106,22 @@ export type ModelCatalogViewFacts = {
 
 /** Projects captured catalog facts while keeping native observations revocable. */
 export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
-  const primary = resolveDefaultModelForAgent({
+  const policy = createModelVisibilityPolicy({
     cfg: params.cfg,
+    catalog: params.snapshot.entries,
+    modelCatalog: params.snapshot,
+    defaultProvider: DEFAULT_PROVIDER,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
     manifestPlugins: params.metadataSnapshot,
   });
-  const defaultModel = pickerModelKey(primary.provider, primary.model);
+  const primary = policy.effectiveDefault.ref;
+  const defaultModel = primary ? pickerModelKey(primary.provider, primary.model) : undefined;
   const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, params.agentId);
   const catalog = [...params.snapshot.entries];
   if (params.view === "configured" && params.snapshot.staticEntries?.length) {
-    const { configuredKeys } = createModelVisibilityPolicy({
-      cfg: params.cfg,
-      catalog,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-      manifestPlugins: params.metadataSnapshot,
-    });
+    const { configuredKeys } = policy;
     const seen = new Set(catalog.map(resolveModelCatalogIdentityKey));
     for (const entry of params.snapshot.staticEntries) {
       const key = resolveModelCatalogIdentityKey(entry);
@@ -154,6 +148,7 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
     snapshot: params.snapshot,
     catalog,
     defaultModel,
+    effectiveDefault: policy.effectiveDefault,
     isCurrent,
     evaluateNative: (
       entry: ModelCatalogEntry,

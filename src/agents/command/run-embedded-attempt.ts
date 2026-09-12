@@ -1,5 +1,6 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { captureAssistantTranscriptRewriteStart } from "../../config/sessions/transcript-assistant-rewrite.js";
 import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -32,6 +33,7 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.j
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch.js";
 import { prepareModelRunCapabilities } from "../model-catalog-lookup.js";
+import { resolveConfiguredModelFallbacks } from "../model-selection-resolve.js";
 import { resolveThinkingDefault } from "../model-selection.js";
 import { resolveConfiguredThinkingDefault } from "../model-thinking-default.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
@@ -105,6 +107,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
     storedModelOverrideSource,
     effectiveTurnThinkLevel,
     allowListPolicyFallback,
+    missingConfiguredPrimary,
   } = params.modelSelection;
   const thinkingCatalog = params.modelSelection.thinkingCatalog;
   let sessionEntry = params.sessionEntry;
@@ -139,6 +142,10 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
   const attemptSessionFile = internalSessionTarget?.sessionFile ?? sessionFile;
 
   const startedAt = Date.now();
+  const modelNoticeTranscriptStart =
+    attemptSessionTarget && (allowListPolicyFallback || missingConfiguredPrimary)
+      ? captureAssistantTranscriptRewriteStart(attemptSessionTarget)
+      : undefined;
   const attemptLifecycleState: AgentAttemptLifecycleState = {
     currentTurnUserMessagePersisted: false,
     lifecycleFinishing: false,
@@ -261,6 +268,9 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         allowListPolicyFallback || isModelSelectionLocked(sessionEntry)
           ? []
           : (params.opts.modelFallbacksOverride ??
+            (missingConfiguredPrimary
+              ? resolveConfiguredModelFallbacks({ cfg, agentId: sessionAgentId })
+              : undefined) ??
             resolveEffectiveModelFallbacks({
               cfg,
               agentId: sessionAgentId,
@@ -288,6 +298,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           requestedRouteResolution: params.modelSelection.requestedRouteResolution,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
+          missingConfiguredPrimary,
           userLockedAuthProfileId:
             resolveSessionAuthProfileOverrideSource(sessionEntryForAttempt) === "user"
               ? sessionEntryForAttempt?.authProfileOverride
@@ -637,6 +648,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         provider = err.provider;
         model = err.model;
         allowListPolicyFallback = undefined;
+        missingConfiguredPrimary = undefined;
         providerForAuthProfileValidation = err.provider;
         if (sessionEntry) {
           sessionEntry = { ...sessionEntry };
@@ -680,11 +692,13 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
 
   return {
     startedAt,
+    modelNoticeTranscriptStart,
     result,
     fallbackProvider,
     fallbackModel,
     fallbackExhausted,
     allowListPolicyFallback,
+    missingConfiguredPrimary,
     provider,
     model,
     sessionEntry,

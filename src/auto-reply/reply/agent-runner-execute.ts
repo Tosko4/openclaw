@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { captureAssistantTranscriptRewriteStart } from "../../config/sessions/transcript-assistant-rewrite.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
@@ -258,6 +259,16 @@ export async function executePreparedReplyAgentRun(
 
   replyOperation.setPhase("running");
   const runStartedAt = Date.now();
+  const modelNoticeTranscriptStart =
+    sessionKey &&
+    (followupRun.run.blockedModelOverrideUsesPrimary || followupRun.run.missingConfiguredPrimary)
+      ? captureAssistantTranscriptRewriteStart({
+          sessionKey,
+          sessionId: replyOperation.sessionId,
+          storePath,
+          agentId: followupRun.run.agentId,
+        })
+      : undefined;
   const userTurnAdmission = await admitUserTurn(followupRun.userTurnTranscriptRecorder);
   if (userTurnAdmission === "duplicate-source") {
     return returnWithQueuedFollowupDrain(undefined);
@@ -429,6 +440,7 @@ export async function executePreparedReplyAgentRun(
     execution: runOutcome.outcome,
     runId: runOutcome.runId,
     runStartedAt,
+    modelNoticeTranscriptStart,
     runtimePolicySessionKey,
     sessionCtx,
     sessionKey,

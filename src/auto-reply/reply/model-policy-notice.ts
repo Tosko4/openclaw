@@ -1,60 +1,11 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
-import {
-  copyReplyPayloadMetadata,
-  getReplyPayloadMetadata,
-  markCommandReplyForDelivery,
-  setReplyPayloadMetadata,
-} from "../reply-payload.js";
+import { copyReplyPayloadMetadata, markCommandReplyForDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import {
+  bindModelNoticePublication,
+  type ModelNoticeTranscript,
+} from "./model-notice-publication.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
-
-type FinalReplyAcknowledgment = NonNullable<
-  ReturnType<typeof getReplyPayloadMetadata>
->["onFinalDeliverySuccess"];
-const policyAcknowledgments = new WeakMap<
-  NonNullable<FinalReplyAcknowledgment>,
-  {
-    deferred: boolean;
-    acknowledge: () => Promise<void>;
-    publication: Deferred;
-  }
->();
-
-/** Gateway capture transfers receipt ownership to its visible final publication. */
-export function deferModelPolicyNoticeAcknowledgment(payload: ReplyPayload): void {
-  const callback = getReplyPayloadMetadata(payload)?.onFinalDeliverySuccess;
-  const receipt = callback ? policyAcknowledgments.get(callback) : undefined;
-  if (receipt) {
-    receipt.deferred = true;
-  }
-}
-
-export function waitForModelPolicyNoticePublication(
-  payload: ReplyPayload,
-): Promise<void> | undefined {
-  const callback = getReplyPayloadMetadata(payload)?.onFinalDeliverySuccess;
-  const receipt = callback ? policyAcknowledgments.get(callback) : undefined;
-  return receipt?.deferred ? receipt.publication.promise : undefined;
-}
-
-export async function settleModelPolicyNoticePublication(
-  payload: ReplyPayload,
-  delivered: boolean,
-): Promise<void> {
-  const callback = getReplyPayloadMetadata(payload)?.onFinalDeliverySuccess;
-  const receipt = callback ? policyAcknowledgments.get(callback) : undefined;
-  if (!receipt?.deferred) {
-    return;
-  }
-  try {
-    if (delivered) {
-      await receipt.acknowledge();
-    }
-  } finally {
-    receipt.publication.resolve();
-  }
-}
 
 type ModelPolicyNoticeParams = {
   payloads: ReplyPayload[];
@@ -63,7 +14,47 @@ type ModelPolicyNoticeParams = {
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   storePath?: string;
+  transcript?: ModelNoticeTranscript;
 };
+
+function findModelNoticePayload(payloads: ReplyPayload[]) {
+  const candidates = payloads.flatMap((original, index) => {
+    if (original.isReasoning || original.isCommentary || original.isFallbackNotice) {
+      return [];
+    }
+    const normalized = normalizeReplyPayload(original, { applyChannelTransforms: false });
+    return normalized ? [{ original, normalized, index }] : [];
+  });
+  return candidates.find(({ original }) => !original.isError) ?? candidates[0];
+}
+
+/** A turn-local correction uses the same final publication boundary as policy notices. */
+export function attachMissingConfiguredPrimaryNotice(params: {
+  payloads: ReplyPayload[];
+  missingPrimary?: string;
+  primaryModel: string;
+  transcript?: ModelNoticeTranscript;
+}): ReplyPayload[] {
+  if (!params.missingPrimary) {
+    return params.payloads;
+  }
+  const candidate = findModelNoticePayload(params.payloads);
+  if (!candidate) {
+    return params.payloads;
+  }
+  const { original, normalized, index } = candidate;
+  const notice = original.isError
+    ? `Configured primary ${params.missingPrimary} is not in the model catalog, and the default could not answer. Update your primary model in settings.`
+    : `Configured primary ${params.missingPrimary} is not in the model catalog. This reply used the default (${params.primaryModel}). Update your primary model in settings.`;
+  const payload = copyReplyPayloadMetadata(original, {
+    ...normalized,
+    text: normalized.text ? `${notice}\n\n${normalized.text}` : notice,
+  });
+  bindModelNoticePublication({ original, payload, notice, transcript: params.transcript });
+  return params.payloads.map((existing, payloadIndex) =>
+    payloadIndex === index ? payload : existing,
+  );
+}
 
 /** The notice preserves the input payload count, including silent payloads. */
 export function attachModelPolicyNotice(
@@ -73,14 +64,7 @@ export function attachModelPolicyNotice(params: ModelPolicyNoticeParams): ReplyP
 export function attachModelPolicyNotice(params: ModelPolicyNoticeParams): ReplyPayload[] {
   const { sessionEntry, pinnedModel, primaryModel, sessionKey, storePath } = params;
   const sessionId = sessionEntry?.sessionId;
-  const candidates = params.payloads.flatMap((original, index) => {
-    if (original.isReasoning || original.isCommentary || original.isFallbackNotice) {
-      return [];
-    }
-    const normalized = normalizeReplyPayload(original, { applyChannelTransforms: false });
-    return normalized ? [{ original, normalized, index }] : [];
-  });
-  const candidate = candidates.find(({ original }) => !original.isError) ?? candidates[0];
+  const candidate = findModelNoticePayload(params.payloads);
   if (!candidate) {
     return params.payloads;
   }
@@ -100,55 +84,33 @@ export function attachModelPolicyNotice(params: ModelPolicyNoticeParams): ReplyP
     ...normalized,
     text: normalized.text ? `${notice}\n\n${normalized.text}` : notice,
   });
-  const previousSuccess = getReplyPayloadMetadata(original)?.onFinalDeliverySuccess;
-  const expectedProvider = sessionEntry?.providerOverride;
-  const expectedModel = sessionEntry?.modelOverride;
-  let committed = false;
-  const receiptOwner = {
-    deferred: false,
-    publication: createDeferredCore(),
-    acknowledge: async () => {
-      if (committed) {
-        return;
-      }
-      await previousSuccess?.();
-      if (original.isError || !sessionEntry || !sessionId) {
+  bindModelNoticePublication({
+    original,
+    payload,
+    notice,
+    transcript: params.transcript,
+    recordReceipt: async (canCommit) => {
+      if (original.isError || !sessionEntry || !sessionId || !sessionKey) {
         return;
       }
       const receipt = { sessionId, pinnedModel };
-      if (storePath && sessionKey) {
-        const { patchSessionEntryCore } = await import("../../config/sessions/session-accessor.js");
-        const updated = await patchSessionEntryCore(
-          { storePath, sessionKey },
-          (current) =>
-            current.sessionId === sessionId &&
-            current.providerOverride === expectedProvider &&
-            current.modelOverride === expectedModel
-              ? { modelPolicyNotice: receipt }
-              : null,
-          { preserveActivity: true, skipMaintenance: true },
-        );
-        if (!updated) {
-          return;
-        }
+      const { patchSessionEntryCore } = await import("../../config/sessions/session-accessor.js");
+      const updated = await patchSessionEntryCore(
+        { storePath, sessionKey, agentId: params.transcript?.scope.agentId },
+        (current) =>
+          canCommit(current) && current.sessionId === sessionId
+            ? { modelPolicyNotice: receipt }
+            : null,
+        { preserveActivity: true, skipMaintenance: true },
+      );
+      if (!updated) {
+        return;
       }
-      if (
-        sessionEntry.sessionId === sessionId &&
-        sessionEntry.providerOverride === expectedProvider &&
-        sessionEntry.modelOverride === expectedModel
-      ) {
+      if (canCommit(sessionEntry)) {
         sessionEntry.modelPolicyNotice = receipt;
       }
-      committed = true;
     },
-  };
-  const onFinalDeliverySuccess = async () => {
-    if (!receiptOwner.deferred) {
-      await receiptOwner.acknowledge();
-    }
-  };
-  policyAcknowledgments.set(onFinalDeliverySuccess, receiptOwner);
-  setReplyPayloadMetadata(payload, { onFinalDeliverySuccess });
+  });
   return params.payloads.map((existing, payloadIndex) =>
     payloadIndex === index ? payload : existing,
   );

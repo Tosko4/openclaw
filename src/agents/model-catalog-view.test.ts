@@ -85,12 +85,19 @@ describe("prepared model catalog view", () => {
             },
           }
         : {};
-      const view = prepareModelCatalogView({ ...facts(cfg), sessionKey });
+      const entries = configured
+        ? [row("fixture", "parent"), row("fixture", "child"), row("fixture", "listed")]
+        : [row(DEFAULT_PROVIDER, DEFAULT_MODEL)];
+      const view = prepareModelCatalogView({
+        ...facts(cfg),
+        sessionKey,
+        snapshot: snapshot(entries),
+      });
       const policy = createModelVisibilityPolicy({
         cfg,
         agentId: "main",
         sessionKey,
-        catalog: [row("fixture", "parent"), row("fixture", "child"), row("fixture", "listed")],
+        catalog: entries,
         defaultProvider: "anthropic",
         defaultModel: view.defaultModel,
         allowManifestNormalization: false,

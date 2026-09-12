@@ -470,6 +470,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       hasSessionModelOverride: runHasSessionModelOverride,
       blockedModelOverrideRef: params.modelState.blockedModelOverrideRef,
       blockedModelOverrideUsesPrimary: params.modelState.blockedModelOverrideUsesPrimary,
+      missingConfiguredPrimary: params.modelState.missingConfiguredPrimary,
       modelOverrideSource: runModelOverrideSource,
       hasAutoFallbackProvenance: runHasAutoFallbackProvenance || undefined,
       autoFallbackPrimaryProbe: params.autoFallbackPrimaryProbe,

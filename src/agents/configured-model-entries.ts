@@ -31,6 +31,7 @@ export function resolveConfiguredModelEntries(
     sessionKey?: string;
     defaultProvider?: string;
     defaultModel?: string;
+    effectiveDefaultRef?: { provider: string; model: string } | null;
     allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;
     canonicalizeRef?: <TRef extends { provider: string; model: string }>(ref: TRef) => TRef;
@@ -39,15 +40,14 @@ export function resolveConfiguredModelEntries(
 ): {
   entries: ConfiguredModelEntry[];
   byKey: Map<string, ConfiguredModelEntry>;
-  defaultRef: { provider: string; model: string };
+  defaultRef: { provider: string; model: string } | null;
 } {
   const defaultProvider = params.defaultProvider ?? DEFAULT_PROVIDER;
   const defaultModel = params.defaultModel ?? DEFAULT_MODEL;
-  const resolvedDefault = resolveConfiguredModelRef({
-    ...params,
-    defaultProvider,
-    defaultModel,
-  });
+  const resolvedDefault =
+    params.effectiveDefaultRef === undefined
+      ? resolveConfiguredModelRef({ ...params, defaultProvider, defaultModel })
+      : params.effectiveDefaultRef;
   const aliasIndex =
     params.aliasIndex ??
     buildModelAliasIndex({
@@ -107,7 +107,9 @@ export function resolveConfiguredModelEntries(
     }
   };
 
-  addEntry(resolvedDefault, "default");
+  if (resolvedDefault) {
+    addEntry(resolvedDefault, "default");
+  }
   resolveConfiguredModelFallbacks({ cfg: params.cfg, agentId: params.agentId }).forEach(
     (raw, index) => addRaw(raw, `fallback#${index + 1}`),
   );

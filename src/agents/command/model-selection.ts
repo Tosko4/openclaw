@@ -33,7 +33,7 @@ import {
   resolveAgentConfig,
 } from "../agent-scope.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
-import { loadManifestModelCatalog } from "../model-catalog.js";
+import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../model-fallback.types.js";
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
@@ -82,7 +82,7 @@ export async function resolveEmbeddedModelSelection(params: {
   pluginsEnabled: boolean;
   manifestMetadataSnapshot?: PluginMetadataSnapshot;
   modelManifestContext: ModelManifestNormalizationContext;
-  configuredThinkingCatalog: ReturnType<typeof loadManifestModelCatalog>;
+  configuredThinkingCatalog: ModelCatalogEntry[];
   requestedThinkLevel?: ThinkLevel;
   thinkOverride?: ThinkLevel;
   thinkOnce?: ThinkLevel;
@@ -102,8 +102,8 @@ export async function resolveEmbeddedModelSelection(params: {
     agentId: params.sessionAgentId,
     sessionKey: params.sessionKey,
   });
-  const configuredDefaultAuthProfileId = splitTrailingAuthProfile(configuredPrimary ?? "").profile;
-  const { provider: defaultProvider, model: defaultModel } = normalizeAgentCommandDefaultModelRef(
+  let configuredDefaultAuthProfileId = splitTrailingAuthProfile(configuredPrimary ?? "").profile;
+  let { provider: defaultProvider, model: defaultModel } = normalizeAgentCommandDefaultModelRef(
     params.cfg,
     configuredDefaultRef.provider,
     configuredDefaultRef.model,
@@ -143,12 +143,19 @@ export async function resolveEmbeddedModelSelection(params: {
     throw new Error("Model override is not authorized for this caller.");
   }
 
-  let allowedModelCatalog: ReturnType<typeof loadManifestModelCatalog> = [];
-  let modelCatalog: ReturnType<typeof loadManifestModelCatalog> | null = null;
-  let visibilityPolicy: ModelVisibilityPolicy = createModelVisibilityPolicy({
+  const { loadPreparedModelCatalogSnapshot } = await import("../prepared-model-catalog.js");
+  const catalogSnapshot = await loadPreparedModelCatalogSnapshot({
+    config: params.cfg,
+    agentId: params.sessionAgentId,
+    workspaceDir: params.workspaceDir,
+    readOnly: true,
+  });
+  const modelCatalog = catalogSnapshot.entries;
+  const visibilityPolicy: ModelVisibilityPolicy = createModelVisibilityPolicy({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
-    catalog: [],
+    catalog: modelCatalog,
+    modelCatalog: catalogSnapshot,
     defaultProvider,
     defaultModel,
     agentId: params.sessionAgentId,
@@ -156,31 +163,14 @@ export async function resolveEmbeddedModelSelection(params: {
     allowPluginNormalization: params.pluginsEnabled,
     ...params.modelManifestContext,
   });
-  const hasAllowlist = !visibilityPolicy.allowAny;
-  const agentModels = resolveAgentConfig(params.cfg, params.sessionAgentId)?.models;
-  const hasConfiguredModels =
-    Object.keys(params.cfg.agents?.defaults?.models ?? {}).length > 0 ||
-    Object.keys(agentModels ?? {}).length > 0;
-  if (hasAllowlist || hasConfiguredModels) {
-    modelCatalog = params.pluginsEnabled
-      ? loadManifestModelCatalog({
-          config: params.cfg,
-          workspaceDir: params.workspaceDir,
-          metadataSnapshot: params.manifestMetadataSnapshot,
-        })
-      : [];
-    visibilityPolicy = createModelVisibilityPolicy({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      catalog: modelCatalog,
-      defaultProvider,
-      defaultModel,
-      agentId: params.sessionAgentId,
-      allowManifestNormalization: true,
-      allowPluginNormalization: params.pluginsEnabled,
-      ...params.modelManifestContext,
-    });
-    allowedModelCatalog = visibilityPolicy.allowedCatalog;
+  const allowedModelCatalog = visibilityPolicy.allowedCatalog;
+  if (visibilityPolicy.effectiveDefault.ref) {
+    ({ provider: defaultProvider, model: defaultModel } = visibilityPolicy.effectiveDefault.ref);
+    provider = defaultProvider;
+    model = defaultModel;
+  }
+  if (visibilityPolicy.effectiveDefault.missingPrimary) {
+    configuredDefaultAuthProfileId = undefined;
   }
 
   if (
@@ -327,7 +317,7 @@ export async function resolveEmbeddedModelSelection(params: {
   if (storedModelOverride) {
     const candidateProvider = storedProviderOverride || defaultProvider;
     const storedRouteKey = modelKey(candidateProvider, storedModelOverride);
-    const storedRouteCataloged = (modelCatalog ?? allowedModelCatalog).some(
+    const storedRouteCataloged = modelCatalog.some(
       (entry) => modelKey(entry.provider, entry.id) === storedRouteKey,
     );
     const storedAlias =
@@ -357,7 +347,7 @@ export async function resolveEmbeddedModelSelection(params: {
       !hasStoredAutoFallbackProvenance
     ) {
       const pinnedModel = `${normalizedStored.provider}/${normalizedStored.model}`;
-      if (!visibilityPolicy.allows({ provider: defaultProvider, model: defaultModel })) {
+      if (!visibilityPolicy.effectiveDefault.ref) {
         throw new Error(
           `Pinned model ${sanitizeForLog(pinnedModel)} is not in your allow list, and no configured primary is usable. Use /model to change it. Your session pin is unchanged.`,
         );
@@ -437,10 +427,25 @@ export async function resolveEmbeddedModelSelection(params: {
     requestedRouteResolution = "resolved";
   }
   const unresolvedSelectionKey = modelKey(provider, model);
-  const allowedInitialSelection = isModelSelectionLocked(sessionEntry)
-    ? { provider, model }
-    : visibilityPolicy.resolveSelection({ provider, model });
+  const missingConfiguredPrimary =
+    !hasExplicitRunOverride &&
+    !isModelSelectionLocked(sessionEntry) &&
+    (!hasEffectiveStoredOverride || allowListPolicyFallback) &&
+    !normalizedChannelOverride
+      ? visibilityPolicy.effectiveDefault.missingPrimary
+      : undefined;
+  const allowedInitialSelection =
+    isModelSelectionLocked(sessionEntry) || hasExplicitRunOverride
+      ? { provider, model }
+      : missingConfiguredPrimary
+        ? visibilityPolicy.effectiveDefault.ref
+        : visibilityPolicy.resolveSelection({ provider, model });
   if (!allowedInitialSelection) {
+    if (missingConfiguredPrimary) {
+      throw new Error(
+        `Configured primary "${missingConfiguredPrimary}" is not in the model catalog, and no allowed default is available. Update your primary model in settings.`,
+      );
+    }
     const policyPath = visibilityPolicy.allowConfigPath ?? "modelPolicy.allow";
     throw new Error(
       `Configured default model "${modelKey(provider, model)}" is not allowed by ${policyPath}, and no allowed model is available.`,
@@ -503,7 +508,7 @@ export async function resolveEmbeddedModelSelection(params: {
   let catalogForThinking =
     allowedModelCatalog.length > 0
       ? allowedModelCatalog
-      : modelCatalog && modelCatalog.length > 0
+      : modelCatalog.length > 0
         ? modelCatalog
         : params.configuredThinkingCatalog;
   if (
@@ -630,6 +635,7 @@ export async function resolveEmbeddedModelSelection(params: {
     hasStoredAutoFallbackProvenance,
     autoFallbackPrimaryProbe,
     allowListPolicyFallback,
+    missingConfiguredPrimary,
     sessionEntryForAttempt,
     thinkingCatalog,
     immutableThinkLevel,

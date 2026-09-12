@@ -11,7 +11,11 @@ import {
   getReplyPayloadMetadata,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
-import { attachModelPolicyNotice } from "../../auto-reply/reply/model-policy-notice.js";
+import type { ModelNoticeTranscript } from "../../auto-reply/reply/model-notice-publication.js";
+import {
+  attachMissingConfiguredPrimaryNotice,
+  attachModelPolicyNotice,
+} from "../../auto-reply/reply/model-policy-notice.js";
 import {
   normalizeReplyPayloadOutcome,
   type NormalizeReplyOutcome,
@@ -148,6 +152,8 @@ type DeliverAgentCommandResultParams = {
   result: RunResult;
   payloads: ReplyPayload[] | undefined;
   allowListPolicyFallback?: { pinnedModel: string; primaryModel: string };
+  missingPrimaryFallback?: { missingPrimary: string; primaryModel: string };
+  modelNoticeTranscript?: ModelNoticeTranscript;
   storePath?: string;
   /** Channel plugin already selected and bootstrapped by the caller. */
   preparedPlugin?: ChannelPlugin;
@@ -888,15 +894,23 @@ export async function deliverAgentCommandResult(
     mediaNormalization.normalizeMediaPaths,
   );
   params.assertDeliveryCurrent?.();
-  const policyPayloads = params.allowListPolicyFallback
+  let policyPayloads = params.allowListPolicyFallback
     ? attachModelPolicyNotice({
         payloads: mediaNormalizedReplyPayloads,
         ...params.allowListPolicyFallback,
+        transcript: params.modelNoticeTranscript,
         sessionEntry,
         sessionKey: effectiveSessionKey,
         storePath: params.storePath,
       })
     : mediaNormalizedReplyPayloads;
+  if (params.missingPrimaryFallback) {
+    policyPayloads = attachMissingConfiguredPrimaryNotice({
+      payloads: policyPayloads,
+      ...params.missingPrimaryFallback,
+      transcript: params.modelNoticeTranscript,
+    });
+  }
   const outboundPayloadPlan = createOutboundPayloadPlan(policyPayloads);
   const deliveryAcknowledgments = outboundPayloadPlan.flatMap((entry) =>
     projectOutboundPayloadPlanForOutbound([entry]).map(

@@ -11,7 +11,6 @@ import { resolveModelProviderAuthConfig } from "../../agents/model-auth-provider
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../agents/model-fallback.types.js";
-import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import {
   type ModelAliasIndex,
   legacyModelKey,
@@ -45,7 +44,6 @@ import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { normalizeThinkLevel, type ThinkLevel } from "../thinking.shared.js";
 import {
   findSelectedCatalogEntry,
-  mergePreparedConfiguredCatalog,
   normalizeRuntimeRef,
   resolveRuntimeNormalization,
 } from "./model-runtime-normalization.js";
@@ -78,6 +76,7 @@ type ModelSelectionState = {
   resetModelOverride: boolean;
   blockedModelOverrideRef?: string;
   blockedModelOverrideUsesPrimary?: boolean;
+  missingConfiguredPrimary?: string;
   resetModelOverrideRef?: string;
   resetModelOverrideReason?: "disallowed" | "stale" | "temporarily-unavailable";
   modelPolicyConfigPath?: string;
@@ -89,7 +88,6 @@ type ModelSelectionState = {
   hasConfiguredThinkingDefault?: boolean;
   /** Default reasoning level from model capability: "on" if model has reasoning, else "off". */
   resolveDefaultReasoningLevel: (selection?: ThinkingDefaultSelection) => Promise<"on" | "off">;
-  needsModelCatalog: boolean;
   modelContextWindow?: number;
   modelContextTokens?: number;
 };
@@ -184,37 +182,22 @@ export async function createModelSelectionState(params: {
   const modelSelectionLocked = sessionEntry?.modelSelectionLocked === true;
   const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
 
-  let visibilityPolicy: ModelVisibilityPolicy = createModelVisibilityPolicy({
+  const catalogSnapshot = await loadRuntimeCatalogSnapshot();
+  const visibilityPolicy: ModelVisibilityPolicy = createModelVisibilityPolicy({
     cfg,
     sessionKey,
-    catalog: [],
+    catalog: catalogSnapshot.entries,
+    modelCatalog: catalogSnapshot,
     defaultProvider,
     defaultModel,
     agentId: params.agentId,
     ...runtimeModelNormalization,
   });
-  const hasAllowlist = !visibilityPolicy.allowAny;
-  const hasConfiguredModels =
-    Object.keys(agentCfg?.models ?? {}).length > 0 ||
-    Object.keys(agentEntry?.models ?? {}).length > 0;
-  const defaultModelVisibleByWildcard = visibilityPolicy.allowsByWildcard({
-    provider: defaultProvider,
-    model: defaultModel,
-  });
-  const configuredModelCatalog = mergePreparedConfiguredCatalog({
-    configured: [...visibilityPolicy.configuredCatalog],
-    prepared: params.preparedModelCatalog?.entries,
-  });
-  const needsModelCatalog =
-    params.hasModelDirective ||
-    (hasAllowlist && visibilityPolicy.hasProviderWildcards && !defaultModelVisibleByWildcard);
-
-  let allowedModelKeys = new Set<string>();
-  let allowedModelCatalog: ModelCatalog = configuredModelCatalog;
-  let modelCatalog: ModelCatalog | null = null;
-  // Whether the loaded catalog is a complete/live snapshot. A degraded catalog
-  // (discovery threw, static/empty fallback) must not destroy a pinned override.
-  let catalogAuthoritative = true;
+  const allowedModelKeys = visibilityPolicy.allowedKeys;
+  const allowedModelCatalog = visibilityPolicy.allowedCatalog;
+  const modelCatalog = catalogSnapshot.entries;
+  const catalogAuthoritative = catalogSnapshot.authoritative !== false;
+  let missingConfiguredPrimary: string | undefined;
   let resetModelOverride = false;
   let blockedModelOverrideRef: string | undefined;
   let blockedModelOverrideUsesPrimary = false;
@@ -277,50 +260,6 @@ export async function createModelSelectionState(params: {
     staleHeartbeatAutoFallbackOverride ||
     staleLegacyOpenAICodexAutoOverride ||
     staleLegacyAutoFallbackWithoutOrigin;
-
-  if (needsModelCatalog) {
-    const catalogSnapshot = await loadRuntimeCatalogSnapshot();
-    modelCatalog = catalogSnapshot.entries;
-    // Only an explicit false is degraded; absent means authoritative.
-    catalogAuthoritative = catalogSnapshot.authoritative !== false;
-    logStage(
-      "catalog-loaded",
-      `entries=${modelCatalog.length} authoritative=${catalogAuthoritative}`,
-    );
-    visibilityPolicy = createModelVisibilityPolicy({
-      cfg,
-      sessionKey,
-      catalog: modelCatalog,
-      defaultProvider,
-      defaultModel,
-      agentId: params.agentId,
-      ...runtimeModelNormalization,
-    });
-    allowedModelCatalog = visibilityPolicy.allowedCatalog;
-    allowedModelKeys = visibilityPolicy.allowedKeys;
-    logStage(
-      "allowlist-built",
-      `allowed=${allowedModelCatalog.length} keys=${allowedModelKeys.size}`,
-    );
-  } else if (hasAllowlist || hasConfiguredModels) {
-    visibilityPolicy = createModelVisibilityPolicy({
-      cfg,
-      sessionKey,
-      catalog: configuredModelCatalog,
-      defaultProvider,
-      defaultModel,
-      agentId: params.agentId,
-      ...runtimeModelNormalization,
-    });
-    allowedModelCatalog = visibilityPolicy.allowedCatalog;
-    allowedModelKeys = visibilityPolicy.allowedKeys;
-    logStage(
-      "configured-allowlist-built",
-      `allowed=${allowedModelCatalog.length} keys=${allowedModelKeys.size}`,
-    );
-  } else if (configuredModelCatalog.length > 0) {
-    logStage("configured-catalog-ready", `entries=${configuredModelCatalog.length}`);
-  }
 
   if (
     sessionEntry &&
@@ -426,7 +365,7 @@ export async function createModelSelectionState(params: {
     const storedProvider = storedOverride.provider || defaultProvider;
     const storedRouteCataloged = Boolean(
       findSelectedCatalogEntry({
-        catalog: modelCatalog ?? allowedModelCatalog,
+        catalog: modelCatalog,
         provider: storedProvider,
         model: storedOverride.model,
       }),
@@ -468,13 +407,9 @@ export async function createModelSelectionState(params: {
   }
 
   if (blockedModelOverrideRef) {
-    const configuredPrimary = resolveDefaultModelForAgent({
-      cfg,
-      agentId: params.agentId,
-      sessionKey,
-      ...runtimeModelNormalization,
-    });
-    if (visibilityPolicy.allows(configuredPrimary)) {
+    const configuredPrimary = visibilityPolicy.effectiveDefault.ref;
+    missingConfiguredPrimary = visibilityPolicy.effectiveDefault.missingPrimary;
+    if (configuredPrimary) {
       provider = configuredPrimary.provider;
       model = configuredPrimary.model;
       requestedRouteResolution = "resolved";
@@ -490,18 +425,23 @@ export async function createModelSelectionState(params: {
     resolvedStoredOverrideSelected;
   if (!skipResolveSelection) {
     const unresolvedSelectionKey = modelKey(provider, model);
-    const allowedInitialSelection = visibilityPolicy.resolveSelection({
-      provider,
-      model,
-    });
-    if (!allowedInitialSelection) {
+    const usesDefault = !storedOverride && provider === defaultProvider && model === defaultModel;
+    const allowedInitialSelection = usesDefault
+      ? visibilityPolicy.effectiveDefault.ref
+      : visibilityPolicy.resolveSelection({ provider, model });
+    if (usesDefault) {
+      missingConfiguredPrimary = visibilityPolicy.effectiveDefault.missingPrimary;
+    }
+    if (!allowedInitialSelection && !missingConfiguredPrimary) {
       const policyPath = visibilityPolicy.allowConfigPath ?? "modelPolicy.allow";
       throw new Error(
         `Configured default model "${modelKey(provider, model)}" is not allowed by ${policyPath}, and no allowed model is available.`,
       );
     }
-    provider = allowedInitialSelection.provider;
-    model = allowedInitialSelection.model;
+    if (allowedInitialSelection) {
+      provider = allowedInitialSelection.provider;
+      model = allowedInitialSelection.model;
+    }
     if (modelKey(provider, model) !== unresolvedSelectionKey) {
       requestedRouteResolution = "resolved";
     }
@@ -656,7 +596,7 @@ export async function createModelSelectionState(params: {
       catalog: await resolveThinkingCatalog(selection),
     });
   const selectedCatalogEntry = findSelectedCatalogEntry({
-    catalog: modelCatalog ?? allowedModelCatalog,
+    catalog: modelCatalog,
     provider,
     model,
   });
@@ -682,6 +622,7 @@ export async function createModelSelectionState(params: {
     resetModelOverride,
     blockedModelOverrideRef,
     blockedModelOverrideUsesPrimary: blockedModelOverrideUsesPrimary || undefined,
+    missingConfiguredPrimary,
     resetModelOverrideRef,
     resetModelOverrideReason,
     modelPolicyConfigPath: visibilityPolicy.allowConfigPath ?? undefined,
@@ -690,7 +631,6 @@ export async function createModelSelectionState(params: {
     resolveDefaultThinkingLevel,
     hasConfiguredThinkingDefault,
     resolveDefaultReasoningLevel,
-    needsModelCatalog,
     modelContextWindow: selectedCatalogEntry?.contextWindow,
     modelContextTokens: selectedCatalogEntry?.contextTokens,
   };

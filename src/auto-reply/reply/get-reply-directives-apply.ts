@@ -582,6 +582,7 @@ export async function applyInlineDirectiveOverrides(params: {
     ) {
       modelState.blockedModelOverrideRef = undefined;
       modelState.blockedModelOverrideUsesPrimary = undefined;
+      modelState.missingConfiguredPrimary = undefined;
     }
   }
 
@@ -589,6 +590,18 @@ export async function applyInlineDirectiveOverrides(params: {
     allowTextCommands && command.isAuthorizedSender && ctx.CommandInterpretationSuppressed !== true
       ? getStandaloneSlashCommandName(command.commandBodyNormalized)
       : null;
+  if (
+    modelState.missingConfiguredPrimary &&
+    modelState.modelPolicy.effectiveDefault.ref === null &&
+    recoveryCommand !== "model" &&
+    recoveryCommand !== "models"
+  ) {
+    typing.cleanup();
+    return directiveRejection(
+      "model-selection-rejected",
+      `Configured primary ${modelState.missingConfiguredPrimary} is not in the model catalog, and no allowed default is available. Use /model to choose an available model or update your primary model in settings.`,
+    );
+  }
   if (
     modelState.blockedModelOverrideRef &&
     !modelState.modelPolicy.allows({ provider, model }) &&

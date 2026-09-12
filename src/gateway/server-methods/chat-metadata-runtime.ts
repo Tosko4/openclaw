@@ -630,6 +630,8 @@ export function createGatewayChatMetadataRuntime(params: {
           }),
       sessionModelCatalog: session.modelCatalog,
       defaultModelCatalog: neutral.modelCatalog,
+      modelCatalogSnapshot: neutral.modelCatalogSnapshot,
+      manifestPlugins: neutral.manifestPlugins,
     });
     const projectStartup = async (
       generation: PreparedMetadataGeneration,
