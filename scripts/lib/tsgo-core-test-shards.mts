@@ -32,6 +32,11 @@ export const TSGO_CORE_TEST_SHARDS = [
     config: "test/tsconfig/tsconfig.core.test.gateway-server.json",
   },
   {
+    name: "gateway-models",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.gateway-models.json",
+  },
+  {
     name: "gateway-other",
     group: "src",
     config: "test/tsconfig/tsconfig.core.test.gateway-other.json",
@@ -55,6 +60,7 @@ export const TSGO_CORE_TEST_SHARDS = [
   },
   { name: "messaging", group: "src", config: "test/tsconfig/tsconfig.core.test.messaging.json" },
   { name: "services", group: "src", config: "test/tsconfig/tsconfig.core.test.services.json" },
+  { name: "sdk", group: "src", config: "test/tsconfig/tsconfig.core.test.sdk.json" },
   { name: "other", group: "src", config: "test/tsconfig/tsconfig.core.test.other.json" },
   {
     name: "ui-pages",

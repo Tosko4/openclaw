@@ -1,6 +1,6 @@
 import { resolveThinkingDefaultWithRuntimeCatalogCore } from "../agents/model-thinking-default.js";
 import {
-  getPreparedModelCatalogSnapshot as getPreparedModelCatalogSnapshotCore,
+  getPreparedModelCatalogSnapshot,
   readPreparedModelCatalog,
   type LoadPreparedModelCatalogParams,
 } from "../agents/prepared-model-catalog.js";
@@ -36,9 +36,7 @@ export { findModelInCatalog, modelSupportsVision } from "../agents/model-catalog
 export type { ModelCatalogEntry } from "../agents/model-catalog.js";
 type SdkModelCatalogParams = Omit<LoadPreparedModelCatalogParams, "requestSelection">;
 
-export const getPreparedModelCatalogSnapshot: (
-  params?: SdkModelCatalogParams,
-) => ReturnType<typeof getPreparedModelCatalogSnapshotCore> = getPreparedModelCatalogSnapshotCore;
+export { getPreparedModelCatalogSnapshot } from "../agents/prepared-model-catalog.js";
 
 /** Preserves the public SDK's writable default while internal catalog reads stay passive. */
 export async function loadPreparedModelCatalog(params: SdkModelCatalogParams = {}) {

@@ -4,6 +4,7 @@ import {
   cleanupPreparedModelRuntimeHarness,
   getPreparedModelRuntimeMocks,
   resetPreparedModelRuntimeHarness,
+  servePreparedModelRuntimeCatalog,
 } from "./prepared-model-runtime.test-harness.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
@@ -21,7 +22,6 @@ import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { loadPreparedModelCatalogSnapshot } from "./prepared-model-catalog.js";
 import {
-  getPreparedModelFullCatalogAuth,
   getPreparedModelRuntimeAuthStore,
   setPreparedModelFullCatalogAuth,
 } from "./prepared-model-runtime-auth.js";
@@ -35,29 +35,9 @@ import {
 const mocks = getPreparedModelRuntimeMocks();
 let state: OpenClawTestState;
 
-function serveCatalog(catalog: ModelCatalogSnapshot) {
-  mocks.runPreparedModelCatalogWorker.mockImplementation(
-    async (providerIds?: readonly string[]) => {
-      const included = (provider: string) => !providerIds || providerIds.includes(provider);
-      const reply: ModelCatalogSnapshot = {
-        ...catalog,
-        entries: catalog.entries.filter((entry) => included(entry.provider)),
-        routeVariants: catalog.routeVariants.filter((entry) => included(entry.provider)),
-        staticEntries: catalog.staticEntries?.filter((entry) => included(entry.provider)),
-        providerOutcomes: catalog.providerOutcomes?.filter((outcome) => included(outcome.provider)),
-      };
-      const auth = getPreparedModelFullCatalogAuth(catalog);
-      if (auth) {
-        setPreparedModelFullCatalogAuth(reply, auth);
-      }
-      return reply;
-    },
-  );
-}
-
 async function prepareCatalogOwner(config: OpenClawConfig, catalog: ModelCatalogSnapshot) {
   mocks.configuredAgentIds = ["pro"];
-  serveCatalog(catalog);
+  servePreparedModelRuntimeCatalog(catalog);
   await refreshPreparedModelRuntimeSnapshots(config, {
     gatewayLifecycle: true,
     catalogMode: "static",
@@ -129,7 +109,7 @@ describe("prepared model runtime scoped refresh", () => {
           },
         },
       };
-      serveCatalog({ entries: [], routeVariants: [] });
+      servePreparedModelRuntimeCatalog({ entries: [], routeVariants: [] });
       await refreshPreparedModelRuntimeSnapshots(replacementConfig, {
         gatewayLifecycle: true,
         catalogMode: "static",
@@ -153,7 +133,14 @@ describe("prepared model runtime scoped refresh", () => {
           "provider-a:default": { type: "api_key", provider: "provider-a", key: "fixture-key" },
         },
       };
-      const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
+      const config: OpenClawConfig = {
+        agents: { entries: { pro: {} } },
+        models: {
+          providers: {
+            "provider-b": { baseUrl: "https://provider-b.example.test/v1", models: [] },
+          },
+        },
+      };
       const learned = { provider: "provider-a", id: "learned", name: "Learned" };
       const caseDistinct = { provider: "provider-a", id: "Learned", name: "Case distinct" };
       const variant = { ...learned, baseUrl: "https://catalog.example.test/v1" };
@@ -212,9 +199,9 @@ describe("prepared model runtime scoped refresh", () => {
         authoritative: false,
         providerOutcomes: snapshots[0]!.providerOutcomes,
       });
-      serveCatalog(snapshots[1]!);
+      servePreparedModelRuntimeCatalog(snapshots[1]!);
       await owner.loadFullModelCatalog!({ refresh: true });
-      serveCatalog(snapshots[2]!);
+      servePreparedModelRuntimeCatalog(snapshots[2]!);
       const failed = await owner.loadFullModelCatalog!({ refresh: true });
       expect(failed.entries).toMatchObject([learned, caseDistinct, sibling]);
       expect(failed.routeVariants).toMatchObject([variant, caseDistinct, sibling]);
@@ -223,15 +210,15 @@ describe("prepared model runtime scoped refresh", () => {
         { provider: "provider-a", profileId, status: "unavailable" },
         { provider: "provider-b", status: "ready" },
       ]);
-      serveCatalog(snapshots[3]!);
+      servePreparedModelRuntimeCatalog(snapshots[3]!);
       const failedAgain = await owner.loadFullModelCatalog!({ refresh: true });
       expect(failedAgain.entries).toMatchObject([learned, caseDistinct, sibling]);
-      serveCatalog(snapshots[4]!);
+      servePreparedModelRuntimeCatalog(snapshots[4]!);
       const recovered = await owner.loadFullModelCatalog!({ refresh: true });
       expect(recovered.entries).toMatchObject([sibling]);
       expect(recovered.routeVariants).toMatchObject([sibling]);
       expect(recovered.authoritative).not.toBe(false);
-      serveCatalog(snapshots[2]!);
+      servePreparedModelRuntimeCatalog(snapshots[2]!);
       expect(await owner.loadFullModelCatalog!({ refresh: true })).toMatchObject({
         entries: [sibling],
         routeVariants: [sibling],
@@ -243,7 +230,10 @@ describe("prepared model runtime scoped refresh", () => {
   it.each(["credential", "selected-profile", "synthetic-credential"] as const)(
     "does not retain an account inventory after its %s changes",
     async (change) => {
-      const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
+      const config: OpenClawConfig = {
+        agents: { entries: { pro: {} } },
+        models: { providers: { demo: { baseUrl: "https://demo.example.test/v1", models: [] } } },
+      };
       const learned = { provider: "demo", id: "learned", name: "Learned" };
       const starter = { provider: "demo", id: "starter", name: "Starter" };
       const profiles = {
@@ -308,7 +298,7 @@ describe("prepared model runtime scoped refresh", () => {
             : {},
       });
       const owner = await prepareCatalogOwner(config, previous);
-      serveCatalog(failed);
+      servePreparedModelRuntimeCatalog(failed);
       expect(await owner.loadFullModelCatalog!({ refresh: true })).toMatchObject({
         entries: [starter],
         routeVariants: [starter],
@@ -367,7 +357,7 @@ describe("prepared model runtime scoped refresh", () => {
       const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
       try {
         const owner = await prepareCatalogOwner(config, previous);
-        serveCatalog(current);
+        servePreparedModelRuntimeCatalog(current);
         const published = await owner.loadFullModelCatalog!({ refresh: true });
         expect(published.entries).toMatchObject(scenario === "alias" ? previous.entries : [fresh]);
         expect(published.routeVariants).toMatchObject(
@@ -413,7 +403,7 @@ describe("prepared model runtime scoped refresh", () => {
         credentials: mocks.authStorage.getAll(),
       };
       setPreparedModelFullCatalogAuth(catalog, auth);
-      serveCatalog(catalog);
+      servePreparedModelRuntimeCatalog(catalog);
       await refreshPreparedModelRuntimeSnapshots(config, {
         gatewayLifecycle: true,
         catalogMode: "static",
@@ -463,7 +453,7 @@ describe("prepared model runtime scoped refresh", () => {
       const replacement = getPreparedModelRuntimeSnapshot(input)!;
       const refreshed = markPreparedModelCatalogFull({ entries: [], routeVariants: [] });
       setPreparedModelFullCatalogAuth(refreshed, auth);
-      serveCatalog(refreshed);
+      servePreparedModelRuntimeCatalog(refreshed);
       const refreshedCatalog = await replacement.loadFullModelCatalog!({ refresh: true });
       expect(refreshedCatalog).toMatchObject(refreshed);
       expect(replacement.readFullModelCatalog!()).toBe(refreshedCatalog);
@@ -495,6 +485,9 @@ describe("prepared model runtime scoped refresh", () => {
   ] as const)("invalidates retained discovery after the %s identity changes", async (change) => {
     mocks.configuredAgentIds = ["pro"];
     const originalIndex = mocks.pluginMetadataSnapshot.index;
+    const originalProviderOwners = mocks.pluginMetadataSnapshot.owners.providers;
+    mocks.pluginMetadataSnapshot.owners.providers = new Map(originalProviderOwners);
+    mocks.pluginMetadataSnapshot.owners.providers.set("demo", ["demo"]);
     mocks.pluginMetadataSnapshot.index = { ...originalIndex };
     const configuredProvider: ModelProviderConfig = {
       baseUrl: "https://original.example.test/v1",
@@ -520,7 +513,7 @@ describe("prepared model runtime scoped refresh", () => {
       },
     };
     const learned = { provider: "demo", id: "learned", name: "Learned" };
-    serveCatalog({
+    servePreparedModelRuntimeCatalog({
       entries: [...buildConfiguredModelCatalog({ cfg: config }), learned],
       routeVariants: [learned],
     });
@@ -531,7 +524,7 @@ describe("prepared model runtime scoped refresh", () => {
       await getPreparedModelRuntimeSnapshot({ ...input, config })!.loadFullModelCatalog!({
         refresh: true,
       });
-      serveCatalog({ entries: [], routeVariants: [] });
+      servePreparedModelRuntimeCatalog({ entries: [], routeVariants: [] });
       let nextConfig: OpenClawConfig =
         change === "endpoint" || change === "configured-models"
           ? {
@@ -573,11 +566,15 @@ describe("prepared model runtime scoped refresh", () => {
       ).not.toContainEqual(expect.objectContaining(learned));
     } finally {
       mocks.pluginMetadataSnapshot.index = originalIndex;
+      mocks.pluginMetadataSnapshot.owners.providers = originalProviderOwners;
     }
   });
 
   it("does not reuse a post-startup account catalog under the startup credentials", async () => {
-    const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
+    const config: OpenClawConfig = {
+      agents: { entries: { pro: {} } },
+      models: { providers: { demo: { baseUrl: "https://demo.example.test/v1", models: [] } } },
+    };
     const learned = { provider: "demo", id: "private-model", name: "Private model" };
     const catalog: ModelCatalogSnapshot = {
       entries: [learned],
@@ -594,7 +591,7 @@ describe("prepared model runtime scoped refresh", () => {
     expect((await owner.loadFullModelCatalog!()).entries).toContainEqual(
       expect.objectContaining(learned),
     );
-    serveCatalog({ entries: [], routeVariants: [] });
+    servePreparedModelRuntimeCatalog({ entries: [], routeVariants: [] });
     await refreshModelRuntimeAfterHotReload({
       config,
       agentIds: undefined,
@@ -728,7 +725,7 @@ describe("prepared model runtime scoped refresh", () => {
       authStore: mocks.preparedAuthStore,
       credentials: mocks.authStorage.getAll(),
     });
-    serveCatalog(catalog);
+    servePreparedModelRuntimeCatalog(catalog);
     const input = { agentId: "pro", agentDir: state.agentDir("pro"), config: {} };
     for (const runtime of ["openclaw", "fixture-runtime", "openclaw"]) {
       const config: OpenClawConfig = {
@@ -759,7 +756,7 @@ describe("prepared model runtime scoped refresh", () => {
           authStore: mocks.preparedAuthStore,
           credentials: mocks.authStorage.getAll(),
         });
-        serveCatalog(failed);
+        servePreparedModelRuntimeCatalog(failed);
         await snapshot.loadFullModelCatalog!({ refresh: true });
       }
       const discoveryRequests = mocks.runPreparedModelCatalogWorker.mock.calls.length;

@@ -15,7 +15,7 @@ import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-r
 import type { ProviderModelAuthSource } from "../../agents/provider-model-auth-source-plan.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import * as providerUsage from "../../infra/provider-usage.js";
+import * as providerUsage from "../../infra/provider-usage.load.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {

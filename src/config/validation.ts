@@ -29,7 +29,6 @@ import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles
 import { removeLegacyCopilotDiscovery } from "./legacy.github-copilot.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
-import { resolveConfigPath } from "./paths.js";
 import { applyProviderUseBindingsToRuntime } from "./provider-use-binding-plan.js";
 import { copyConfigResolutionFacts } from "./resolution-facts.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
@@ -56,6 +55,8 @@ type ValidateConfigWithPluginsResult =
   | { ok: false; issues: ConfigValidationIssue[]; warnings: ConfigValidationIssue[] };
 
 type ValidateConfigWithPluginsParams = {
+  /** Selected by the config IO owner; object-only validation has no migration receipt. */
+  configPath?: string;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   pluginValidation?: "full" | "skip" | "core-only";
@@ -119,6 +120,7 @@ function validateConfigObjectWithPluginMode(
   if (
     result.ok &&
     applyDefaults &&
+    params?.configPath !== undefined &&
     params?.pluginValidation !== "core-only" &&
     params?.semanticValidation !== "strict"
   ) {
@@ -126,7 +128,7 @@ function validateConfigObjectWithPluginMode(
     const migration = applyProviderUseBindingsToRuntime({
       config: migrated,
       runtimeConfig: result.config,
-      configPath: resolveConfigPath(env, undefined, params?.homedir),
+      configPath: params.configPath,
       env,
       manifestRegistry,
       loadManifestRegistry: () =>

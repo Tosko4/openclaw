@@ -482,7 +482,7 @@ describe("registerTelegramNativeCommands /login", () => {
       authProfileOverrideSource: "user",
     };
     const store = { "agent:main:main": previous };
-    loginSessionMocks.loadSessionStore.mockReturnValue(store);
+    loginSessionMocks.readFixtureEntries.mockReturnValue(store);
     loginSessionMocks.patchSessionEntry.mockImplementationOnce(
       async (
         write: Parameters<

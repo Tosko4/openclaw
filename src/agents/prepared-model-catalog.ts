@@ -129,7 +129,9 @@ async function materializeRequestedModelCatalog(
   }
   const materialized = materializePreparedModelCatalogOwner(snapshot, modelCatalog);
   const { isRequestCurrent } = requestOptions;
-  if (!isRequestCurrent) return materialized;
+  if (!isRequestCurrent) {
+    return materialized;
+  }
   const scoped = Object.freeze({
     ...materialized,
     isCurrent: () => materialized.isCurrent() && isRequestCurrent(),
@@ -278,7 +280,7 @@ export function getPublishedPreparedModelCatalogOwnerSnapshot(
 
 /** Returns the newest published catalog without starting discovery. */
 export function getPreparedModelCatalogSnapshot(
-  params: LoadPreparedModelCatalogParams = {},
+  params: Omit<LoadPreparedModelCatalogParams, "requestSelection"> = {},
 ): ModelCatalogSnapshot | undefined {
   const owner = getPreparedModelCatalogOwnerSnapshot(params);
   return owner?.readFullModelCatalog?.() ?? owner?.modelCatalog;
@@ -420,7 +422,9 @@ async function withPreparedModelCatalogOwnerPolicy<T>(
         ...(personal
           ? {
               isRequestCurrent: () => {
-                if (!projection.isCurrent()) return false;
+                if (!projection.isCurrent()) {
+                  return false;
+                }
                 const current = project();
                 return (
                   current.isCurrent() &&

@@ -47,7 +47,7 @@ type ValidationPluginMetadataSnapshotLoader = {
 
 export type ConfigIoContext = {
   deps: NormalizedConfigIoDeps;
-  pathResolution: { env: NodeJS.ProcessEnv; homedir?: () => string };
+  pathResolution: { configPath: string; env: NodeJS.ProcessEnv; homedir?: () => string };
   configPath: string;
   options: ConfigIoFactoryOptions;
   observeLoadConfigSnapshot: (snapshot: ConfigFileSnapshot) => ConfigFileSnapshot;
@@ -68,7 +68,7 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
   const configPath = resolveConfigPathForDeps(deps);
   // The normalized default homedir already applies OPENCLAW_HOME. Path
   // resolvers need the original OS-home fallback or relative overrides expand twice.
-  const pathResolution = { env: deps.env, homedir: options.homedir };
+  const pathResolution = { configPath, env: deps.env, homedir: options.homedir };
 
   function observeLoadConfigSnapshot(snapshot: ConfigFileSnapshot): ConfigFileSnapshot {
     if (deps.observe) {

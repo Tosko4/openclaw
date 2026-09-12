@@ -263,7 +263,9 @@ async function runFamilyOrderCase(mode: "explicit" | "retained") {
     }
   } finally {
     endpoint.closeAllConnections();
-    await new Promise<void>((resolve) => endpoint.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      endpoint.close(() => resolve());
+    });
     await state.cleanup();
   }
 }

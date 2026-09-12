@@ -1,195 +1,145 @@
-import { once } from "node:events";
-import { createServer } from "node:http";
-import { expect, it, vi } from "vitest";
-import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import type { RuntimeConfigWriteApplicationStatus } from "../../config/runtime-write-application.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import * as configReload from "../config-reload.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { expect, it } from "vitest";
+import { observeHeldGatewayWorkDrain } from "../server-held-work.test-support.js";
+import { withAuthRefreshOverlap } from "./models-auth-refresh.overlap.test-support.js";
 
 it("models.authRefresh keeps catalog publication held until an overlapping failed mutation releases it", async () => {
-  const state = await createOpenClawTestState({
-    label: "overlapping-auth-refresh",
-    env: {
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-    },
+  await withAuthRefreshOverlap(async (fixture) => {
+    expect((await fixture.list(true)).models.map((model) => model.id)).toEqual(["old-row"]);
+    const firstHold = fixture.holdReconcile();
+    const first = fixture.refresh();
+    await firstHold.entered.promise;
+    await fixture.save("new-key");
+    const secondHold = fixture.holdReconcile();
+    const second = fixture.refresh();
+    const rejectedSecond = expect(second).rejects.toThrow("configuration application is failed");
+    await secondHold.entered.promise;
+    const catalog = fixture.holdCatalog();
+
+    firstHold.release.resolve("reconcile");
+    await expect(first).resolves.toEqual({ refreshed: true });
+    expect((await fixture.list()).pendingProviders ?? []).not.toContain("overlap-fixture");
+    expect(fixture.requests).not.toContain("Bearer new-key");
+
+    secondHold.release.resolve("failed");
+    await rejectedSecond;
+    await catalog.entered;
+    expect(
+      fixture.requests.filter((authorization) => authorization === "Bearer new-key"),
+    ).toHaveLength(1);
+    catalog.release();
+    await expect
+      .poll(async () => (await fixture.list()).models.map((model) => model.id))
+      .toEqual(["new-row"]);
   });
-  const firstEntered = createDeferred<void>();
-  const secondEntered = createDeferred<void>();
-  const releaseFirst = createDeferred<void>();
-  const releaseSecond = createDeferred<RuntimeConfigWriteApplicationStatus>();
-  const newCatalogEntered = createDeferred<void>();
-  const heldCatalogReplies: Array<() => void> = [];
-  const releaseCatalog = () => {
-    for (const send of heldCatalogReplies.splice(0)) {
-      send();
-    }
-  };
-  const requests: string[] = [];
-  const startReloader = configReload.startGatewayConfigReloader;
-  let reconcileCalls = 0;
-  vi.spyOn(configReload, "startGatewayConfigReloader").mockImplementation((options) => {
-    const reloader = startReloader(options);
-    return {
-      ...reloader,
-      reconcileExternalWrite: async () => {
-        reconcileCalls += 1;
-        if (reconcileCalls === 1) {
-          firstEntered.resolve();
-          await releaseFirst.promise;
-          return reloader.reconcileExternalWrite();
-        }
-        if (reconcileCalls === 2) {
-          secondEntered.resolve();
-          return releaseSecond.promise;
-        }
-        return reloader.reconcileExternalWrite();
-      },
-    };
+});
+
+it("models.authRefresh releases a failed-only refresh without starting provider discovery", async () => {
+  await withAuthRefreshOverlap(async (fixture) => {
+    expect((await fixture.list(true)).models.map((model) => model.id)).toEqual(["old-row"]);
+    const beforeFailure = [...fixture.requests];
+    const failedHold = fixture.holdReconcile();
+    const failed = fixture.refresh();
+    const rejected = expect(failed).rejects.toThrow("configuration application is failed");
+    await failedHold.entered.promise;
+    expect((await fixture.list()).pendingProviders ?? []).not.toContain("overlap-fixture");
+    expect(fixture.requests).toEqual(beforeFailure);
+    failedHold.release.resolve("failed");
+    await rejected;
+    expect((await fixture.list()).models.map((model) => model.id)).toEqual(["old-row"]);
+    expect(fixture.requests).toEqual(beforeFailure);
+
+    const recoveryHold = fixture.holdReconcile();
+    const recovered = fixture.refresh();
+    await recoveryHold.entered.promise;
+    await fixture.save("new-key");
+    const catalog = fixture.holdCatalog();
+    recoveryHold.release.resolve("reconcile");
+    await expect(recovered).resolves.toEqual({ refreshed: true });
+    await catalog.entered;
+    expect(
+      fixture.requests.filter((authorization) => authorization === "Bearer new-key"),
+    ).toHaveLength(1);
+    catalog.release();
+    await expect
+      .poll(async () => (await fixture.list()).models.map((model) => model.id))
+      .toEqual(["new-row"]);
   });
-  const endpoint = createServer((request, response) => {
-    const authorization = request.headers.authorization ?? "";
-    requests.push(authorization);
-    if (
-      request.url !== "/models" ||
-      !["Bearer old-key", "Bearer new-key"].includes(authorization)
-    ) {
-      response.writeHead(401).end();
-      return;
-    }
-    const send = () => {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(
-        JSON.stringify([{ id: authorization === "Bearer old-key" ? "old-row" : "new-row" }]),
-      );
-    };
-    if (authorization === "Bearer new-key") {
-      heldCatalogReplies.push(send);
-      newCatalogEntered.resolve();
-    } else {
-      send();
-    }
-  });
-  try {
-    endpoint.listen(0, "127.0.0.1");
-    await once(endpoint, "listening");
-    const address = endpoint.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Overlapping auth fixture did not bind a TCP port");
-    }
-    const baseUrl = `http://127.0.0.1:${address.port}`;
-    await state.writeJson("catalog-plugin/openclaw.plugin.json", {
-      id: "overlap-fixture",
-      providers: ["overlap-fixture"],
-      configSchema: { type: "object", additionalProperties: false },
+});
+
+it("models.authRefresh holds a same-auth-scope replacement owner while another agent remains usable", async () => {
+  await withAuthRefreshOverlap(async (fixture) => {
+    expect((await fixture.list(true)).models.map((model) => model.id)).toEqual(["old-row"]);
+    expect((await fixture.list(true, "other")).models.map((model) => model.id)).toEqual([
+      "other-row",
+    ]);
+    const hold = fixture.holdReconcile();
+    const refresh = fixture.refresh();
+    await hold.entered.promise;
+    await fixture.save("new-key");
+    const catalog = fixture.holdCatalog();
+
+    const beforeReplacement = await fixture.client.request<{ hash: string }>("config.get", {});
+    await fixture.client.request("config.patch", {
+      baseHash: beforeReplacement.hash,
+      raw: JSON.stringify({
+        agents: { entries: { pro: { workspace: fixture.replacementWorkspace } } },
+      }),
     });
-    const pluginPath = await state.writeText(
-      "catalog-plugin/index.cjs",
-      `module.exports = {
-      id: "overlap-fixture", register(api) {
-        api.registerProvider({ id: "overlap-fixture", label: "Overlap fixture", auth: [],
-          catalog: { order: "profile", async run(ctx) {
-            const auth = ctx.resolveProviderAuth("overlap-fixture");
-            if (!auth.discoveryApiKey) return null;
-            const response = await fetch(${JSON.stringify(`${baseUrl}/models`)}, {
-              headers: { Authorization: "Bearer " + auth.discoveryApiKey },
-            });
-            if (!response.ok) throw new Error("Catalog rejected the account");
-            const rows = await response.json();
-            return { provider: { baseUrl: ${JSON.stringify(baseUrl)}, api: "openai-completions",
-              models: rows.map(row => ({ ...row, name: row.id, input: ["text"], reasoning: false,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 32768, maxTokens: 4096 })),
-            } };
-          } },
-        });
-      },
-    };`,
-    );
-    const token = "overlap-fixture-gateway-token";
-    const cfg = {
-      agents: {
-        defaults: { modelPolicy: { allow: ["overlap-fixture/*"] } },
-        entries: { main: { workspace: state.workspaceDir } },
-      },
-      plugins: {
-        allow: ["overlap-fixture"],
-        load: { paths: [pluginPath] },
-        slots: { memory: "none" },
-      },
-      gateway: { mode: "local", auth: { mode: "token", token } },
-    };
-    const save = (key: string) =>
-      state.writeAuthProfiles({
-        version: 1,
-        profiles: {
-          "overlap-fixture:saved": { type: "api_key", provider: "overlap-fixture", key },
-        },
-      });
-    await state.writeConfig(cfg);
-    await save("old-key");
-    const { client, server } = await startGatewayWithClient({
-      cfg,
-      configPath: state.configPath,
-      token,
-      scopes: ["operator.admin"],
-    });
-    const operations: Promise<unknown>[] = [];
-    try {
-      await server.startupSettled;
-      const list = (refresh = false) =>
-        client.request<ModelsListResult>("models.list", {
-          agentId: "main",
-          provider: "overlap-fixture",
-          view: "all",
-          refresh,
-        });
-      expect((await list(true)).models.map((model) => model.id)).toEqual(["old-row"]);
-      const first = client.request("models.authRefresh", { agentId: "main", operation: "update" });
-      operations.push(first);
-      void first.catch(() => undefined);
-      await firstEntered.promise;
-      await save("new-key");
-      const second = client.request("models.authRefresh", { agentId: "main", operation: "update" });
-      operations.push(second);
-      const rejectedSecond = expect(second).rejects.toThrow("configuration application is failed");
-      await secondEntered.promise;
+    const replacement = await fixture.list();
+    expect(replacement.models.map((model) => model.id)).not.toContain("new-row");
+    expect(replacement.pendingProviders ?? []).not.toContain("overlap-fixture");
+    expect(fixture.requests).not.toContain("Bearer new-key");
+    expect((await fixture.list(true, "other")).models.map((model) => model.id)).toEqual([
+      "other-row",
+    ]);
 
-      releaseFirst.resolve();
-      await expect(first).resolves.toEqual({ refreshed: true });
+    hold.release.resolve("reconcile");
+    await expect(refresh).resolves.toEqual({ refreshed: true });
+    await catalog.entered;
+    expect(
+      fixture.requests.filter((authorization) => authorization === "Bearer new-key"),
+    ).toHaveLength(1);
+    catalog.release();
+    await expect
+      .poll(async () => (await fixture.list()).models.map((model) => model.id))
+      .toEqual(["new-row"]);
+  });
+});
 
-      expect((await list()).pendingProviders ?? []).not.toContain("overlap-fixture");
-      expect(requests).not.toContain("Bearer new-key");
+it("models.authRefresh joins a retired refresh before Gateway close and preserves the next lifecycle's hold", async () => {
+  const expectHeldWork = await observeHeldGatewayWorkDrain();
+  await withAuthRefreshOverlap(async (fixture) => {
+    expect((await fixture.list(true)).models.map((model) => model.id)).toEqual(["old-row"]);
+    const retiredHold = fixture.holdReconcile();
+    const retired = fixture.refresh();
+    await retiredHold.entered.promise;
+    const rejected = expect(retired).rejects.toThrow("gateway closed (1012): service restart");
+    const closed = fixture.close();
+    await expectHeldWork(closed);
+    await rejected;
+    retiredHold.release.resolve("applied");
+    await expect(fixture.refreshCompletions[0]).resolves.toBeUndefined();
+    await closed;
+    await fixture.start();
+    expect((await fixture.list(true)).models.map((model) => model.id)).toEqual(["old-row"]);
+    const currentHold = fixture.holdReconcile();
+    const current = fixture.refresh();
+    await currentHold.entered.promise;
+    await fixture.save("new-key");
+    const catalog = fixture.holdCatalog();
 
-      releaseSecond.resolve("failed");
-      await rejectedSecond;
-      await newCatalogEntered.promise;
-      expect(requests.filter((authorization) => authorization === "Bearer new-key")).toHaveLength(
-        1,
-      );
-      releaseCatalog();
-      await expect
-        .poll(async () => (await list()).models.map((model) => model.id))
-        .toEqual(["new-row"]);
-    } finally {
-      releaseFirst.resolve();
-      releaseSecond.resolve("failed");
-      releaseCatalog();
-      await Promise.allSettled(operations);
-      await disconnectGatewayClient(client);
-      await server.close();
-    }
-  } finally {
-    endpoint.closeAllConnections();
-    await new Promise<void>((resolve) => endpoint.close(() => resolve()));
-    vi.restoreAllMocks();
-    await state.cleanup();
-  }
+    expect((await fixture.list()).pendingProviders ?? []).not.toContain("overlap-fixture");
+    expect(fixture.requests).not.toContain("Bearer new-key");
+
+    currentHold.release.resolve("reconcile");
+    await expect(current).resolves.toEqual({ refreshed: true });
+    await catalog.entered;
+    expect(
+      fixture.requests.filter((authorization) => authorization === "Bearer new-key"),
+    ).toHaveLength(1);
+    catalog.release();
+    await expect
+      .poll(async () => (await fixture.list()).models.map((model) => model.id))
+      .toEqual(["new-row"]);
+  });
 });

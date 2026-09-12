@@ -68,7 +68,9 @@ function planConfigRepair(
     return null;
   }
   const valid = pluginContracts
-    ? validateConfigObjectWithPlugins(prepareAutomaticConfigRepairWrite(snapshot, config)).ok
+    ? validateConfigObjectWithPlugins(prepareAutomaticConfigRepairWrite(snapshot, config), {
+        configPath: snapshot.path,
+      }).ok
     : validateConfigObjectRaw(config).ok;
   const issues = (pluginContracts ? findDoctorLegacyConfigIssues : findLegacyConfigIssues)(
     config,

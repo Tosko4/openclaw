@@ -902,10 +902,11 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
       const runtimeConfigToWrite = resolveConfigEnvVars(runtimeCandidate, runtimeCandidateEnv, {
         onMissing: () => {},
       }) as OpenClawConfig;
-      const validated = validateConfigObjectWithPlugins(
-        runtimeConfigToWrite,
-        params.writeOptions?.skipPluginValidation ? { pluginValidation: "skip" } : undefined,
-      );
+      const validated = validateConfigObjectWithPlugins(runtimeConfigToWrite, {
+        configPath: params.snapshot.path,
+        env: runtimeCandidateEnv,
+        ...(params.writeOptions?.skipPluginValidation ? { pluginValidation: "skip" } : {}),
+      });
       if (!validated.ok) {
         throw createInvalidConfigError(
           params.snapshot.path,

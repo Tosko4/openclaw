@@ -36,8 +36,8 @@ it("models.list acquires each requested provider once without widening session-o
   const requests: string[] = [];
   const personalRequests: string[] = [];
   const sharedPinnedRequests: string[] = [];
-  const personalStarted = createDeferred<void>();
-  const replacementStarted = createDeferred<void>();
+  const personalStarted = createDeferred();
+  const replacementStarted = createDeferred();
   let releasePersonal: (() => void) | undefined;
   let holdPersonal = false;
   const inferenceRequests: Array<{
@@ -85,9 +85,14 @@ it("models.list acquires each requested provider once without widening session-o
         personalKey === "Bearer personal-replaced" ||
         personalKey === "Bearer other-alternate")
     ) {
-      if (personalKey === "Bearer other-alternate") sharedPinnedRequests.push(personalKey);
-      else personalRequests.push(personalKey);
-      if (personalKey === "Bearer personal-replaced") replacementStarted.resolve();
+      if (personalKey === "Bearer other-alternate") {
+        sharedPinnedRequests.push(personalKey);
+      } else {
+        personalRequests.push(personalKey);
+      }
+      if (personalKey === "Bearer personal-replaced") {
+        replacementStarted.resolve();
+      }
       const send = () => {
         response.setHeader("Content-Type", "application/json");
         response.end(
@@ -107,7 +112,9 @@ it("models.list acquires each requested provider once without widening session-o
       if (holdPersonal && personalKey === "Bearer personal-key") {
         releasePersonal = send;
         personalStarted.resolve();
-      } else send();
+      } else {
+        send();
+      }
       return;
     }
     const key = provider === other ? "other-key" : "family-key";

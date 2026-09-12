@@ -327,7 +327,10 @@ describe("models.list CLI runtime availability", () => {
         const modelId = "claude-haiku-4-5";
         const cfg: OpenClawConfig = {
           agents: {
-            defaults: { model: { primary: `${provider}/${modelId}` } },
+            defaults: {
+              model: { primary: `${provider}/${modelId}` },
+              models: { [`${provider}/${modelId}`]: { agentRuntime: { id: "claude-cli" } } },
+            },
             list: [{ id: "main", default: true }],
           },
           auth: {

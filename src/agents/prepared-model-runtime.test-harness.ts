@@ -494,3 +494,23 @@ export async function cleanupPreparedModelRuntimeHarness(
   await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
   await state.cleanup();
 }
+
+export function servePreparedModelRuntimeCatalog(catalog: ModelCatalogSnapshot) {
+  preparedModelRuntimeMocks.runPreparedModelCatalogWorker.mockImplementation(
+    async (providerIds?: readonly string[]) => {
+      const included = (provider: string) => !providerIds || providerIds.includes(provider);
+      const reply: ModelCatalogSnapshot = {
+        ...catalog,
+        entries: catalog.entries.filter((entry) => included(entry.provider)),
+        routeVariants: catalog.routeVariants.filter((entry) => included(entry.provider)),
+        staticEntries: catalog.staticEntries?.filter((entry) => included(entry.provider)),
+        providerOutcomes: catalog.providerOutcomes?.filter((outcome) => included(outcome.provider)),
+      };
+      const auth = getPreparedModelFullCatalogAuth(catalog);
+      if (auth) {
+        setPreparedModelFullCatalogAuth(reply, auth);
+      }
+      return reply;
+    },
+  );
+}

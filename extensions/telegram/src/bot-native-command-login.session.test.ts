@@ -16,7 +16,7 @@ describe("registerTelegramNativeCommands /login session profile", () => {
 
   it("moves the target session to the profile returned by Telegram /login codex", async () => {
     const finishLogin = createDeferred<void>();
-    loginSessionMocks.loadSessionStore.mockReturnValue({
+    loginSessionMocks.readFixtureEntries.mockReturnValue({
       "agent:main:main": {
         authProfileOverride: "openai:owner@example.com",
         sessionId: "sess-main",
@@ -93,7 +93,7 @@ describe("registerTelegramNativeCommands /login session profile", () => {
   it("moves a session created while Telegram login is pending to the returned profile", async () => {
     const finishLogin = createDeferred<void>();
     let sessionStore: Record<string, SessionEntry> = {};
-    loginSessionMocks.loadSessionStore.mockImplementation(() => sessionStore);
+    loginSessionMocks.readFixtureEntries.mockImplementation(() => sessionStore);
     const runModelsAuthLoginFlow = vi.fn<TelegramLoginFlow>(async (opts) => {
       await opts.prompter.deviceCode?.({
         title: "OpenAI Codex device code",
@@ -148,7 +148,7 @@ describe("registerTelegramNativeCommands /login session profile", () => {
   it("preserves a later user-selected profile on a session created during Telegram login", async () => {
     const finishLogin = createDeferred<void>();
     let sessionStore: Record<string, SessionEntry> = {};
-    loginSessionMocks.loadSessionStore.mockImplementation(() => sessionStore);
+    loginSessionMocks.readFixtureEntries.mockImplementation(() => sessionStore);
     const runModelsAuthLoginFlow = vi.fn<TelegramLoginFlow>(async (opts) => {
       await opts.prompter.deviceCode?.({
         title: "OpenAI Codex device code",
@@ -193,7 +193,7 @@ describe("registerTelegramNativeCommands /login session profile", () => {
   });
 
   it("marks a same-profile Telegram login as user-selected", async () => {
-    loginSessionMocks.loadSessionStore.mockReturnValue({
+    loginSessionMocks.readFixtureEntries.mockReturnValue({
       "agent:main:main": {
         authProfileOverride: "openai:owner@example.com",
         authProfileOverrideSource: "auto",
@@ -264,7 +264,7 @@ describe("registerTelegramNativeCommands /login session profile", () => {
   ] as const)(
     "preserves $authRefresh when Telegram cannot persist the returned session profile",
     async ({ authRefresh, message }) => {
-      loginSessionMocks.loadSessionStore.mockReturnValue({
+      loginSessionMocks.readFixtureEntries.mockReturnValue({
         "agent:main:main": {
           authProfileOverride: "openai:old-owner@example.com",
           modelOverride: "test-model",
@@ -338,7 +338,7 @@ describe("registerTelegramNativeCommands /login session profile", () => {
       sessionId: "sess-main",
       updatedAt: 1,
     };
-    loginSessionMocks.loadSessionStore.mockReturnValue({
+    loginSessionMocks.readFixtureEntries.mockReturnValue({
       "agent:main:main": previousEntry,
     });
     loginSessionMocks.patchSessionEntry.mockImplementationOnce(async (params) => {

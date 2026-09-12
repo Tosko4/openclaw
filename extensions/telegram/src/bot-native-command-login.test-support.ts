@@ -27,7 +27,7 @@ const loginGatewayRequest = vi.hoisted(() => vi.fn());
 
 const loginSessionMocks = vi.hoisted(() => ({
   getSessionEntry: vi.fn(),
-  loadSessionStore: vi.fn(),
+  readFixtureEntries: vi.fn(),
   resolveStorePath: vi.fn(),
   patchSessionEntry: vi.fn(),
 }));
@@ -74,16 +74,16 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
 export function resetLoginCommandMocks() {
   resetNativeCommandMenuMocks();
   loginGatewayRequest.mockReset().mockResolvedValue({ refreshed: true });
-  loginSessionMocks.loadSessionStore.mockReset().mockReturnValue({});
+  loginSessionMocks.readFixtureEntries.mockReset().mockReturnValue({});
   loginSessionMocks.getSessionEntry
     .mockReset()
     .mockImplementation(
       ({ storePath, sessionKey }: { storePath: string; sessionKey: string }) =>
-        loginSessionMocks.loadSessionStore(storePath)[sessionKey],
+        loginSessionMocks.readFixtureEntries(storePath)[sessionKey],
     );
   loginSessionMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/openclaw-sessions.json");
   loginSessionMocks.patchSessionEntry.mockReset().mockImplementation(async (params) => {
-    const current = loginSessionMocks.loadSessionStore(params.storePath)[params.sessionKey];
+    const current = loginSessionMocks.readFixtureEntries(params.storePath)[params.sessionKey];
     if (!current) {
       return null;
     }

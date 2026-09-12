@@ -80,7 +80,12 @@ it.each(["merge", "replace"] as const)(
     const selectedCases = cases
       .filter((entry) => entry.mode === mode)
       .map((entry, index) => ({
-        ...entry,
+        mode: entry.mode,
+        capturedBaseUrl: entry.capturedBaseUrl,
+        capturedId: entry.capturedId,
+        pin: entry.pin,
+        expectedBaseUrl: entry.expectedBaseUrl,
+        expectedIds: entry.expectedIds,
         agentId: index === 0 ? "main" : `case-${index}`,
         provider: `captured-fixture-${index}`,
         workspace: state.statePath(`workspace-${index}`),
