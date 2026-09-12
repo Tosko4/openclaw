@@ -62,8 +62,10 @@ describe("authenticated request completion", { concurrent: false }, () => {
       }
       const { createDispatchTestHarness, createOperatorWsClient } =
         await import("./authenticated-request-dispatch.test-support.js");
+      // A profile-owned method must enter identity synchronization before its handler.
+      const method = "sessions.list";
       const harness = createDispatchTestHarness({
-        extraHandlers: { "test.lifetime": handleGatewayRequest },
+        extraHandlers: { [method]: handleGatewayRequest },
         buildRequestContext: () => ({ getRuntimeConfig: () => ({}) }),
       });
       const client = createOperatorWsClient({ socket: new EventEmitter() });
@@ -81,7 +83,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
         };
       }
       const dispatch = harness.dispatcher
-        .dispatch({ type: "req", id: "held", method: "test.lifetime", params: {} }, client)
+        .dispatch({ type: "req", id: "held", method, params: {} }, client)
         .then(() => {
           dispatched = true;
           selection.OPENCLAW_STATE_DIR = restoredRoot;
