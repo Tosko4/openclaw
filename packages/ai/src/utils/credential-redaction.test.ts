@@ -1,6 +1,36 @@
 import { describe, expect, it, vi } from "vitest";
 import { projectDiagnosticValue } from "./credential-redaction.js";
 
+describe("diagnostic Headers projection", () => {
+  it("retains retry timing from native headers without reading overridden methods", () => {
+    const getter = vi.fn(() => {
+      throw new Error("must not be read");
+    });
+    const headers = new Headers({
+      "retry-after": "7",
+      "retry-after-ms": "8500",
+      authorization: "synthetic-private",
+    });
+    for (const key of ["has", "get", "constructor", Symbol.toStringTag]) {
+      Object.defineProperty(headers, key, { get: getter });
+    }
+
+    expect(projectDiagnosticValue({ headers })).toEqual({
+      headers: { "retry-after-ms": 8500 },
+    });
+    expect(getter).not.toHaveBeenCalled();
+  });
+
+  it("still projects own data when a Headers prototype has no native slots", () => {
+    const value = Object.assign(Object.create(Headers.prototype), {
+      detail: "safe",
+      authorization: "synthetic-private",
+    });
+
+    expect(projectDiagnosticValue(value)).toEqual({ detail: "safe" });
+  });
+});
+
 describe("diagnostic descriptor snapshots", () => {
   it("keeps media and credential classification isolated through reentrant policy callbacks", () => {
     const nested: unknown[] = [];

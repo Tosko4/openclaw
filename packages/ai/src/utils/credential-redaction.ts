@@ -236,11 +236,14 @@ export function projectDiagnosticValue(
       return "[Truncated]";
     }
     try {
-      // Brand-check without provider getters; retain only numeric retry timing.
-      Headers.prototype.has.call(value, "retry-after");
-      const seconds = parseRetryAfterHeadersSeconds(value);
-      state.changed = true;
-      return seconds === undefined ? {} : { "retry-after-ms": seconds * 1000 };
+      // Node Headers requires this prototype brand; avoid throwing for ordinary objects.
+      if (Function.prototype[Symbol.hasInstance].call(Headers, value)) {
+        // Keep native slot validation without reading provider getters.
+        Headers.prototype.has.call(value, "retry-after");
+        const seconds = parseRetryAfterHeadersSeconds(value);
+        state.changed = true;
+        return seconds === undefined ? {} : { "retry-after-ms": seconds * 1000 };
+      }
     } catch {
       // Other objects follow the bounded descriptor walk below.
     }
