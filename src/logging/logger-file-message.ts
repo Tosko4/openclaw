@@ -4,6 +4,12 @@ import type { RedactionMessage } from "./redact-json.js";
 
 const MAX_FILE_LOG_MESSAGE_CHARS = 4 * 1024;
 
+function clampMessage(text: string): string {
+  return text.length > MAX_FILE_LOG_MESSAGE_CHARS
+    ? `${truncateUtf16Safe(text, MAX_FILE_LOG_MESSAGE_CHARS)}...(truncated)`
+    : text;
+}
+
 function stringifyFileLogMessagePart(value: unknown, json: boolean): string | undefined {
   if (json) {
     return JSON.stringify(value);
@@ -53,8 +59,9 @@ export function buildFileLogMessage(
   const joined = text.join(" ");
   const prefix = truncateUtf16Safe(joined, MAX_FILE_LOG_MESSAGE_CHARS);
   return {
-    text: joined.length > MAX_FILE_LOG_MESSAGE_CHARS ? `${prefix}...(truncated)` : joined,
+    text: clampMessage(joined),
     contentLength: prefix.length,
+    finish: clampMessage,
     parts: spans,
   };
 }

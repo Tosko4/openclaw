@@ -698,6 +698,13 @@ it.each(patternCases)(
             }
           })(),
         });
+        rawLogger.info(
+          new (class {
+            toJSON() {
+              return { token: Array.from({ length: 1_000 }, () => 1) };
+            }
+          })(),
+        );
       },
     });
     const services = await startPluginServices({ registry, config: {} });
@@ -709,7 +716,7 @@ it.each(patternCases)(
       .split("\n")
       .map((line) => JSON.parse(line));
     const consoleRecords = output.mock.calls.map(([line]) => JSON.parse(String(line)));
-    expect(records).toHaveLength(5);
+    expect(records).toHaveLength(6);
     expect(consoleRecords).toHaveLength(3);
     expect(records[0][1].payload).toBe(maskedLong);
     expect(records[0][2]).toBe(maskedLong);
@@ -736,7 +743,9 @@ it.each(patternCases)(
       token: "***",
     });
     const tail = await readConfiguredLogTail({ maxBytes: 500_000 });
-    expect(tail.lines.map((line) => JSON.parse(line))).toHaveLength(5);
+    expect(records[5].message).toHaveLength(4_096 + "...(truncated)".length);
+    expect(records[5].message).toMatch(/\.\.\.\(truncated\)$/);
+    expect(tail.lines.map((line) => JSON.parse(line))).toHaveLength(6);
     for (const serialized of [text, JSON.stringify(consoleRecords), tail.lines.join("\n")]) {
       expect(serialized).not.toContain(token);
       expect(serialized).not.toContain("OPAQUE_REMAINDER");

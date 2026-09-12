@@ -25,6 +25,7 @@ export type RedactionField = {
 export type RedactionMessage = {
   text: string;
   contentLength: number;
+  finish: (text: string) => string;
   parts: {
     key: string;
     json: boolean;
@@ -381,10 +382,15 @@ export function redactJsonRecord(
     if (token.fullMask) {
       edits.push({ start: token.start, end: token.end, replacement: '"***"' });
     } else if (token.edits.length > 0) {
+      const value = applyRedactionEdits(token.value, token.edits);
       edits.push({
         start: token.start,
         end: token.end,
-        replacement: JSON.stringify(applyRedactionEdits(token.value, token.edits)),
+        replacement: JSON.stringify(
+          message && !token.isKey && token.path.length === 1 && token.key === "message"
+            ? message.finish(value)
+            : value,
+        ),
       });
     }
   }
