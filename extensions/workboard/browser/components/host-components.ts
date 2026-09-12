@@ -108,9 +108,10 @@ export function renderSelectPicker(props: SelectPickerProps, className = "") {
 }
 
 export function renderAppearanceGlyph(props: AppearanceGlyphProps, className = "") {
+  const color = workboardHost().components.resolveAppearanceColor(props.color) || "var(--muted)";
   return html`<span
     class=${className}
-    style="--workboard-board-color: var(--appearance-color, var(--muted))"
+    style=${`--workboard-board-color: ${color}`}
     aria-hidden="true"
     ${mountAppearanceGlyph(props)}
   ></span>`;

@@ -2,6 +2,7 @@ import "../test/dom.setup.ts";
 import type { ControlUiHost, ControlUiWidget } from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it, vi } from "vitest";
+import { getWorkboardState } from "../lib/workboard/runtime.ts";
 import { createWorkboardCard } from "../lib/workboard/test/index-helpers.ts";
 import type { WorkboardCard } from "../lib/workboard/types.ts";
 import { workboardTestHost } from "../test/host.setup.ts";
@@ -226,25 +227,44 @@ it.each([
   "keeps a newer mutation failure visible (refresh during move: $refreshDuringMove, refresh fails: $refreshFails)",
   async ({ refreshDuringMove, refreshFails }) => {
     const refreshed = createDeferred<unknown>();
+    const reconciled = createDeferred<unknown>();
     const move = createDeferred<unknown>();
+    let persistedCards = cards;
     let listCount = 0;
-    const { fixture, mount } = setup(
+    const { fixture, mount, request } = setup(
       vi.fn(async (method: string) => {
         if (method === "workboard.cards.move") {
           return move.promise;
         }
-        return ++listCount === 2 ? refreshed.promise : snapshot();
+        if (method === "workboard.cards.list") {
+          return ++listCount === 2 ? refreshed.promise : snapshot(persistedCards);
+        }
+        return { tasks: [] };
       }),
     );
     const card = mount("card", { cardId: "ready" });
     await vi.waitFor(() => expect(card.container.querySelector("select")).not.toBeNull());
+    // Recovery uses the invoking view's host; shared refreshes retain their own response.
+    card.scopedRequest.mockImplementation((method, params) =>
+      method === "workboard.cards.list" ? reconciled.promise : request(method, params),
+    );
     const lease = acquireWidgetRuntime(fixture.host, () => {});
     disposers.push(() => lease.release());
     const refresh = refreshDuringMove ? null : lease.runtime.refresh();
     changeStatus(card.container);
     const duringMoveRefresh = refreshDuringMove ? lease.runtime.refresh() : null;
+    persistedCards = [
+      createWorkboardCard({ ...cards[0], status: "running", position: 3000 }),
+      ...cards.slice(1),
+    ];
     move.reject(new Error("Move temporarily unavailable"));
-    await vi.waitFor(() => expect(listCount).toBe(2));
+    await vi.waitFor(() =>
+      expect(card.scopedRequest).toHaveBeenCalledWith("workboard.cards.list", {}),
+    );
+    expect(card.container.textContent).toContain("Move temporarily unavailable");
+    expect(getWorkboardState(lease.runtime.owner).mutationReadiness).toBe(
+      "canonical_reload_required",
+    );
     if (refreshFails) {
       refreshed.reject(new Error("List temporarily unavailable"));
     } else {
@@ -255,8 +275,14 @@ it.each([
     expect(card.container.textContent).toContain("Move temporarily unavailable");
     expect(card.container.querySelector("select")).toBeNull();
 
+    reconciled.resolve(snapshot(persistedCards));
+    await vi.waitFor(() =>
+      expect(getWorkboardState(lease.runtime.owner).mutationReadiness).toBe("ready"),
+    );
+    expect(card.container.textContent).toContain("Move temporarily unavailable");
+    expect(card.container.querySelector("select")).toBeNull();
     card.container.querySelector<HTMLButtonElement>("button")!.click();
-    await vi.waitFor(() => expect(card.container.querySelector("select")?.value).toBe("ready"));
+    await vi.waitFor(() => expect(card.container.querySelector("select")?.value).toBe("running"));
     expect(card.container.querySelector('[role="alert"]')).toBeNull();
     expect(listCount).toBe(3);
   },

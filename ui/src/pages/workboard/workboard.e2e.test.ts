@@ -13,7 +13,10 @@ import { WORKBOARD_CHANGED_EVENT } from "../../../../packages/workboard-contract
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiViewportScreenshot,
+  waitForControlUiProofSurface,
+} from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
@@ -959,6 +962,7 @@ suite.define(() => {
 
       const collapseButton = page.getByRole("button", { name: "Collapse Review column" });
       await collapseButton.waitFor({ state: "visible" });
+      await waitForControlUiProofSurface(collapseButton, []);
       const touchGeometry = await collapseButton.evaluate((button) => {
         const bounds = button.getBoundingClientRect();
         return {
