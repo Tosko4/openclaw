@@ -49,14 +49,22 @@ describe("authenticated request completion", { concurrent: false }, () => {
         }
       };
       vi.resetModules();
-      if (stage !== "profile authorization") {
-        vi.doMock("./authenticated-request-dispatch.server-methods.runtime.js", async () => {
-          if (stage === "lazy import") {
-            await hold();
-          }
-          return { handleGatewayRequest };
-        });
-      }
+      // A fresh factory prevents shared workers from reusing the prior case's handler.
+      vi.doMock("./authenticated-request-dispatch.server-methods.runtime.js", async () => {
+        if (stage === "lazy import") {
+          await hold();
+        }
+        return {
+          handleGatewayRequest:
+            stage === "profile authorization"
+              ? (
+                  await vi.importActual<typeof import("../../server-methods.js")>(
+                    "../../server-methods.js",
+                  )
+                ).handleGatewayRequest
+              : handleGatewayRequest,
+        };
+      });
       if (stage === "start scheduler") {
         vi.doMock("./request-start.js", () => ({ scheduleGatewayRequestStart: hold }));
       }

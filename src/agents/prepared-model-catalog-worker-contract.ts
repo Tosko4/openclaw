@@ -26,6 +26,10 @@ export type PreparedModelCatalogWorkerInput = Readonly<{
   pluginMetadataSnapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">;
 }>;
 
+export type PreparedModelCatalogWorkerData = PreparedModelCatalogWorkerInput & {
+  sourceCaptureDirectory: string;
+};
+
 export type PreparedModelWorkerCommand =
   | Readonly<{ kind: "catalog"; providerIds?: readonly string[] }>
   | Readonly<{
@@ -44,6 +48,7 @@ export type PreparedModelWorkerResult =
       generationFingerprint: string;
       snapshot: ModelCatalogSnapshot;
       runtimeModels: Map<string, Model[]>;
+      providerExpiries: Map<string, number>;
       configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
       credentials: Readonly<AuthStorageData>;
       providerAuthLabels: ModelCatalogAuthLabels;
