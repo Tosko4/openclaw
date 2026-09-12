@@ -13,6 +13,7 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
 }));
 
 import {
+  getPreparedModelCatalogSnapshot,
   loadModelCatalog,
   loadPreparedModelCatalog,
   resolveThinkingDefaultWithRuntimeCatalog,
@@ -22,6 +23,18 @@ describe("agent-runtime model catalog compatibility", () => {
   beforeEach(() => {
     mocks.getSnapshot.mockReset();
     mocks.loadCatalog.mockReset();
+  });
+
+  it("keeps host request selections outside public catalog options", () => {
+    expectTypeOf<
+      NonNullable<Parameters<typeof getPreparedModelCatalogSnapshot>[0]>
+    >().not.toHaveProperty("requestSelection");
+    expectTypeOf<NonNullable<Parameters<typeof loadPreparedModelCatalog>[0]>>().not.toHaveProperty(
+      "requestSelection",
+    );
+    expectTypeOf<NonNullable<Parameters<typeof loadModelCatalog>[0]>>().not.toHaveProperty(
+      "requestSelection",
+    );
   });
 
   it("uses the shipped thinking catalog callback", async () => {

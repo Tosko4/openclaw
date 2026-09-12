@@ -1,6 +1,6 @@
 import { resolveThinkingDefaultWithRuntimeCatalogCore } from "../agents/model-thinking-default.js";
 import {
-  getPreparedModelCatalogSnapshot,
+  getPreparedModelCatalogSnapshot as getPreparedModelCatalogSnapshotCore,
   readPreparedModelCatalog,
   type LoadPreparedModelCatalogParams,
 } from "../agents/prepared-model-catalog.js";
@@ -34,14 +34,18 @@ export {
 export { resolveApiKeyForProviderCore as resolveApiKeyForProvider } from "../agents/model-auth.js";
 export { findModelInCatalog, modelSupportsVision } from "../agents/model-catalog.js";
 export type { ModelCatalogEntry } from "../agents/model-catalog.js";
-export { getPreparedModelCatalogSnapshot };
+type SdkModelCatalogParams = Omit<LoadPreparedModelCatalogParams, "requestSelection">;
+
+export const getPreparedModelCatalogSnapshot: (
+  params?: SdkModelCatalogParams,
+) => ReturnType<typeof getPreparedModelCatalogSnapshotCore> = getPreparedModelCatalogSnapshotCore;
 
 /** Preserves the public SDK's writable default while internal catalog reads stay passive. */
-export async function loadPreparedModelCatalog(params: LoadPreparedModelCatalogParams = {}) {
+export async function loadPreparedModelCatalog(params: SdkModelCatalogParams = {}) {
   return await readPreparedModelCatalog({ ...params, readOnly: params.readOnly ?? false });
 }
 
-type LoadModelCatalogCompatibilityParams = LoadPreparedModelCatalogParams & {
+type LoadModelCatalogCompatibilityParams = SdkModelCatalogParams & {
   /** @deprecated Lifecycle publication owns refreshes; retained for source compatibility. */
   useCache?: boolean;
   /** @deprecated Use getPreparedModelCatalogSnapshot for new nonblocking readers. */
