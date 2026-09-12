@@ -129,7 +129,10 @@ export async function resolveUpdateCommandTarget(
   let gitRelocation: Awaited<ReturnType<typeof prepareDirtyGitUpdateRelocation>>;
   if (installKind === "git" && requestedChannel === "dev") {
     try {
-      gitRelocation = await prepareDirtyGitUpdateRelocation({ root, timeoutMs: updateStepTimeoutMs });
+      gitRelocation = await prepareDirtyGitUpdateRelocation({
+        root,
+        timeoutMs: updateStepTimeoutMs,
+      });
     } catch (error) {
       if (!(error instanceof UpdatePreMutationError)) {
         throw error;

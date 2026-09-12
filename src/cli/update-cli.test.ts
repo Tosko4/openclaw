@@ -10821,7 +10821,9 @@ describe("update-cli", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32").each(["success", "Doctor failure"] as const)(
+  it
+    .skipIf(process.platform === "win32")
+    .each(["success", "Doctor failure", "runtime preparation failure"] as const)(
     "moves an edited dev installation through managed activation (%s)",
     async (outcome) => {
       const base = tempDirs.make("openclaw-update-dirty-activation-");
@@ -10869,6 +10871,25 @@ describe("update-cli", () => {
         await options?.beforeGitMutation?.({});
         expect(serviceStop).toHaveBeenCalledOnce();
         expect(await options?.publishGitCheckout?.()).toBe(destination);
+        if (outcome === "runtime preparation failure") {
+          await fs.rm(path.join(destination, "dist"), { recursive: true });
+          return {
+            ...makeOkUpdateResult({ mode: "git", root: destination }),
+            status: "error",
+            reason: "runtime-promotion-failed",
+            recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+            steps: [
+              {
+                name: "runtime promotion",
+                command: "copy runtime",
+                cwd: destination,
+                durationMs: 1,
+                exitCode: 1,
+                stderrTail: "ENOSPC: no space left on device",
+              },
+            ],
+          };
+        }
         return makeOkUpdateResult({
           mode: "git",
           root: destination,
@@ -10951,12 +10972,18 @@ describe("update-cli", () => {
             root,
             recovery: {
               serviceRestartSafe: true,
-              packageRollbackVerified: true,
+              ...(outcome === "Doctor failure" ? { packageRollbackVerified: true } : {}),
               service: "healthy",
             },
           });
           expect(await fs.readFile(path.join(bin, "openclaw"), "utf8")).toBe(wrapper);
           expect(gatewayCommandCall(newEntry, "install")).toBeUndefined();
+          if (outcome === "runtime preparation failure") {
+            expect(gatewayCommandCall(oldEntry, "restart")).toBeDefined();
+            await expect(
+              fs.lstat(path.join(prefix, "lib/node_modules/openclaw")),
+            ).rejects.toMatchObject({ code: "ENOENT" });
+          }
         }
       });
       expect(await fs.readFile(path.join(root, "local.txt"), "utf8")).toBe("operator edits\n");

@@ -457,20 +457,11 @@ async function updateCommandInternal(
     { env: run.env },
   );
   const schemaPreflight = await preflightUpdateCommandSchemas({
-    legacyConfigPlan,
-    root,
-    updateInstallKind,
-    switchToGit,
-    gitRelocation,
+    ...target,
     shouldRestart,
     updateStepTimeoutMs,
     invocationCwd,
-    managedServiceRootRedirect,
-    channel,
-    devTarget,
-    packageTargetSchemaVersions,
     packageTargetVersion: targetVersion ?? undefined,
-    packageInstallSpec,
     opts,
     refuseUpdate,
   });

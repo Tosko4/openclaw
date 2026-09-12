@@ -4,8 +4,8 @@ import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import type { createUpdateProgress } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import type { StagedPackageInstallUpdate } from "./update-command-package.js";
 import type { GitUpdateRelocation } from "./update-command-git-relocation.js";
+import type { StagedPackageInstallUpdate } from "./update-command-package.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 

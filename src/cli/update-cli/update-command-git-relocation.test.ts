@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { prepareDirtyGitUpdateRelocation } from "./update-command-git-relocation.js";
 
 const SHA = "a".repeat(40);
@@ -37,9 +38,10 @@ afterEach(() => {
 });
 
 async function fixture(base: string) {
-  commands.npmRoot = path.join(base, "prefix/lib/node_modules");
+  const windows = process.platform === "win32";
+  commands.npmRoot = path.join(base, windows ? "prefix/node_modules" : "prefix/lib/node_modules");
   const root = path.join(base, "original");
-  const bin = path.join(base, "prefix", "bin");
+  const bin = path.join(base, "prefix", ...(windows ? [] : ["bin"]));
   await fs.mkdir(path.join(root, "dist/control-ui/assets"), { recursive: true });
   await fs.mkdir(bin, { recursive: true });
   for (const [file, value] of Object.entries({
@@ -54,8 +56,14 @@ async function fixture(base: string) {
   })) {
     await fs.writeFile(path.join(root, file), value);
   }
-  const launcher = path.join(bin, "openclaw");
-  const contents = `#!/usr/bin/env bash\nset -euo pipefail\nexec ${process.execPath} ${root}/dist/entry.js "$@"\n`;
+  const launcher = path.join(bin, windows ? "openclaw.cmd" : "openclaw");
+  const contents = windows
+    ? `@echo off\r\nnode "${path.win32.join(root, "dist", "entry.js")}" %*\r\n`
+    : `#!/usr/bin/env bash\nset -euo pipefail\nexec ${process.execPath} ${root}/dist/entry.js "$@"\n`;
+  if (windows) {
+    await fs.symlink(process.execPath, path.join(bin, "node.exe"));
+    vi.stubEnv("PATHEXT", ".EXE");
+  }
   await fs.writeFile(launcher, contents, { mode: 0o755 });
   vi.stubEnv("PATH", bin);
   vi.stubEnv("OPENCLAW_GIT_DIR", path.join(base, "fresh"));
@@ -207,10 +215,108 @@ describe.skipIf(process.platform === "win32")("dirty dev installation relocation
       });
     },
   );
+  it("reuses the installer's npm prefix after npm exposes a new checkout", async () => {
+    await withTestDir({ prefix: "dirty-dev-repeat-" }, async (base) => {
+      const { root: original, launcher } = await fixture(base);
+      const packageRoot = path.join(commands.npmRoot, "openclaw");
+      commands.npmRoot = path.join(base, "unrelated/lib/node_modules");
+      const initial = await prepareDirtyGitUpdateRelocation({ root: original, timeoutMs: 1000 });
+      await expect(initial?.assertCurrent()).resolves.toBeUndefined();
+      const root = path.join(base, "first-update");
+      await fs.cp(original, root, { recursive: true });
+      await fs.writeFile(path.join(root, "openclaw.mjs"), "#!/usr/bin/env node\n", { mode: 0o755 });
+      await fs.mkdir(path.dirname(packageRoot), { recursive: true });
+      await fs.symlink(root, packageRoot);
+      await fs.unlink(launcher);
+      await fs.symlink(path.join(packageRoot, "openclaw.mjs"), launcher);
+      const next = await prepareDirtyGitUpdateRelocation({ root, timeoutMs: 1000 });
+      expect(next?.installTarget.packageRoot).toBe(packageRoot);
+      await expect(next?.assertCurrent()).resolves.toBeUndefined();
+      expect(await fs.readFile(path.join(original, "local.txt"), "utf8")).toBe("operator edits\n");
+    });
+  });
   it("leaves a clean checkout on its existing update route", async () => {
     commands.dirty = false;
     await expect(
       prepareDirtyGitUpdateRelocation({ root: "/unused", timeoutMs: 1000 }),
     ).resolves.toBeUndefined();
   });
+});
+
+// Generated with npm cmd-shim@8.0.0 from a bin with #!/usr/bin/env node.
+const NPM_WINDOWS_SHIM =
+  '@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\openclaw\\openclaw.mjs" %*\r\n';
+
+describe("Windows dirty dev installation relocation", () => {
+  it.each(["npm", "installer then npm"])("accepts the %s launcher", async (owner) => {
+    await withTestDir({ prefix: "dirty-dev-npm-shim-" }, (base) =>
+      withMockedPlatform("win32", async () => {
+        const { root: original, launcher } = await fixture(base);
+        const packageRoot = path.join(commands.npmRoot, "openclaw");
+        commands.npmRoot = path.join(base, "unrelated/node_modules");
+        let root = original;
+        if (owner === "installer then npm") {
+          const initial = await prepareDirtyGitUpdateRelocation({ root, timeoutMs: 1000 });
+          await expect(initial?.assertCurrent()).resolves.toBeUndefined();
+          root = path.join(base, "first-update");
+          await fs.cp(original, root, { recursive: true });
+        }
+        // Reproduce the next admission after npm exposes the new checkout and replaces the wrapper.
+        await fs.writeFile(path.join(root, "openclaw.mjs"), "#!/usr/bin/env node\n");
+        await fs.mkdir(path.dirname(packageRoot), { recursive: true });
+        await fs.symlink(root, packageRoot, "junction");
+        await fs.writeFile(launcher, NPM_WINDOWS_SHIM);
+        const plan = await prepareDirtyGitUpdateRelocation({ root, timeoutMs: 1000 });
+        expect(plan?.installTarget.packageRoot).toBe(packageRoot);
+        await expect(plan?.assertCurrent()).resolves.toBeUndefined();
+        expect(await fs.readFile(launcher, "utf8")).toBe(NPM_WINDOWS_SHIM);
+        expect(await fs.readFile(path.join(original, "local.txt"), "utf8")).toBe(
+          "operator edits\n",
+        );
+        expect(await fs.readFile(path.join(root, "local.txt"), "utf8")).toBe("operator edits\n");
+        await expect(fs.stat(path.join(base, "fresh"))).rejects.toMatchObject({ code: "ENOENT" });
+      }),
+    );
+  });
+
+  it.each(["custom commands", "wrong target", "changed contents", "changed Node", "changed entry"])(
+    "refuses an npm shim with %s",
+    async (change) => {
+      await withTestDir({ prefix: "dirty-dev-npm-refusal-" }, (base) =>
+        withMockedPlatform("win32", async () => {
+          const { root, launcher, bin } = await fixture(base);
+          await fs.mkdir(commands.npmRoot, { recursive: true });
+          await fs.symlink(root, path.join(commands.npmRoot, "openclaw"), "junction");
+          await fs.writeFile(path.join(root, "openclaw.mjs"), "#!/usr/bin/env node\n");
+          await fs.writeFile(launcher, NPM_WINDOWS_SHIM);
+          if (change === "custom commands" || change === "wrong target") {
+            await fs.writeFile(
+              launcher,
+              change === "custom commands"
+                ? `echo custom setup\r\n${NPM_WINDOWS_SHIM}`
+                : NPM_WINDOWS_SHIM.replace("openclaw.mjs", "custom.mjs"),
+            );
+            await expect(
+              prepareDirtyGitUpdateRelocation({ root, timeoutMs: 1000 }),
+            ).rejects.toThrow("custom or unrelated launcher");
+          } else {
+            const plan = await prepareDirtyGitUpdateRelocation({ root, timeoutMs: 1000 });
+            if (change === "changed contents") {
+              await fs.appendFile(launcher, "echo custom command\r\n");
+            } else if (change === "changed entry") {
+              const other = path.join(base, "custom.mjs");
+              await fs.writeFile(other, "export {};\n");
+              await fs.unlink(path.join(root, "openclaw.mjs"));
+              await fs.symlink(other, path.join(root, "openclaw.mjs"));
+            } else {
+              await fs.unlink(path.join(bin, "node.exe"));
+              await fs.writeFile(path.join(bin, "node.exe"), "replacement executable\n");
+            }
+            await expect(plan?.assertCurrent()).rejects.toThrow("active launcher changed");
+          }
+          expect(await fs.readFile(path.join(root, "local.txt"), "utf8")).toBe("operator edits\n");
+        }),
+      );
+    },
+  );
 });

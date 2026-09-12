@@ -13,6 +13,7 @@ import {
   type DevUpdateTarget,
 } from "../../infra/update-dev-target.js";
 import { matchesStandaloneGitWrapper } from "../../infra/update-git-launcher.js";
+import { verifyGitUpdateRecovery } from "../../infra/update-git-runtime.js";
 import {
   createGlobalInstallEnv,
   verifyPackageUpdateRecovery,
@@ -630,6 +631,14 @@ export async function updateGitInstall(params: {
         updateResult.recovery = cancelled.recovery;
       }
       steps.push(...cancelled.steps);
+    }
+    if (params.gitRelocation) {
+      // Publishing the checkout does not activate its launcher. Until exposure
+      // commits, migrations have not run and recovery must use the preserved runtime.
+      updateResult.root = params.root;
+      updateResult.recovery = await verifyGitUpdateRecovery(
+        params.gitRelocation.previousGitCheckout,
+      );
     }
     return { ...updateResult, before, steps, durationMs: Date.now() - params.startedAt };
   } finally {

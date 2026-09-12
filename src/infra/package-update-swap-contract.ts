@@ -1,7 +1,7 @@
 // Public contracts shared by package activation and its existing callers.
 import type { LocalPackageOverridesResult } from "./package-local-overrides-shared.js";
-import type { NpmGlobalPrefixLayout, ResolvedGlobalInstallTarget } from "./update-global.js";
 import type { GitRuntimeIdentity } from "./update-git-runtime.js";
+import type { NpmGlobalPrefixLayout, ResolvedGlobalInstallTarget } from "./update-global.js";
 import type { NativePackageStage } from "./update-native-package-stage.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 

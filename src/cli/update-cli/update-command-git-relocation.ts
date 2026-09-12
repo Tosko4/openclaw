@@ -3,16 +3,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { hasNodeErrorCode, isPathInside } from "../../infra/path-guards.js";
-import { matchesStandaloneGitWrapper } from "../../infra/update-git-launcher.js";
+import {
+  matchesNpmGitCmdShim,
+  matchesStandaloneGitWrapper,
+} from "../../infra/update-git-launcher.js";
 import {
   verifyGitUpdateRecovery,
   type GitRuntimeIdentity,
 } from "../../infra/update-git-runtime.js";
 import {
-  detectGlobalInstallManagerForRoot,
   resolveGlobalInstallTarget,
   resolveNpmGlobalPrefixLayoutFromPrefix,
-  resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import { gitCleanCheckArgs } from "../../infra/update-runner-git-commands.js";
@@ -84,59 +85,38 @@ export async function prepareDirtyGitUpdateRelocation(params: {
     standalone !== undefined &&
     (await matchesStandaloneGitWrapper(standalone, root, process.platform, process.execPath));
   const launcherReal = await fs.realpath(launcherPath);
-  let installTarget: ResolvedGlobalInstallTarget;
-  if (generated) {
-    const bin = path.dirname(launcherPath);
-    if (process.platform !== "win32" && path.basename(bin) !== "bin") {
-      return refuse(
-        "the generated launcher has no supported global prefix. Run openclaw triage for repair help.",
-      );
-    }
-    const prefix = process.platform === "win32" ? bin : path.dirname(bin);
-    const layout = resolveNpmGlobalPrefixLayoutFromPrefix(prefix);
-    const npm = await resolveGlobalInstallTarget({
-      manager: "npm",
-      runCommand: runCommandWithTimeout,
-      timeoutMs: params.timeoutMs,
-    });
-    installTarget = {
-      ...npm,
-      globalRoot: layout.globalRoot,
-      packageRoot: path.join(layout.globalRoot, "openclaw"),
-    };
-  } else {
-    if (launcherReal !== path.join(root, "openclaw.mjs")) {
-      return refuse(
-        "the first openclaw command on PATH is a custom or unrelated launcher. Use this installation's managed launcher, or run openclaw triage for repair help.",
-      );
-    }
-    const manager = await detectGlobalInstallManagerForRoot(
-      runCommandWithTimeout,
-      root,
-      params.timeoutMs,
+  const npmShim =
+    standalone !== undefined &&
+    (await matchesNpmGitCmdShim(standalone, launcherPath, root, process.execPath));
+  const npmSymlink =
+    process.platform !== "win32" &&
+    launcherStat.isSymbolicLink() &&
+    launcherReal === path.join(root, "openclaw.mjs");
+  if (!generated && !npmShim && !npmSymlink) {
+    return refuse(
+      "the first openclaw command on PATH is a custom or unrelated launcher. Use this installation's managed launcher, or run openclaw triage for repair help.",
     );
-    if (!manager) {
-      return refuse(
-        "the CLI package-manager owner could not be verified. Run openclaw triage for repair help.",
-      );
-    }
-    installTarget = await resolveGlobalInstallTarget({
-      manager,
-      runCommand: runCommandWithTimeout,
-      timeoutMs: params.timeoutMs,
-      pkgRoot: root,
-    });
-    const layout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot);
-    if (manager !== "npm" || !layout || launcherPath !== path.join(layout.binDir, wrapperName)) {
-      return refuse(
-        "the active launcher is outside the supported package-manager prefix. Use this installation's managed launcher, or run openclaw triage for repair help.",
-      );
-    }
   }
-  if (!installTarget.packageRoot) {
-    return refuse("the launcher package target could not be resolved.");
+  const bin = path.dirname(launcherPath);
+  if (process.platform !== "win32" && path.basename(bin) !== "bin") {
+    return refuse(
+      "the active launcher has no supported global prefix. Run openclaw triage for repair help.",
+    );
   }
-  const packageRoot = installTarget.packageRoot;
+  const prefix = process.platform === "win32" ? bin : path.dirname(bin);
+  const layout = resolveNpmGlobalPrefixLayoutFromPrefix(prefix);
+  const npm = await resolveGlobalInstallTarget({
+    manager: "npm",
+    runCommand: runCommandWithTimeout,
+    timeoutMs: params.timeoutMs,
+  });
+  // The active launcher owns this prefix; npm's current default may belong to another installation.
+  const packageRoot = path.join(layout.globalRoot, "openclaw");
+  const installTarget: ResolvedGlobalInstallTarget = {
+    ...npm,
+    globalRoot: layout.globalRoot,
+    packageRoot,
+  };
   const packageOwner = await fs.realpath(packageRoot).catch((error: unknown) => {
     if (hasNodeErrorCode(error, "ENOENT")) {
       return undefined;
@@ -162,6 +142,11 @@ export async function prepareDirtyGitUpdateRelocation(params: {
   if (packageOwner && packageOwner !== root) {
     return refuse(
       "the launcher prefix contains another OpenClaw installation. Choose the intended managed launcher before retrying.",
+    );
+  }
+  if (!generated && packageOwner !== root) {
+    return refuse(
+      "the active launcher's npm package link does not own this checkout. Use this installation's managed launcher, or run openclaw triage for repair help.",
     );
   }
   const requestedDirectory = resolveGitInstallDir();
@@ -237,7 +222,10 @@ export async function prepareDirtyGitUpdateRelocation(params: {
             root,
             process.platform,
             process.execPath,
-          ))))
+          )))) ||
+      (npmShim &&
+        ((await fs.readFile(launcherPath, "utf8")) !== standalone ||
+          !(await matchesNpmGitCmdShim(standalone ?? "", launcherPath, root, process.execPath))))
     ) {
       refuse("the active launcher changed during preparation; retry the update.");
     }
