@@ -46,6 +46,10 @@ export function runNpmWindowsJob(
   let root: bigint | undefined;
   let stdio: ReturnType<typeof b.createCommandStdio> | undefined;
   let extinct = true;
+  let rootExited = true;
+  let settled = true;
+  let terminationRequested = false;
+  let cleanupDeadline: number | undefined;
   const streams: Array<{
     name: "stdout" | "stderr";
     handle: bigint;
@@ -76,17 +80,71 @@ export function runNpmWindowsJob(
     }
     return count === 0;
   };
+  const readOutput = (capture: boolean) => {
+    for (const stream of streams) {
+      if (stream.ended) {
+        continue;
+      }
+      const available = [0];
+      if (!b.PeekNamedPipe(stream.handle, null, 0, null, available, null)) {
+        if (b.getLastErrorCode() === 109) {
+          stream.ended = true;
+          continue;
+        }
+        throw b.lastError(`PeekNamedPipe(npm ${stream.name})`);
+      }
+      const amount = Math.min(available[0] ?? 0, buffer.length);
+      if (amount === 0) {
+        continue;
+      }
+      const read = [0];
+      if (!b.ReadFile(stream.handle, buffer, amount, read, null)) {
+        throw b.lastError(`ReadFile(npm ${stream.name})`);
+      }
+      const count = read[0];
+      if (typeof count !== "number" || count <= 0 || count > amount) {
+        throw new Error("Invalid npm output byte count");
+      }
+      if (!capture) {
+        continue;
+      }
+      if (stream.bytes + count > options.maxBuffer) {
+        throw Object.assign(new Error("npm output limit exceeded"), { code: "ENOBUFS" });
+      }
+      stream.chunks.push(Buffer.from(buffer.subarray(0, count)));
+      stream.bytes += count;
+    }
+  };
   const terminateAndJoin = () => {
-    if (!job || extinct) {
+    if (!job || settled) {
       return;
     }
-    if (!b.TerminateJobObject(job, 1)) {
-      throw b.lastError("TerminateJobObject(npm)");
+    cleanupDeadline ??= performance.now() + CLEANUP_TIMEOUT_MS;
+    if (!extinct && !terminationRequested) {
+      terminationRequested = true;
+      if (!b.TerminateJobObject(job, 1)) {
+        throw b.lastError("TerminateJobObject(npm)");
+      }
     }
-    const cleanupDeadline = performance.now() + CLEANUP_TIMEOUT_MS;
-    while (!(extinct = observeJob())) {
+    // Job accounting can reach zero before a terminated root is signalled or its
+    // inherited pipe handles close. Do not publish settlement at that boundary.
+    while (true) {
+      extinct = observeJob();
+      if (root && !rootExited) {
+        const state = b.WaitForSingleObject(root, 0);
+        if (state === 0) {
+          rootExited = true;
+        } else if (state !== 258) {
+          throw b.lastError("WaitForSingleObject(npm cleanup)");
+        }
+      }
+      readOutput(!result.error);
+      if (extinct && rootExited && streams.every((stream) => stream.ended)) {
+        settled = true;
+        return;
+      }
       if (performance.now() >= cleanupDeadline) {
-        throw new Error("npm Job extinction could not be verified");
+        throw new Error("npm Job resource settlement could not be verified");
       }
       Atomics.wait(waitCell, 0, 0, 5);
     }
@@ -145,6 +203,8 @@ export function runNpmWindowsJob(
       }
       // JOB_LIST makes containment atomic; numeric PIDs never grant cleanup authority.
       extinct = false;
+      rootExited = false;
+      settled = false;
       root = b.requireHandle(info.hProcess, "CreateProcessW(npm process)");
       const thread = b.requireHandle(info.hThread, "CreateProcessW(npm thread)");
       if (!b.CloseHandle(thread)) {
@@ -162,38 +222,8 @@ export function runNpmWindowsJob(
       { name: "stdout", handle: output.stdoutReadHandle, chunks: [], bytes: 0, ended: false },
       { name: "stderr", handle: output.stderrReadHandle, chunks: [], bytes: 0, ended: false },
     );
-    let rootExited = false;
     while (!rootExited || !extinct || streams.some((stream) => !stream.ended)) {
-      for (const stream of streams) {
-        if (stream.ended) {
-          continue;
-        }
-        const available = [0];
-        if (!b.PeekNamedPipe(stream.handle, null, 0, null, available, null)) {
-          if (b.getLastErrorCode() === 109) {
-            stream.ended = true;
-            continue;
-          }
-          throw b.lastError(`PeekNamedPipe(npm ${stream.name})`);
-        }
-        const amount = Math.min(available[0] ?? 0, buffer.length);
-        if (amount === 0) {
-          continue;
-        }
-        const read = [0];
-        if (!b.ReadFile(stream.handle, buffer, amount, read, null)) {
-          throw b.lastError(`ReadFile(npm ${stream.name})`);
-        }
-        const count = read[0];
-        if (typeof count !== "number" || count <= 0 || count > amount) {
-          throw new Error("Invalid npm output byte count");
-        }
-        if (stream.bytes + count > options.maxBuffer) {
-          throw Object.assign(new Error("npm output limit exceeded"), { code: "ENOBUFS" });
-        }
-        stream.chunks.push(Buffer.from(buffer.subarray(0, count)));
-        stream.bytes += count;
-      }
+      readOutput(true);
       if (!rootExited) {
         const state = b.WaitForSingleObject(root, 0);
         if (state === 0) {
@@ -225,7 +255,7 @@ export function runNpmWindowsJob(
     } catch (error) {
       rememberError(error);
     }
-    result.processTreeState = extinct ? "terminated" : "indeterminate";
+    result.processTreeState = settled ? "terminated" : "indeterminate";
     for (const stream of streams) {
       result[stream.name] = Buffer.concat(stream.chunks).toString("utf8");
       if (!b.CloseHandle(stream.handle)) {
