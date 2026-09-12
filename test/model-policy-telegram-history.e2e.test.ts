@@ -497,19 +497,30 @@ it.each([
     });
     expect(response.status).toBe(200);
   }
-  async function telegramTurn(text: string, expectedReply: string) {
+  async function telegramTurn(
+    text: string,
+    expectedReply: string,
+    allowPendingDeliveryNotice = false,
+  ) {
     const before = deliveries.length;
     await sendTelegramUpdate(text);
     const outbound = await observe(
       "Telegram reply did not settle",
       () => deliveries.slice(before),
-      (messages) => messages.length > 0,
+      (messages) =>
+        messages.length >
+        (allowPendingDeliveryNotice && messages[0]?.text === pendingDeliveryNotice ? 1 : 0),
     );
+    const replyIndex =
+      allowPendingDeliveryNotice && outbound[0]?.text === pendingDeliveryNotice ? 1 : 0;
     expect(outbound).toEqual([
+      ...(replyIndex === 1
+        ? [{ method: "sendMessage", text: pendingDeliveryNotice, messageId: outbound[0].messageId }]
+        : []),
       {
         method: withPhoto ? "sendPhoto" : "sendMessage",
         text: expectedReply,
-        messageId: outbound[0].messageId,
+        messageId: outbound[replyIndex].messageId,
       },
     ]);
     return observe(
@@ -525,6 +536,8 @@ it.each([
   }
   const notice =
     "Pinned model openai/fixture-pin is not in your allow list. This reply used the default (openai/fixture-primary). Use /model to change it.";
+  const pendingDeliveryNotice =
+    "I couldn’t confirm whether my previous reply reached this chat, so I won’t resend it automatically. Please ask for any missing remainder.";
   const notifiedAnswer = `${notice}\n\nReceipt response.`;
   const controlHistoryText = `Receipt response.${attachmentSuffix}`;
   const notifiedHistoryText = `${notifiedAnswer}${attachmentSuffix}`;
@@ -584,6 +597,7 @@ it.each([
     const retryHistory = await telegramTurn(
       "Please retry after the delivery failure.",
       failDelivery === "notice" ? notifiedAnswer : "Receipt response.",
+      true,
     );
     expect(
       retryHistory.messages.filter(
@@ -594,7 +608,7 @@ it.each([
     expect(await modelRequests()).toEqual(["fixture-pin", "fixture-primary", "fixture-primary"]);
     await stopGateway();
     await startGateway();
-    const restarted = await telegramTurn("Please answer after restart.", "Receipt response.");
+    const restarted = await telegramTurn("Please answer after restart.", "Receipt response.", true);
     expect(
       restarted.messages.filter(
         (message) => message.role === "assistant" && messageText(message).includes(notice),
@@ -608,6 +622,15 @@ it.each([
       "fixture-primary",
     ]);
     expect(rejectedDeliveries).toHaveLength(1);
+    expect(deliveries.filter((delivery) => delivery.text === pendingDeliveryNotice)).toHaveLength(
+      1,
+    );
+    expect(deliveries).toHaveLength(failDelivery === "notice" ? 4 : 5);
+    expect(
+      restarted.messages.filter(
+        (message) => message.role === "assistant" && messageText(message) === pendingDeliveryNotice,
+      ),
+    ).toHaveLength(1);
     expect(failures).toEqual([]);
     return;
   }
