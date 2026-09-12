@@ -129,6 +129,10 @@ vi.mock("../../secrets/runtime.js", () => ({
 
 vi.mock("../../agents/prepared-model-runtime.js", () => ({
   prepareModelRuntimeSnapshot: mocks.prepareModelRuntimeSnapshot,
+  withDeferredPreparedModelCatalogRefresh: async <T>(
+    _agentDir: string,
+    operation: () => Promise<T>,
+  ) => await operation(),
 }));
 
 vi.mock("../server-model-catalog-auth.js", () => ({

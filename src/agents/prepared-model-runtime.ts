@@ -14,7 +14,6 @@ import {
   configuredOwnersAreRequestVisible,
   registerPreparedRuntimeAuthMaterializationPublisher,
 } from "./prepared-model-runtime-materializations.js";
-import { refreshCommittedProviderCatalogs } from "./prepared-model-runtime.catalog-access.js";
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import {
   capturePreparedModelRuntimeLifetime,
@@ -415,6 +414,14 @@ export async function prepareModelRuntimeSnapshot(
   );
 }
 
+/** One auth operation can publish static state more than once before discovery is current. */
+export function withDeferredPreparedModelCatalogRefresh<T>(
+  agentDir: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return authPublication.withDeferredCatalogRefreshForAgent(owners, agentDir, operation);
+}
+
 /** Initializes or refreshes inventory on catalog demand; turn admission remains static. */
 export async function refreshPreparedModelRuntimeCatalog(
   snapshot: PreparedModelRuntimeSnapshot,
@@ -619,7 +626,7 @@ export function refreshPreparedModelRuntimeSnapshots(
     // Publication listeners may synchronously read the committed owner. Clear the lifecycle
     // gate before announcing availability so they cannot observe a false missing generation.
     notifyPreparedModelRuntimePublication({ phase: "published" });
-    refreshCommittedProviderCatalogs(owners.values());
+    authPublication.refreshCommittedCatalogs(owners);
   };
   return enqueuePreparedModelRuntimePublication(async () => {
     if (!isPublicationCurrent()) {
@@ -728,7 +735,7 @@ function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): voi
       }
       if (configuredOwnersAreRequestVisible(owners)) {
         notifyPreparedModelRuntimePublication({ phase: "published" });
-        refreshCommittedProviderCatalogs(owners.values());
+        authPublication.refreshCommittedCatalogs(owners);
       }
     });
   });

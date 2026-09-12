@@ -30,6 +30,7 @@ import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gatewa
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withEnv } from "../test-utils/env.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
@@ -684,10 +685,9 @@ describe("loadGatewayPlugins", () => {
 
     await boundDispatch(params);
 
-    expect(dispatchReplyFromConfig).toHaveBeenCalledWith({
-      ...params,
-      sessionWorkerPlacementContext: context,
-    });
+    expect(dispatchReplyFromConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ ...params, sessionWorkerPlacementContext: context }),
+    );
   });
 
   test("captures retired plugin reply owners through their canonical Gateway binding", async () => {
@@ -1545,6 +1545,81 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedParams()).toEqual({ to: "+15550001234" });
     expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
+  });
+
+  test.each([
+    { closure: "runtime retirement", message: "Plugin Gateway runtime retired" },
+    { closure: "Gateway closure", message: "Gateway owner closed" },
+    { closure: "context replacement", message: "Plugin Gateway request owner changed" },
+  ])("rejects a retained Gateway request after $closure", async ({ closure, message }) => {
+    let context = createTestContext("original-refresh-owner");
+    const resolveGatewayContext = () => context;
+    loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "telegram" }));
+    const loaded = serverPluginsModule.loadGatewayPlugins({
+      loadIntent: "startup",
+      cfg: {},
+      autoEnabledReasons: {},
+      workspaceDir: "/tmp",
+      log: createTestLog(),
+      baseMethods: [],
+      resolveGatewayContext,
+    });
+    runtimeRegistryModule.setActivePluginRegistry(loaded.pluginRegistry);
+    const request = createRuntimeFromLastGatewayLoad().gateway.request;
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    handleGatewayRequest.mockImplementationOnce(async (opts) => {
+      entered.resolve();
+      await release.promise;
+      opts.respond(true, { refreshed: true });
+    });
+    const pending = gatewayRequestScopeModule.withPluginRuntimePluginScope(
+      { pluginId: "telegram", pluginOrigin: "bundled" },
+      () => request("models.authRefresh", { agentId: "main", operation: "login" }),
+    );
+    const outcome = pending.then(
+      (value) => ({ status: "completed" as const, value }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    try {
+      expect(
+        await Promise.race([
+          entered.promise.then(() => "entered"),
+          outcome.then(({ status }) => status),
+        ]),
+      ).toBe("entered");
+      if (closure === "runtime retirement") {
+        loaded.retireGatewayRuntimeBindings();
+      } else if (closure === "Gateway closure") {
+        gatewayRequestScopeModule
+          .getGatewayContextLifetime(resolveGatewayContext)
+          .abort(new Error("Gateway owner closed"));
+      } else {
+        context = createTestContext("replacement-refresh-owner");
+      }
+      release.resolve();
+      expect(await outcome).toMatchObject({
+        status: "rejected",
+        error: expect.objectContaining({ message: expect.stringContaining(message) }),
+      });
+
+      loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "telegram" }));
+      const unaffectedContext = createTestContext("unaffected-refresh-owner");
+      loadGatewayPluginsForTest({
+        resolveGatewayContext: () => unaffectedContext,
+      });
+      const activeRequest = createRuntimeFromLastGatewayLoad().gateway.request;
+      await expect(
+        gatewayRequestScopeModule.withPluginRuntimePluginScope(
+          { pluginId: "telegram", pluginOrigin: "bundled" },
+          () => activeRequest("models.authRefresh", { agentId: "main", operation: "login" }),
+        ),
+      ).resolves.toEqual({});
+    } finally {
+      release.resolve();
+      await outcome;
+      loaded.retireGatewayRuntimeBindings();
+    }
   });
 
   test.each([

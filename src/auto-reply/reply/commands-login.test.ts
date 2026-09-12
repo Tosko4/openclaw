@@ -14,16 +14,12 @@ import { buildBuiltinChatCommands } from "../commands-registry.shared.js";
 import type { ReplyPayload } from "../types.js";
 import {
   blockReplyOpts,
+  refreshAuthRuntime,
   buildLoginParams,
   patchSessionEntryMock,
   runModelsAuthLoginFlowMock,
   setupLoginCommandTests,
 } from "./commands-login.harness-test-support.js";
-
-const refreshAuthRuntime = vi.hoisted(() => vi.fn<() => Promise<void>>());
-vi.mock("../../gateway/model-auth-refresh.js", () => ({
-  refreshModelAuthStateAfterMutation: refreshAuthRuntime,
-}));
 
 const { handleLoginCommand } = await import("./commands-login.js");
 const { handleCommands } = await import("./commands-core.js");

@@ -6,8 +6,8 @@ import type { AuthProfileStore } from "../auth-profiles.js";
 import { createOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
 import { resolveAgentHarnessPreparedAuthSupport } from "../harness/support.js";
 import { getApiKeyForModelCore } from "../model-auth.js";
+import { agentRuntimeAuthPlanMatchesTarget } from "./auth.js";
 import {
-  agentRuntimeAuthPlanMatchesTarget,
   canRunPreparedAgentRuntimeAuthAttempt,
   prepareAgentRuntimeAuth,
   preparedAgentRuntimeProfileAttemptHasCandidate,

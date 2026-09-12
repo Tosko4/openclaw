@@ -1,6 +1,7 @@
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { retainModelRuntimeAuthSourcesAfterMutation } from "./prepared-model-runtime-auth.js";
+import { refreshCommittedProviderCatalogs } from "./prepared-model-runtime.catalog-access.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   normalizeOptionalDir,
@@ -20,6 +21,11 @@ export type PreparedModelRuntimeAuthMutation = {
   affectsInheritedStores: boolean;
   profileSetChanged: boolean;
 };
+
+type AuthMutationScope = Pick<
+  PreparedModelRuntimeAuthMutation,
+  "agentDir" | "affectsInheritedStores"
+>;
 
 type PreparedModelRuntimeAuthTransaction = {
   adoptedBy?: PreparedModelRuntimeReplacementGateId;
@@ -54,7 +60,96 @@ function partitionAuthMutationOwners(
 
 export class PreparedModelRuntimeAuthPublicationOwner {
   readonly #events: (readonly PreparedModelRuntimeOwner[])[] = [];
+  readonly #catalogRefreshHolds = new Map<
+    symbol,
+    { scope: AuthMutationScope; completed: boolean }
+  >();
   #transaction: PreparedModelRuntimeAuthTransaction | undefined;
+
+  private deferCatalogRefresh(
+    scope: AuthMutationScope,
+  ): (
+    completed: boolean,
+    owners: Iterable<PreparedModelRuntimeOwner>,
+  ) => PreparedModelRuntimeOwner[] {
+    const hold = Symbol("model-auth-refresh");
+    this.#catalogRefreshHolds.set(hold, { scope, completed: false });
+    return (completed, owners) => {
+      const held = this.#catalogRefreshHolds.get(hold);
+      if (!held) {
+        return [];
+      }
+      if (completed) {
+        held.completed = true;
+      } else {
+        this.#catalogRefreshHolds.delete(hold);
+      }
+      const currentOwners = [...owners];
+      const ready = [...this.#catalogRefreshHolds].filter(
+        ([, pending]) =>
+          pending.completed &&
+          !currentOwners.some(
+            (owner) =>
+              authMutationAffectsOwner(owner, pending.scope) &&
+              this.isCatalogRefreshDeferred(owner),
+          ),
+      );
+      for (const [token] of ready) {
+        this.#catalogRefreshHolds.delete(token);
+      }
+      return currentOwners.filter((owner) =>
+        ready.some(([, pending]) => authMutationAffectsOwner(owner, pending.scope)),
+      );
+    };
+  }
+
+  isCatalogRefreshDeferred(owner: PreparedModelRuntimeOwner): boolean {
+    return [...this.#catalogRefreshHolds.values()].some(
+      ({ scope, completed }) => !completed && authMutationAffectsOwner(owner, scope),
+    );
+  }
+
+  async withDeferredCatalogRefresh<T>(
+    scope: AuthMutationScope,
+    currentOwners: () => Iterable<PreparedModelRuntimeOwner>,
+    operation: () => Promise<T>,
+    refresh: (owners: readonly PreparedModelRuntimeOwner[]) => void,
+  ): Promise<T> {
+    const release = this.deferCatalogRefresh(scope);
+    let completed = false;
+    try {
+      const result = await operation();
+      completed = true;
+      return result;
+    } finally {
+      refresh(release(completed, currentOwners()));
+    }
+  }
+
+  withDeferredCatalogRefreshForAgent<T>(
+    owners: Map<string, PreparedModelRuntimeOwner>,
+    agentDir: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    return this.withDeferredCatalogRefresh(
+      { agentDir: normalizeOptionalDir(agentDir), affectsInheritedStores: false },
+      () => owners.values(),
+      operation,
+      (ready) => this.refreshCommittedCatalogs(owners, ready),
+    );
+  }
+
+  refreshCommittedCatalogs(
+    owners: Map<string, PreparedModelRuntimeOwner>,
+    candidates: Iterable<PreparedModelRuntimeOwner> = owners.values(),
+  ): void {
+    refreshCommittedProviderCatalogs(
+      [...candidates].filter(
+        (owner) =>
+          owners.get(ownerKey(owner.input)) === owner && !this.isCatalogRefreshDeferred(owner),
+      ),
+    );
+  }
 
   enqueue(
     invalidatedOwners: readonly PreparedModelRuntimeOwner[],
@@ -266,6 +361,7 @@ export class PreparedModelRuntimeAuthPublicationOwner {
       this.reject(this.#transaction, error);
     }
     this.#events.length = 0;
+    this.#catalogRefreshHolds.clear();
   }
 
   private clearOwnerGates(transaction: PreparedModelRuntimeAuthTransaction): void {
@@ -302,6 +398,24 @@ export class PreparedModelRuntimeAuthPublicationOwner {
   }
 }
 
+function authMutationAffectsOwner(
+  owner: PreparedModelRuntimeOwner,
+  scope: AuthMutationScope,
+): boolean {
+  return (
+    scope.affectsInheritedStores ||
+    owner.input.agentDir === scope.agentDir ||
+    owner.input.inheritedAuthDir === scope.agentDir
+  );
+}
+
+function selectPreparedModelRuntimeAuthMutationOwners(
+  owners: Iterable<PreparedModelRuntimeOwner>,
+  event: PreparedModelRuntimeAuthMutation,
+): PreparedModelRuntimeOwner[] {
+  return [...owners].filter((owner) => authMutationAffectsOwner(owner, event));
+}
+
 export function invalidatePreparedModelRuntimeOwnersForAuthMutation(
   owners: Map<string, PreparedModelRuntimeOwner>,
   normalizedEvent: PreparedModelRuntimeAuthMutation,
@@ -312,14 +426,10 @@ export function invalidatePreparedModelRuntimeOwnersForAuthMutation(
   const staleError = new Error("prepared model runtime owner is stale after auth mutation");
   const invalidatedOwners: PreparedModelRuntimeOwner[] = [];
   const invalidatedConfiguredAgentIds = new Set<string>();
-  for (const owner of owners.values()) {
-    if (
-      !normalizedEvent.affectsInheritedStores &&
-      owner.input.agentDir !== normalizedEvent.agentDir &&
-      owner.input.inheritedAuthDir !== normalizedEvent.agentDir
-    ) {
-      continue;
-    }
+  for (const owner of selectPreparedModelRuntimeAuthMutationOwners(
+    owners.values(),
+    normalizedEvent,
+  )) {
     retainModelRuntimeAuthSourcesAfterMutation(owner);
     invalidatedOwners.push(owner);
     owner.generation += 1;

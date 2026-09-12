@@ -8,6 +8,7 @@ import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { discoverModels } from "./agent-model-discovery.js";
 import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
 import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
+import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { normalizeCatalogRouteBaseUrl } from "./model-catalog-metadata.js";
@@ -18,8 +19,10 @@ import {
   resolveModelCatalogIdentityKey,
 } from "./openai-model-routes.js";
 import {
+  capturePreparedModelRuntimePreferredAuthSource,
   getPreparedModelFullCatalogAuth,
   hasSamePreparedModelCatalogAuth,
+  hasSamePreparedModelCatalogProfile,
   setPreparedModelFullCatalogAuth,
   setPreparedModelRuntimeAuthMaterializations,
   setPreparedModelRuntimeAuthLoader,
@@ -34,6 +37,10 @@ import type {
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
+import {
+  fingerprintPreparedRuntimeFacts,
+  normalizePreparedModelCatalogPluginConfig,
+} from "./prepared-model-runtime.configured-catalog.js";
 import { completeConfiguredRuntimeModels } from "./prepared-model-runtime.configured-completion.js";
 import {
   acquirePreparedMediaCapabilityProviders,
@@ -191,6 +198,149 @@ export function mergePreparedProviderCatalog(
     staticEntries: [...(retained?.staticEntries ?? []), ...(scoped.staticEntries ?? [])],
     providerOutcomes: outcomes,
     authoritative: outcomes.every((outcome) => outcome.status === "ready"),
+  };
+}
+
+export function preparedProviderCatalogSource(
+  facts: PreparedModelRuntimeAgentFacts,
+  generation: PreparedModelRuntimePluginGeneration,
+  provider: string,
+  normalize: (provider: string) => string,
+): string {
+  const { config } = facts.input;
+  const plugins = normalizePreparedModelCatalogPluginConfig(config.plugins);
+  const pluginIds = generation.pluginMetadataSnapshot.owners.providers.get(provider) ?? [];
+  const providerEntries = <T>(entries: Record<string, T> | undefined) =>
+    Object.fromEntries(Object.entries(entries ?? {}).filter(([id]) => normalize(id) === provider));
+  return fingerprintPreparedRuntimeFacts({
+    models: { ...config.models, providers: providerEntries(config.models?.providers) },
+    auth: {
+      profiles: Object.fromEntries(
+        Object.entries(config.auth?.profiles ?? {}).filter(
+          ([, profile]) => normalize(profile.provider) === provider,
+        ),
+      ),
+      order: providerEntries(config.auth?.order),
+    },
+    plugins: {
+      ...plugins,
+      allow: plugins.allow.filter((id) => pluginIds.includes(id)),
+      deny: plugins.deny.filter((id) => pluginIds.includes(id)),
+      entries: Object.fromEntries(pluginIds.map((id) => [id, plugins.entries[id]])),
+    },
+    env: { config: config.env, runtime: facts.env },
+  });
+}
+
+export function preparedProviderCatalogCredentials(
+  source: Pick<PreparedModelCatalogAuth, "authStore" | "credentials">,
+  provider: string,
+  normalize: (provider: string) => string,
+): string {
+  const { authStore, credentials } = source;
+  return fingerprintPreparedRuntimeFacts({
+    profiles: Object.fromEntries(
+      Object.entries(authStore.profiles).filter(
+        ([, profile]) => normalize(profile.provider) === provider,
+      ),
+    ),
+    credentials: Object.fromEntries(
+      Object.entries(credentials ?? {}).filter(([id]) => normalize(id) === provider),
+    ),
+    order: Object.fromEntries(
+      Object.entries(authStore.order ?? {}).filter(([id]) => normalize(id) === provider),
+    ),
+  });
+}
+
+/** Keep a learned row only while its successful source still owns the current route. */
+export function createPreparedModelCatalogRetention(params: {
+  agentFacts: PreparedModelRuntimeAgentFacts;
+  pluginGeneration: PreparedModelRuntimePluginGeneration;
+  previousSnapshot?: PreparedModelRuntimeSnapshot;
+  sourceUnchanged: (provider: string) => boolean;
+  normalizeProvider: (provider: string) => string;
+}) {
+  const { agentFacts, pluginGeneration, sourceUnchanged, normalizeProvider } = params;
+  const previousAgentDir = params.previousSnapshot?.agentDir;
+  const preferredAuthSource = capturePreparedModelRuntimePreferredAuthSource(
+    params.previousSnapshot,
+  );
+  return (
+    catalog: ModelCatalogSnapshot,
+    previous: ModelCatalogSnapshot | undefined,
+    auth: PreparedModelCatalogAuth,
+    refreshed = false,
+  ): ModelCatalogSnapshot => {
+    const previousAuth = previous && getPreparedModelFullCatalogAuth(previous);
+    if (!previous || !previousAuth || previousAgentDir !== agentFacts.input.agentDir) {
+      return catalog;
+    }
+    let resolver: ReturnType<typeof createModelAuthAvailabilityResolver> | undefined;
+    const retain = (entry: ModelCatalogSnapshot["entries"][number]) => {
+      const provider = normalizeProvider(entry.provider);
+      const source = preferredAuthSource(provider, entry.id);
+      if (entry.nativeRuntime || !source || !sourceUnchanged(provider)) {
+        return false;
+      }
+      if (
+        source.kind === "profile" &&
+        !hasSamePreparedModelCatalogProfile(
+          previousAuth.authStore,
+          auth.authStore,
+          source.profileId,
+        )
+      ) {
+        return false;
+      }
+      resolver ??= createModelAuthAvailabilityResolver({
+        cfg: agentFacts.input.config,
+        agentId: agentFacts.input.agentId,
+        agentDir: agentFacts.input.agentDir,
+        workspaceDir: agentFacts.input.workspaceDir,
+        env: agentFacts.env,
+        authStore: auth.authStore,
+        preparedRuntimeAuthStore: auth.authStore,
+        metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+        preferredAuthSource,
+      });
+      const evaluation = resolver.evaluateRuntimeModelAuth(provider, {
+        modelId: entry.id,
+        api: entry.api,
+        baseUrl: entry.baseUrl,
+      });
+      const sameSource =
+        source.kind === "profile"
+          ? evaluation.selectedProfileId === source.profileId
+          : source.boundEnvVar !== undefined &&
+            evaluation.selectedProfileId === undefined &&
+            evaluation.environmentVariable === source.boundEnvVar;
+      if (!sameSource || evaluation.availability !== true) {
+        return false;
+      }
+      // A successful refresh of this same account supersedes its old rows, including an empty list.
+      return !(
+        refreshed &&
+        catalog.providerOutcomes?.some(
+          (outcome) =>
+            normalizeProvider(outcome.provider) === provider &&
+            outcome.status === "ready" &&
+            outcome.profileId === (source.kind === "profile" ? source.profileId : undefined),
+        )
+      );
+    };
+    const retained = previous.routeVariants.filter(retain);
+    return {
+      ...catalog,
+      entries: dedupeByKey(
+        [...catalog.entries, ...previous.entries.filter(retain)],
+        resolveModelCatalogIdentityKey,
+      ),
+      routeVariants: dedupeByKey([...catalog.routeVariants, ...retained], (entry) =>
+        JSON.stringify([resolveModelCatalogIdentityKey(entry), entry.api, entry.baseUrl]),
+      ),
+    };
+
   };
 }
 

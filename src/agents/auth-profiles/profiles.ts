@@ -404,8 +404,9 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
     );
   }
   for (let attempt = 0; attempt < OAUTH_REMOVAL_MAX_ATTEMPTS; attempt += 1) {
-    const owners =
-      params.provider === undefined ? [params.agentDir] : providerAuthStoreOwners(params.agentDir);
+    const owners = (
+      params.provider === undefined ? [params.agentDir] : providerAuthStoreOwners(params.agentDir)
+    ).map((owner) => (isSharedMainAuthProfileAgentDir(owner) ? undefined : owner));
     const profilesByOwner = new Map(owners.map((owner) => [owner, new Set(profileIds)]));
     for (const profileId of profileIds) {
       const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({

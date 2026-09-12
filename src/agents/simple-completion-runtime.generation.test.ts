@@ -171,7 +171,8 @@ it("keeps route rematerialization and runtime auth on the supplied generation", 
     mocks.publishedGeneration = "B";
     return {
       apiKey: "sk-platform",
-      source: "models.providers.openai",
+      profileId: "openai:platform",
+      source: "profile:openai:platform",
       mode: "api-key",
     };
   });
@@ -200,6 +201,9 @@ it("keeps route rematerialization and runtime auth on the supplied generation", 
   }
   const prepared = result;
   expect(prepared.model.params).toMatchObject({ generation: "A" });
+  expect(mocks.getApiKeyForModel).toHaveBeenCalledWith(
+    expect.objectContaining({ profileId: "openai:platform", lockedProfile: true }),
+  );
   expect(observedModelGenerations).toEqual(["A", "A"]);
   expect(observedRuntimeAuthGenerations).toEqual(["A"]);
 });

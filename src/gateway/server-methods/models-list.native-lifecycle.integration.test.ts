@@ -659,7 +659,7 @@ it.each([false, true])(
   120_000,
 );
 
-it("models.list full refresh discovers an enabled provider without configured credentials", async () => {
+it("models.list full refresh discovers a declared provider without configured credentials", async () => {
   const state = await createOpenClawTestState({
     label: "credential-free-catalog",
     layout: "state-only",
@@ -723,6 +723,7 @@ it("models.list full refresh discovers an enabled provider without configured cr
     );
     const token = "credential-free-gateway-token";
     const cfg = {
+      models: { providers: { [provider]: { baseUrl, models: [] } } },
       agents: {
         defaults: { models: { [`${provider}/*`]: {} } },
         list: [{ id: "main", workspace: state.workspaceDir }],

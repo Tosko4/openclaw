@@ -22,6 +22,10 @@ vi.mock("../../agents/auth-profiles/runtime-snapshots.js", () => ({
 }));
 vi.mock("../../agents/prepared-model-runtime.js", () => ({
   prepareModelRuntimeSnapshot: mocks.prepareModelRuntimeSnapshot,
+  withDeferredPreparedModelCatalogRefresh: async <T>(
+    _agentDir: string,
+    operation: () => Promise<T>,
+  ) => await operation(),
 }));
 vi.mock("../../secrets/runtime.js", () => ({
   refreshActiveProviderAuthRuntimeSnapshot: mocks.refreshActiveProviderAuthRuntimeSnapshot,

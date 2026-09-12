@@ -6,7 +6,7 @@ import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes
 import { isOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
 import { hasOAuthIdentity } from "./auth-profiles/oauth-shared.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import type { ProviderModelAuthSource } from "./provider-model-auth-source-plan.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
@@ -72,6 +72,13 @@ export function getPreparedModelRuntimePreferredAuthSource(
     : undefined;
 }
 
+/** Retain source facts without keeping a predecessor snapshot and its runtime resources alive. */
+export function capturePreparedModelRuntimePreferredAuthSource(snapshot: object | undefined) {
+  const state = snapshot ? authSourcesBySnapshot.get(snapshot) : undefined;
+  return (provider: string, modelId: string): ProviderModelAuthSource | undefined =>
+    state?.preferred.get(authSourceKey(provider, modelId));
+}
+
 /** Only successful automatic runs can change the current source or publish its notice. */
 export function recordPreparedModelRuntimeAuthSource(
   snapshot: { config: OpenClawConfig; isCurrent: () => boolean },
@@ -128,6 +135,34 @@ export type PreparedModelRuntimeAuthScope = Readonly<{
   profileIds?: readonly string[];
 }>;
 
+function catalogProfileIdentity(profile: AuthProfileCredential) {
+  if (profile.type !== "oauth" || !hasOAuthIdentity(profile) || isOAuthRefreshFence(profile)) {
+    return profile;
+  }
+  const {
+    access: _access,
+    refresh: _refresh,
+    expires: _expires,
+    idToken: _idToken,
+    ...account
+  } = profile;
+  return account;
+}
+
+export function hasSamePreparedModelCatalogProfile(
+  previous: AuthProfileStore,
+  next: AuthProfileStore,
+  profileId: string,
+): boolean {
+  const before = previous.profiles[profileId];
+  const after = next.profiles[profileId];
+  return Boolean(
+    before &&
+    after &&
+    isDeepStrictEqual(catalogProfileIdentity(before), catalogProfileIdentity(after)),
+  );
+}
+
 /** Inventory follows identified accounts; credential use still follows the current auth owner. */
 export function hasSamePreparedModelCatalogAuth(
   previous: Pick<PreparedModelCatalogAuth, "authStore" | "credentials"> | undefined,
@@ -147,19 +182,7 @@ export function hasSamePreparedModelCatalogAuth(
     );
     return {
       profiles: Object.fromEntries(
-        profiles.map(([id, profile]) => {
-          if (profile.type !== "oauth" || !identifiedOAuth.some(([key]) => key === id)) {
-            return [id, profile];
-          }
-          const {
-            access: _access,
-            refresh: _refresh,
-            expires: _expires,
-            idToken: _idToken,
-            ...account
-          } = profile;
-          return [id, account];
-        }),
+        profiles.map(([id, profile]) => [id, catalogProfileIdentity(profile)]),
       ),
       credentials: Object.fromEntries(
         Object.entries(credentials)

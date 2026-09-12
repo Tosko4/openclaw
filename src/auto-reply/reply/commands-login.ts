@@ -238,6 +238,14 @@ async function switchLoginSessionProfile(params: {
   return "failed";
 }
 
+async function refreshLoginAuthState(params: HandleCommandsParams, agentId: string): Promise<void> {
+  const refresh = params.opts?.refreshProviderLoginAuthState;
+  if (!refresh) {
+    throw new Error("Provider sign-in refresh requires an active Gateway runtime.");
+  }
+  await refresh(agentId);
+}
+
 async function runChannelProviderLogin(params: {
   commandParams: HandleCommandsParams;
   choice: ProviderChannelLoginChoice;
@@ -275,6 +283,7 @@ async function runChannelProviderLogin(params: {
   try {
     const loginResult = await runProviderChannelLoginFlow({
       choice: params.choice,
+      refreshAuthState: (agentId) => refreshLoginAuthState(params.commandParams, agentId),
       agentId: params.agentId,
       config: params.commandParams.cfg,
       readConfig,
@@ -347,6 +356,7 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
     refreshAuth: () =>
       refreshProviderLoginAuthState({
         agentId: params.agentId,
+        refreshAuthState: (agentId) => refreshLoginAuthState(params, agentId),
         readConfig:
           params.opts?.getProviderLoginConfig ?? (() => getRuntimeConfigSnapshot() ?? params.cfg),
         assertCurrent: (config) => assertProviderLoginAuthority(params, config),

@@ -25,6 +25,7 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { defaultTelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import type { TelegramCommandDispatch } from "./bot-native-command-dispatch.js";
 import { buildTelegramRoutingTarget, resolveTelegramCommandAuthorization } from "./bot/helpers.js";
+import { getTelegramRuntime } from "./runtime.js";
 
 const activeTelegramProviderLoginFlows = createProviderLoginFlowRegistry();
 
@@ -113,6 +114,17 @@ export async function executeTelegramLoginCommand(params: {
       throw new Error("Provider login authority is no longer active.");
     }
   };
+  const refreshAuthState = async (agentId: string) => {
+    dispatch.opts.accountAbortSignal?.throwIfAborted();
+    assertCurrent();
+    await getTelegramRuntime().gateway.request(
+      "models.authRefresh",
+      { agentId, operation: "login" },
+      { scopes: ["operator.admin"] },
+    );
+    dispatch.opts.accountAbortSignal?.throwIfAborted();
+    assertCurrent();
+  };
   const sendLoginReply = async (reply: ReplyPayload) => {
     const { deliverReplies } = await dispatch.loadDeliveryRuntime();
     const result = await deliverReplies({
@@ -135,6 +147,7 @@ export async function executeTelegramLoginCommand(params: {
     refreshAuth: () =>
       refreshProviderLoginAuthState({
         agentId: dispatch.route.agentId,
+        refreshAuthState,
         readConfig: dispatch.telegramDeps.getRuntimeConfig,
         assertCurrent: (config) => {
           dispatch.opts.accountAbortSignal?.throwIfAborted();
@@ -206,6 +219,7 @@ export async function executeTelegramLoginCommand(params: {
         sessionKey: dispatch.targetSessionKey,
       });
       const loginResult = await runProviderChannelLoginFlow({
+        refreshAuthState,
         runLoginFlow:
           dispatch.telegramDeps.runModelsAuthLoginFlow ??
           defaultTelegramNativeCommandDeps.runModelsAuthLoginFlow,

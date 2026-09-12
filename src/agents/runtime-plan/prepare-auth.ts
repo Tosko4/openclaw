@@ -151,21 +151,6 @@ export function preparedAgentRuntimeProfileAttemptHasCandidate(params: {
   );
 }
 
-/** True when a prepared auth tuple can be reused for this exact compaction target. */
-export function agentRuntimeAuthPlanMatchesTarget(
-  plan: AgentRuntimeAuthPlan,
-  target: { provider: string; modelId: string },
-): boolean {
-  const route = plan.modelRoute;
-  const provider = route?.provider ?? plan.providerForAuth;
-  const modelId = route?.modelId ?? plan.modelId;
-  return (
-    modelId !== undefined &&
-    provider.trim().toLowerCase() === target.provider.trim().toLowerCase() &&
-    modelId === target.modelId
-  );
-}
-
 /** Applies terminal provider-entry credential policy before route selection. */
 function resolvePreparedProviderEntryApiKeyProfileReference(
   params: PrepareAgentRuntimeAuthPlanParams & { store: AuthProfileStore },

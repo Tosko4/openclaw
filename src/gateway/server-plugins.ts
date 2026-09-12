@@ -215,10 +215,37 @@ function createGatewayPluginRuntimeBindings(
         const sessionWorkerPlacementContext = getInProcessGatewayRequestContext(
           resolveBoundGatewayContext,
         );
+        const readLoginContext = () => {
+          const context = resolveBoundGatewayContext?.();
+          if (!context || context !== sessionWorkerPlacementContext) {
+            throw new Error("Provider sign-in refresh requires the active bound Gateway runtime.");
+          }
+          return context;
+        };
         const run = async () =>
           await dispatchLowLevelChannelReplyFromConfig({
             ...params,
             ...(sessionWorkerPlacementContext ? { sessionWorkerPlacementContext } : {}),
+            replyOptions: {
+              ...params.replyOptions,
+              getProviderLoginConfig: () => readLoginContext().getRuntimeConfig(),
+              refreshProviderLoginAuthState: async (agentId) => {
+                readLoginContext();
+                const { refreshModelAuthStateAfterMutation } =
+                  await import("./model-auth-refresh.js");
+                readLoginContext();
+                await refreshModelAuthStateAfterMutation(
+                  {
+                    getRuntimeConfig: () => readLoginContext().getRuntimeConfig(),
+                    reconcileConfigAfterExternalWrite: () =>
+                      readLoginContext().reconcileConfigAfterExternalWrite(),
+                  },
+                  "login",
+                  agentId,
+                );
+                readLoginContext();
+              },
+            },
           });
         return resolveBoundGatewayContext
           ? await withPluginRuntimeGatewayContextResolver(resolveBoundGatewayContext, run)
@@ -226,8 +253,25 @@ function createGatewayPluginRuntimeBindings(
       },
       gateway: {
         isAvailable: async () => hasInProcessGatewayContext(resolveBoundGatewayContext),
-        request: (method, params, options) =>
-          dispatchTrustedPluginGatewayMethod(method, params, options, resolveBoundGatewayContext),
+        request: async <T = unknown>(
+          method: string,
+          params?: Record<string, unknown>,
+          options?: RuntimeGatewayRequestOptions,
+        ): Promise<T> => {
+          signal.throwIfAborted();
+          const context = getInProcessGatewayRequestContext(resolveBoundGatewayContext);
+          const result = await dispatchTrustedPluginGatewayMethod<T>(
+            method,
+            params,
+            options,
+            resolveBoundGatewayContext,
+          );
+          signal.throwIfAborted();
+          if (getInProcessGatewayRequestContext(resolveBoundGatewayContext) !== context) {
+            throw new Error("Plugin Gateway request owner changed before completion.");
+          }
+          return result;
+        },
       },
       hooks: createGatewayHooksRuntime(resolveBoundGatewayContext),
       nodes: createGatewayNodesRuntime(resolveBoundGatewayContext, signal),

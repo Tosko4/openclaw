@@ -32,6 +32,7 @@ const choice: ProviderChannelLoginChoice = {
 };
 const loginParams = {
   choice,
+  refreshAuthState: vi.fn(async (_agentId: string) => {}),
   agentId: "main",
   config: {},
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },

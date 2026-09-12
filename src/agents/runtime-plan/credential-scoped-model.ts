@@ -7,11 +7,9 @@ import {
   resolveProviderModelRouteAuthRequirement,
   type ProviderModelRouteMaterializationAuthMode,
 } from "../provider-model-route-auth.js";
+import { agentRuntimeAuthPlanMatchesTarget } from "./auth.js";
 import { materializePreparedRuntimeModel } from "./materialize-model.js";
-import {
-  agentRuntimeAuthPlanMatchesTarget,
-  type PreparedAgentRuntimeAuthAttempt,
-} from "./prepare-auth.js";
+import type { PreparedAgentRuntimeAuthAttempt } from "./prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
 type RuntimeRouteModel = {

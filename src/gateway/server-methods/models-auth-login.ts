@@ -142,7 +142,7 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
                 runner.lockCancellationForPreparation();
               },
               refreshAfterLogin: (agentId) =>
-                refreshModelAuthStateAfterMutation(context.getRuntimeConfig, "login", agentId),
+                refreshModelAuthStateAfterMutation(context, "login", agentId),
             });
             if (result.profiles.length === 0) {
               throw new Error(`${choice.choiceLabel} did not return a credential profile.`);

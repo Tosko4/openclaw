@@ -53,8 +53,8 @@ import { maybeRepairPluginOpenClawHostLinks } from "./doctor-plugin-host-links.j
 import { throwStartupMigrationGuardRejected } from "./doctor-startup-migration-refusal.js";
 import { noteStaleUpdateRuns } from "./doctor-update-run.js";
 import type { CronCodexRuntimePolicyTarget } from "./doctor/cron/store-migration.js";
-import type { DoctorConfigPreflightResult } from "./doctor/shared/config-migration-result.js";
 import { planAutomaticConfigRepair } from "./doctor/shared/automatic-startup-config-repair.js";
+import type { DoctorConfigPreflightResult } from "./doctor/shared/config-migration-result.js";
 import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
 import { createDoctorPluginMetadataSnapshotScope } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 

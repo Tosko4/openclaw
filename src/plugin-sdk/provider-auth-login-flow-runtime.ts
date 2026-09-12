@@ -513,6 +513,7 @@ function parseModelsAuthLoginFlowResult(value: unknown): ModelsAuthLoginFlowResu
 
 export async function refreshProviderLoginAuthState(params: {
   agentId: string;
+  refreshAuthState: (agentId: string) => Promise<void>;
   readConfig: () => OpenClawConfig;
   assertCurrent: (config: OpenClawConfig) => void;
 }): Promise<void> {
@@ -522,14 +523,13 @@ export async function refreshProviderLoginAuthState(params: {
     return config;
   };
   readConfig();
-  const { refreshModelAuthStateAfterMutation } = await import("../gateway/model-auth-refresh.js");
-  readConfig();
-  await refreshModelAuthStateAfterMutation(readConfig, "login", params.agentId);
+  await params.refreshAuthState(params.agentId);
   readConfig();
 }
 
 export async function runProviderChannelLoginFlow(params: {
   choice: ProviderChannelLoginChoice;
+  refreshAuthState: (agentId: string) => Promise<void>;
   agentId: string;
   config: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -601,7 +601,12 @@ export async function runProviderChannelLoginFlow(params: {
       credentialOnly: true,
       onModelAccessRequested: params.onModelAccessRequested,
       refreshAfterLogin: (agentId) =>
-        refreshProviderLoginAuthState({ agentId, readConfig, assertCurrent }),
+        refreshProviderLoginAuthState({
+          agentId,
+          readConfig,
+          assertCurrent,
+          refreshAuthState: params.refreshAuthState,
+        }),
       assertCurrent,
       agent: params.agentId,
       config: readConfig(),

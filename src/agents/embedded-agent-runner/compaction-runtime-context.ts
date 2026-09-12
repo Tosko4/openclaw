@@ -20,7 +20,7 @@ import {
   listModelAliasCandidates,
 } from "../model-selection-shared.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../openai-routing.js";
-import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.js";
+import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/auth.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";

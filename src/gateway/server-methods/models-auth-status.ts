@@ -421,7 +421,7 @@ async function refreshAfterCredentialMutation(
   agentId: string,
 ): Promise<string | undefined> {
   try {
-    await refreshModelAuthStateAfterMutation(context.getRuntimeConfig, operation, agentId);
+    await refreshModelAuthStateAfterMutation(context, operation, agentId);
     return undefined;
   } catch (error) {
     log.warn(`credential change saved but auth refresh failed: ${formatForLog(error)}`);

@@ -314,6 +314,7 @@ export function startGatewayConfigReloader(opts: {
   } = { epoch: 0, writerEpoch: 0 };
   let pendingInProcessConfig: InProcessConfigCandidate | null = null;
   let activeInProcessConfig: InProcessConfigCandidate | null = null;
+  let appliedReloadCleanup: { snapshot: ConfigFileSnapshot; isCurrent: () => boolean } | undefined;
   let watcherIntentCandidate: InProcessConfigCandidate | null = null;
   let watcherIntentCameFromPendingWrite = false;
   const settleApplication = (
@@ -477,12 +478,15 @@ export function startGatewayConfigReloader(opts: {
       runtimeRefresh,
       application,
     } = candidate ?? {};
+    let runtimeApplied = false;
     const settleRuntimeApplication = (result: GatewayHotReloadApplication = "applied") => {
       const status = typeof result === "string" ? result : result.status;
       // A watcher replay must not turn recovery-owned runtime work into a success receipt.
-      application?.settle(
-        opts.hasOutstandingGatewayRestart?.() ? "applied-restart-required" : status,
-      );
+      const settledStatus = opts.hasOutstandingGatewayRestart?.()
+        ? "applied-restart-required"
+        : status;
+      runtimeApplied = settledStatus === "applied";
+      application?.settle(settledStatus);
     };
     let nextPluginInstallRecords = currentPluginInstallRecords;
     let committedRuntimeConfig: OpenClawConfig | null = null;
@@ -552,7 +556,7 @@ export function startGatewayConfigReloader(opts: {
         clearReloadTimer();
         pending = false;
       }
-      return { runtime, isCurrent };
+      return { runtime, isCurrent, runtimeApplied };
     };
     assertInvokerOwned();
     // Reprepare against the current accepted env owner. A managed write can
@@ -660,7 +664,7 @@ export function startGatewayConfigReloader(opts: {
     if (
       candidate?.source === "external-reconcile" &&
       !pluginLifecycle &&
-      sourceSnapshot.hash === currentRawHash &&
+      hashConfigRaw(sourceSnapshot.raw) === currentRawHash &&
       sourceSnapshot.hash !== lastSourceOnlyWriteHash &&
       changedPaths.length === 0 &&
       diffConfigPaths(currentRuntimeEnvSourceConfig, nextSourceConfig).length === 0 &&
@@ -1014,6 +1018,9 @@ export function startGatewayConfigReloader(opts: {
     }
     if (snapshot.valid && typeof snapshot.hash === "string") {
       updateAcceptedSnapshot(hashConfigRaw(snapshot.raw), snapshot.parsed);
+      if (runtimeApplied && !opts.hasOutstandingGatewayRestart?.()) {
+        appliedReloadCleanup = { snapshot, isCurrent: ownership.isCurrent };
+      }
     }
     if (snapshot.valid) {
       await acceptWatchedPaths(snapshot.includedPaths ?? []);
@@ -1035,6 +1042,10 @@ export function startGatewayConfigReloader(opts: {
     if (watcherIntentCandidate === candidate) {
       watcherIntentCandidate = null;
       watcherIntentCameFromPendingWrite = false;
+    }
+    if (applied.runtimeApplied && applied.isCurrent()) {
+      // Only watch cleanup and snapshot promotion remain; another request keeps its own receipt.
+      appliedReloadCleanup = { snapshot, isCurrent: applied.isCurrent };
     }
     await acceptWatchedPaths(snapshot.includedPaths ?? []);
     if (applied.isCurrent()) {
@@ -1270,6 +1281,7 @@ export function startGatewayConfigReloader(opts: {
         opts.log.error(`config reload failed: ${String(err)}`);
       }
     } finally {
+      appliedReloadCleanup = undefined;
       running = false;
     }
   };
@@ -1815,7 +1827,29 @@ export function startGatewayConfigReloader(opts: {
       }
       if (
         sourceObservation !== observed ||
-        running ||
+        (running &&
+          !(
+            appliedReloadCleanup?.isCurrent() &&
+            snapshot.exists &&
+            snapshot.valid &&
+            hashConfigRaw(snapshot.raw) === currentRawHash &&
+            snapshot.hash === appliedReloadCleanup.snapshot.hash &&
+            snapshot.hash !== lastSourceOnlyWriteHash &&
+            !opts.hasOutstandingGatewayRestart?.() &&
+            diffConfigPaths(currentRuntimeEnvSourceConfig, snapshot.sourceConfig).length === 0 &&
+            isDeepStrictEqual(
+              serializeConfigResolutionFacts(currentRuntimeEnvSourceConfig),
+              serializeConfigResolutionFacts(snapshot.sourceConfig),
+            ) &&
+            isDeepStrictEqual(
+              snapshot.includedPaths,
+              appliedReloadCleanup.snapshot.includedPaths,
+            ) &&
+            isDeepStrictEqual(
+              snapshot.includeProvenance,
+              appliedReloadCleanup.snapshot.includeProvenance,
+            )
+          )) ||
         pendingInProcessConfig ||
         activeInProcessConfig ||
         watcherIntentCandidate

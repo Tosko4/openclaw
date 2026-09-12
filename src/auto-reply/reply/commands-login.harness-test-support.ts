@@ -12,6 +12,7 @@ type SessionPatchArguments = Parameters<typeof patchSessionEntryCore>;
 type SessionPatchInvocation = SessionPatchArguments[0] &
   NonNullable<SessionPatchArguments[2]> & { update: SessionPatchArguments[1] };
 
+const refreshAuthRuntime = vi.hoisted(() => vi.fn<(agentId: string) => Promise<void>>());
 const runModelsAuthLoginFlowMock = vi.hoisted(() => vi.fn());
 const patchSessionEntryMock = vi.hoisted(() =>
   vi.fn<(params: SessionPatchInvocation) => ReturnType<typeof patchSessionEntryCore>>(),
@@ -81,7 +82,7 @@ export function buildLoginParams(
     to: "direct:owner",
     ...overrides.command,
   };
-  params.opts = overrides.opts;
+  params.opts = { refreshProviderLoginAuthState: refreshAuthRuntime, ...overrides.opts };
   if (overrides.sessionEntry !== undefined) {
     params.sessionEntry = overrides.sessionEntry;
     params.sessionStore = overrides.sessionStore ?? {
@@ -107,12 +108,13 @@ export async function dispatchLoginCommand(params: HandleCommandsParams) {
   });
 }
 
-export { runModelsAuthLoginFlowMock, patchSessionEntryMock };
+export { runModelsAuthLoginFlowMock, patchSessionEntryMock, refreshAuthRuntime };
 
 export function setupLoginCommandTests() {
   beforeEach(() => {
     vi.clearAllMocks();
     runModelsAuthLoginFlowMock.mockReset();
+    refreshAuthRuntime.mockReset().mockResolvedValue(undefined);
     patchSessionEntryMock.mockReset();
     testing.clearActiveFlows();
   });

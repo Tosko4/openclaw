@@ -195,7 +195,6 @@ async function writeConfigHealth(
   const { hashConfigRaw } = await import("../config/io.read-helpers.js");
   const { resolveConfigIncludeWriteBoundary } = await import("../config/mutate.js");
   const { getConfigValueAtPath } = await import("../config/config-paths.js");
-  const { isDeepStrictEqual } = await import("node:util");
   const { createSubsystemLogger } = await import("../logging/subsystem.js");
   const { recordDoctorHealthWarnings } = await import("./doctor-health-contribution.js");
   const { logConfigUpdated } = await import("../config/logging.js");

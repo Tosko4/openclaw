@@ -328,6 +328,16 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           applyChatSendManagedMedia(ctx, pluginBoundMedia, managedMediaApplyMode);
           const dispatchInbound = () => {
             assertWorkspaceRunOwnership?.();
+            const assertProviderLoginAuthority = () => {
+              client?.connectionSignal?.throwIfAborted();
+              if (client?.invalidated || !client?.connect.scopes?.includes("operator.admin")) {
+                throw new Error("Provider login authority is no longer active.");
+              }
+            };
+            const getProviderLoginConfig = () => {
+              assertProviderLoginAuthority();
+              return context.getRuntimeConfig();
+            };
             return dispatchInboundMessageWithProjectedDispatcher({
               ctx,
               cfg,
@@ -372,12 +382,22 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 resumeRequestedSession: reconnectResumeRequested,
                 onSessionPrepared: admission.onSessionPrepared,
                 abortSignal: activeRunAbort.controller.signal,
-                getProviderLoginConfig: context.getRuntimeConfig,
-                assertProviderLoginAuthority: () => {
-                  client?.connectionSignal?.throwIfAborted();
-                  if (client?.invalidated || !client?.connect.scopes?.includes("operator.admin")) {
-                    throw new Error("Provider login authority is no longer active.");
-                  }
+                getProviderLoginConfig,
+                assertProviderLoginAuthority,
+                refreshProviderLoginAuthState: async (loginAgentId) => {
+                  assertProviderLoginAuthority();
+                  const { refreshModelAuthStateAfterMutation } =
+                    await import("../model-auth-refresh.js");
+                  assertProviderLoginAuthority();
+                  await refreshModelAuthStateAfterMutation(
+                    {
+                      getRuntimeConfig: getProviderLoginConfig,
+                      reconcileConfigAfterExternalWrite: context.reconcileConfigAfterExternalWrite,
+                    },
+                    "login",
+                    loginAgentId,
+                  );
+                  assertProviderLoginAuthority();
                 },
                 // Keep a Gateway-owned cancel identity after this chat.send
                 // terminalizes while the prompt waits in followup/collect queue.

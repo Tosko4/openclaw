@@ -3,7 +3,6 @@ import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { Result } from "@openclaw/normalization-core/result";
 import { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getPluginMetadataSnapshotCache, retainPluginCache } from "../plugins/plugin-cache.js";
 import {
   getPreparedMessageToolCatalog,
@@ -43,7 +42,10 @@ import type {
   PreparedModelRuntimeAgentBaseFacts,
   PreparedModelRuntimeAgentFacts,
 } from "./prepared-model-runtime.catalog-contract.js";
-import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
+import {
+  fingerprintPreparedRuntimeFacts,
+  normalizePreparedModelCatalogPluginConfig,
+} from "./prepared-model-runtime.configured-catalog.js";
 import {
   collectPreparedModelRuntimeConfiguredRefs,
   collectConfiguredProviderIdsNeedingStaticCatalog,
@@ -569,10 +571,7 @@ export async function prepareWorkspaceBuildGroup(
 /** Record discovery scope before config projection or auth-owner publication can replace it. */
 export function preparedModelInventoryKey(input: PreparedModelRuntimeInput): string {
   const { models, auth, env } = input.config;
-  const plugins = normalizePluginsConfig(input.config.plugins);
-  for (const entry of Object.values(plugins.entries)) {
-    entry.config ??= {};
-  }
+  const plugins = normalizePreparedModelCatalogPluginConfig(input.config.plugins);
   return fingerprintPreparedRuntimeFacts({
     ...input,
     config: { models, auth, env, plugins },

@@ -18,9 +18,80 @@ import {
   createNativeCommandTestParams,
   createPrivateCommandContext,
   deliverReplies,
+  resetNativeCommandMenuMocks,
 } from "./bot-native-commands.menu-test-support.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { parseTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
+
+const loginGatewayRequest = vi.hoisted(() => vi.fn());
+
+const loginSessionMocks = vi.hoisted(() => ({
+  getSessionEntry: vi.fn(),
+  loadSessionStore: vi.fn(),
+  resolveStorePath: vi.fn(),
+  patchSessionEntry: vi.fn(),
+}));
+
+vi.mock("./runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./runtime.js")>("./runtime.js");
+  return {
+    ...actual,
+    getTelegramRuntime: () => ({ gateway: { request: loginGatewayRequest } }),
+  };
+});
+
+vi.mock("./bot-native-commands.runtime.js", () => ({
+  ensureConfiguredBindingRouteReady: vi.fn(async () => ({ ok: true })),
+  finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
+  getAgentScopedMediaLocalRoots: vi.fn(() => []),
+  getSessionEntry: loginSessionMocks.getSessionEntry,
+  resolveChunkMode: vi.fn(() => "length"),
+  resolveThreadSessionKeys: vi.fn(
+    ({
+      baseSessionKey,
+      parentSessionKey,
+    }: {
+      baseSessionKey: string;
+      parentSessionKey?: string;
+    }) => ({
+      sessionKey: baseSessionKey,
+      parentSessionKey,
+    }),
+  ),
+}));
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
+    "openclaw/plugin-sdk/session-store-runtime",
+  );
+  return {
+    ...actual,
+    getSessionEntry: loginSessionMocks.getSessionEntry,
+    resolveStorePath: loginSessionMocks.resolveStorePath,
+    patchSessionEntry: loginSessionMocks.patchSessionEntry,
+  };
+});
+
+export function resetLoginCommandMocks() {
+  resetNativeCommandMenuMocks();
+  loginGatewayRequest.mockReset().mockResolvedValue({ refreshed: true });
+  loginSessionMocks.loadSessionStore.mockReset().mockReturnValue({});
+  loginSessionMocks.getSessionEntry
+    .mockReset()
+    .mockImplementation(
+      ({ storePath, sessionKey }: { storePath: string; sessionKey: string }) =>
+        loginSessionMocks.loadSessionStore(storePath)[sessionKey],
+    );
+  loginSessionMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/openclaw-sessions.json");
+  loginSessionMocks.patchSessionEntry.mockReset().mockImplementation(async (params) => {
+    const current = loginSessionMocks.loadSessionStore(params.storePath)[params.sessionKey];
+    if (!current) {
+      return null;
+    }
+    const patch = await params.update({ ...current });
+    params.assertCommitAllowed?.();
+    return patch ? { ...current, ...patch } : current;
+  });
+}
 
 export type TelegramLoginFlow = NonNullable<TelegramNativeCommandDeps["runModelsAuthLoginFlow"]>;
 
@@ -336,3 +407,5 @@ export async function exerciseDeferredModelAccess(choice: "all" | "keep" | "canc
     clearRuntimeConfigSnapshot();
   }
 }
+
+export { loginGatewayRequest, loginSessionMocks };

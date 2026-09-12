@@ -2607,8 +2607,59 @@ describe("startGatewayConfigReloader", () => {
     },
   );
 
+  it("supersedes queued auth reconciliation when an explicit plugin reload owns the same bytes", async () => {
+    const config: OpenClawConfig = { gateway: { reload: {} } };
+    const observed = createDeferred();
+    const runtime = { operationId: "explicit-reload", generation: 9, pluginIds: ["notes"] };
+    const harness = createReloaderHarness(
+      async () => makeSnapshot({ config, sourceConfig: config, hash: "same-source" }),
+      {
+        initialConfig: config,
+        onConfigCandidateObserved: () => observed.resolve(),
+        onHotReload: async (plan, nextConfig, ownership) => {
+          ownership.markRuntimeCommitted(nextConfig, plan);
+          return { status: "applied", runtime };
+        },
+      },
+    );
+    const authRequest = tryBeginGatewayRootWorkAdmission();
+    const pluginRequest = tryBeginGatewayRootWorkAdmission();
+    if (!authRequest || !pluginRequest) {
+      authRequest?.release();
+      pluginRequest?.release();
+      await harness.reloader.stop();
+      throw new Error("expected independent auth and plugin request admissions");
+    }
+    try {
+      await harness.reloader.ready;
+      const reconciliation = authRequest.run(() => harness.reloader.reconcileExternalWrite());
+      await observed.promise;
+      await expect(
+        pluginRequest.run(() =>
+          withPluginLifecycleLease({}, (lease) =>
+            harness.reloader.applyPluginLifecycleChange({
+              config,
+              pluginIds: ["notes"],
+              reason: "reload",
+              assertInvokerOwned: () => lease.assertOwned(),
+            }),
+          ),
+        ),
+      ).resolves.toBe(runtime);
+      await expect(reconciliation).resolves.toBe("superseded");
+      await vi.runAllTimersAsync();
+      expect(harness.onHotReload).toHaveBeenCalledOnce();
+      expect(harness.onRestart).not.toHaveBeenCalled();
+    } finally {
+      await harness.reloader.stop();
+      authRequest.release();
+      pluginRequest.release();
+    }
+  });
+
   it("reconciles an external write before its delayed watcher notification", async () => {
     const applied = createDeferred();
+    const applying = createDeferred();
     const nextConfig: OpenClawConfig = {
       gateway: { reload: {} },
       auth: { profiles: { saved: { provider: "fixture", mode: "token" } } },
@@ -2624,6 +2675,7 @@ describe("startGatewayConfigReloader", () => {
       {
         runTransaction: runWithGatewayIndependentRootWorkAdmission,
         onConfigApplied: async () => {
+          applying.resolve();
           expect(getActiveGatewayRootWorkCount({ excludeCurrent: true })).toBe(0);
           await applied.promise;
         },
@@ -2640,7 +2692,8 @@ describe("startGatewayConfigReloader", () => {
       void result.then(() => {
         settled = true;
       });
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
+      await applying.promise;
       expect(harness.onHotReload).toHaveBeenCalledOnce();
       expect(settled).toBe(false);
       applied.resolve();
@@ -2650,6 +2703,186 @@ describe("startGatewayConfigReloader", () => {
       expect(harness.onHotReload).toHaveBeenCalledOnce();
     } finally {
       applied.resolve();
+      await harness.reloader.stop();
+      request.release();
+    }
+  });
+
+  it.each([
+    "same-source",
+    "changed-hash",
+    "changed-source",
+    "changed-facts",
+    "changed-includes",
+    "newer-write",
+  ] as const)(
+    "reconciles only accepted source during applied-write cleanup (%s)",
+    async (scenario) => {
+      const sourceConfig: OpenClawConfig = { gateway: { reload: {} }, hooks: { enabled: true } };
+      const runtimeConfig: OpenClawConfig = {
+        ...sourceConfig,
+        gateway: { reload: {}, port: 18789 },
+      };
+      let snapshot = makeSnapshot({
+        config: sourceConfig,
+        sourceConfig,
+        parsed: sourceConfig,
+        hash: "applied-write",
+      });
+      const promoting = createDeferred();
+      const releasePromotion = createDeferred();
+      const queued = createDeferred();
+      let observingReconcile = false;
+      const harness = createReloaderHarness(async () => snapshot, {
+        runTransaction: runWithGatewayIndependentRootWorkAdmission,
+        onConfigCandidateObserved: () => {
+          if (observingReconcile) {
+            queued.resolve();
+          }
+        },
+        promoteSnapshot: async () => {
+          promoting.resolve();
+          await releasePromotion.promise;
+          return true;
+        },
+      });
+      const request = tryBeginGatewayRootWorkAdmission();
+      if (!request) {
+        await harness.reloader.stop();
+        throw new Error("expected gateway request admission");
+      }
+      try {
+        await harness.reloader.ready;
+        const application = await request.run(async () => {
+          const receipt = createRuntimeConfigWriteApplication(
+            captureGatewayRootWorkAdmissionContinuationScope()?.run,
+          );
+          harness.emitWrite(
+            attachRuntimeConfigWriteApplication(
+              { ...makeZeroDebounceHookWrite("applied-write"), runtimeConfig, sourceConfig },
+              receipt,
+            ),
+          );
+          return receipt;
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await promoting.promise;
+        await expect(application.result).resolves.toBe("applied");
+
+        if (scenario === "changed-hash") {
+          snapshot = { ...snapshot, hash: "different-write" };
+        } else if (scenario === "changed-source") {
+          snapshot = { ...snapshot, sourceConfig: { ...sourceConfig, hooks: { enabled: false } } };
+        } else if (scenario === "changed-facts") {
+          const changedSource = { ...sourceConfig };
+          setConfigResolutionFacts(
+            changedSource,
+            createConfigResolutionFacts([], new Map([["hooks.token", "OTHER_TOKEN"]])),
+          );
+          snapshot = { ...snapshot, sourceConfig: changedSource };
+        } else if (scenario === "changed-includes") {
+          snapshot = { ...snapshot, includedPaths: ["/tmp/replaced-include.json"] };
+        } else if (scenario === "newer-write") {
+          harness.emitWrite(makeZeroDebounceHookWrite("newer-write"));
+        }
+        observingReconcile = true;
+        const reconciliation = request.run(() => harness.reloader.reconcileExternalWrite());
+        if (scenario === "same-source") {
+          expect(
+            await Promise.race([
+              queued.promise.then(() => "queued"),
+              reconciliation.then((status) => status),
+            ]),
+          ).toBe("queued");
+          await vi.advanceTimersByTimeAsync(0);
+          expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
+          releasePromotion.resolve();
+          await vi.advanceTimersByTimeAsync(0);
+          await expect(reconciliation).resolves.toBe("applied");
+          expect(harness.onConfigAccepted).toHaveBeenLastCalledWith(
+            runtimeConfig,
+            expect.any(Object),
+            sourceConfig,
+            { runtimeApplied: true },
+          );
+          expect(harness.onHotReload).toHaveBeenCalledOnce();
+        } else {
+          await expect(reconciliation).resolves.toBe("superseded");
+        }
+      } finally {
+        releasePromotion.resolve();
+        await harness.reloader.stop();
+        request.release();
+      }
+    },
+  );
+
+  it("queues reconciliation after an accepted runtime echo while watch cleanup is pending", async () => {
+    const sourceConfig: OpenClawConfig = { gateway: { reload: {} } };
+    const runtimeConfig: OpenClawConfig = { gateway: { reload: {}, port: 18789 } };
+    const cleaningWatches = createDeferred();
+    const releaseWatchCleanup = createDeferred();
+    const queued = createDeferred();
+    let observingReconcile = false;
+    const harness = createReloaderHarness(
+      async () =>
+        makeSnapshot({
+          config: sourceConfig,
+          sourceConfig,
+          parsed: sourceConfig,
+          hash: "accepted-runtime",
+          includedPaths: [],
+        }),
+      {
+        initialConfig: runtimeConfig,
+        initialCompareConfig: sourceConfig,
+        initialSnapshotRawHash: hashConfigRaw(JSON.stringify(sourceConfig)),
+        initialInternalWriteHash: "accepted-runtime",
+        initialIncludedPaths: ["/tmp/old-include.json"],
+        runTransaction: runWithGatewayIndependentRootWorkAdmission,
+        onConfigCandidateObserved: () => {
+          if (observingReconcile) {
+            queued.resolve();
+          }
+        },
+      },
+    );
+    harness.watcher.close.mockImplementationOnce(async () => {
+      cleaningWatches.resolve();
+      await releaseWatchCleanup.promise;
+    });
+    const request = tryBeginGatewayRootWorkAdmission();
+    if (!request) {
+      releaseWatchCleanup.resolve();
+      await harness.reloader.stop();
+      throw new Error("expected gateway request admission");
+    }
+    try {
+      await harness.reloader.ready;
+      harness.watcher.emit("change");
+      await vi.advanceTimersByTimeAsync(0);
+      await cleaningWatches.promise;
+      expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
+      observingReconcile = true;
+      const reconciliation = request.run(() => harness.reloader.reconcileExternalWrite());
+      expect(
+        await Promise.race([
+          queued.promise.then(() => "queued"),
+          reconciliation.then((status) => status),
+        ]),
+      ).toBe("queued");
+      releaseWatchCleanup.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(reconciliation).resolves.toBe("applied");
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+      expect(harness.onConfigAccepted).toHaveBeenLastCalledWith(
+        runtimeConfig,
+        expect.any(Object),
+        sourceConfig,
+        { runtimeApplied: true },
+      );
+    } finally {
+      releaseWatchCleanup.resolve();
       await harness.reloader.stop();
       request.release();
     }
@@ -2710,7 +2943,9 @@ describe("startGatewayConfigReloader", () => {
     const sourceConfig: OpenClawConfig = { gateway: { reload: {} } };
     const runtimeConfig: OpenClawConfig = { gateway: { reload: {}, port: 18789 } };
     const accepted = createDeferred();
+    const accepting = createDeferred();
     const onConfigAccepted = vi.fn(async () => {
+      accepting.resolve();
       await accepted.promise;
     });
     const onEffectiveConfigUnchanged = vi.fn(async () => {
@@ -2727,7 +2962,7 @@ describe("startGatewayConfigReloader", () => {
       {
         initialConfig: runtimeConfig,
         initialCompareConfig: sourceConfig,
-        initialSnapshotRawHash: "applied-source",
+        initialSnapshotRawHash: hashConfigRaw(JSON.stringify(sourceConfig)),
         onConfigAccepted,
         onEffectiveConfigUnchanged,
       },
@@ -2739,7 +2974,8 @@ describe("startGatewayConfigReloader", () => {
       void result.then(() => {
         settled = true;
       });
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
+      await accepting.promise;
       expect(settled).toBe(false);
       expect(onConfigAccepted).toHaveBeenCalledWith(
         runtimeConfig,

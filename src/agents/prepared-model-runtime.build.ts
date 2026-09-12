@@ -22,9 +22,7 @@ import {
   assertPreparedModelRuntimeCandidatesCurrent,
   PreparedModelRuntimePublicationSupersededError,
 } from "./prepared-model-runtime.errors.js";
-import {
-  prepareWorkspaceBuildGroup,
-} from "./prepared-model-runtime.facts.js";
+import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 import {
   createPreparedModelRuntimeSnapshot,
   prepareFullCatalogFacts,
@@ -53,7 +51,10 @@ const MAX_CONCURRENT_MODEL_RUNTIME_AGENT_SOURCE_BUILDS = 2;
 export type PreparedModelRuntimeBuildCandidate = Readonly<{
   input: PreparedModelRuntimeInput;
   catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"];
-  inventoryOwner?: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttempt">;
+  inventoryOwner?: Pick<
+    PreparedModelRuntimeOwner,
+    "catalogInventory" | "catalogAttempt" | "snapshot"
+  >;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   prepareInboundPluginRegistry?: boolean;
   isGenerationCurrent?: () => boolean;

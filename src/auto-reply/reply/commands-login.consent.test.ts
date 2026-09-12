@@ -10,14 +10,10 @@ import {
   blockReplyOpts,
   buildLoginParams,
   dispatchLoginCommand,
+  refreshAuthRuntime,
   runModelsAuthLoginFlowMock,
   setupLoginCommandTests,
 } from "./commands-login.harness-test-support.js";
-
-const refreshAuthRuntime = vi.hoisted(() => vi.fn<() => Promise<void>>());
-vi.mock("../../gateway/model-auth-refresh.js", () => ({
-  refreshModelAuthStateAfterMutation: refreshAuthRuntime,
-}));
 
 const { handleLoginCommand } = await import("./commands-login.js");
 const { prepareProviderModelAccess } = await import("../../commands/models/auth-model-policy.js");

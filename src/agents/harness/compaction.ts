@@ -23,9 +23,9 @@ import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
 } from "../provider-secret-egress.js";
+import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/auth.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import {
-  agentRuntimeAuthPlanMatchesTarget,
   prepareAgentRuntimeAuth,
   type PreparedAgentRuntimeAuth,
   type PreparedAgentRuntimeAuthAttempt,

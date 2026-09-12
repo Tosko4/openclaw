@@ -6,6 +6,7 @@ import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolvePreparedProviderStaticConfigs } from "../plugins/provider-discovery.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
@@ -132,6 +133,14 @@ export function captureModelsJsonContents(agentDir: string): string | null {
 }
 export const fingerprintPreparedRuntimeFacts = (value: unknown): string =>
   sha256Base64Url(stableStringify(value));
+
+export function normalizePreparedModelCatalogPluginConfig(config: OpenClawConfig["plugins"]) {
+  const plugins = normalizePluginsConfig(config);
+  for (const entry of Object.values(plugins.entries)) {
+    entry.config ??= {};
+  }
+  return plugins;
+}
 
 function hasSameOAuthProviderGeneration(
   left: ReturnType<AuthStorage["getOAuthProviders"]>,

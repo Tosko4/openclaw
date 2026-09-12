@@ -36,6 +36,8 @@ type InternalReplySessionOptions = {
   /** Rechecks the live Gateway caller before a chat login has a durable effect. */
   assertProviderLoginAuthority?: () => void;
   getProviderLoginConfig?: () => OpenClawConfig;
+  /** Applies saved sign-in state through this reply's live Gateway owner. */
+  refreshProviderLoginAuthState?: (agentId: string) => Promise<void>;
   /** Invocation-owned conversation facts; never execution or sender authority. */
   replyConversation?: PreparedReplyConversation;
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
