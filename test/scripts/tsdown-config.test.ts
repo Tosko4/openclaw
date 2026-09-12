@@ -142,7 +142,7 @@ describe("tsdown config", () => {
           'export { value } from "setup-private-dependency";',
         ].join("\n"),
       );
-      const bundles = await build({
+      const { bundles } = await build({
         ...selected,
         config: false,
         cwd: root,
@@ -228,7 +228,7 @@ describe("tsdown config", () => {
         fs.mkdirSync(path.dirname(destination), { recursive: true });
         fs.symlinkSync(fs.realpathSync(installed), destination, "dir");
       }
-      const bundles = await build({
+      const { bundles } = await build({
         ...selected,
         config: false,
         entry: { [entryName]: source! },
@@ -373,7 +373,7 @@ describe("tsdown config", () => {
     expect(Object.keys(entries)).toContain("discord");
     const root = fs.realpathSync(createTempDir("openclaw-retained-config-doctors-"));
     fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
-    const bundles = await build({
+    const { bundles } = await build({
       ...selected,
       config: false,
       outDir: root,
@@ -530,7 +530,7 @@ describe("tsdown config", () => {
         worker ? isWorkerDeployConfig : (config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP,
       );
       expect(selected).toBeDefined();
-      const bundles = await build({
+      const { bundles } = await build({
         ...selected,
         config: false,
         entry: worker
@@ -737,7 +737,7 @@ describe("tsdown config", () => {
           )
           .join("\n"),
       );
-      const bundles = await build({
+      const { bundles } = await build({
         ...selected,
         config: false,
         cwd: root,
