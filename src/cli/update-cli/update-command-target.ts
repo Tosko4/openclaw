@@ -238,8 +238,12 @@ export async function resolveUpdateCommandTarget(
         runCommand: runCommandWithTimeout,
         timeoutMs: updateStepTimeoutMs,
         pkgRoot: root,
+        // A writable rebind keeps the selected package root even when the
+        // retained service executable is not a recognized Node runner.
         honorPackageRoot:
-          managedServiceRootRedirect !== null || managedServiceNodeRunner !== undefined,
+          managedServiceRootRedirect !== null ||
+          managedServiceRoot !== undefined ||
+          managedServiceNodeRunner !== undefined,
         packageName: installedPackageName,
       });
       const npmLifecycleGate = resolveNpmLifecyclePolicyGate(packageInstallTarget);
