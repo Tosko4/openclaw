@@ -221,10 +221,11 @@ suite.define(() => {
         if (late === "system info") {
           await expect.poll(() => pathInput.getAttribute("placeholder")).toBe("Gateway · local");
           await gateway.resolveDeferred("system.info", systemInfo);
-          await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
-            "QA-Gateway",
-          );
+          await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on your gateway");
         }
+        await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
+          "QA-Gateway",
+        );
         await expect.poll(() => pathInput.getAttribute("placeholder")).toBe("Gateway · QA-Gateway");
         await captureProjectUiProof(suite, page, `gateway-name-${late.replaceAll(" ", "-")}.png`, {
           surface: page.locator('.new-session-page__project-popover wa-popup [part="popup"]'),
@@ -246,7 +247,9 @@ suite.define(() => {
             page,
             `gateway-name-${late.replaceAll(" ", "-")}-final.png`,
             {
-              surface: page.locator('.new-session-page__where-popover wa-popup [part="popup"]'),
+              surface: page.locator(
+                '.new-session-page__where-popover wa-popup.popover > [part="popup"]',
+              ),
               content: [page.locator('.new-session-page__where-popover [data-value="gateway"]')],
             },
           );
@@ -379,6 +382,12 @@ suite.define(() => {
       const cloud = where.getByRole("button", { name: "aws", exact: true });
       await cloud.waitFor();
       expect(await cloud.isDisabled()).toBe(true);
+      await cloud.focus();
+      await page.keyboard.press("Enter");
+      expect(
+        await page.locator("#new-session-where-trigger").getAttribute("data-cloud-profile"),
+      ).toBeNull();
+      await expect.poll(() => tooltipTitleText(cloud)).toBe("Cloud needs a Git checkout");
       await cloud.hover();
       const reason = cloud
         .locator("xpath=ancestor::openclaw-tooltip[1]")

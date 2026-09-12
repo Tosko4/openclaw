@@ -388,6 +388,11 @@ suite.define(() => {
       await afterShow;
       const cloud = where.getByRole("button", { name: "aws", exact: true });
       expect(await cloud.isDisabled()).toBe(true);
+      await cloud.focus();
+      await page.keyboard.press("Enter");
+      await expect
+        .poll(() => tooltipTitleText(cloud))
+        .toBe("Couldn't verify Git for this folder. Choose it again to retry.");
       await cloud.hover();
       const reason = cloud
         .locator("xpath=ancestor::openclaw-tooltip[1]")

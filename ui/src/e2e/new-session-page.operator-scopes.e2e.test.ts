@@ -95,9 +95,11 @@ suite.define(() => {
       const where = page.locator("wa-popover.new-session-page__where-popover");
       await where.getByRole("button", { name: /Writer runner/u }).waitFor();
       expect(await where.locator('[data-value="cloud:aws"]').count()).toBe(0);
+      expect(await where.locator('[data-action="connect-machine"]').count()).toBe(0);
       expect(
         await where.getByRole("button", { name: "Connect a device", exact: true }).count(),
       ).toBe(0);
+      expect(await where.locator('[data-action="manage-cloud-workers"]').count()).toBe(0);
       await page.keyboard.press("Escape");
       await effort.click();
       const fastMode = page.locator("[data-chat-speed-toggle]");
@@ -188,7 +190,9 @@ suite.define(() => {
       const where = page.locator("wa-popover.new-session-page__where-popover");
       await where.locator('[data-value="device:writer-runner"]').waitFor();
       await where.locator('[data-value="cloud:aws"]').waitFor();
+      await where.locator('[data-action="connect-machine"]').waitFor();
       await where.getByRole("button", { name: "Connect a device", exact: true }).waitFor();
+      await where.locator('[data-action="manage-cloud-workers"]').waitFor();
     } finally {
       await context.close();
     }
@@ -317,6 +321,10 @@ suite.define(() => {
 
       const pathInput = page.locator("input.new-session-page__browser-path");
       await expect.poll(() => pathInput.inputValue()).toBe(workspace);
+      await page
+        .locator(".new-session-page__browser")
+        .getByText("No subfolders", { exact: true })
+        .waitFor();
       await gateway.deferNext("fs.listDir", { path: "/tmp" });
       await pathInput.fill("/tmp");
       await pathInput.press("Enter");

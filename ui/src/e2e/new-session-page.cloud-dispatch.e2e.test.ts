@@ -242,7 +242,7 @@ suite.define(() => {
       await place.locator('[data-value="machine:fast"]').click();
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws");
-      await expect.poll(() => trigger.getAttribute("aria-label")).toContain("Fast");
+      await expect.poll(() => trigger.getAttribute("aria-label")).toContain("aws, Fast");
       await page.keyboard.press("Escape");
       const checkoutTrigger = page.locator("#new-session-checkout-trigger");
       const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
@@ -371,9 +371,11 @@ suite.define(() => {
         await trigger.click();
         await writeFile(
           path.join(suite.artifactDir, "cloud-profile-refresh-retention", "01-before-refresh.png"),
-          await takeControlUiViewportScreenshot(page, place.locator('wa-popup [part="popup"]'), [
-            place.locator('[data-value="cloud:aws"]'),
-          ]),
+          await takeControlUiViewportScreenshot(
+            page,
+            place.locator('wa-popup.popover > [part="popup"]'),
+            [place.locator('[data-value="cloud:aws"]')],
+          ),
         );
         await page.keyboard.press("Escape");
       }
@@ -418,7 +420,7 @@ suite.define(() => {
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws");
-      await expect.poll(() => trigger.getAttribute("aria-label")).toContain("Fast");
+      await expect.poll(() => trigger.getAttribute("aria-label")).toContain("aws, Fast");
       await expect.poll(() => startButton.isDisabled()).toBe(false);
       await trigger.click();
       const retainedCloudProfile = place.locator('[data-value="cloud:aws"]');
@@ -428,8 +430,10 @@ suite.define(() => {
           retainedCloudProfile.locator(".new-session-page__selected-summary").textContent(),
         )
         .toBe("Fast");
-      await retainedCloudProfile.hover();
-      await expect.poll(() => place.locator('[data-value="machine:fast"]').isVisible()).toBe(true);
+      await retainedCloudProfile.click();
+      const retainedMachine = place.locator('[data-value="machine:fast"]');
+      await expect.poll(() => retainedMachine.isVisible()).toBe(true);
+      expect(await retainedMachine.getAttribute("aria-pressed")).toBe("true");
       if (captureUiProofEnabled) {
         await writeFile(
           path.join(
@@ -437,9 +441,11 @@ suite.define(() => {
             "cloud-profile-refresh-retention",
             "03-after-retry-exhaustion.png",
           ),
-          await takeControlUiViewportScreenshot(page, place.locator('wa-popup [part="popup"]'), [
-            retainedCloudProfile,
-          ]),
+          await takeControlUiViewportScreenshot(
+            page,
+            place.locator(".new-session-page__cloud-configuration"),
+            [retainedCloudProfile, retainedMachine],
+          ),
         );
       }
       await page.keyboard.press("Escape");

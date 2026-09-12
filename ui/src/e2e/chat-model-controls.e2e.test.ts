@@ -204,7 +204,8 @@ suite.define(() => {
             },
             "users.listModelAccounts": {
               profileId: "test-person",
-              accounts: [personal],
+              // Reopening retries an empty inventory; a populated one stays cached.
+              accounts: input === "keyboard" ? [] : [personal],
               nextCursor: "accounts-page-2",
               links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
             },
@@ -255,10 +256,40 @@ suite.define(() => {
         await expect.poll(() => more.isVisible()).toBe(false);
         await expect.poll(() => account.isVisible()).toBe(true);
         await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+        const refreshRequests = await gateway.getRequests("users.listModelAccounts");
+        if (input === "keyboard") {
+          await gateway.deferNext("users.listModelAccounts", {});
+        }
+        await trigger.press("Enter");
+        await expect.poll(() => more.isVisible()).toBe(true);
+        if (input === "keyboard") {
+          await gateway.waitForRequest("users.listModelAccounts", {
+            after: refreshRequests.length,
+          });
+          const loading = picker.locator('[data-chat-account-option="loading"]');
+          await expect.poll(() => loading.isVisible()).toBe(true);
+          await more.focus();
+          await gateway.resolveDeferred("users.listModelAccounts", {
+            profileId: "test-person",
+            accounts: [personal],
+            nextCursor: "accounts-page-2",
+            links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
+          });
+          await expect.poll(() => loading.isVisible()).toBe(false);
+          await expect
+            .poll(() => more.evaluate((element) => element === document.activeElement))
+            .toBe(true);
+        } else {
+          expect(await gateway.getRequests("users.listModelAccounts")).toHaveLength(
+            refreshRequests.length,
+          );
+        }
+        // A populated inventory remains cached even after an empty-inventory refresh.
+        await trigger.click();
+        await expect.poll(() => more.isVisible()).toBe(false);
         const cachedRequests = await gateway.getRequests("users.listModelAccounts");
         await trigger.press("Enter");
         await expect.poll(() => more.isVisible()).toBe(true);
-        // Reopening a loaded inventory must not trigger a refresh.
         expect(await gateway.getRequests("users.listModelAccounts")).toHaveLength(
           cachedRequests.length,
         );
@@ -291,7 +322,7 @@ suite.define(() => {
         const nextCursor = input === "keyboard" ? "accounts-page-3" : "accounts-page-2";
         await gateway.deferNext("users.listModelAccounts", { cursor: nextCursor });
         if (input === "keyboard") {
-          // Pagination must preserve the action focused before Loading disappeared.
+          // Pagination preserves the action focused before Loading disappeared.
           await page.keyboard.press("Enter");
           expect(page.url()).toContain("/chat/");
         } else {
@@ -302,11 +333,22 @@ suite.define(() => {
         });
         expect(nextPage.params).toEqual({ cursor: nextCursor });
         await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+        const loading = picker.locator('[data-chat-account-option="loading"]');
+        await expect.poll(() => loading.isVisible()).toBe(true);
+        const manage = picker.locator('[data-chat-account-option="manage"]');
+        if (input === "keyboard") {
+          await manage.focus();
+        }
         await gateway.resolveDeferred("users.listModelAccounts", {
           profileId: "test-person",
           accounts: [work],
           links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
         });
+        await expect.poll(() => loading.isVisible()).toBe(false);
+        if (input === "keyboard") {
+          // Paging shifts this action's row; removing Loading must preserve its focus.
+          expect(await manage.evaluate((button) => button === document.activeElement)).toBe(true);
+        }
         const workOption = picker.locator(
           `[data-chat-account-option="account:${work.authProfileId}"]`,
         );

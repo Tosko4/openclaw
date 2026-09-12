@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   LOCAL_GIT_WORKSPACE_RESPONSES,
   captureUiProofEnabled,
@@ -49,9 +49,9 @@ suite.define(() => {
           if (captureUiProofEnabled) {
             await writeFile(
               path.join(suite.artifactDir, fileName),
-              await takeControlUiElementScreenshot(
+              await takeControlUiViewportScreenshot(
                 page,
-                picker.locator('wa-popup [part="popup"]'),
+                picker.locator(".new-session-page__cloud-configuration"),
                 [picker.locator('[data-value="machine:standard"]')],
               ),
             );
@@ -78,6 +78,7 @@ suite.define(() => {
         await linux.waitFor();
         expect(await linux.isEnabled()).toBe(true);
         expect(await linux.evaluate((element) => element.tagName)).toBe("SPAN");
+        expect(await linux.getAttribute("aria-pressed")).toBeNull();
         expect(await linux.textContent()).toBe("Linux");
         expect(await picker.locator('[data-value="cloud:aws"]').getAttribute("aria-pressed")).toBe(
           "true",
@@ -87,7 +88,6 @@ suite.define(() => {
           expect(await option.count()).toBe(0);
         }
         await capturePicker("02-after-unavailable-operating-systems.png");
-        // The only available OS is fixed provider configuration, not a toggle.
         await page.keyboard.press("Escape");
         await page.locator(".new-session-page__message").fill("Continue on Linux");
         await page.getByRole("button", { name: "Start session" }).click();
