@@ -5,6 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
+import { formatConfigIssueLine } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
@@ -72,10 +73,23 @@ function readValidationFailure(stdout: string): string | undefined {
   if (!isRecord(result)) {
     return undefined;
   }
-  if (isRecord(result.error) && typeof result.error.message === "string") {
-    return result.error.message;
-  }
   const messages: string[] = [];
+  if (Array.isArray(result.issues)) {
+    for (const issue of result.issues) {
+      if (isRecord(issue) && typeof issue.message === "string" && issue.message.trim()) {
+        messages.push(
+          formatConfigIssueLine(
+            {
+              path: typeof issue.path === "string" ? issue.path : undefined,
+              message: issue.message,
+            },
+            "",
+            { normalizeRoot: true },
+          ),
+        );
+      }
+    }
+  }
   if (Array.isArray(result.findings)) {
     messages.push(
       ...result.findings
@@ -113,7 +127,10 @@ function readValidationFailure(stdout: string): string | undefined {
     }
   }
   return (
-    [...new Set(messages.filter((message) => message.trim()))].slice(0, 3).join("\n") || undefined
+    [...new Set(messages.filter((message) => message.trim()))].slice(0, 3).join("\n") ||
+    (isRecord(result.error) && typeof result.error.message === "string"
+      ? result.error.message
+      : undefined)
   );
 }
 
@@ -406,11 +423,11 @@ export async function validateUpdateCandidateCanary(params: {
     for (const command of commands) {
       phase = command.phase;
       env.OPENCLAW_UPDATE_IN_PROGRESS = phase === "doctor" ? "1" : "0";
-      remaining();
       stepStarted = Date.now();
       stepName = command.name;
       stepLog.length = 0;
       stepFailureReason = undefined;
+      remaining();
       const doctorResultPath =
         phase === "doctor"
           ? createUpdatePostInstallDoctorResultPath(doctorResultOptions)
@@ -423,6 +440,7 @@ export async function validateUpdateCandidateCanary(params: {
       let code: number | null = null;
       let doctorAdvisory: UpdateStepResult["advisory"];
       const pluginObservations: string[] = [];
+      let validationFailure: string | undefined;
       let timedOut = false;
       try {
         const outcome = await waitBounded(running.closed, remaining(), params.signal);
@@ -498,7 +516,8 @@ export async function validateUpdateCandidateCanary(params: {
           plugins.some((plugin) => !isRecord(plugin) || typeof plugin.id !== "string")
         ) {
           code = 1;
-          capture("Plugin checks returned an invalid inventory");
+          validationFailure = "Plugin checks returned an invalid inventory";
+          capture(validationFailure);
         } else {
           for (const plugin of plugins) {
             if (isRecord(plugin) && plugin.status === "error" && typeof plugin.id === "string") {
@@ -509,7 +528,12 @@ export async function validateUpdateCandidateCanary(params: {
             if (isRecord(diagnostic) && diagnostic.level === "error") {
               if (typeof diagnostic.pluginId !== "string") {
                 code = 1;
-                capture("Plugin registry reported an unattributed error");
+                const message =
+                  typeof diagnostic.message === "string" && diagnostic.message.trim()
+                    ? diagnostic.message
+                    : "Plugin registry reported an unattributed error";
+                validationFailure ??= message;
+                capture(message);
               } else {
                 failedPluginIds.add(diagnostic.pluginId);
               }
@@ -530,7 +554,8 @@ export async function validateUpdateCandidateCanary(params: {
         doctorConfigWrites = isRecord(contract) && contract.doctorConfigWrites === "pid-start-v1";
         if (!candidateSchemaVersions) {
           code = 1;
-          capture("The update did not report its supported database versions");
+          validationFailure = "The update did not report its supported database versions";
+          capture(validationFailure);
         }
       }
       const step: UpdateStepResult = {
@@ -551,7 +576,8 @@ export async function validateUpdateCandidateCanary(params: {
       if (code !== 0 && !doctorAdvisory) {
         const summary = timedOut
           ? `${command.name} timed out.`
-          : (readValidationFailure(running.outputExceeded() ? "" : running.stdout()) ??
+          : (validationFailure ??
+            readValidationFailure(running.outputExceeded() ? "" : running.stdout()) ??
             stepFailureReason ??
             stepLog.at(-1) ??
             `${command.name} failed (exit code ${code ?? "unknown"}).`);
@@ -569,12 +595,12 @@ export async function validateUpdateCandidateCanary(params: {
       throw new Error("The update did not report its supported database versions");
     }
     phase = "startup";
-    remaining();
     const gatewayStart = Date.now();
     stepStarted = gatewayStart;
     stepName = "Checking Gateway startup";
     stepLog.length = 0;
     stepFailureReason = undefined;
+    remaining();
     const running = launch(entry, [
       "gateway",
       "run",
