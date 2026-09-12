@@ -17,46 +17,53 @@ describe("defineChannelSetupContract", () => {
     expect(resolveChannelSetupExecutionAdapter({})).toBeUndefined();
   });
 
-  it("channels.add setup contract keeps ignored aliases ineligible during cold promotion", () => {
-    const next = withPluginCache(createPluginCache(), () => {
-      const plugin = {
-        setupContract: defineChannelSetupContract({
-          fields: {},
-          adapter: {
-            accountKeyPolicy: { canonicalAliasesRequireOwnField: "account" },
-            singleAccountKeysToMove: ["account"],
-            namedAccountPromotionKeys: ["account"],
-            applyAccountConfig: ({ cfg }) => cfg,
-          },
-        }),
-      };
-      const cfg: OpenClawConfig = {
-        channels: {
-          demo: {
-            account: "+12025550123",
-            defaultAccount: "work-phone",
-            accounts: {
-              "Work Phone": { dmPolicy: "open", allowFrom: ["*"] },
+  it.each(["channel-owned", "metadata-only"])(
+    "channels.add keeps ignored aliases ineligible during cold promotion with %s setup",
+    (source) => {
+      const next = withPluginCache(createPluginCache(), () => {
+        const promotion = {
+          accountKeyPolicy: { canonicalAliasesRequireOwnField: "account" },
+          singleAccountKeysToMove: ["account"],
+          namedAccountPromotionKeys: ["account"],
+        };
+        const plugin = {
+          setupContract: defineChannelSetupContract({
+            fields: {},
+            adapter: {
+              ...promotion,
+              applyAccountConfig: ({ cfg }) => cfg,
+            },
+          }),
+        };
+        const cfg: OpenClawConfig = {
+          channels: {
+            demo: {
+              account: "+12025550123",
+              defaultAccount: "work-phone",
+              accounts: {
+                "Work Phone": { dmPolicy: "open", allowFrom: ["*"] },
+              },
             },
           },
-        },
-      };
+        };
 
-      return moveSingleAccountChannelSectionToDefaultAccount({
-        cfg,
-        channelKey: "demo",
-        setupSurface: resolveChannelSetupExecutionAdapter(plugin),
+        return moveSingleAccountChannelSectionToDefaultAccount({
+          cfg,
+          channelKey: "demo",
+          setupSurface:
+            source === "metadata-only" ? promotion : resolveChannelSetupExecutionAdapter(plugin),
+        });
       });
-    });
 
-    expect(next.channels?.demo).toEqual({
-      defaultAccount: "work-phone",
-      accounts: {
-        "Work Phone": { dmPolicy: "open", allowFrom: ["*"] },
-        default: { account: "+12025550123" },
-      },
-    });
-  });
+      expect(next.channels?.demo).toEqual({
+        defaultAccount: "work-phone",
+        accounts: {
+          "Work Phone": { dmPolicy: "open", allowFrom: ["*"] },
+          default: { account: "+12025550123" },
+        },
+      });
+    },
+  );
 
   it("requires field keys to match camelCased long flag names", () => {
     expect(() =>

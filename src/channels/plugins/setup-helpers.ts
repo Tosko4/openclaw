@@ -397,7 +397,7 @@ function resolveSingleAccountPromotionTarget(params: {
 export function moveSingleAccountChannelSectionToDefaultAccount(params: {
   cfg: OpenClawConfig;
   channelKey: string;
-  setupSurface?: ChannelSetupPromotionSurface;
+  setupSurface?: ChannelSetupAdapter | ChannelSetupPromotionSurface;
 }): OpenClawConfig {
   const base = getChannelSection(params.cfg, params.channelKey);
   if (!base) {
