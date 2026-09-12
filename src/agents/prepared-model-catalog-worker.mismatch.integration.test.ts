@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { build as buildFixture } from "esbuild";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -74,8 +75,26 @@ async function createMismatchFixture(cachedCatalog = false) {
   const loadedFile = path.join(root, "loaded-file");
   if (cachedCatalog) {
     fs.writeFileSync(clockFile, "1000");
-    // Bind the public SDK helper to current source, never a historical dist artifact.
-    const sdk = fileURLToPath(new URL("../plugin-sdk/provider-catalog-shared.ts", import.meta.url));
+    // Compile this source helper into the disposable plugin. Capturing the repository as
+    // a plugin dependency loses its workspace links; no historical dist is involved.
+    const sdkSource = fileURLToPath(
+      new URL("../plugin-sdk/provider-catalog-shared.ts", import.meta.url),
+    );
+    const sdk = path.join(path.dirname(pluginFile), "catalog-cache.mjs");
+    await buildFixture({
+      stdin: {
+        contents: `export { getCachedLiveCatalogValue } from ${JSON.stringify(sdkSource)};`,
+        resolveDir: path.dirname(sdkSource),
+      },
+      outfile: sdk,
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      banner: {
+        js: 'import { createRequire as __fixtureCreateRequire } from "node:module"; const require = __fixtureCreateRequire(import.meta.url);',
+      },
+      logLevel: "warning",
+    });
     const source = fs
       .readFileSync(pluginFile, "utf8")
       .replace(
@@ -153,6 +172,9 @@ if (!require("node:worker_threads").isMainThread) {
       undefined,
     ).pending
   )[0]!;
+  if (cachedCatalog) {
+    expect(build.pluginGeneration.pluginRegistry?.diagnostics).toEqual([]);
+  }
   const workerParams = {
     agentFacts: {
       input: { agentId: "main", agentDir, workspaceDir, config, env },
