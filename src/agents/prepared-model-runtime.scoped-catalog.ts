@@ -6,6 +6,7 @@ import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
+import type { ProviderCatalogProfileSelections } from "./models-config.providers.secret-helpers.js";
 import { loadPersistedPluginModelCatalogsReadOnly } from "./plugin-model-catalog.js";
 import type {
   PreparedModelRuntimeAgentFacts,
@@ -104,6 +105,7 @@ export async function prepareAgentCatalogSource(
     providerDiscoveryProviderIds?: readonly string[];
     providerDiscoveryTimeoutMs?: number;
     requestedProviderIds?: readonly string[];
+    profileSelections?: ProviderCatalogProfileSelections;
   } = {},
 ): Promise<PreparedModelRuntimeCatalogSource> {
   const { env, input, providerIds } = agentFacts;
@@ -129,6 +131,7 @@ export async function prepareAgentCatalogSource(
     pluginMetadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
     providerDiscoveryProviderIds: sourceOptions.providerDiscoveryProviderIds ?? providerIds,
     requestedProviderIds: sourceOptions.requestedProviderIds,
+    profileSelections: sourceOptions.profileSelections,
     ...(pluginGeneration.preparedStaticProviderCatalog
       ? { preparedStaticProviderCatalog: pluginGeneration.preparedStaticProviderCatalog }
       : {}),

@@ -1,7 +1,7 @@
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { retainModelRuntimeAuthSourcesAfterMutation } from "./prepared-model-runtime-auth.js";
-import { refreshCommittedProviderCatalogs } from "./prepared-model-runtime.catalog-access.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   normalizeOptionalDir,
@@ -15,6 +15,8 @@ import type {
   PreparedModelRuntimeReplacementGateId,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
+
+const log = createSubsystemLogger("agents/prepared-model-runtime");
 
 export type PreparedModelRuntimeAuthMutation = {
   agentDir?: string;
@@ -143,12 +145,21 @@ export class PreparedModelRuntimeAuthPublicationOwner {
     owners: Map<string, PreparedModelRuntimeOwner>,
     candidates: Iterable<PreparedModelRuntimeOwner> = owners.values(),
   ): void {
-    refreshCommittedProviderCatalogs(
-      [...candidates].filter(
-        (owner) =>
-          owners.get(ownerKey(owner.input)) === owner && !this.isCatalogRefreshDeferred(owner),
-      ),
-    );
+    for (const owner of candidates) {
+      if (
+        owners.get(ownerKey(owner.input)) !== owner ||
+        this.isCatalogRefreshDeferred(owner) ||
+        owner.provenance !== "configured" ||
+        owner.pending ||
+        owner.needsRefresh
+      )
+        continue;
+      void owner.snapshot?.loadFullModelCatalog?.({ changedOnly: true }).catch((error: unknown) => {
+        if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
+          log.warn(`provider catalog refresh failed: ${String(error)}`);
+        }
+      });
+    }
   }
 
   enqueue(

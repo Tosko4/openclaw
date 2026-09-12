@@ -27,6 +27,7 @@ type GatewayModelCatalogReadParams = {
   refreshAuth?: boolean;
   refreshFullCatalog?: LoadPreparedModelCatalogParams["refreshFullCatalog"];
   providerDiscoveryProviderIds?: readonly string[];
+  requestSelection?: LoadPreparedModelCatalogParams["requestSelection"];
   workspaceDir?: string;
 };
 
@@ -67,7 +68,12 @@ export async function loadDeferredCatalog(
   agentId: string,
   options: Pick<
     GatewayModelCatalogReadParams,
-    "authScope" | "readOnly" | "refreshAuth" | "refreshFullCatalog" | "providerDiscoveryProviderIds"
+    | "authScope"
+    | "readOnly"
+    | "refreshAuth"
+    | "refreshFullCatalog"
+    | "providerDiscoveryProviderIds"
+    | "requestSelection"
   >,
 ): Promise<PreparedGatewayModelCatalogSnapshot> {
   return await requirePrivateAccess(context).loadDeferred({ agentId, ...options });

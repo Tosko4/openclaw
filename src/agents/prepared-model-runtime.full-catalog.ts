@@ -57,7 +57,10 @@ import type {
 } from "./prepared-model-runtime.types.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
-const fullModelCatalogSnapshots = new WeakSet<ModelCatalogSnapshot>();
+const fullModelCatalogSnapshots = new WeakMap<
+  ModelCatalogSnapshot,
+  ReadonlyMap<string, readonly Model[]> | undefined
+>();
 
 /** Builds complete inventory before generation-specific runtime capability projection. */
 export async function prepareFullCatalogFacts(
@@ -124,7 +127,7 @@ export async function prepareFullCatalogFacts(
     ...(providerOutcomes.length > 0 ? { providerOutcomes } : {}),
   };
   if (catalogMode === "live") {
-    fullModelCatalogSnapshots.add(completeModelCatalog);
+    fullModelCatalogSnapshots.set(completeModelCatalog, undefined);
   }
   return {
     templateModelRegistry,
@@ -525,7 +528,7 @@ export function materializePreparedModelCatalog(
     );
   }
   if (isPreparedModelCatalogFull(snapshot)) {
-    markPreparedModelCatalogFull(materialized);
+    markPreparedModelCatalogFull(materialized, fullModelCatalogSnapshots.get(snapshot));
   }
   const auth = getPreparedModelFullCatalogAuth(snapshot);
   if (auth) {
@@ -539,10 +542,16 @@ export const isPreparedModelCatalogFull = (snapshot: ModelCatalogSnapshot): bool
   fullModelCatalogSnapshots.has(snapshot);
 
 /** Restores process-local provenance after a complete catalog crosses a worker boundary. */
-export function markPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): ModelCatalogSnapshot {
-  fullModelCatalogSnapshots.add(snapshot);
+export function markPreparedModelCatalogFull(
+  snapshot: ModelCatalogSnapshot,
+  runtimeModels?: ReadonlyMap<string, readonly Model[]>,
+): ModelCatalogSnapshot {
+  fullModelCatalogSnapshots.set(snapshot, runtimeModels ?? fullModelCatalogSnapshots.get(snapshot));
   return snapshot;
 }
+
+export const getPreparedModelCatalogRuntimeModels = (snapshot: ModelCatalogSnapshot) =>
+  fullModelCatalogSnapshots.get(snapshot);
 
 export type PreparedModelRuntimeCatalogAccess = Readonly<{
   isCurrent: () => boolean;

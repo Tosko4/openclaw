@@ -37,6 +37,7 @@ import {
   resolveImplicitProviderDiscoveryScope,
   type ProviderDiscoveryScope,
 } from "./models-config.providers.discovery-scope.js";
+import type { ProviderCatalogProfileSelections } from "./models-config.providers.secret-helpers.js";
 import type {
   ProviderApiKeyResolver,
   ProviderAuthResolver,
@@ -74,6 +75,7 @@ type ImplicitProviderParams = {
   preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   providerDiscoveryProviderIds?: readonly string[];
   requestedProviderIds?: readonly string[];
+  profileSelections?: ProviderCatalogProfileSelections;
   staticCatalogProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
@@ -506,6 +508,7 @@ export async function resolveImplicitProviders(
     params.workspaceDir,
     discoveryAuthEnv,
     providerAdmission,
+    params.profileSelections,
   ] as const;
   const context: ImplicitProviderContext = {
     ...params,

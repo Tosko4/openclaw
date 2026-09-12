@@ -65,6 +65,7 @@ vi.mock("./prepared-model-runtime.js", () => {
 
 vi.mock("./prepared-model-runtime.full-catalog.js", () => ({
   isPreparedModelCatalogFull: (...args: unknown[]) => mocks.isFullCatalog(...args),
+  getPreparedModelCatalogRuntimeModels: () => undefined,
 }));
 
 vi.mock("./prepared-model-runtime.scoped-catalog.js", () => ({

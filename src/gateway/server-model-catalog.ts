@@ -30,6 +30,7 @@ type LoadPublishedPreparedModelCatalogOwnerSnapshot = (params: {
   readOnly?: boolean;
   refreshFullCatalog?: LoadPreparedModelCatalogParams["refreshFullCatalog"];
   providerDiscoveryProviderIds?: readonly string[];
+  requestSelection?: LoadPreparedModelCatalogParams["requestSelection"];
   workspaceDir?: string;
 }) => Promise<PublishedModelCatalogOwnerCandidate>;
 type LoadGatewayModelCatalogParams = {
@@ -40,6 +41,7 @@ type LoadGatewayModelCatalogParams = {
   readOnly?: boolean;
   refreshFullCatalog?: LoadPreparedModelCatalogParams["refreshFullCatalog"];
   providerDiscoveryProviderIds?: readonly string[];
+  requestSelection?: LoadPreparedModelCatalogParams["requestSelection"];
   workspaceDir?: string;
 };
 type LoadPreparedGatewayModelCatalogParams = LoadGatewayModelCatalogParams & {
@@ -89,6 +91,7 @@ async function loadGatewayModelCatalogOwnerSnapshot(
     ...(params?.providerDiscoveryProviderIds
       ? { providerDiscoveryProviderIds: params.providerDiscoveryProviderIds }
       : {}),
+    ...(params?.requestSelection ? { requestSelection: params.requestSelection } : {}),
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   const owner = resolvePublishedModelCatalogOwner(candidate);

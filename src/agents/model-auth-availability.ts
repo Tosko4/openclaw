@@ -573,20 +573,7 @@ export function createModelAuthAvailabilityResolver(
       forModel,
       readinessMode: "read-only",
     });
-    const binding = admitted.get(normalized);
-    const resolution = prependAuthProfilePin(
-      binding?.kind === "profile" &&
-        normalizeProviderId(orderStore.profiles[binding.profileId]?.provider ?? "") === normalized
-        ? {
-            ...ordered,
-            profileIds: ordered.profileIds.filter((id) => {
-              const credential = orderStore.profiles[id];
-              return credential && normalizeProviderId(credential.provider) === normalized;
-            }),
-          }
-        : ordered,
-      pinnedProfileId,
-    );
+    const resolution = prependAuthProfilePin(ordered, pinnedProfileId);
     orderCache.set(cacheKey, resolution);
     return resolution;
   };

@@ -340,18 +340,7 @@ export function prepareAgentRuntimeAuth(
           includePendingOAuthRefresh: true,
         });
   const automaticOrderResolution = prependAuthProfilePin(
-    providerUseBinding?.kind === "profile" &&
-      normalizeProviderId(store?.profiles[providerUseBinding.profileId]?.provider ?? "") ===
-        normalizeProviderId(authProfileSelectionProvider)
-      ? {
-          ...resolvedAutomaticOrder,
-          profileIds: resolvedAutomaticOrder.profileIds.filter(
-            (id) =>
-              normalizeProviderId(store?.profiles[id]?.provider ?? "") ===
-              normalizeProviderId(authProfileSelectionProvider),
-          ),
-        }
-      : resolvedAutomaticOrder,
+    resolvedAutomaticOrder,
     userPinnedProfileId,
   );
   const providerPreferredProfileId =

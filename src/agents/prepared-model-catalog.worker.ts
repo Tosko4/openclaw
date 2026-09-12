@@ -235,16 +235,22 @@ export async function runPreparedModelCatalogWorkerRequest(
     const { prepareFullCatalogFacts } = await import("./prepared-model-runtime.full-catalog.js");
     // Full discovery is one point-in-time operation: refresh first, then let every provider hook
     // and the returned availability projection consume the same exact store.
-    const authStore = refreshAuthStore({
-      agentDir: value.input.agentDir,
-      inheritedAuthDir: value.input.inheritedAuthDir,
-      authStore: value.authStore,
-      config: value.input.config,
-      env: value.input.env ?? process.env,
-      providerIds: request.providerIds ?? listExternalCliSyncProviderIds(),
-      pluginGeneration: prepared.pluginGeneration,
-    });
-    replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: value.input.agentDir, store: authStore }]);
+    const authStore =
+      request.requestScope?.authStore ??
+      refreshAuthStore({
+        agentDir: value.input.agentDir,
+        inheritedAuthDir: value.input.inheritedAuthDir,
+        authStore: value.authStore,
+        config: value.input.config,
+        env: value.input.env ?? process.env,
+        providerIds: request.providerIds ?? listExternalCliSyncProviderIds(),
+        pluginGeneration: prepared.pluginGeneration,
+      });
+    if (!request.requestScope?.authStore) {
+      replaceRuntimeAuthProfileStoreSnapshots([
+        { agentDir: value.input.agentDir, store: authStore },
+      ]);
+    }
     const ambientCredentials = resolveSyntheticCredentials(
       request.providerIds ?? value.providerIds,
     );
@@ -257,10 +263,13 @@ export async function runPreparedModelCatalogWorkerRequest(
       config: value.input.config,
       env: value.input.env,
       profiles: authStore.profiles,
-      requestedProviders: resolveSelectedModelProviderIds({
-        cfg: value.input.config,
-        agentId: value.input.agentId,
-      }),
+      requestedProviders: [
+        ...resolveSelectedModelProviderIds({
+          cfg: value.input.config,
+          agentId: value.input.agentId,
+        }),
+        ...(request.requestScope?.requestedProviderIds ?? []),
+      ],
       storedCredentialAuthAliases: resolveProviderAuthAliasMap({
         ...value.input,
         metadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
@@ -339,6 +348,8 @@ export async function runPreparedModelCatalogWorkerRequest(
       false,
       {
         authStore,
+        requestedProviderIds: request.requestScope?.requestedProviderIds,
+        profileSelections: request.requestScope?.profileSelections,
         providerDiscoveryProviderIds: request.providerIds,
         providerDiscoveryTimeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
       },
@@ -385,6 +396,7 @@ export async function runPreparedModelCatalogWorkerRequest(
       kind: "catalog",
       generationFingerprint,
       snapshot: facts.modelCatalog,
+      admittedProviderIds: [...admitted.keys()],
       runtimeModels,
       configuredRuntimeModels: facts.configuredRuntimeModels,
       credentials: catalogCredentials,

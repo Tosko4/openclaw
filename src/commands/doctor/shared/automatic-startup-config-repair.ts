@@ -130,8 +130,6 @@ export function isStartupConfigRepairResult(
 export async function commitAutomaticConfigRepair(
   plan: Pick<AutomaticConfigRepairPlan, "config">,
   snapshot: ConfigFileSnapshot,
-  unsetPaths?: string[][],
-  withCommit?: import("../../../config/io.types.js").ConfigWriteOptions["withCommit"],
 ): Promise<void> {
   await transformConfigFile({
     baseHash: resolveConfigSnapshotHash(snapshot) ?? undefined,
@@ -142,12 +140,10 @@ export async function commitAutomaticConfigRepair(
     }),
     afterWrite: { mode: "none", reason: "automatic migration" },
     writeOptions: {
-      withCommit,
       expectedConfigPath: snapshot.path,
       auditOrigin: "doctor",
       skipOutputLogs: true,
       skipRuntimeSnapshotRefresh: true,
-      ...(unsetPaths ? { unsetPaths } : {}),
       // The reader retired legacy markers; persist their canonical owners in this write.
       // Startup verification above uses the same writer topology preparation.
       persistCanonicalAgentRoster: true,

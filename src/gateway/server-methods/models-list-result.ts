@@ -5,11 +5,7 @@ import type {
   ModelsListParams,
   ModelsListResult,
 } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runtime-materializations.js";
 import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
@@ -306,16 +302,29 @@ export async function prepareModelsListResult(
   // A preloaded projection carries the same owner facts used by session metadata.
   const usedPreloadedCatalog =
     preloadedCatalog !== undefined && params.catalogProjector !== undefined;
-  if (source.kind === "gateway" && refresh && !params.preloadedOnly) {
-    await loadDeferredCatalog(source.context, initialAgentId, {
-      readOnly: false,
-      refreshFullCatalog: true,
-      ...(params.params.provider ? { providerDiscoveryProviderIds: [params.params.provider] } : {}),
-    });
-  }
+  const refreshedCatalog =
+    source.kind === "gateway" && refresh && !params.preloadedOnly
+      ? await loadDeferredCatalog(source.context, initialAgentId, {
+          readOnly: false,
+          refreshFullCatalog: true,
+          ...(params.params.provider
+            ? { providerDiscoveryProviderIds: [params.params.provider] }
+            : {}),
+          ...(view !== "provider-config" && profiles.selectedModel
+            ? {
+                requestSelection: {
+                  ...profiles,
+                  requesterProfileId: useRequesterDefaults
+                    ? (draft?.owner ?? params.requesterProfileId)
+                    : undefined,
+                },
+              }
+            : {}),
+        })
+      : undefined;
   const ownerSnapshot =
     source.kind === "gateway" && !usedPreloadedCatalog
-      ? await readPreparedCatalog(source.context, initialAgentId)
+      ? (refreshedCatalog ?? (await readPreparedCatalog(source.context, initialAgentId)))
       : undefined;
   if (!publishedOwner && !usedPreloadedCatalog && !ownerSnapshot) {
     throw new PreparedModelRuntimeOwnerNotPublishedError(
@@ -408,43 +417,9 @@ export async function prepareModelsListResult(
     isCurrent,
     observationConfig: preparedProjectionOwner?.observationConfig,
   };
-  let projector =
+  const projector =
     (usedPreloadedCatalog ? params.catalogProjector : undefined) ??
     createGatewayAgentModelCatalogProjector(projectionParams);
-  if (refresh && !params.preloadedOnly && view !== "provider-config" && profiles.selectedModel) {
-    const { prepareScopedReadOnlyLiveModelCatalog } =
-      await import("../../agents/prepared-model-runtime.scoped-catalog.js");
-    const provider = normalizeProviderId(profiles.selectedModel.provider);
-    const selected = await prepareScopedReadOnlyLiveModelCatalog(
-      {
-        config: cfg,
-        agentId,
-        agentDir: sourceOwner?.agentDir ?? resolveAgentDir(cfg, agentId),
-        workspaceDir,
-        readOnly: true,
-      },
-      [provider],
-      { requestedProviderIds: [provider], metadataSnapshot, authStore: projector.authStore },
-    );
-    const belongsToSelection = (entry: { provider: string }) =>
-      normalizeProviderId(entry.provider) === provider;
-    snapshot = {
-      ...snapshot,
-      entries: dedupeModelCatalogEntries([
-        ...projectionParams.snapshot.entries,
-        ...selected.entries.filter(belongsToSelection),
-      ]),
-      routeVariants: [
-        ...snapshot.routeVariants.filter((entry) => !belongsToSelection(entry)),
-        ...selected.routeVariants.filter(belongsToSelection),
-      ],
-      providerOutcomes: [
-        ...(snapshot.providerOutcomes ?? []).filter((entry) => !belongsToSelection(entry)),
-        ...(selected.providerOutcomes ?? []).filter(belongsToSelection),
-      ],
-    };
-    projector = createGatewayAgentModelCatalogProjector({ ...projectionParams, snapshot });
-  }
   const catalog = dedupeModelCatalogEntries([
     ...preparedCatalog.catalog,
     ...projector.snapshot.entries,

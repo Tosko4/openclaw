@@ -5,11 +5,8 @@ import { recordPreparedModelRuntimeAuthSource } from "../../agents/prepared-mode
 import { getPreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
-import { buildModelAuthServingSnapshot } from "./models-auth-status-serving.js";
 import type { ModelAuthStatusResult } from "./models-auth-status.types.js";
 
 describe("models.authStatus serving source", () => {
@@ -22,6 +19,19 @@ describe("models.authStatus serving source", () => {
     const resolver = vi
       .spyOn(openaiRoutes, "createOpenAIModelRoutesResolver")
       .mockReturnValue(() => incompatible);
+    const state = await createOpenClawTestState({
+      label: "serving-route-rejection",
+      env: {
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+      },
+    });
+    const token = "serving-route-gateway-token";
     const config: OpenClawConfig = {
       agents: {
         defaults: {
@@ -29,59 +39,69 @@ describe("models.authStatus serving source", () => {
           models: { "openai/fixture-model": { agentRuntime: { id: "openclaw" } } },
         },
       },
+      plugins: { enabled: false },
+      gateway: { mode: "local", auth: { mode: "token", token } },
     };
     try {
-      const read = () =>
-        buildModelAuthServingSnapshot({
-          agentId: "main",
-          agentDir: "/tmp/serving-route-agent",
-          workspaceDir: "/tmp/serving-route-workspace",
-          config,
-          observationConfig: config,
-          entries: [],
-          routeVariants: [],
-          catalogComplete: true,
-          authStore: {
-            version: 1,
-            profiles: {
-              "openai:fixture": { type: "api_key", provider: "openai", key: "fixture-private-key" },
+      await state.writeConfig(config);
+      await state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          "openai:fixture": { type: "api_key", provider: "openai", key: "fixture-private-key" },
+        },
+      });
+      const { client, server } = await startGatewayWithClient({
+        cfg: config,
+        configPath: state.configPath,
+        token,
+        scopes: ["operator.admin"],
+      });
+      try {
+        await server.startupSettled;
+        const read = async () => {
+          const response = await client.request<ModelAuthStatusResult>("models.authStatus", {
+            agentId: "main",
+          });
+          assert(response.servingAuth);
+          return response.servingAuth;
+        };
+        const serving = await read();
+        expect(serving.models).toEqual([
+          expect.objectContaining({
+            provider: "openai",
+            model: "fixture-model",
+            availability: false,
+            routeIncompatibility: { code: incompatible.code, message: incompatible.message },
+          }),
+        ]);
+        expect(serving.models[0]).not.toHaveProperty("routeResolution");
+        expect(serving.models[0]).not.toHaveProperty("selectedRoute");
+        resolver.mockReturnValue(() => ({
+          kind: "routes",
+          routes: [
+            {
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+              authRequirement: "api-key",
+              requestTransportOverrides: "none",
+              runtimePolicy: { compatibleIds: ["openclaw"] },
             },
-          },
-          authModes: {},
-          authMaterializations: [],
-          metadataSnapshot: createPluginMetadataSnapshotFixture(),
-          pluginRegistry: createEmptyPluginRegistry(),
-          isCurrent: () => true,
+          ],
+        }));
+        const available = await read();
+        expect(available.models[0]).toMatchObject({
+          availability: true,
+          authRequirement: "api-key",
         });
-      const serving = await read();
-      expect(serving.models).toEqual([
-        expect.objectContaining({
-          provider: "openai",
-          model: "fixture-model",
-          availability: false,
-          routeIncompatibility: { code: incompatible.code, message: incompatible.message },
-        }),
-      ]);
-      expect(serving.models[0]).not.toHaveProperty("routeResolution");
-      expect(serving.models[0]).not.toHaveProperty("selectedRoute");
-      resolver.mockReturnValue(() => ({
-        kind: "routes",
-        routes: [
-          {
-            api: "openai-responses",
-            baseUrl: "https://api.openai.com/v1",
-            authRequirement: "api-key",
-            requestTransportOverrides: "none",
-            runtimePolicy: { compatibleIds: ["openclaw"] },
-          },
-        ],
-      }));
-      const available = await read();
-      expect(available.models[0]).toMatchObject({ availability: true, authRequirement: "api-key" });
-      expect(available.models[0]).not.toHaveProperty("selectedRoute");
-      expect(JSON.stringify(available)).not.toContain("fixture-private-key");
+        expect(available.models[0]).not.toHaveProperty("selectedRoute");
+        expect(JSON.stringify(available)).not.toContain("fixture-private-key");
+      } finally {
+        await disconnectGatewayClient(client);
+        await server.close();
+      }
     } finally {
       resolver.mockRestore();
+      await state.cleanup();
     }
   });
 

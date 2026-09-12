@@ -30,6 +30,7 @@ import { loadManifestModelCatalog } from "./model-catalog.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { ModelRef } from "./model-ref-shared.js";
 import { dedupeModelCatalogEntries } from "./model-selection-shared.js";
+import type { ProviderCatalogProfileSelections } from "./models-config.providers.secret-helpers.js";
 import {
   createOpenAIModelRoutesResolver,
   openAIModelCatalogRoutePolicy,
@@ -94,9 +95,7 @@ function createModelsListAuthResolver(params: {
 function createModelsListEntryEvaluator(params: {
   authResolver: ModelAuthAvailabilityResolver;
   providerOutcomes?: readonly ProviderCatalogOutcome[];
-  preferredProfileId?: string;
-  preferredProfilesByProvider?: ReadonlyMap<string, string>;
-  pinnedProfileId?: string;
+  profileSelections: ProviderCatalogProfileSelections;
   profileProvider?: string;
   runtimeOverride?: string;
   normalizeAuthProvider: (provider: string) => string;
@@ -121,18 +120,12 @@ function createModelsListEntryEvaluator(params: {
       return cached;
     }
     const next = Promise.resolve().then((): ModelAuthAvailabilityEvaluation => {
-      const defaultProfileId = params.preferredProfilesByProvider?.get(
-        normalizeProviderId(entry.provider),
-      );
       const sameProvider =
         !params.profileProvider ||
         params.normalizeAuthProvider(params.profileProvider) ===
           params.normalizeAuthProvider(entry.provider);
-      const preferredProfileId =
-        (sameProvider ? params.preferredProfileId : undefined) ?? defaultProfileId;
-      // New sessions capture personal defaults with the same strength as explicit account pins.
-      const pinnedProfileId =
-        (sameProvider ? params.pinnedProfileId : undefined) ?? defaultProfileId;
+      const { preferredProfileId, pinnedProfileId } =
+        params.profileSelections[normalizeProviderId(entry.provider)] ?? {};
       const requestedRuntimeId =
         runtimeId ?? (sameProvider && params.profileProvider ? params.runtimeOverride : undefined);
       const resolved = {
@@ -264,12 +257,34 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       ? (authStore.profiles[selectedProfileId]?.provider ??
         params.cfg.auth?.profiles?.[selectedProfileId]?.provider)
       : undefined);
+  const authProvider = (provider: string) =>
+    resolveProviderIdForAuth(provider, { config: params.cfg, metadataSnapshot });
+  const profileSelections: ProviderCatalogProfileSelections = Object.fromEntries(
+    [
+      ...new Set([
+        ...metadataSnapshot.manifestRegistry.plugins.flatMap((plugin) => plugin.providers),
+        ...Object.values(authStore.profiles).map((profile) => profile.provider),
+        ...snapshot.entries.map((entry) => entry.provider),
+        ...(params.selectedModel ? [params.selectedModel.provider] : []),
+      ]),
+    ].flatMap((provider) => {
+      const normalized = normalizeProviderId(provider);
+      const sameProvider =
+        !profileProvider || authProvider(profileProvider) === authProvider(provider);
+      const defaultProfileId = preferredProfilesByProvider.get(normalized);
+      const preferredProfileId =
+        (sameProvider ? params.preferredProfileId : undefined) ?? defaultProfileId;
+      const pinnedProfileId =
+        (sameProvider ? params.pinnedProfileId : undefined) ?? defaultProfileId;
+      return preferredProfileId || pinnedProfileId
+        ? [[normalized, { preferredProfileId, pinnedProfileId }]]
+        : [];
+    }),
+  );
   if (
     snapshot.pendingProviders?.length &&
     (selectedProfileId || preferredProfilesByProvider.size)
   ) {
-    const authProvider = (provider: string) =>
-      resolveProviderIdForAuth(provider, { config: params.cfg, metadataSnapshot });
     // Shared discovery does not describe a selected account's inventory.
     snapshot = {
       ...snapshot,
@@ -325,12 +340,10 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
   const evaluateStoredEntry = createModelsListEntryEvaluator({
     authResolver,
     providerOutcomes: params.snapshot.providerOutcomes,
-    preferredProfilesByProvider,
+    profileSelections,
     runtimeOverride: params.runtimeOverride,
     normalizeAuthProvider: (provider) =>
       resolveProviderIdForAuth(provider, { config: params.cfg, metadataSnapshot }),
-    ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
-    ...(params.pinnedProfileId ? { pinnedProfileId: params.pinnedProfileId } : {}),
     profileProvider,
   });
   const missingPersonalPin = Boolean(
@@ -357,6 +370,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     snapshot,
     metadataSnapshot,
     authStore,
+    profileSelections,
     authModes: params.preparedRuntimeAuthModes,
     async runtimeChoices(
       entry: ModelCatalogEntry,

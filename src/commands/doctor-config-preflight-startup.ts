@@ -68,7 +68,7 @@ export async function commitStartupConfigRepairs(params: {
   runWithPluginMetadataSnapshot: PluginMetadataSnapshotScopeRunner;
 }): Promise<DoctorConfigPreflightPluginSnapshotRead> {
   let snapshotRead = params.snapshotRead;
-  let snapshot = snapshotRead.snapshot;
+  const snapshot = snapshotRead.snapshot;
   const guardWrite = async () => {
     if (params.gatewayStartupCheckpointRequired && !params.lease) {
       throw new Error("Automatic startup config repair requires the startup migration lease.");
@@ -102,7 +102,6 @@ export async function commitStartupConfigRepairs(params: {
       "Doctor changes",
     );
     snapshotRead = await params.readSnapshot();
-    snapshot = snapshotRead.snapshot;
   }
   return snapshotRead;
 }

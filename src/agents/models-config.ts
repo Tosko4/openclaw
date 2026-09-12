@@ -40,6 +40,7 @@ import {
   type ModelsJsonReadyState,
 } from "./models-config-state.js";
 import { planOpenClawModelsJson, type PreparedModelsConfigContext } from "./models-config.plan.js";
+import type { ProviderCatalogProfileSelections } from "./models-config.providers.secret-helpers.js";
 import { repairPluginModelCatalogTransportMetadata } from "./plugin-model-catalog-repair.js";
 import {
   decodePluginModelCatalogRelativePathPluginId,
@@ -66,6 +67,7 @@ type EnsureOpenClawModelsJsonOptions = {
   workspaceDir?: string;
   providerDiscoveryProviderIds?: readonly string[];
   requestedProviderIds?: readonly string[];
+  profileSelections?: ProviderCatalogProfileSelections;
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
   onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
@@ -128,6 +130,7 @@ async function buildModelsJsonFingerprint(context: PreparedModelsConfigContext):
         : context.pluginMetadataSnapshot.pluginIds.toSorted(),
     providerDiscoveryProviderIds: context.providerDiscoveryProviderIds,
     requestedProviderIds: context.requestedProviderIds,
+    profileSelections: context.profileSelections,
     providerDiscoveryTimeoutMs: context.providerDiscoveryTimeoutMs,
     providerDiscoveryEntriesOnly: context.providerDiscoveryEntriesOnly === true,
   });
@@ -268,6 +271,7 @@ function prepareModelsConfigContext(
     env,
     envFingerprint: options.env ? hashRuntimeConfigValue(fingerprintEnv) : fingerprintEnv,
     requestedProviderIds: options.requestedProviderIds,
+    profileSelections: options.profileSelections,
     ...(workspaceDir ? { workspaceDir } : {}),
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
     ...(options.preparedStaticProviderCatalog

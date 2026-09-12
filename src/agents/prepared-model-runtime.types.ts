@@ -8,9 +8,11 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import type { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import type { AgentHarnessPluginSelection } from "./harness/runtime-plugin-load-plan.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import type { ProviderCatalogProfileSelections } from "./models-config.providers.secret-helpers.js";
 import type { PublishedModelCatalogOwnerCandidate } from "./prepared-model-catalog.types.js";
 import type { AuthStorage, AuthStorageData } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
@@ -34,6 +36,13 @@ export type PreparedModelCatalogRefreshOptions = {
   refresh?: boolean;
   providerIds?: readonly string[];
   changedOnly?: boolean;
+  requestScope?: {
+    requestedProviderIds: readonly string[];
+    /** A personal projection stays private to this acquisition. */
+    authStore?: AuthProfileStore;
+    profileSelections?: ProviderCatalogProfileSelections;
+  };
+  isRequestCurrent?: () => boolean;
 };
 
 export type PreparedModelRuntimeResourceClaim = { release: () => Promise<void> };

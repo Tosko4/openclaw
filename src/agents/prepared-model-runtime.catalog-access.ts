@@ -1,6 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import pLimit from "p-limit";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -26,10 +25,7 @@ import {
   fingerprintPreparedRuntimeFacts,
   prepareConfiguredRuntimeFacts,
 } from "./prepared-model-runtime.configured-catalog.js";
-import {
-  assertPreparedModelRuntimeInputCurrent,
-  PreparedModelRuntimePublicationSupersededError,
-} from "./prepared-model-runtime.errors.js";
+import { assertPreparedModelRuntimeInputCurrent } from "./prepared-model-runtime.errors.js";
 import { preparedModelInventoryKey } from "./prepared-model-runtime.facts.js";
 import {
   type PreparedModelRuntimeCatalogAccess,
@@ -57,23 +53,6 @@ import type {
 export const MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS = 1;
 const limitFullModelCatalogBuild = pLimit(MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS);
 const MODEL_CATALOG_FOREGROUND_WAIT_MS = 5_000;
-const log = createSubsystemLogger("agents/prepared-model-runtime");
-
-export function refreshCommittedProviderCatalogs(
-  owners: Iterable<PreparedModelRuntimeOwner>,
-): void {
-  for (const owner of owners) {
-    if (owner.provenance !== "configured" || owner.pending || owner.needsRefresh) {
-      continue;
-    }
-    void owner.snapshot?.loadFullModelCatalog?.({ changedOnly: true }).catch((error: unknown) => {
-      if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
-        log.warn(`provider catalog refresh failed: ${String(error)}`);
-      }
-    });
-  }
-}
-
 export function createFullModelCatalogAccess(params: {
   agentFacts: PreparedModelRuntimeAgentFacts;
   catalogFacts: PreparedModelRuntimeCatalogFacts;
@@ -280,7 +259,7 @@ export function createFullModelCatalogAccess(params: {
   if (fullCatalog) {
     if (hasNativeCatalog) {
       fullCatalog.authoritative = false;
-    } else if (eligibleProviders.every((provider) => retainedProviders.has(provider))) {
+    } else if ([...admittedProviders].every((provider) => retainedProviders.has(provider))) {
       markPreparedModelCatalogFull(fullCatalog);
     }
   }
@@ -289,6 +268,7 @@ export function createFullModelCatalogAccess(params: {
         providers: readonly string[] | undefined;
         /** Undefined covers unscoped native selection; an empty list schedules none. */
         nativeProviders: readonly string[] | undefined;
+        requestScopeKey: string;
         promise: Promise<ModelCatalogSnapshot>;
       }
     | undefined;
@@ -298,8 +278,11 @@ export function createFullModelCatalogAccess(params: {
         promise: Promise<PreparedModelRuntimeAuth>;
       }
     | undefined;
-  const assertCurrent = () =>
-    assertPreparedModelRuntimeInputCurrent(params.agentFacts.input, params.isCurrent);
+  const assertCurrent = (isRequestCurrent?: () => boolean) =>
+    assertPreparedModelRuntimeInputCurrent(
+      params.agentFacts.input,
+      () => params.isCurrent() && isRequestCurrent?.() !== false,
+    );
   // Construction is lazy: automatic prepared reads do not start a thread. The first explicit
   // request initializes one registry and reuses that exact plugin generation until retirement.
   const worker = createPreparedModelCatalogWorker({
@@ -317,10 +300,13 @@ export function createFullModelCatalogAccess(params: {
   const acquireCatalog = async (
     options: PreparedModelCatalogRefreshOptions = {},
   ): Promise<ModelCatalogSnapshot> => {
-    assertCurrent();
+    assertCurrent(options.isRequestCurrent);
+    const privateRequest = options.requestScope?.authStore !== undefined;
+    const requestScopeKey = fingerprintPreparedRuntimeFacts(options.requestScope ?? null);
     if (
       !options.refresh &&
       !options.changedOnly &&
+      !options.requestScope &&
       fullCatalog &&
       isPreparedModelCatalogFull(fullCatalog)
     ) {
@@ -334,7 +320,7 @@ export function createFullModelCatalogAccess(params: {
             ? Object.keys(params.agentFacts.credentials).filter((provider) =>
                 admittedProviders.has(normalizeProvider(provider)),
               )
-            : eligibleProviders)
+            : [...eligibleProviders, ...(options.requestScope?.requestedProviderIds ?? [])])
         ).map(normalizeProvider),
       ),
     ];
@@ -346,7 +332,8 @@ export function createFullModelCatalogAccess(params: {
           preparedProviderCatalogCredentials(params.agentFacts, provider, normalizeProvider),
     );
     const fullRefresh = !options.changedOnly && !options.providerIds;
-    const includeNative = hasNativeCatalog && (!options.changedOnly || !nativeCatalogAcquired);
+    const includeNative =
+      !privateRequest && hasNativeCatalog && (!options.changedOnly || !nativeCatalogAcquired);
     const nativeProviders = includeNative
       ? options.providerIds
         ? requestedProviders
@@ -367,7 +354,7 @@ export function createFullModelCatalogAccess(params: {
         pendingNative === undefined ||
         (nativeProviders !== undefined &&
           nativeProviders.every((provider) => pendingNative.includes(provider)));
-      if (coversNative && coversProviders) {
+      if (current.requestScopeKey === requestScopeKey && coversNative && coversProviders) {
         return current.promise;
       }
       await current.promise;
@@ -376,7 +363,7 @@ export function createFullModelCatalogAccess(params: {
     if (includeNative && !options.providerIds) {
       nativeCatalogAcquired = false;
     }
-    attempt.started(providers);
+    if (!privateRequest) attempt.started(providers);
     // Discovery is read-only. Holding the directory build queue here would block an auth
     // replacement and every picker waiting for its static publication.
     const promise = (async () => {
@@ -386,15 +373,18 @@ export function createFullModelCatalogAccess(params: {
       const scopes: Array<readonly string[] | undefined> = fullRefresh
         ? [undefined]
         : providers.map((provider) => [provider]);
+      let privatePublication: ReturnType<typeof prepareModelCatalogPublication> | undefined;
       for (const providerIds of scopes) {
         await limitFullModelCatalogBuild(async () => {
-          assertCurrent();
+          assertCurrent(options.isRequestCurrent);
           const {
             modelCatalog: workerCatalog,
+            admittedProviderIds,
             configuredRuntimeModels,
             runtimeModels,
-          } = await worker.loadCatalog(providerIds);
-          assertCurrent();
+          } = await worker.loadCatalog(providerIds, options.requestScope, options.isRequestCurrent);
+          assertCurrent(options.isRequestCurrent);
+          const workerAdmittedProviders = new Set(admittedProviderIds.map(normalizeProvider));
           const scope = new Set(
             (
               providerIds ?? [
@@ -402,14 +392,18 @@ export function createFullModelCatalogAccess(params: {
                 ...workerCatalog.entries.map((entry) => entry.provider),
                 ...(workerCatalog.providerOutcomes ?? []).map((outcome) => outcome.provider),
               ]
-            ).map(normalizeProvider),
+            )
+              .map(normalizeProvider)
+              .filter((provider) => workerAdmittedProviders.has(provider)),
           );
           const discoveredAuth = getPreparedModelFullCatalogAuth(workerCatalog);
           if (!discoveredAuth) {
             throw new Error("prepared model catalog worker omitted its auth generation");
           }
+          const previousPublication = privateRequest ? privatePublication : inventory;
           const retainedAuth =
-            getPreparedModelFullCatalogAuth(fullCatalog ?? staticCatalog) ?? currentAuth;
+            getPreparedModelFullCatalogAuth(previousPublication?.catalog ?? staticCatalog) ??
+            currentAuth;
           const retainOther = <T>(values: Readonly<Record<string, T>>) =>
             Object.fromEntries(
               Object.entries(values).filter(([id]) => !scope.has(normalizeProvider(id))),
@@ -439,25 +433,25 @@ export function createFullModelCatalogAccess(params: {
             new Map(
               [...runtimeModels].filter(([provider]) => scope.has(normalizeProvider(provider))),
             ),
-            inventory,
+            previousPublication,
             auth,
             normalizeProvider,
           );
-          if (providerIds) {
+          if (previousPublication) {
             publication.runtimeModels = new Map([
-              ...[...(inventory?.runtimeModels ?? [])].filter(
+              ...[...previousPublication.runtimeModels].filter(
                 ([provider]) => !scope.has(normalizeProvider(provider)),
               ),
               ...publication.runtimeModels,
             ]);
             publication.catalog = mergePreparedProviderCatalog(
-              inventory?.catalog,
+              previousPublication.catalog,
               publication.catalog,
               scope,
               normalizeProvider,
             );
             publication.discoveryOrigins = [
-              ...(inventory?.discoveryOrigins ?? []).filter(
+              ...previousPublication.discoveryOrigins.filter(
                 ({ provider }) => !scope.has(normalizeProvider(provider)),
               ),
               ...publication.discoveryOrigins.filter(({ provider }) =>
@@ -465,7 +459,7 @@ export function createFullModelCatalogAccess(params: {
               ),
             ];
           }
-          if (inventory) {
+          if (inventory && !privateRequest) {
             publication.catalog = mergePreparedNativeCatalog(
               inventory.catalog,
               publication.catalog,
@@ -473,6 +467,10 @@ export function createFullModelCatalogAccess(params: {
             publication = retainWorkingModels(publication, inventory, auth, true);
           }
           setPreparedModelFullCatalogAuth(publication.catalog, auth);
+          if (privateRequest) {
+            privatePublication = publication;
+            return;
+          }
           currentConfiguredRuntimeModels = configuredRuntimeModels;
           const catalog = project(publication.catalog);
           setPreparedModelFullCatalogAuth(catalog, auth);
@@ -509,7 +507,7 @@ export function createFullModelCatalogAccess(params: {
             catalog.authoritative = false;
           }
           fullCatalog =
-            eligibleProviders.every((provider) => completedSources.has(provider)) &&
+            [...admittedProviders].every((provider) => completedSources.has(provider)) &&
             nativeCatalogAcquired
               ? markPreparedModelCatalogFull(catalog)
               : catalog;
@@ -603,20 +601,30 @@ export function createFullModelCatalogAccess(params: {
         catalog.authoritative = nativeCatalogAcquired ? sourceAuthority : false;
         fullCatalog =
           nativeCatalogAcquired &&
-          eligibleProviders.every((provider) => inventory?.providerSources.has(provider))
+          [...admittedProviders].every((provider) => inventory?.providerSources.has(provider))
             ? markPreparedModelCatalogFull(attempt.withRefreshStatus(catalog))
             : attempt.withRefreshStatus(catalog);
         if (nativeDiscoveryStarted) {
           attempt.published();
         }
       }
-      return fullCatalog ?? staticCatalog;
+      return privatePublication
+        ? markPreparedModelCatalogFull(privatePublication.catalog, privatePublication.runtimeModels)
+        : (fullCatalog ?? staticCatalog);
     })()
-      .catch(attempt.failed)
+      .catch((error: unknown) => {
+        if (privateRequest) throw error;
+        return attempt.failed(error);
+      })
       .finally(() => {
         pending = undefined;
       });
-    pending = { providers: fullRefresh ? undefined : providers, nativeProviders, promise };
+    pending = {
+      providers: fullRefresh ? undefined : providers,
+      nativeProviders,
+      requestScopeKey,
+      promise,
+    };
     return promise;
   };
   return {
@@ -667,6 +675,7 @@ export function createFullModelCatalogAccess(params: {
       return inventory?.runtimeModels;
     },
     loadFullModelCatalog: async (options) => {
+      if (options?.requestScope?.authStore) return acquireCatalog(options);
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         return await Promise.race([

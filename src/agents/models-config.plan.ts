@@ -24,6 +24,7 @@ import {
   resolveImplicitProviders,
   type ProviderConfig,
 } from "./models-config.providers.js";
+import type { ProviderCatalogProfileSelections } from "./models-config.providers.secret-helpers.js";
 import {
   encodePluginModelCatalogRelativePath,
   filterGeneratedPluginModelCatalogProviders,
@@ -50,6 +51,7 @@ export type PreparedModelsConfigContext = Readonly<{
   preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   providerDiscoveryProviderIds?: readonly string[];
   requestedProviderIds?: readonly string[];
+  profileSelections?: ProviderCatalogProfileSelections;
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
   onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
@@ -135,6 +137,7 @@ async function resolveProvidersForModelsJson(params: {
   const implicitProviders = await resolveImplicitProviders({
     agentDir,
     requestedProviderIds: context.requestedProviderIds,
+    profileSelections: context.profileSelections,
     ...(params.authStore ? { authStore: params.authStore } : {}),
     config: cfg,
     discoveryAuthConfig: context.discoveryAuthConfig,

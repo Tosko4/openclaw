@@ -331,6 +331,17 @@ export function resolveAuthProfileOrderWithMetadata(
     store,
     providerAuthKey,
   });
+  // Automatic selection stays with an exact provider's stored accounts. An
+  // authored family order still owns selection, including an empty order.
+  const preferExactProvider =
+    explicitOrder === undefined &&
+    storeProfiles.some((profileId) => {
+      const credential = store.profiles[profileId]!;
+      return (
+        normalizeProviderId(credential.provider) === providerKey &&
+        isSetupCredentialAccessible({ profileId, credential })
+      );
+    });
   const baseOrder =
     explicitOrder ?? (explicitProfiles.length > 0 ? explicitProfiles : storeProfiles);
   if (baseOrder.length === 0) {
@@ -338,6 +349,13 @@ export function resolveAuthProfileOrderWithMetadata(
   }
 
   const isValidProfile = (profileId: string): boolean => {
+    const credential = store.profiles[profileId];
+    if (
+      preferExactProvider &&
+      (!credential || normalizeProviderId(credential.provider) !== providerKey)
+    ) {
+      return false;
+    }
     const eligibility = resolveAuthProfileEligibility({
       cfg,
       authAliasLookupParams: params.authAliasLookupParams,

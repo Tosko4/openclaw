@@ -1,4 +1,5 @@
 /** Lifecycle-owned model catalog access. */
+import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -8,6 +9,7 @@ import {
   resolveAmbientOwnerAgentId,
 } from "./agent-scope.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
+import type { ModelCatalogDecisionParams } from "./model-catalog-decisions.js";
 import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
@@ -24,7 +26,11 @@ import {
   setPreparedModelRuntimeAuthLoader,
   setPreparedModelRuntimeAuthStore,
 } from "./prepared-model-runtime-auth.js";
-import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
+import { capturePreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
+import {
+  getPreparedModelCatalogRuntimeModels,
+  isPreparedModelCatalogFull,
+} from "./prepared-model-runtime.full-catalog.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquirePreparedModelRuntimeSnapshot,
@@ -42,6 +48,7 @@ import {
   prepareScopedReadOnlyLiveModelCatalog,
   prepareScopedReadOnlyModelCatalog,
 } from "./prepared-model-runtime.scoped-catalog.js";
+import type { PreparedModelCatalogRefreshOptions } from "./prepared-model-runtime.types.js";
 import { normalizeThinkingCatalogProviders } from "./thinking-runtime.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
@@ -53,6 +60,15 @@ export type LoadPreparedModelCatalogParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   providerDiscoveryProviderIds?: readonly string[];
+  requestSelection?: Pick<
+    ModelCatalogDecisionParams,
+    | "selectedModel"
+    | "preferredProfileId"
+    | "pinnedProfileId"
+    | "profileProvider"
+    | "requesterProfileId"
+    | "runtimeOverride"
+  >;
   /** Explicitly requests full inventory acquisition; writable reads also replace completed data. */
   refreshFullCatalog?: boolean;
   /** Scoped read-only loads may run live discovery for the scoped providers only. */
@@ -82,6 +98,10 @@ async function materializeRequestedModelCatalog(
   readOnly: boolean | undefined,
   refreshFullCatalog: LoadPreparedModelCatalogParams["refreshFullCatalog"],
   providerIds?: readonly string[],
+  requestOptions: Pick<
+    PreparedModelCatalogRefreshOptions,
+    "requestScope" | "isRequestCurrent"
+  > = {},
 ): Promise<PreparedModelRuntimeSnapshot> {
   if (!snapshot.loadFullModelCatalog) {
     return snapshot;
@@ -92,6 +112,7 @@ async function materializeRequestedModelCatalog(
       ? await refreshPreparedModelRuntimeCatalog(snapshot, {
           refresh: readOnly !== true,
           ...(providerIds ? { providerIds } : {}),
+          ...requestOptions,
         })
       : undefined;
   const modelCatalog =
@@ -101,11 +122,20 @@ async function materializeRequestedModelCatalog(
       : await snapshot.loadFullModelCatalog({
           refresh: refreshFullCatalog === true,
           ...(providerIds ? { providerIds } : {}),
+          ...requestOptions,
         }));
   if (!modelCatalog) {
     return snapshot;
   }
-  return materializePreparedModelCatalogOwner(snapshot, modelCatalog);
+  const materialized = materializePreparedModelCatalogOwner(snapshot, modelCatalog);
+  const { isRequestCurrent } = requestOptions;
+  if (!isRequestCurrent) return materialized;
+  const scoped = Object.freeze({
+    ...materialized,
+    isCurrent: () => materialized.isCurrent() && isRequestCurrent(),
+  });
+  copyPreparedModelRuntimeAuthBindings(materialized, scoped);
+  return scoped;
 }
 
 /** Carries a completed catalog and its paired auth without acquiring or refreshing facts. */
@@ -138,7 +168,10 @@ export function materializePreparedModelCatalogOwner(
     materialized,
     getPreparedModelRuntimeAuthMaterializations(snapshot),
   );
-  return materialized;
+  return capturePreparedModelRuntimeCatalog(
+    materialized,
+    getPreparedModelCatalogRuntimeModels(modelCatalog),
+  );
 }
 
 function acceptsPreparedSnapshotConfig(
@@ -355,6 +388,50 @@ async function withPreparedModelCatalogOwnerPolicy<T>(
     preparePublishedOwner,
   );
   try {
+    let requestOptions: Pick<
+      PreparedModelCatalogRefreshOptions,
+      "requestScope" | "isRequestCurrent"
+    > = {};
+    if (request.requestSelection && request.refreshFullCatalog === true) {
+      const { createModelCatalogDecisions } = await import("./model-catalog-decisions.js");
+      const owner = resolvePublishedModelCatalogOwner(snapshot);
+      const project = () =>
+        createModelCatalogDecisions({
+          cfg: owner.config,
+          agentId: owner.agentId,
+          agentDir: owner.agentDir,
+          workspaceDir: owner.workspaceDir,
+          snapshot: owner.modelCatalog,
+          metadataSnapshot: owner.metadataSnapshot,
+          preparedAuthStore: owner.authStore,
+          isCurrent: owner.isCurrent,
+          ...request.requestSelection,
+        });
+      const projection = project();
+      const { authStore, profileSelections } = projection;
+      const personal = authStore !== owner.authStore || Object.keys(profileSelections).length > 0;
+      requestOptions = {
+        requestScope: {
+          requestedProviderIds: request.requestSelection.selectedModel
+            ? [request.requestSelection.selectedModel.provider]
+            : [],
+          ...(personal ? { authStore, profileSelections } : {}),
+        },
+        ...(personal
+          ? {
+              isRequestCurrent: () => {
+                if (!projection.isCurrent()) return false;
+                const current = project();
+                return (
+                  current.isCurrent() &&
+                  isDeepStrictEqual(authStore, current.authStore) &&
+                  isDeepStrictEqual(profileSelections, current.profileSelections)
+                );
+              },
+            }
+          : {}),
+      };
+    }
     // Only published owners expose generation caches; temporary reads use their prepared facts.
     const owner =
       request.readOnly && !publishedReadOnlyOwner
@@ -364,6 +441,7 @@ async function withPreparedModelCatalogOwnerPolicy<T>(
             request.readOnly,
             request.refreshFullCatalog,
             request.providerDiscoveryProviderIds,
+            requestOptions,
           );
     // Projection must finish before releasing the selected generation's resources.
     return await read(owner);

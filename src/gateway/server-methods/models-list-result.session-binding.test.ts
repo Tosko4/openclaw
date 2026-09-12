@@ -1,9 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  readPreparedCatalog,
+  registerGatewayModelCatalogPrivateAccess,
+} from "../server-model-catalog-auth.js";
 import {
   createModelsListTestContext,
   providerCatalogEntry,
@@ -11,15 +15,6 @@ import {
 } from "./models-list-result.openai-routes.test-support.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
-
-const liveCatalog = vi.hoisted(() => vi.fn());
-vi.mock("../../agents/prepared-model-runtime.scoped-catalog.js", () => ({
-  prepareScopedReadOnlyLiveModelCatalog: liveCatalog,
-  prepareScopedReadOnlyModelCatalog: () => {
-    throw new Error("Unexpected static acquisition");
-  },
-}));
-afterEach(() => vi.clearAllMocks());
 
 it.each(["default", "all", "refresh"] as const)(
   "admits a saved family account only for the session-selected provider in %s listings",
@@ -76,9 +71,18 @@ it.each(["default", "all", "refresh"] as const)(
           catalog: [],
           staticEntries: [selected, sibling],
         });
-        liveCatalog.mockResolvedValue({
-          entries: [dynamic, sibling],
-          routeVariants: [dynamic, sibling],
+        const published = expectDefined(
+          await readPreparedCatalog(context, "main"),
+          "prepared session catalog fixture",
+        );
+        const liveCatalog = vi.fn(async () => ({
+          ...published,
+          entries: [dynamic],
+          routeVariants: [dynamic],
+        }));
+        registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
+          loadDeferred: liveCatalog,
+          readPrepared: async () => published,
         });
         const request = async (params: Record<string, unknown>) => {
           const respond = vi.fn<RespondFn>();
@@ -127,12 +131,11 @@ it.each(["default", "all", "refresh"] as const)(
         );
         if (view === "refresh") {
           expect(liveCatalog).toHaveBeenCalledWith(
-            expect.objectContaining({ config: cfg, readOnly: true }),
-            ["byteplus-plan"],
             expect.objectContaining({
-              requestedProviderIds: ["byteplus-plan"],
-              authStore: expect.objectContaining({
-                profiles: expect.objectContaining({ "byteplus:saved": expect.anything() }),
+              agentId: "main",
+              refreshFullCatalog: true,
+              requestSelection: expect.objectContaining({
+                selectedModel: { provider: "byteplus-plan", model: "ark-code-latest" },
               }),
             }),
           );

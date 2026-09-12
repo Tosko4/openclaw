@@ -12,7 +12,11 @@ import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { isOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
-import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
+import {
+  prependAuthProfilePin,
+  resolveAuthProfileEligibility,
+  resolveAuthProfileOrderWithMetadata,
+} from "./auth-profiles/order.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import {
@@ -28,6 +32,7 @@ import {
   toDiscoveryApiKey,
   type ProviderApiKeyResolver,
   type ProviderAuthResolver,
+  type ProviderCatalogProfileSelections,
 } from "./models-config.providers.secret-helpers.js";
 import type { ProviderUseBinding } from "./provider-model-auth-source-plan.js";
 import type { AuthStorageData } from "./sessions/index.js";
@@ -60,18 +65,35 @@ function resolveCatalogAuthProfileOrder(params: {
   env: NodeJS.ProcessEnv;
   provider: string;
   store: AuthProfileStore;
+  selection?: ProviderCatalogProfileSelections[string];
 }): string[] {
-  return resolveAuthProfileOrder({
-    cfg: params.config,
-    provider: params.provider,
-    store: params.store,
-    authAliasLookupParams: {
-      config: params.config,
-      env: params.env,
-    },
-    cooldownScope: "all-models",
-    readinessMode: "read-only",
-  });
+  const pinned = params.selection?.pinnedProfileId;
+  if (
+    pinned &&
+    !resolveAuthProfileEligibility({
+      cfg: params.config,
+      store: params.store,
+      provider: params.provider,
+      profileId: pinned,
+      now: Date.now(),
+    }).eligible
+  )
+    return [];
+  return prependAuthProfilePin(
+    resolveAuthProfileOrderWithMetadata({
+      cfg: params.config,
+      provider: params.provider,
+      store: params.store,
+      authAliasLookupParams: {
+        config: params.config,
+        env: params.env,
+      },
+      cooldownScope: "all-models",
+      readinessMode: "read-only",
+      preferredProfile: params.selection?.preferredProfileId,
+    }),
+    pinned,
+  ).profileIds;
 }
 
 function resolveCatalogDirectAuthMode(config: OpenClawConfig | undefined, provider: string) {
@@ -193,11 +215,13 @@ export function createProviderApiKeyResolver(
   workspaceDir?: string,
   syntheticAuthEnv = env,
   admission?: ReadonlyMap<string, ProviderUseBinding>,
+  profileSelections?: ProviderCatalogProfileSelections,
 ): ProviderApiKeyResolver {
   const getLookupCaches = createProviderAuthLookupCaches(env, config, admission);
   return (provider: string) => {
     const binding = admission?.get(normalizeProviderId(provider));
-    const profileBound = binding?.kind === "profile";
+    const selection = profileSelections?.[normalizeProviderId(provider)];
+    const profileBound = binding?.kind === "profile" || selection !== undefined;
     const lookupCaches = getLookupCaches();
     const authProvider = resolveProviderIdForAuthFromCaches(provider, lookupCaches);
     const envVar = profileBound
@@ -243,14 +267,7 @@ export function createProviderApiKeyResolver(
         env,
         provider,
         store: authStore,
-      }).filter((id) => {
-        const credential = authStore.profiles[id];
-        return (
-          !profileBound ||
-          normalizeProviderId(authStore.profiles[binding.profileId]?.provider ?? "") !==
-            normalizeProviderId(provider) ||
-          (credential && normalizeProviderId(credential.provider) === normalizeProviderId(provider))
-        );
+        selection,
       }),
     });
     return fromProfiles?.apiKey
@@ -273,11 +290,13 @@ export function createProviderAuthResolver(
   workspaceDir?: string,
   syntheticAuthEnv = env,
   admission?: ReadonlyMap<string, ProviderUseBinding>,
+  profileSelections?: ProviderCatalogProfileSelections,
 ): ProviderAuthResolver {
   const getLookupCaches = createProviderAuthLookupCaches(env, config, admission);
   return (provider, options) => {
     const binding = admission?.get(normalizeProviderId(provider));
-    const profileBound = binding?.kind === "profile";
+    const selection = profileSelections?.[normalizeProviderId(provider)];
+    const profileBound = binding?.kind === "profile" || selection !== undefined;
     const lookupCaches = getLookupCaches();
     const authProvider = resolveProviderIdForAuthFromCaches(provider, lookupCaches);
     const authStore = resolveAuthProfileStoreInput(authStoreInput);
@@ -287,20 +306,13 @@ export function createProviderAuthResolver(
       env,
       provider,
       store: authStore,
+      selection,
     });
     for (const id of ids) {
       if (excludedProfileIds.has(id)) {
         continue;
       }
       const cred = authStore.profiles[id];
-      if (
-        profileBound &&
-        normalizeProviderId(authStore.profiles[binding.profileId]?.provider ?? "") ===
-          normalizeProviderId(provider) &&
-        (!cred || normalizeProviderId(cred.provider) !== normalizeProviderId(provider))
-      ) {
-        continue;
-      }
       if (!cred) {
         continue;
       }

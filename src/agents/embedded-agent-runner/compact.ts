@@ -28,9 +28,6 @@ import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { isFallbackSummaryError } from "../model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
-/**
- * Public facade and fallback coordinator for embedded-agent compaction.
- */
 import { copyPreparedModelRuntimeAuthBindings } from "../prepared-model-runtime-auth.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
 import { resolveProjectKey } from "../project-memory-scope.js";

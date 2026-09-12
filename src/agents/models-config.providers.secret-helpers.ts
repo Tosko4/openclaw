@@ -31,6 +31,10 @@ export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 /** Default secret reference sources applied when config omits an explicit source. */
 export type SecretDefaults = NonNullable<NonNullable<OpenClawConfig["secrets"]>["defaults"]>;
 
+export type ProviderCatalogProfileSelections = Readonly<
+  Record<string, { preferredProfileId?: string; pinnedProfileId?: string }>
+>;
+
 /** Resolved API key value plus provenance for discovery and secret-marker handling. */
 type ProfileApiKeyResolution = {
   apiKey: string;
