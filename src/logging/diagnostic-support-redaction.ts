@@ -308,7 +308,7 @@ function redactCommonCredentialTextForSupport(value: string): string {
     .replace(JWT_RE, "<redacted-jwt>");
   // Whole vendor tokens precede bare keys; field masking must not consume the full support mask.
   return replaceRedactPattern(
-    redactText(redacted, vendorTokenPatterns),
+    redactText(redacted, vendorTokenPatterns, { fullContext: true }),
     AWS_SECRET_ACCESS_KEY_MATCHER,
     () => "<redacted-aws-secret-key>",
   );
