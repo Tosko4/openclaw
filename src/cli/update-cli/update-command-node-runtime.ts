@@ -11,8 +11,8 @@ import {
   type UpdateCommandExecutor,
 } from "./update-command-executor.js";
 import type { PackageRuntimeRecovery } from "./update-command-node-runtime-resolution.js";
+import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import {
-  gatewayServiceCommandUsesRoot,
   resolvePackageRuntimePreflight,
   type PackageRuntimePreflight,
 } from "./update-command-service-plan.js";
@@ -98,7 +98,7 @@ function reportPackageRuntimeSelection(
 export async function preparePackageUpdateRuntime(params: {
   root: string;
   managedServiceRoot?: string;
-  managedServiceNodeRunner?: string;
+  managedService?: PreManagedServiceStop;
   packageUpdateNodeRunner?: string;
   packageInstallEnv?: NodeJS.ProcessEnv;
   packageRuntimeTarget?: { version: string; nodeEngine: string | null };
@@ -108,11 +108,12 @@ export async function preparePackageUpdateRuntime(params: {
   timeoutMs: number;
   tag: string;
 }) {
+  const managedServiceNodeRunner = params.managedService?.serviceNodeRunner;
   const canRefreshManagedServiceNode =
     params.shouldRestart &&
-    params.managedServiceNodeRunner !== undefined &&
-    (await gatewayServiceCommandUsesRoot({ root: params.managedServiceRoot ?? params.root })) ===
-      true;
+    params.managedService?.serviceUpdateVerdict?.kind === "owned" &&
+    params.managedService.serviceUpdateVerdict.refreshDefinition &&
+    params.managedService.serviceMutationAllowed !== false;
   const fence = await params.executor.enter(params.root, {
     preflight: true,
     serviceRoot: params.managedServiceRoot,
@@ -123,10 +124,13 @@ export async function preparePackageUpdateRuntime(params: {
   const result = await resolvePackageRuntimePreflight({
     target: params.packageRuntimeTarget,
     timeoutMs: params.timeoutMs,
-    nodeRunner: params.packageUpdateNodeRunner,
+    nodeRunner:
+      params.managedServiceRoot && canRefreshManagedServiceNode
+        ? params.packageUpdateNodeRunner
+        : (managedServiceNodeRunner ?? params.packageUpdateNodeRunner),
     fallbackNodeRunner: canRefreshManagedServiceNode ? resolveNodeRunner() : undefined,
     runtimeRecovery:
-      !params.managedServiceNodeRunner || canRefreshManagedServiceNode
+      !managedServiceNodeRunner || canRefreshManagedServiceNode
         ? createPackageRuntimeRecovery({
             root: params.root,
             opts: params.opts,

@@ -11418,6 +11418,102 @@ describe("update-cli", () => {
     expect(packageInstallCommandCall()).toBeUndefined();
   });
 
+  it.each([
+    { capability: "sealed", restart: true, currentRunner: false, compatible: false },
+    { capability: "unknown", restart: true, currentRunner: false, compatible: false },
+    { capability: "writable", restart: false, currentRunner: true, compatible: false },
+    { capability: "sealed", restart: false, currentRunner: true, compatible: false },
+    { capability: "writable", restart: true, currentRunner: false, compatible: false },
+    { capability: "sealed", restart: true, currentRunner: false, compatible: true },
+  ] as const)(
+    "preserves target compatibility for an unchanged service launcher ($capability, restart=$restart, current=$currentRunner, compatible=$compatible)",
+    async ({ capability, restart, currentRunner, compatible }) => {
+      const fixture = await setupServicePackageAtPrefix({
+        prefix: tempDirs.make("preserved-runtime-"),
+      });
+      const serviceNode = currentRunner ? process.execPath : fixture.serviceNode;
+      const replacementNode = path.join(tempDirs.make("replacement-runtime-"), "bin", "node");
+      await fs.mkdir(path.dirname(replacementNode), { recursive: true });
+      await fs.writeFile(replacementNode, "", { mode: 0o755 });
+      mockPackageInstallStatus(fixture.root);
+      primeServiceCommand([serviceNode, fixture.entrypoint, "gateway"]);
+      serviceLoaded.mockResolvedValue(true);
+      serviceReadRuntime.mockResolvedValue({
+        status: "running",
+        pid: gatewayFixturePid,
+        state: "running",
+      });
+      serviceDefinitionMutationCapability.mockResolvedValue({
+        kind: capability,
+        reason: "fixture",
+      });
+      primeNpmChannelTag("latest", "2026.7.1");
+      vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+        packageTargetStatus({ target: "latest", version: "2026.7.1", nodeEngine: ">=26.1.0" }),
+      );
+      nodeVersionSatisfiesEngine.mockImplementation(
+        (version: string | null) => version === "26.8.1",
+      );
+      resolveNodeRuntimeInfo.mockImplementation(async (nodePath) => ({
+        status: "supported",
+        version:
+          nodePath === replacementNode || (compatible && nodePath === serviceNode)
+            ? "26.8.1"
+            : "24.20.0",
+        sqliteVersion: "3.51.3",
+        nodeSharedSqlite: false,
+        sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
+      }));
+      const recovery = await import("./update-cli/update-command-node-runtime-resolution.js");
+      const recoverNode = vi
+        .spyOn(recovery, "resolveTargetNodeRuntime")
+        .mockResolvedValue(replacementNode);
+      mockFileBackedPathExists();
+      mockServicePackageCommands({
+        nodeModules: fixture.nodeModules,
+        packageRoot: fixture.root,
+        targetVersion: "2026.7.1",
+        npmCommands: ["npm", fixture.serviceNpm, requireValue(fixture.serviceNpmReal, "npm")],
+        nodeVersions: {
+          [serviceNode]: compatible ? "v26.8.1" : "v24.20.0",
+          [replacementNode]: "v26.8.1",
+        },
+        onGatewayInstall: (argv) =>
+          primeServiceCommand([requireValue(argv[0], "Node"), fixture.entrypoint, "gateway"]),
+      });
+      if (!compatible && (!restart || capability !== "writable")) {
+        await expect(updateCommand({ yes: true, json: true, restart })).rejects.toEqual(
+          new ExitError(1),
+        );
+        expect(lastWriteJsonCall()).toMatchObject({
+          status: "error",
+          reason: "node-runtime-preflight",
+        });
+        expect(
+          commandCalls().find(([argv]) => argv[1] === "i" && argv[2] === "-g"),
+        ).toBeUndefined();
+        expect(recoverNode).not.toHaveBeenCalled();
+        expect(serviceStop).not.toHaveBeenCalled();
+        expect((await serviceReadCommand(process.env)).programArguments[0]).toBe(serviceNode);
+        expect(
+          JSON.parse(await fs.readFile(path.join(fixture.root, "package.json"), "utf8")).version,
+        ).toBe("2026.5.18");
+      } else {
+        await updateCommand({ yes: true, json: true, restart });
+        expect(commandCalls().find(([argv]) => argv[1] === "i" && argv[2] === "-g")).toBeDefined();
+        expect(lastWriteJsonCall()).toMatchObject({ status: "ok" });
+        expect((await serviceReadCommand(process.env)).programArguments[0]).toBe(
+          compatible ? serviceNode : replacementNode,
+        );
+        if (compatible) {
+          expect(recoverNode).not.toHaveBeenCalled();
+        } else {
+          expect(recoverNode).toHaveBeenCalledOnce();
+        }
+      }
+    },
+  );
+
   it("blocks a stale managed service Node before a no-restart package update", async () => {
     resolveNodeRuntimeInfo.mockResolvedValue({
       status: "unsupported",

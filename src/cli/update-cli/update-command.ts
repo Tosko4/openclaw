@@ -279,7 +279,7 @@ async function initializeAndRunUpdate(
                 );
               }
               Object.assign(target, config);
-              await preflightUpdateCommandSchemas({
+              return await preflightUpdateCommandSchemas({
                 ...target,
                 shouldRestart: prepared.shouldRestart,
                 updateStepTimeoutMs: timeoutMs,
@@ -288,7 +288,10 @@ async function initializeAndRunUpdate(
                 opts,
               });
             };
-            await checkSchemas();
+            const schemaPreflight = await checkSchemas();
+            if (!schemaPreflight) {
+              return;
+            }
             const initializationRuntime = await import("./update-command-initialization.js");
             await initializationRuntime.confirmFreshUpdateDowngrade({
               target,
@@ -298,6 +301,7 @@ async function initializeAndRunUpdate(
             initialization.downgradeConfirmed = true;
             const runtime = await preparePackageUpdateRuntime({
               ...target,
+              managedService: schemaPreflight.managedService,
               shouldRestart: prepared.shouldRestart,
               opts,
               executor,
@@ -343,7 +347,9 @@ async function initializeAndRunUpdate(
                         invocationCwd,
                         progress: presentation.progress,
                         assertCurrent: fence.assertCurrent,
-                        checkSchemas,
+                        checkSchemas: async () => {
+                          await checkSchemas();
+                        },
                       });
                     } finally {
                       presentation.dispose();
@@ -550,6 +556,7 @@ async function updateCommandInternal(
   if (updateInstallKind === "package") {
     const runtimePreflight = await preparePackageUpdateRuntime({
       ...target,
+      managedService: schemaPreflight.managedService,
       shouldRestart,
       opts,
       executor,
