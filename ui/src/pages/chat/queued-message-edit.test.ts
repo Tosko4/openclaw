@@ -14,9 +14,9 @@ import {
 import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { applyChatAgentsList } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
 import {
   admitQueuedMessageForSession,
-  markQueuedChatSendsWaitingForReconnect,
   removeQueuedMessageWithoutReleasing,
   subscribeChatOutboxProjection,
   syncVisibleChatQueueProjection,
