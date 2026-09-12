@@ -194,6 +194,7 @@ export async function handleInlineActions(params: {
   model: string;
   blockedModelOverrideRef?: string;
   blockedModelOverrideUsesPrimary?: boolean;
+  missingConfiguredPrimary?: string;
   contextTokens: number;
   directiveAck?: ReplyPayload;
   abortedLastRun: boolean;
@@ -610,6 +611,7 @@ export async function handleInlineActions(params: {
       contextTokens,
       isGroup,
       blockedModelOverrideUsesPrimary: params.blockedModelOverrideUsesPrimary,
+      missingConfiguredPrimary: params.missingConfiguredPrimary,
       skillCommands,
       ...createSkillCommandLoaders(skillCommandsRuntimeLoader.load, {
         ...skillCommandContext,

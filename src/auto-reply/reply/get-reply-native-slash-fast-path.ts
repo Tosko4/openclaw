@@ -503,6 +503,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     blockedModelOverrideRef: directiveResult.result.modelState.blockedModelOverrideRef,
     blockedModelOverrideUsesPrimary:
       directiveResult.result.modelState.blockedModelOverrideUsesPrimary,
+    missingConfiguredPrimary: directiveResult.result.modelState.missingConfiguredPrimary,
     provider: directiveResult.result.provider,
     model: directiveResult.result.model,
     contextTokens: directiveResult.result.contextTokens,

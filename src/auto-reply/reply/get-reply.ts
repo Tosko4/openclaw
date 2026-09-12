@@ -1099,6 +1099,7 @@ export async function getReplyFromConfig(
       resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
       blockedModelOverrideRef: modelState.blockedModelOverrideRef,
       blockedModelOverrideUsesPrimary: modelState.blockedModelOverrideUsesPrimary,
+      missingConfiguredPrimary: modelState.missingConfiguredPrimary,
       provider,
       model,
       contextTokens,

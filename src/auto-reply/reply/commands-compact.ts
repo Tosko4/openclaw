@@ -318,15 +318,16 @@ export const handleCompactCommand: CommandHandler = async (params) => {
         entry: refreshedEntry,
         cfg: params.cfg,
       });
-  const configuredProfile = params.blockedModelOverrideUsesPrimary
-    ? splitTrailingAuthProfile(
-        resolveConfiguredModelPrimaryValue({
-          cfg: params.cfg,
-          agentId: sessionAgentId,
-          sessionKey: params.sessionKey,
-        }) ?? "",
-      ).profile
-    : undefined;
+  const configuredProfile =
+    params.blockedModelOverrideUsesPrimary && !params.missingConfiguredPrimary
+      ? splitTrailingAuthProfile(
+          resolveConfiguredModelPrimaryValue({
+            cfg: params.cfg,
+            agentId: sessionAgentId,
+            sessionKey: params.sessionKey,
+          }) ?? "",
+        ).profile
+      : undefined;
   const replyOperation = params.opts?.replyOperation;
   replyOperation?.setPhase("preflight_compacting");
   const compaction = runtime.compactEmbeddedAgentSession(

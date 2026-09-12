@@ -87,6 +87,7 @@ export type HandleCommandsParams = {
   provider: string;
   model: string;
   blockedModelOverrideUsesPrimary?: boolean;
+  missingConfiguredPrimary?: string;
   contextTokens: number;
   isGroup: boolean;
   skillCommands?: SkillCommandSpec[];
