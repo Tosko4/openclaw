@@ -10761,37 +10761,44 @@ describe("update-cli", () => {
     expect(getErrorOutput()).toContain("native owner refused");
   });
 
+  async function setupDirtyDevCheckout(customLauncher = false) {
+    const base = tempDirs.make("openclaw-update-dirty-");
+    const root = path.join(base, "original");
+    const destination = path.join(base, "fresh");
+    const prefix = path.join(base, "prefix");
+    const bin = path.join(prefix, "bin");
+    const sha = "a".repeat(40);
+    const oldEntry = path.join(root, "dist", "entry.js");
+    await fs.mkdir(bin, { recursive: true });
+    await writeOpenClawPackageFixture(root, "2026.8.1", { git: true, builtSha: sha });
+    await fs.writeFile(path.join(root, "local.txt"), "operator edits\n");
+    const wrapper = customLauncher
+      ? "#!/usr/bin/env bash\necho custom launcher\n"
+      : `#!/usr/bin/env bash\nset -euo pipefail\nexec ${process.execPath} ${oldEntry} "$@"\n`;
+    await fs.writeFile(path.join(bin, "openclaw"), wrapper, { mode: 0o755 });
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    vi.mocked(resolveUpdateInstallKind).mockResolvedValue("git");
+    vi.mocked(resolveUpdateInstallIdentity).mockResolvedValue({ installKind: "git" });
+    mockFileBackedPathExists();
+    const gitStatus = (argv: string[]) => {
+      if (argv[0] === "git" && argv.includes("status")) {
+        return commandResult({ stdout: " M local.txt\n" });
+      }
+      if (argv[0] === "git" && argv.includes("rev-parse") && argv.includes("HEAD")) {
+        return commandResult({ stdout: sha });
+      }
+      return undefined;
+    };
+    return { root, destination, prefix, bin, sha, oldEntry, wrapper, gitStatus };
+  }
+
   it.skipIf(process.platform === "win32").each(["preview", "custom launcher"] as const)(
     "handles a separate dev installation for an edited checkout (%s)",
     async (scenario) => {
-      const base = tempDirs.make("openclaw-update-dirty-preview-");
-      const root = path.join(base, "original");
-      const destination = path.join(base, "fresh");
-      const prefix = path.join(base, "prefix");
-      const bin = path.join(prefix, "bin");
-      const sha = "a".repeat(40);
-      await fs.mkdir(root, { recursive: true });
-      await fs.mkdir(bin, { recursive: true });
-      await writeOpenClawPackageFixture(root, "2026.8.1", { git: true, builtSha: sha });
-      await fs.writeFile(path.join(root, "local.txt"), "operator edits\n");
-      const wrapper =
-        scenario === "preview"
-          ? `#!/usr/bin/env bash\nset -euo pipefail\nexec ${process.execPath} ${root}/dist/entry.js "$@"\n`
-          : "#!/usr/bin/env bash\necho custom launcher\n";
-      await fs.writeFile(path.join(bin, "openclaw"), wrapper, { mode: 0o755 });
-      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
-      vi.mocked(resolveUpdateInstallKind).mockResolvedValue("git");
-      vi.mocked(resolveUpdateInstallIdentity).mockResolvedValue({ installKind: "git" });
-      mockFileBackedPathExists();
-      mockNpmGlobalCommands(path.join(prefix, "lib/node_modules"), async (argv) => {
-        if (argv[0] === "git" && argv.includes("status")) {
-          return commandResult({ stdout: " M local.txt\n" });
-        }
-        if (argv[0] === "git" && argv.includes("rev-parse") && argv.includes("HEAD")) {
-          return commandResult({ stdout: sha });
-        }
-        return undefined;
-      });
+      const { root, destination, prefix, bin, wrapper, gitStatus } = await setupDirtyDevCheckout(
+        scenario === "custom launcher",
+      );
+      mockNpmGlobalCommands(path.join(prefix, "lib/node_modules"), async (argv) => gitStatus(argv));
       await withEnvAsync({ PATH: bin, OPENCLAW_GIT_DIR: destination }, async () => {
         const update = updateCommand({
           channel: "dev",
@@ -10826,24 +10833,10 @@ describe("update-cli", () => {
     .each(["success", "Doctor failure", "runtime preparation failure"] as const)(
     "moves an edited dev installation through managed activation (%s)",
     async (outcome) => {
-      const base = tempDirs.make("openclaw-update-dirty-activation-");
-      const root = path.join(base, "original");
-      const destination = path.join(base, "fresh");
-      const prefix = path.join(base, "prefix");
-      const bin = path.join(prefix, "bin");
-      const sha = "a".repeat(40);
+      const { root, destination, prefix, bin, sha, oldEntry, wrapper, gitStatus } =
+        await setupDirtyDevCheckout();
       const nextSha = "b".repeat(40);
-      const oldEntry = path.join(root, "dist", "entry.js");
       const newEntry = path.join(destination, "dist", "entry.js");
-      await fs.mkdir(bin, { recursive: true });
-      await writeOpenClawPackageFixture(root, "2026.8.1", { git: true, builtSha: sha });
-      await fs.writeFile(path.join(root, "local.txt"), "operator edits\n");
-      const wrapper = `#!/usr/bin/env bash\nset -euo pipefail\nexec ${process.execPath} ${oldEntry} "$@"\n`;
-      await fs.writeFile(path.join(bin, "openclaw"), wrapper, { mode: 0o755 });
-      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
-      vi.mocked(resolveUpdateInstallKind).mockResolvedValue("git");
-      vi.mocked(resolveUpdateInstallIdentity).mockResolvedValue({ installKind: "git" });
-      mockFileBackedPathExists();
       mockNoopPostUpdatePluginConvergence();
       mockRunningManagedGateway(["node", oldEntry, "gateway", "run"]);
       mockGatewayHealth("2026.8.1", "original-checkout", "fixture-original-build");
@@ -10919,12 +10912,6 @@ describe("update-cli", () => {
           mockGatewayHealth(manifest.version, "activated-checkout", build.buildId);
           return commandResult();
         }
-        if (argv[0] === "git" && argv.includes("status")) {
-          return commandResult({ stdout: " M local.txt\n" });
-        }
-        if (argv[0] === "git" && argv.includes("rev-parse") && argv.includes("HEAD")) {
-          return commandResult({ stdout: sha });
-        }
         if (argv[0] === "git" && argv[1] === "clone") {
           const stagingRoot = requireValue(argv.at(-1), "clone destination");
           await writeOpenClawPackageFixture(stagingRoot, "2026.9.4", {
@@ -10952,7 +10939,7 @@ describe("update-cli", () => {
           );
           return commandResult();
         }
-        return undefined;
+        return gitStatus(argv);
       });
       await withEnvAsync({ PATH: bin, OPENCLAW_GIT_DIR: destination }, async () => {
         const update = updateCommand({ channel: "dev", yes: true, json: true });

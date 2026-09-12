@@ -34,6 +34,13 @@ const refuse = (message: string): never => {
   );
 };
 
+function ignoreMissingPath(error: unknown): undefined {
+  if (!hasNodeErrorCode(error, "ENOENT")) {
+    throw error;
+  }
+  return undefined;
+}
+
 /** A dirty source tree can move only through the launcher that already owns this installation. */
 export async function prepareDirtyGitUpdateRelocation(params: {
   root: string;
@@ -117,18 +124,8 @@ export async function prepareDirtyGitUpdateRelocation(params: {
     globalRoot: layout.globalRoot,
     packageRoot,
   };
-  const packageOwner = await fs.realpath(packageRoot).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
-  const packageEntry = await fs.lstat(packageRoot).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  const packageOwner = await fs.realpath(packageRoot).catch(ignoreMissingPath);
+  const packageEntry = await fs.lstat(packageRoot).catch(ignoreMissingPath);
   if (packageEntry && !packageOwner) {
     return refuse(
       "the launcher package target is a broken link. Run openclaw triage for repair help.",
@@ -152,12 +149,7 @@ export async function prepareDirtyGitUpdateRelocation(params: {
   const requestedDirectory = resolveGitInstallDir();
   const override = Boolean(process.env.OPENCLAW_GIT_DIR?.trim());
   let directory = resolvePathViaExistingAncestorSync(requestedDirectory);
-  const entries = await fs.readdir(directory).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  const entries = await fs.readdir(directory).catch(ignoreMissingPath);
   if (
     !override &&
     (entries !== undefined || isPathInside(root, directory) || isPathInside(directory, root))
@@ -171,12 +163,7 @@ export async function prepareDirtyGitUpdateRelocation(params: {
       "OPENCLAW_GIT_DIR overlaps the CLI package target. Choose an empty directory outside the launcher prefix.",
     );
   }
-  const directoryEntry = await fs.lstat(directory).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  const directoryEntry = await fs.lstat(directory).catch(ignoreMissingPath);
   const head = await runCommandWithTimeout(["git", "-C", root, "rev-parse", "HEAD"], {
     cwd: root,
     timeoutMs: params.timeoutMs,
@@ -191,12 +178,7 @@ export async function prepareDirtyGitUpdateRelocation(params: {
   const previousGitCheckout = { ...identity, buildId: previous.buildId };
   const assertCurrent: GitUpdateRelocation["assertCurrent"] = async (options) => {
     if (options?.requireFreshDestination) {
-      const currentDirectoryEntry = await fs.lstat(directory).catch((error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
+      const currentDirectoryEntry = await fs.lstat(directory).catch(ignoreMissingPath);
       if (
         currentDirectoryEntry?.dev !== directoryEntry?.dev ||
         currentDirectoryEntry?.ino !== directoryEntry?.ino ||
@@ -229,18 +211,8 @@ export async function prepareDirtyGitUpdateRelocation(params: {
     ) {
       refuse("the active launcher changed during preparation; retry the update.");
     }
-    const currentOwner = await fs.realpath(packageRoot).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
-    const currentEntry = await fs.lstat(packageRoot).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    const currentOwner = await fs.realpath(packageRoot).catch(ignoreMissingPath);
+    const currentEntry = await fs.lstat(packageRoot).catch(ignoreMissingPath);
     if (
       currentEntry?.dev !== packageEntry?.dev ||
       currentEntry?.ino !== packageEntry?.ino ||
