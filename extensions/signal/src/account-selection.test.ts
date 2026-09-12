@@ -14,6 +14,67 @@ const authored = {
 
 describe("Signal registered account entry points", () => {
   it.each([
+    ["default", true],
+    ["Default.", true],
+    ["default", false],
+    ["Default.", false],
+  ] as const)(
+    "channels.add setupContract preserves default %s winner when restoring its number (restricted=%s)",
+    (key, restricted) => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          signal: {
+            replyToMode: "all",
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            transport: { kind: "external-native", url: "http://127.0.0.1:19961" },
+            accounts: {
+              [key]: {
+                account: "+12025550123",
+                ...(restricted
+                  ? {
+                      enabled: false,
+                      dmPolicy: "allowlist" as const,
+                      allowFrom: ["+12025550126"],
+                      replyToMode: "off" as const,
+                    }
+                  : {}),
+              },
+              "DEFAULT!": { account: "+12025550125", dmPolicy: "disabled" },
+            },
+          },
+        },
+      };
+      const setup = expectDefined(signalPlugin.setupContract, "registered setup contract");
+      const next = setup.applyAccountConfig({
+        cfg,
+        accountId: "work",
+        input: {
+          signalNumber: "+12025550124",
+          signalTransport: "external-native",
+          httpUrl: "http://127.0.0.1:19962",
+        },
+      });
+      expect(signalPlugin.config.resolveAccount(next, "default")).toMatchObject({
+        enabled: !restricted,
+        config: {
+          account: "+12025550123",
+          replyToMode: restricted ? "off" : "all",
+          dmPolicy: restricted ? "allowlist" : "open",
+          allowFrom: restricted ? ["+12025550126"] : ["*"],
+        },
+      });
+      expect(next.channels?.signal?.accounts?.["DEFAULT!"]).toEqual(
+        cfg.channels?.signal?.accounts?.["DEFAULT!"],
+      );
+      expect(signalPlugin.config.resolveAccount(next, "work").config).toMatchObject({
+        dmPolicy: "open",
+        allowFrom: ["*"],
+      });
+    },
+  );
+
+  it.each([
     [false, false],
     [false, true],
     [true, false],

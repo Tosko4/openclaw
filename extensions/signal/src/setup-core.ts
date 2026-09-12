@@ -374,11 +374,9 @@ function restorePromotedSignalDefaultAccount(cfg: OpenClawConfig): OpenClawConfi
   }
   const { account, transport: _shadowedTransport, ...remainingDefault } = promoted;
   const accounts = { ...signal.accounts };
-  if (Object.keys(remainingDefault).length === 0) {
-    delete accounts[promotedKey];
-  } else {
-    accounts[promotedKey] = remainingDefault;
-  }
+  delete accounts[promotedKey];
+  // Retain the canonical winner after its number moves to root, including an empty entry.
+  accounts[DEFAULT_ACCOUNT_ID] = remainingDefault;
   return patchTopLevelChannelConfigSection({ cfg, channel, patch: { account, accounts } });
 }
 

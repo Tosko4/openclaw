@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import {
   defineChannelSetupContract,
   resolveChannelSetupExecutionAdapter,
 } from "./setup-contract.js";
+import { moveSingleAccountChannelSectionToDefaultAccount } from "./setup-helpers.js";
 
 describe("defineChannelSetupContract", () => {
   it("keeps released adapters intact while preferring channel-owned contracts", () => {
@@ -13,6 +15,47 @@ describe("defineChannelSetupContract", () => {
     expect(resolveChannelSetupExecutionAdapter({ setup })).toBe(setup);
     expect(resolveChannelSetupExecutionAdapter({ setup, setupContract })).toBe(setupContract);
     expect(resolveChannelSetupExecutionAdapter({})).toBeUndefined();
+  });
+
+  it("channels.add setup contract keeps ignored aliases ineligible during cold promotion", () => {
+    const next = withPluginCache(createPluginCache(), () => {
+      const plugin = {
+        setupContract: defineChannelSetupContract({
+          fields: {},
+          adapter: {
+            accountKeyPolicy: { canonicalAliasesRequireOwnField: "account" },
+            singleAccountKeysToMove: ["account"],
+            namedAccountPromotionKeys: ["account"],
+            applyAccountConfig: ({ cfg }) => cfg,
+          },
+        }),
+      };
+      const cfg: OpenClawConfig = {
+        channels: {
+          demo: {
+            account: "+12025550123",
+            defaultAccount: "work-phone",
+            accounts: {
+              "Work Phone": { dmPolicy: "open", allowFrom: ["*"] },
+            },
+          },
+        },
+      };
+
+      return moveSingleAccountChannelSectionToDefaultAccount({
+        cfg,
+        channelKey: "demo",
+        setupSurface: resolveChannelSetupExecutionAdapter(plugin),
+      });
+    });
+
+    expect(next.channels?.demo).toEqual({
+      defaultAccount: "work-phone",
+      accounts: {
+        "Work Phone": { dmPolicy: "open", allowFrom: ["*"] },
+        default: { account: "+12025550123" },
+      },
+    });
   });
 
   it("requires field keys to match camelCased long flag names", () => {
