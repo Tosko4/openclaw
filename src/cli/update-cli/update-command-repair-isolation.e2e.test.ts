@@ -182,86 +182,87 @@ describe("staged CLI repair isolation", () => {
                 workspaceDir: string;
               }> = [];
               let proof: RepairProof | undefined;
+              const repairParams: Parameters<typeof runUpdateCommandRepair>[0] = {
+                root: originalRoot,
+                candidateRoot: candidate,
+                env: state.env,
+                run: updateRun,
+                phase: "validating",
+                result: {
+                  status: "error",
+                  mode: "npm",
+                  reason: "candidate-proof-missing",
+                  steps: [],
+                  durationMs: 0,
+                },
+                validate: async (_signal, assertCurrent, rehearsal) => {
+                  assertCurrent();
+                  updateRun.executorFence?.assertCurrent();
+                  // Initial and post-turn checks must preserve the serving files;
+                  // the updater owns its executor again before either oracle.
+                  for (const { file, identity } of before) {
+                    expect(await fileIdentity(file)).toEqual(identity);
+                  }
+                  if (rehearsal) {
+                    oracleTargets.push({
+                      stateDir: rehearsal.stateDir,
+                      configPath: rehearsal.configPath,
+                      workspaceDir: rehearsal.workspaceDir,
+                    });
+                  }
+                  const raw = await fs
+                    .readFile(path.join(candidate, "repair-proof.json"), "utf8")
+                    .catch((error: unknown) => {
+                      if (!hasNodeErrorCode(error, "ENOENT")) {
+                        throw error;
+                      }
+                      return undefined;
+                    });
+                  if (!raw) {
+                    return {
+                      ok: false,
+                      score: 0,
+                      summary: "Candidate repair marker is absent.",
+                    };
+                  }
+                  proof = JSON.parse(raw) as RepairProof;
+                  if (configChange) {
+                    expect(proof.doctor, JSON.stringify(proof.doctor)).toMatchObject({
+                      status: 0,
+                    });
+                    const copiedConfig: unknown = JSON.parse(
+                      await fs.readFile(proof.configPath, "utf8"),
+                    );
+                    expect(copiedConfig).toMatchObject({
+                      meta: { lastTouchedVersion: expect.any(String) },
+                      wizard: { lastRunCommand: "doctor" },
+                      plugins: { enabled: false },
+                    });
+                    const copied = openNodeSqliteDatabase(
+                      path.join(proof.stateDir, "state", "openclaw.sqlite"),
+                    );
+                    try {
+                      expect(
+                        copied.prepare("SELECT value FROM isolation_evidence").get(),
+                      ).toMatchObject({
+                        value: "repaired-copy",
+                      });
+                    } finally {
+                      copied.close();
+                    }
+                  }
+                  if (revokeAfterValidation) {
+                    requesterCurrent = false;
+                    updateRun.requesterAuthority = { requester, isCurrent: () => true };
+                  }
+                  return { ok: true, score: 1, summary: "Candidate repair marker verified." };
+                },
+              };
               const repair = withUpdateCommandExecutor(
                 run.runId,
                 async (executor) => {
                   updateRun.executorFence = await executor.enter(originalRoot);
-                  return await runUpdateCommandRepair({
-                    root: originalRoot,
-                    candidateRoot: candidate,
-                    env: state.env,
-                    run: updateRun,
-                    phase: "validating",
-                    result: {
-                      status: "error",
-                      mode: "npm",
-                      reason: "candidate-proof-missing",
-                      steps: [],
-                      durationMs: 0,
-                    },
-                    validate: async (_signal, assertCurrent, rehearsal) => {
-                      assertCurrent();
-                      updateRun.executorFence?.assertCurrent();
-                      // Initial and post-turn checks must preserve the serving files;
-                      // the updater owns its executor again before either oracle.
-                      for (const { file, identity } of before) {
-                        expect(await fileIdentity(file)).toEqual(identity);
-                      }
-                      if (rehearsal) {
-                        oracleTargets.push({
-                          stateDir: rehearsal.stateDir,
-                          configPath: rehearsal.configPath,
-                          workspaceDir: rehearsal.workspaceDir,
-                        });
-                      }
-                      const raw = await fs
-                        .readFile(path.join(candidate, "repair-proof.json"), "utf8")
-                        .catch((error: unknown) => {
-                          if (!hasNodeErrorCode(error, "ENOENT")) {
-                            throw error;
-                          }
-                          return undefined;
-                        });
-                      if (!raw) {
-                        return {
-                          ok: false,
-                          score: 0,
-                          summary: "Candidate repair marker is absent.",
-                        };
-                      }
-                      proof = JSON.parse(raw) as RepairProof;
-                      if (configChange) {
-                        expect(proof.doctor, JSON.stringify(proof.doctor)).toMatchObject({
-                          status: 0,
-                        });
-                        const copiedConfig: unknown = JSON.parse(
-                          await fs.readFile(proof.configPath, "utf8"),
-                        );
-                        expect(copiedConfig).toMatchObject({
-                          meta: { lastTouchedVersion: expect.any(String) },
-                          wizard: { lastRunCommand: "doctor" },
-                          plugins: { enabled: false },
-                        });
-                        const copied = openNodeSqliteDatabase(
-                          path.join(proof.stateDir, "state", "openclaw.sqlite"),
-                        );
-                        try {
-                          expect(
-                            copied.prepare("SELECT value FROM isolation_evidence").get(),
-                          ).toMatchObject({
-                            value: "repaired-copy",
-                          });
-                        } finally {
-                          copied.close();
-                        }
-                      }
-                      if (revokeAfterValidation) {
-                        requesterCurrent = false;
-                        updateRun.requesterAuthority = { requester, isCurrent: () => true };
-                      }
-                      return { ok: true, score: 1, summary: "Candidate repair marker verified." };
-                    },
-                  });
+                  return await runUpdateCommandRepair(repairParams);
                 },
                 { existingAuthority: { ...executorIdentity, installKey: originalRoot } },
               );

@@ -9,15 +9,10 @@ import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
-import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { installationTargetEnv } from "./installation-target-context.js";
-import {
-  captureManagedUpdateLeaseDatabaseIdentity,
-  createManagedHandoffLeaseDatabase,
-} from "./update-managed-service-handoff-database.js";
 import { prepareUnattendedUpdateRepair, runUpdateRepairLoop } from "./update-repair-agent.js";
 import {
   updateRepairBudgetSchema,
@@ -25,6 +20,7 @@ import {
   type UpdateRepairParams,
   type UpdateRepairResult,
 } from "./update-repair-protocol.js";
+import { withRepairExecutor } from "./update-repair.test-support.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunPhase } from "./update-run-ledger.js";
 
 // Manual triage retains the shared in-process loop. Load its built runtime through
@@ -339,22 +335,7 @@ describe("update repair with a local model provider", () => {
                   ? await runWorkerEnvelope(params)
                   : entry === "manual"
                     ? await runUpdateRepairLoop(params)
-                    : await (async () => {
-                        const control = state.path("executor-control");
-                        await fs.mkdir(control, { mode: 0o700 });
-                        const databasePath = path.join(control, "managed-update-handoffs.sqlite");
-                        const identity = createManagedHandoffLeaseDatabase(databasePath)(true, () =>
-                          captureManagedUpdateLeaseDatabaseIdentity(databasePath),
-                        );
-                        return await withUpdateCommandExecutor(
-                          run.runId,
-                          async (executor) => {
-                            params.executorFence = await executor.enter(state.workspaceDir);
-                            return await prepareUnattendedUpdateRepair(params);
-                          },
-                          { existingAuthority: { ...identity, installKey: state.workspaceDir } },
-                        );
-                      })();
+                    : await withRepairExecutor(params, prepareUnattendedUpdateRepair);
 
               expect(errors).toEqual([]);
               if (revoke !== "none") {

@@ -1,17 +1,12 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { assertSupportedStateSchemaVersion } from "../state/openclaw-state-db-schema-version.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import {
-  captureManagedUpdateLeaseDatabaseIdentity,
-  createManagedHandoffLeaseDatabase,
-} from "./update-managed-service-handoff-database.js";
 import { prepareUnattendedUpdateRepair } from "./update-repair-agent.js";
+import { withRepairExecutor } from "./update-repair.test-support.js";
 
 describe("candidate repair runtime ownership", () => {
   it("lets the candidate read its migrated copy without reopening it in the older parent", async () => {
@@ -71,32 +66,22 @@ process.send({ type: "ready", repairTurns: true, executorDelegation: "pid-start-
           }
           return { ok: false, score: 0, summary: "Candidate lint failed after migration." };
         });
-        const control = state.path("executor-control");
-        await fs.mkdir(control, { mode: 0o700 });
-        const authorityPath = path.join(control, "managed-update-handoffs.sqlite");
-        const identity = createManagedHandoffLeaseDatabase(authorityPath)(true, () =>
-          captureManagedUpdateLeaseDatabaseIdentity(authorityPath),
-        );
-        const runId = randomUUID();
-        const result = await withUpdateCommandExecutor(
-          runId,
-          async (executor) =>
-            await prepareUnattendedUpdateRepair({
-              runId,
-              executorFence: await executor.enter(state.workspaceDir),
-              admissionEnv: state.env,
-              target: {
-                stateDir: copiedState,
-                configPath: copiedConfig,
-                workspaceDir: state.workspaceDir,
-                installRoot: candidateRoot,
-                environment: { ...state.env, HOME: state.path("copied-home") },
-              },
-              context: { error: "Update health check failed", phase: "validating" },
-              budget: { wallClockMs: 10_000 },
-              validate,
-            }),
-          { existingAuthority: { ...identity, installKey: state.workspaceDir } },
+        const result = await withRepairExecutor(
+          {
+            admissionEnv: state.env,
+            target: {
+              stateDir: copiedState,
+              configPath: copiedConfig,
+              workspaceDir: state.workspaceDir,
+              installRoot: candidateRoot,
+              environment: { ...state.env, HOME: state.path("copied-home") },
+            },
+            context: { error: "Update health check failed", phase: "validating" },
+            budget: { wallClockMs: 10_000 },
+            validate,
+          },
+          prepareUnattendedUpdateRepair,
+          state.workspaceDir,
         );
         expect(result).toMatchObject({
           status: "unavailable",

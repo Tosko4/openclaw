@@ -5,7 +5,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import { runUpdateCommandRepair } from "../cli/update-cli/update-command-repair.js";
 import { admitUpdateCommandRun } from "../cli/update-cli/update-command-run.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
@@ -20,6 +19,7 @@ import {
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 import { prepareUnattendedUpdateRepair } from "./update-repair-agent.js";
 import type { UpdateRepairEvent, UpdateRepairParams } from "./update-repair-protocol.js";
+import { withRepairExecutor } from "./update-repair.test-support.js";
 import * as requesterOwner from "./update-requester-authority.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunPhase } from "./update-run-ledger.js";
 
@@ -46,26 +46,6 @@ function repairParams(state: {
   };
 }
 
-async function withRepairExecutor<T>(
-  params: UpdateRepairParams,
-  operation: (params: UpdateRepairParams) => Promise<T>,
-): Promise<T> {
-  const control = path.join(params.target.installRoot, "executor-control");
-  await fs.mkdir(control, { recursive: true, mode: 0o700 });
-  const databasePath = path.join(control, "managed-update-handoffs.sqlite");
-  const identity = createManagedHandoffLeaseDatabase(databasePath)(true, () =>
-    captureManagedUpdateLeaseDatabaseIdentity(databasePath),
-  );
-  const runId = params.runId ?? randomUUID();
-  return await withUpdateCommandExecutor(
-    runId,
-    async (executor) => {
-      const executorFence = await executor.enter(params.target.installRoot);
-      return await operation({ ...params, runId, executorFence });
-    },
-    { existingAuthority: { ...identity, installKey: params.target.installRoot } },
-  );
-}
 function prepareOwnedRepair(params: UpdateRepairParams) {
   return withRepairExecutor(params, prepareUnattendedUpdateRepair);
 }
@@ -274,16 +254,10 @@ describe("fresh candidate repair process", () => {
             const events: UpdateRepairEvent[] = [];
             let validations = 0;
             let restarts = 0;
-            const control = state.path("executor-control");
-            await fs.mkdir(control, { mode: 0o700 });
-            const databasePath = path.join(control, "managed-update-handoffs.sqlite");
-            const identity = createManagedHandoffLeaseDatabase(databasePath)(true, () =>
-              captureManagedUpdateLeaseDatabaseIdentity(databasePath),
-            );
-            const result = await withUpdateCommandExecutor(
-              run.runId,
-              async (executor) => {
-                run.executorFence = await executor.enter(state.workspaceDir);
+            const result = await withRepairExecutor(
+              { ...repairParams(state), runId: run.runId },
+              async ({ executorFence }) => {
+                run.executorFence = executorFence;
                 return await runUpdateCommandRepair({
                   root: state.workspaceDir,
                   env: run.env,
@@ -323,7 +297,6 @@ describe("fresh candidate repair process", () => {
                   },
                 });
               },
-              { existingAuthority: { ...identity, installKey: state.workspaceDir } },
             );
             expect(result).toMatchObject({
               status: "repaired",
@@ -351,60 +324,6 @@ describe("fresh candidate repair process", () => {
       );
     },
   );
-
-  it("repairs a candidate rehearsal in the staged candidate runtime", async () => {
-    await withOpenClawTestState(
-      { prefix: "repair-candidate-rehearsal-", layout: "home" },
-      async (state) => {
-        // The candidate owns rehearsal state it has already migrated to its own
-        // schema. Only its runtime may open that state during pre-activation repair.
-        const candidateRoot = path.join(state.workspaceDir, "candidate");
-        await candidate(
-          candidateRoot,
-          `
-        import fs from "node:fs";
-        process.on("message", message => {
-          if (message.type !== "start") return;
-          fs.writeFileSync("candidate-repair-pid", String(process.pid));
-          fs.writeFileSync("candidate-repair-state", message.target.stateDir);
-          process.send({ type: "event", event: { type: "route-selected", provider: "openai", model: "gpt-5.6-luna" } });
-          process.send({ type: "turn-result", result: { status: "completed", provider: "openai", model: "gpt-5.6-luna", toolCalls: 1, summary: "Update repaired.", timedOut: false } }, () => process.disconnect());
-        });
-        process.send({ type: "ready", repairTurns: true, executorDelegation: "pid-start-v1" });
-      `,
-        );
-        const rehearsalStateDir = state.path("rehearsal");
-        await fs.mkdir(rehearsalStateDir, { recursive: true });
-        const result = await prepareOwnedRepair({
-          target: {
-            stateDir: rehearsalStateDir,
-            configPath: path.join(rehearsalStateDir, "openclaw.json"),
-            workspaceDir: path.join(rehearsalStateDir, "workspace"),
-            installRoot: candidateRoot,
-          },
-          context: { error: "Candidate lint failed", phase: "validating" },
-          budget: { maxTurns: 1, wallClockMs: 30_000 },
-          validate: async () => ({
-            ok: await fs.access(path.join(candidateRoot, "candidate-repair-state")).then(
-              () => true,
-              () => false,
-            ),
-            score: 0,
-            summary: "Update health check",
-          }),
-        });
-
-        expect(result, JSON.stringify(result)).toMatchObject({ status: "repaired" });
-        const pid = Number(
-          await fs.readFile(path.join(candidateRoot, "candidate-repair-pid"), "utf8"),
-        );
-        expect(pid).not.toBe(process.pid);
-        expect(await fs.readFile(path.join(candidateRoot, "candidate-repair-state"), "utf8")).toBe(
-          rehearsalStateDir,
-        );
-      },
-    );
-  });
 
   it("keeps admission separate from the rehearsal environment sent to the child", async () => {
     await withOpenClawTestState({ prefix: "repair-child-env-", layout: "home" }, async (state) => {
