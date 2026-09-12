@@ -22,10 +22,12 @@ import {
 } from "./redact-pattern-runtime.js";
 import {
   AWS_SECRET_ACCESS_KEY_FIELD_KEYS,
+  AWS_SECRET_ACCESS_KEY_MATCHER,
   BASE64_SAFE_TOKEN_BOUNDARY,
   BODY_SECRET_KEYS,
   CHUNK_UNSAFE_PATTERN_SOURCES,
   DEFAULT_REDACT_PATTERNS,
+  DEFAULT_REDACT_STRING_PATTERNS,
   FORM_AWARE_EQUALS_ASSIGNMENT_PATTERN_SOURCES,
   FORM_BODY_KEY_INVISIBLE_CHARS,
   IDENTIFIER_SAFE_TOKEN_BOUNDARY,
@@ -127,7 +129,6 @@ const DEFAULT_REDACT_PREFILTER_SOURCES: string[] = [
   String.raw`sk-|gh[opsur]_|github_pat_|glpat-|gloas-|gldt-|glcbt-|glptt-|glft-|glimt-|glagent-|glwt-|glsoat-|glffct-|glrt-|glrtr-|GR1348941|_gitlab_session=|xox[baprs]-|xapp-|hooks\.slack\.com|discord|gsk_|AIza|ya29\.|1\/\/0|eyJ|pplx-|fal_|fc-|bb_live_|gAAAA|[sr]k_(?:live|test)_|\bSG\.|npm_|pypi-|do[opr]_v1_|dp\.(?:ct|pt|sa|st|scim|audit)\.|dckr_|bkua_|CCIPAT_|sbp_|dapi[0-9a-f]|dd[pw]_|glsa_|nfp_|CFPAT-|ATCTT3|ATATT|ATBB|BBDC-|HRKU-|pat-(?:eu|na)1-|apify_api_|FlyV1|fio-u-|tvly-|exa_|syt_|retaindb_|mem0_|brv_|xai-|fw-|fw_|fpk_`,
   String.raw`(?:^|[^A-Za-z0-9_])(?:am_|sk_)`,
   String.raw`A[KS]IA[A-Z0-9]|AKID|LTAI|hf_|api_org_|r8_`,
-  String.raw`[A-Za-z0-9/+=]{40}`,
   String.raw`\bbot\d{6,}:|\b\d{6,}:[A-Za-z0-9_-]{20,}`,
   // Obfuscated form/URL keys: percent escapes can rewrite any key letter, while plus or
   // invisible splices break the literal key-name triggers above mid-word. After a splice the
@@ -218,8 +219,10 @@ function includesDefaultRedactPatterns(value?: readonly RedactPattern[]): boolea
   }
   const source = new Set(value);
   return (
-    DEFAULT_REDACT_PATTERNS.every((pattern) => source.has(pattern)) ||
-    TOOL_PAYLOAD_REDACT_PATTERNS.every((pattern) => source.has(pattern))
+    DEFAULT_REDACT_STRING_PATTERNS.every((pattern) => source.has(pattern)) ||
+    TOOL_PAYLOAD_REDACT_PATTERNS.every(
+      (pattern) => typeof pattern !== "string" || source.has(pattern),
+    )
   );
 }
 
@@ -664,7 +667,7 @@ function redactMatch(
   return `${match.slice(0, tokenIndex)}${masked}${match.slice(tokenIndex + token.length)}`;
 }
 
-function redactText(
+export function redactText(
   text: string,
   patterns: ResolvedRedactPattern[],
   options?: {
@@ -696,7 +699,7 @@ function redactText(
 }
 
 function couldMatchDefaultRedactPatterns(text: string): boolean {
-  return DEFAULT_REDACT_PREFILTER_RE.test(text);
+  return DEFAULT_REDACT_PREFILTER_RE.test(text) || AWS_SECRET_ACCESS_KEY_MATCHER.couldMatch(text);
 }
 
 function markPatternMatchRedaction(
