@@ -44,7 +44,12 @@ type GitHubIdentityMetadataCache = {
   pending: Map<string, Promise<ResolvedGitHubUserIdentity>>;
 };
 const identityMetadataCaches = new WeakMap<typeof fetch, GitHubIdentityMetadataCache>();
-type AuthenticatedGitHubIdentitySyncResult = { profileId: string; updatedAt: number };
+export type AuthenticatedGitHubIdentity = { profileId: string; accountId: number; login: string };
+type AuthenticatedGitHubIdentitySyncResult = {
+  profileId: string;
+  updatedAt: number;
+  githubIdentity: { accountId: number; login: string };
+};
 export type AuthenticatedGitHubIdentitySync = () => Promise<AuthenticatedGitHubIdentitySyncResult>;
 
 function headerValue(value: string | string[] | undefined): string | undefined {
@@ -277,7 +282,7 @@ export function createAuthenticatedGitHubIdentitySync(params: {
         authenticationAlias: { kind: "github-login", login: tailscaleLogin.subject },
         initialDisplayName: params.authResult.tailscaleIdentity?.name,
       });
-      return { profileId: profile.id, updatedAt: profile.updatedAt };
+      return { profileId: profile.id, updatedAt: profile.updatedAt, githubIdentity: identity };
     });
   }
 
@@ -323,6 +328,6 @@ export function createAuthenticatedGitHubIdentitySync(params: {
       authenticationAlias: { kind: "email", email: access.principal },
       initialDisplayName: accessIdentity.initialDisplayName,
     });
-    return { profileId: profile.id, updatedAt: profile.updatedAt };
+    return { profileId: profile.id, updatedAt: profile.updatedAt, githubIdentity: lookup.identity };
   });
 }

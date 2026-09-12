@@ -655,11 +655,17 @@ export function createExecApprovalHandlers(
                 details: APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS,
               };
         },
-        resolveRecord: ({ approvalId, decision: decisionLocal, resolvedBy, resolver }) => {
+        resolveRecord: ({
+          approvalId,
+          decision: decisionLocal,
+          resolvedBy,
+          resolver,
+          decisionActor,
+        }) => {
           if (autoReviewResolution) {
             return manager.resolveAutoReview(approvalId, resolvedBy);
           }
-          const grantOptions = grantExpiresAtMs !== undefined ? { grantExpiresAtMs } : {};
+          const grantOptions = { grantExpiresAtMs, decisionActor };
           return resolver
             ? manager.resolveDetailed(
                 approvalId,

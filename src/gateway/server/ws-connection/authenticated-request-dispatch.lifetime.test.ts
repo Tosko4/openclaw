@@ -77,7 +77,11 @@ describe("authenticated request completion", { concurrent: false }, () => {
             hasAvatar: false,
             updatedAt: 1,
           };
-          return { profileId: "lifetime-profile", updatedAt: 1 };
+          return {
+            profileId: "lifetime-profile",
+            updatedAt: 1,
+            githubIdentity: { accountId: 101, login: "lifetime" },
+          };
         };
       }
       const dispatch = harness.dispatcher

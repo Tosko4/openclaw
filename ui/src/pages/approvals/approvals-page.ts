@@ -500,7 +500,20 @@ class ApprovalsPage extends OpenClawLightDomElement {
                           ${sourceLabel(item)}
                         </td>
                         <td class="mono" data-label=${t("approvalHistory.columns.resolver")}>
-                          ${resolverLabel(item)}
+                          ${
+                            item.decisionActor
+                              ? html`<div>
+                                  <div>
+                                    ${
+                                      item.decisionActor.githubLogin
+                                        ? `@${item.decisionActor.githubLogin} · `
+                                        : nothing
+                                    }${item.decisionActor.profileId}
+                                  </div>
+                                  ${resolverLabel(item)}
+                                </div>`
+                              : resolverLabel(item)
+                          }
                         </td>
                       </tr>
                     `,

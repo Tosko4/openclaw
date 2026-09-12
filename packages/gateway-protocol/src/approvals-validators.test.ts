@@ -325,6 +325,30 @@ describe("unified approval protocol validators", () => {
     expect(validateApprovalHistoryParams({ kind: "tool" })).toBe(false);
 
     expect(validateApprovalHistoryResult({ items: [terminal], nextCursor: "next" })).toBe(true);
+    for (const decisionActor of [
+      { profileId: "person-a" },
+      { profileId: "person-a", githubLogin: "reviewer-a" },
+    ]) {
+      expect(validateApprovalHistoryResult({ items: [{ ...terminal, decisionActor }] })).toBe(true);
+      expect(
+        validateApprovalResolveParams({
+          id: terminal.id,
+          kind: "plugin",
+          decision: "deny",
+          decisionActor,
+        }),
+      ).toBe(false);
+    }
+    for (const decisionActor of [
+      { profileId: "" },
+      { profileId: "x".repeat(257) },
+      { profileId: "person-a", githubLogin: "not a login" },
+      { profileId: "person-a", email: "reviewer@example.test" },
+    ]) {
+      expect(validateApprovalHistoryResult({ items: [{ ...terminal, decisionActor }] })).toBe(
+        false,
+      );
+    }
     expect(validateApprovalHistoryResult({ items: [{ ...execRecord, status: "pending" }] })).toBe(
       false,
     );

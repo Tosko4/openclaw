@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { validateApprovalHistoryResult } from "../../../../packages/gateway-protocol/src/approval-result-validators.js";
 import type { ApprovalHistoryResult } from "../../../../packages/gateway-protocol/src/schema/approvals.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -110,6 +111,40 @@ function stubGrants(
 }
 
 describe("ApprovalsPage", () => {
+  it("renders historical people as plain text while retaining transport attribution", async () => {
+    const history: ApprovalHistoryResult = {
+      items: [
+        {
+          ...terminal("known", 3_000),
+          decisionActor: { profileId: "person-a", githubLogin: "historical-reviewer" },
+        },
+        { ...terminal("profile-only", 2_000), decisionActor: { profileId: "person-b" } },
+        terminal("unknown", 1_000),
+      ],
+    };
+    expect(validateApprovalHistoryResult(history)).toBe(true);
+    const request = vi.fn().mockResolvedValue(history);
+    const { page } = createPage(stubGrants(request));
+    await settle(page);
+    const rows = page.querySelectorAll(".approval-history-table tbody tr");
+    expect(rows[0]?.textContent).toContain("@historical-reviewer");
+    expect(rows[0]?.textContent).toContain("person-a");
+    expect(rows[0]?.textContent).toContain("reviewer-device");
+    expect(rows[1]?.textContent).toContain("person-b");
+    expect(rows[2]?.textContent).not.toContain("person-");
+    for (const [index, profileId] of [
+      [0, "person-a"],
+      [1, "person-b"],
+    ] as const) {
+      const resolverCell = rows[index]?.lastElementChild;
+      expect(resolverCell?.childElementCount).toBe(1);
+      expect(resolverCell?.firstElementChild?.textContent).toContain(profileId);
+      expect(resolverCell?.firstElementChild?.textContent).toContain("reviewer-device");
+    }
+    expect(rows[2]?.lastElementChild?.childElementCount).toBe(0);
+    expect(page.querySelector('a[href^="https://github.com/"]')).toBeNull();
+    expect(request).toHaveBeenCalledOnce();
+  });
   it("loads and renders terminal history, then paginates", async () => {
     const request = vi
       .fn()

@@ -4,7 +4,10 @@ import type { TranscriptSenderIdentity } from "../../chat/sender-identity.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
-import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.js";
+import type {
+  AuthenticatedGitHubIdentity,
+  AuthenticatedGitHubIdentitySync,
+} from "../github-user-identity.js";
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import type { GatewayWsBrowserOrigin } from "../server/ws-types.js";
@@ -47,6 +50,8 @@ export type GatewayClient = {
   /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
   authenticatedUserIsTailscaleProvider?: boolean;
   authenticatedGitHubIdentitySync?: AuthenticatedGitHubIdentitySync;
+  /** Verified account binding captured at authentication, never accepted from wire params. */
+  authenticatedGitHubIdentity?: AuthenticatedGitHubIdentity;
   authenticatedUserProfile?: {
     profileId: string;
     displayName: string | null;

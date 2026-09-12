@@ -25,6 +25,7 @@ import {
   insertOperatorApproval,
   resolveOperatorApproval,
   type ForceDenyOperatorApprovalResult,
+  type OperatorApprovalDecisionActor,
   type OperatorApprovalKind,
   type OperatorApprovalRecord,
   type OperatorApprovalResolver,
@@ -259,6 +260,7 @@ export class ExecApprovalManager<
     options: {
       /** Explicit grant expiry override; undefined defers to the configured default. */
       grantExpiresAtMs?: number | null;
+      decisionActor?: OperatorApprovalDecisionActor;
     } = {},
   ): ExecApprovalResolveResult<TPayload> {
     if (this.retired) {
@@ -332,6 +334,7 @@ export class ExecApprovalManager<
         decision,
         resolver,
         expectedKind: this.approvalKind,
+        decisionActor: localResolutionSource === "operator" ? options.decisionActor : undefined,
         runtimeEpoch: persistence.runtimeEpoch,
         databaseOptions: persistence.databaseOptions,
         ...(standingGrant?.kind === "cron" ? { standingGrant } : {}),
@@ -578,7 +581,10 @@ export class ExecApprovalManager<
     recordId: string,
     decision: ExecApprovalDecision,
     resolvedBy?: string | null,
-    options: { grantExpiresAtMs?: number | null } = {},
+    options: {
+      grantExpiresAtMs?: number | null;
+      decisionActor?: OperatorApprovalDecisionActor;
+    } = {},
   ): boolean {
     return (
       this.resolveDetailed(

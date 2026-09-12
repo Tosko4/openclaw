@@ -174,6 +174,7 @@ describe("presence projection store admission", () => {
       pending.authenticatedGitHubIdentitySync = async () => ({
         profileId: "pending",
         updatedAt: 1,
+        githubIdentity: { accountId: 101, login: "pending" },
       });
       const node = recipient();
       node.connect.role = "node";

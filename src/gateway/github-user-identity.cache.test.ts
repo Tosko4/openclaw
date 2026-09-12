@@ -109,8 +109,12 @@ describe("GitHub public identity metadata cache", () => {
         );
       stubIdentityFetch(metadata);
       const first = await createAccessSync()();
+      expect(first.githubIdentity).toMatchObject({ accountId: 101, login: "ada" });
       clock.mockReturnValue(1_800_000_000_000 + CACHE_TTL_MS - 1);
-      await expect(createAccessSync()()).resolves.toMatchObject({ profileId: first.profileId });
+      await expect(createAccessSync()()).resolves.toMatchObject({
+        profileId: first.profileId,
+        githubIdentity: { accountId: 101, login: "ada" },
+      });
       expect(metadata).toHaveBeenCalledOnce();
       clock.mockReturnValue(1_800_000_000_000 + CACHE_TTL_MS);
       await expect(createAccessSync()()).resolves.toMatchObject({
@@ -123,7 +127,10 @@ describe("GitHub public identity metadata cache", () => {
       await createAccessSync()();
       expect(metadata).toHaveBeenCalledTimes(2);
       clock.mockReturnValue(1_800_000_000_000 + 2 * CACHE_TTL_MS);
-      await createAccessSync()();
+      await expect(createAccessSync()()).resolves.toMatchObject({
+        profileId: first.profileId,
+        githubIdentity: { accountId: 101, login: "ada-renamed" },
+      });
       expect(getUserProfileListItem(first.profileId).githubIdentity?.login).toBe("ada-renamed");
     });
   });
@@ -320,8 +327,14 @@ describe("GitHub public identity metadata cache", () => {
       stubIdentityFetch(metadata, access);
       const first = await createAccessSync()();
       clock.mockReturnValue(1_800_000_000_000 + CACHE_TTL_MS);
-      await expect(createAccessSync()()).resolves.toMatchObject({ profileId: first.profileId });
-      await expect(createAccessSync()()).resolves.toMatchObject({ profileId: first.profileId });
+      await expect(createAccessSync()()).resolves.toMatchObject({
+        profileId: first.profileId,
+        githubIdentity: { accountId: 101, login: "ada" },
+      });
+      await expect(createAccessSync()()).resolves.toMatchObject({
+        profileId: first.profileId,
+        githubIdentity: { accountId: 101, login: "ada" },
+      });
       access.email = "new-principal@example.test";
       await expect(createAccessSync(access.email)()).rejects.toMatchObject({ statusCode: 429 });
       expect(metadata).toHaveBeenCalledTimes(2);
@@ -348,6 +361,8 @@ describe("GitHub public identity metadata cache", () => {
       };
       const first = await sync();
       const second = await sync();
+      expect(first.githubIdentity).toMatchObject({ accountId: 101, login: "ada" });
+      expect(second.githubIdentity).toMatchObject({ accountId: 102, login: "ada" });
       expect(second.profileId).not.toBe(first.profileId);
       expect(transport).toHaveBeenCalledTimes(2);
     });

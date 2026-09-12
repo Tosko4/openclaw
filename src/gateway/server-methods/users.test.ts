@@ -8,6 +8,7 @@ import {
   validateUsersSetRoleResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { UserProfileOwnerError } from "../../state/user-profiles-schema.js";
+import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.js";
 import { usersHandlers } from "./users.js";
 
 const linkEmail = vi.hoisted(() => vi.fn());
@@ -212,9 +213,9 @@ describe("users gateway methods", () => {
       authenticatedUserIsTailscaleProvider: true,
       connect: { scopes: ["operator.write"] },
     };
-    const authenticatedGitHubIdentitySync = vi.fn(
+    const authenticatedGitHubIdentitySync = vi.fn<AuthenticatedGitHubIdentitySync>(
       async () =>
-        await new Promise<{ profileId: string; updatedAt: number }>((resolve) => {
+        await new Promise<Awaited<ReturnType<AuthenticatedGitHubIdentitySync>>>((resolve) => {
           finishSync = () => {
             providerClient.authenticatedUserProfile = {
               profileId: profile.id,
@@ -222,7 +223,11 @@ describe("users gateway methods", () => {
               hasAvatar: false,
               updatedAt: 1,
             };
-            resolve({ profileId: profile.id, updatedAt: profile.updatedAt });
+            resolve({
+              profileId: profile.id,
+              updatedAt: profile.updatedAt,
+              githubIdentity: { accountId: 101, login: "ada" },
+            });
           };
         }),
     );
@@ -247,7 +252,7 @@ describe("users gateway methods", () => {
       connect: { scopes: ["operator.write"] },
     };
     const authenticatedGitHubIdentitySync = vi
-      .fn()
+      .fn<AuthenticatedGitHubIdentitySync>()
       .mockRejectedValueOnce(new Error("network unavailable"))
       .mockImplementationOnce(async () => {
         providerClient.authenticatedUserProfile = {
@@ -256,7 +261,11 @@ describe("users gateway methods", () => {
           hasAvatar: false,
           updatedAt: 1,
         };
-        return { profileId: profile.id, updatedAt: profile.updatedAt };
+        return {
+          profileId: profile.id,
+          updatedAt: profile.updatedAt,
+          githubIdentity: { accountId: 101, login: "ada" },
+        };
       });
     providerClient.authenticatedGitHubIdentitySync = authenticatedGitHubIdentitySync;
     resolveUserProfileId.mockReturnValue(profile.id);

@@ -226,6 +226,17 @@ const ApprovalResolutionFields = {
   resolvedAtMs: Type.Integer({ minimum: 0 }),
   source: Type.Optional(ApprovalHistorySourceAttributionSchema),
   resolver: Type.Optional(ApprovalHistoryResolverAttributionSchema),
+  decisionActor: Type.Optional(
+    closedObject({
+      profileId: Type.String({ minLength: 1, maxLength: 256 }),
+      githubLogin: Type.Optional(
+        Type.String({
+          maxLength: 39,
+          pattern: "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$",
+        }),
+      ),
+    }),
+  ),
 };
 
 /** Approval that has not yet accepted a reviewer decision. */

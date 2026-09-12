@@ -67,7 +67,11 @@ describe("gateway client identity", () => {
   it("keeps a GitHub-backed mutable alias unattributed until immutable sync completes", () => {
     const client = {
       authenticatedUserId: "released-login@github",
-      authenticatedGitHubIdentitySync: async () => ({ profileId: "owner", updatedAt: 1 }),
+      authenticatedGitHubIdentitySync: async () => ({
+        profileId: "owner",
+        updatedAt: 1,
+        githubIdentity: { accountId: 101, login: "released-login" },
+      }),
     } as GatewayClient;
 
     expect(gatewayClientSenderFields(client)).toEqual({});

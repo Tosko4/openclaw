@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail, getUserProfileListItem } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { AuthenticatedGitHubIdentitySync } from "./github-user-identity.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
@@ -55,7 +56,7 @@ describe("Gateway pending-profile authorization", () => {
   it.each(["chat.send", "models.list"])(
     "waits for immutable profile attachment before %s dispatch",
     async (method) => {
-      const deferred = createDeferredCore<{ profileId: string; updatedAt: number }>();
+      const deferred = createDeferredCore<Awaited<ReturnType<AuthenticatedGitHubIdentitySync>>>();
       const client = createPendingProfileClient();
       client.authenticatedGitHubIdentitySync = vi.fn(async () => await deferred.promise);
       const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
@@ -78,7 +79,11 @@ describe("Gateway pending-profile authorization", () => {
         hasAvatar: false,
         updatedAt: 1,
       };
-      deferred.resolve({ profileId: "profile-canonical", updatedAt: 1 });
+      deferred.resolve({
+        profileId: "profile-canonical",
+        updatedAt: 1,
+        githubIdentity: { accountId: 101, login: "canonical" },
+      });
 
       await expect(request).resolves.toHaveBeenCalledWith(true, { ok: true });
       expect(handler).toHaveBeenCalledOnce();
@@ -88,7 +93,7 @@ describe("Gateway pending-profile authorization", () => {
   it("returns retryable unavailability without dispatch and retries on the next request", async () => {
     const client = createPendingProfileClient();
     client.authenticatedGitHubIdentitySync = vi
-      .fn()
+      .fn<AuthenticatedGitHubIdentitySync>()
       .mockRejectedValueOnce(new Error("private provider detail"))
       .mockImplementationOnce(async () => {
         client.authenticatedUserProfile = {
@@ -97,7 +102,11 @@ describe("Gateway pending-profile authorization", () => {
           hasAvatar: false,
           updatedAt: 2,
         };
-        return { profileId: "profile-retried", updatedAt: 2 };
+        return {
+          profileId: "profile-retried",
+          updatedAt: 2,
+          githubIdentity: { accountId: 101, login: "retried" },
+        };
       });
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
 
@@ -252,7 +261,7 @@ describe("Gateway pending-profile authorization", () => {
     for (const method of ["users.self", "status"]) {
       const client = createPendingProfileClient();
       client.authenticatedGitHubIdentitySync = vi.fn(
-        () => new Promise<{ profileId: string; updatedAt: number }>(() => {}),
+        () => new Promise<Awaited<ReturnType<AuthenticatedGitHubIdentitySync>>>(() => {}),
       );
       const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
       const methodRegistry = createGatewayMethodRegistry([

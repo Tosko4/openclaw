@@ -67,7 +67,7 @@ function selectStoredGitHubIdentities(
 export function resolveCachedGitHubIdentity(
   params: { accountId: number; email: string },
   options: OpenClawStateDatabaseOptions = {},
-): { profileId: string; updatedAt: number } | undefined {
+): { profileId: string; updatedAt: number; githubIdentity: StoredGitHubIdentity } | undefined {
   const email = params.email.trim().toLowerCase();
   if (!email || !Number.isSafeInteger(params.accountId) || params.accountId <= 0) {
     return undefined;
@@ -88,7 +88,7 @@ export function resolveCachedGitHubIdentity(
   }
   const identity = selectStoredGitHubIdentities(db, [profile.id]).get(profile.id);
   return identity?.accountId === params.accountId
-    ? { profileId: profile.id, updatedAt: profile.updated_at }
+    ? { profileId: profile.id, updatedAt: profile.updated_at, githubIdentity: identity }
     : undefined;
 }
 

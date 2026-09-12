@@ -328,6 +328,7 @@ describe("live person presence timing", () => {
     delayed.client.authenticatedGitHubIdentitySync = async () => ({
       profileId: "delayed-person",
       updatedAt: 1,
+      githubIdentity: { accountId: 101, login: "delayed-person" },
     });
     const started = Date.now();
     delayed.handler.setClient(delayed.client);

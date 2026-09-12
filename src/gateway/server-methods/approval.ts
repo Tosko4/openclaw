@@ -31,11 +31,14 @@ import {
   canResolveOperatorApproval,
   canReviewOperatorApproval,
 } from "../operator-approval-authorization.js";
+import { resolveOperatorApprovalDecisionActor } from "../operator-approval-decision-actor.js";
 import { projectOperatorApprovalSnapshot } from "../operator-approval-snapshot.js";
 import {
   getOperatorApprovalDetailed,
   listTerminalOperatorApprovals,
   OperatorApprovalHistoryCursorError,
+  projectOperatorApprovalDecisionActor,
+  type OperatorApprovalDecisionActor,
   type OperatorApprovalRecord,
   type OperatorApprovalResolver,
 } from "../operator-approval-store.js";
@@ -67,12 +70,14 @@ function buildApprovalSnapshot(
     return snapshot;
   }
   // Terminal attribution belongs to RPC readers; session events omit it.
+  const decisionActor = projectOperatorApprovalDecisionActor(record);
   return {
     ...snapshot,
     source: {
       ...(record.source.agentId ? { agentId: record.source.agentId } : {}),
       ...(record.source.sessionKey ? { sessionKey: record.source.sessionKey } : {}),
     },
+    ...(decisionActor ? { decisionActor } : {}),
     ...(record.resolver
       ? {
           resolver: {
@@ -241,6 +246,7 @@ function applyApprovalDecision<TPayload>(params: {
   forceMalformedDeny: boolean;
   resolver: OperatorApprovalResolver;
   localResolvedBy: string | null;
+  decisionActor?: OperatorApprovalDecisionActor;
   grantExpiresAtMs?: number;
 }): ApplyApprovalDecisionResult<TPayload> {
   const result = params.forceMalformedDeny
@@ -259,7 +265,7 @@ function applyApprovalDecision<TPayload>(params: {
         params.resolver,
         params.localResolvedBy,
         "operator",
-        params.grantExpiresAtMs !== undefined ? { grantExpiresAtMs: params.grantExpiresAtMs } : {},
+        { grantExpiresAtMs: params.grantExpiresAtMs, decisionActor: params.decisionActor },
       );
   if (result.outcome === "decision-not-allowed") {
     return applyApprovalDecision({ ...params, forceMalformedDeny: true });
@@ -441,6 +447,7 @@ export function createApprovalHandlers(
         ? ({ kind: "channel", id: custody.resolverId } as const)
         : resolveApprovalResolver(client);
       const localResolvedBy = resolveLegacyApprovalLabel(client);
+      const decisionActor = custody ? undefined : resolveOperatorApprovalDecisionActor(client);
       const requestedDecision = resolveParams?.decision ?? null;
       const decisionAllowed =
         requestedDecision === "deny" ||
@@ -464,6 +471,7 @@ export function createApprovalHandlers(
                 forceMalformedDeny,
                 resolver,
                 localResolvedBy,
+                decisionActor,
                 // Grant terms freeze at resolve; an explicit per-resolve
                 // override (custom operator UIs, CLI) beats the config default.
                 ...(requestedDecision === "allow-always" &&
@@ -482,6 +490,7 @@ export function createApprovalHandlers(
                   forceMalformedDeny,
                   resolver,
                   localResolvedBy,
+                  decisionActor,
                 })
               : applyApprovalDecision({
                   manager: params.systemAgentApprovalManager!,
@@ -490,6 +499,7 @@ export function createApprovalHandlers(
                   forceMalformedDeny,
                   resolver,
                   localResolvedBy,
+                  decisionActor,
                 });
       } catch (error) {
         respondApprovalStorageUnavailable({ context, respond, operation: "resolve", error });

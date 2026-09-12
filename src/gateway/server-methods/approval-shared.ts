@@ -17,6 +17,8 @@ import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.
 import { createDeferredCore } from "../../shared/deferred.js";
 import { prepareApprovalChannelCustody } from "../approval-channel-custody.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
+import { resolveOperatorApprovalDecisionActor } from "../operator-approval-decision-actor.js";
+import type { OperatorApprovalDecisionActor } from "../operator-approval-store.js";
 import {
   type ApprovalRecordLookupResult,
   isApprovalRecordVisibleToClient,
@@ -488,6 +490,7 @@ export async function handleApprovalResolve<
     resolvedBy: string | null;
     snapshot: ExecApprovalRecord<TPayload>;
     resolver?: { kind: "channel"; id: string };
+    decisionActor?: OperatorApprovalDecisionActor;
   }) => boolean;
   forwardResolved?: (event: ResolvedApprovalEvent<TPayload>) => Promise<void> | void;
   forwardResolvedErrorLabel?: string;
@@ -562,6 +565,7 @@ export async function handleApprovalResolve<
   const resolvedBy =
     params.client?.connect?.client?.displayName ?? params.client?.connect?.client?.id ?? null;
   const resolver = custody ? ({ kind: "channel", id: custody.resolverId } as const) : undefined;
+  const decisionActor = custody ? undefined : resolveOperatorApprovalDecisionActor(params.client);
   let ok: boolean;
   try {
     ok = params.resolveRecord
@@ -571,11 +575,14 @@ export async function handleApprovalResolve<
           resolvedBy,
           snapshot: resolved.snapshot,
           resolver,
+          decisionActor,
         })
       : resolver
         ? params.manager.resolveDetailed(resolved.approvalId, params.decision, resolver, resolvedBy)
             .outcome === "resolved"
-        : params.manager.resolve(resolved.approvalId, params.decision, resolvedBy);
+        : params.manager.resolve(resolved.approvalId, params.decision, resolvedBy, {
+            decisionActor,
+          });
   } catch (err) {
     respondApprovalStorageUnavailable({ ...params, operation: "resolve", error: err });
     return;

@@ -63,6 +63,25 @@ for matching, prompting, and binding restrictions.
 - The **node host service** forwards `system.run` to the **macOS app** over local IPC.
 - The **macOS app** enforces approvals and executes the command in UI context.
 
+## Decision history
+
+The Control UI Approvals page and authorized terminal approval RPC responses retain
+the winning reviewer's opaque profile ID and, when already verified at sign-in,
+their GitHub handle. The handle is a historical snapshot, not a link to the current
+account. Profile merges, handle changes, retries, and later reviewers do not rewrite
+the recorded decision.
+
+Shared gateway credentials, internal agents, automatic reviewers, channel-only
+reviewers, and historical records without a verified person remain unattributed.
+Device and runtime resolver labels remain separate from human identity. The source
+agent and session identify where the request arose, not a human originator; session
+ownership does not establish who requested an action.
+
+Attribution uses the existing approval readers and rolling 30-day history retention.
+It is not included in ordinary session events and does not store names, emails,
+credentials, or GitHub tokens. No audit setting or schema-version change is needed.
+See the [accepted attribution scope](https://github.com/openclaw/openclaw/issues/115902#issuecomment-5641921911).
+
 ## Inspecting the effective policy
 
 | Command                                                          | What it shows                                                                              |

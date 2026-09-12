@@ -641,7 +641,11 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           const profile = params.authResult.tailscaleIdentity
             ? ensureProfileForTailscaleIdentity(params.authResult.tailscaleIdentity)
             : ensureProfileForEmailMock("authenticated@example.test");
-          return { profileId: profile.id, updatedAt: profile.updatedAt };
+          return {
+            profileId: profile.id,
+            updatedAt: profile.updatedAt,
+            githubIdentity: { accountId: 101, login: "ada" },
+          };
         });
       },
     );
@@ -1300,11 +1304,19 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     async (closedBeforeSync) => {
       await withGatewayTestState({ label: "gateway-github-profile-deferred" }, async () => {
         const canonical = ensureProfileForEmail("canonical@example.test");
-        const syncCompletion = createGatewayHarnessGate<{ profileId: string; updatedAt: number }>();
+        const syncCompletion = createGatewayHarnessGate<{
+          profileId: string;
+          updatedAt: number;
+          githubIdentity: { accountId: number; login: string };
+        }>();
         let finishSync: (() => void) | undefined;
         const sync = vi.fn(async () => {
           finishSync = () =>
-            syncCompletion.resolve({ profileId: canonical.id, updatedAt: canonical.updatedAt });
+            syncCompletion.resolve({
+              profileId: canonical.id,
+              updatedAt: canonical.updatedAt,
+              githubIdentity: { accountId: 101, login: "ada" },
+            });
           return await syncCompletion.promise;
         });
         createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(sync);
@@ -1377,6 +1389,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         await waitForFast(() => {
           expect(harness.client).toMatchObject({
             authenticatedUserProfile: { profileId: canonical.id },
+            authenticatedGitHubIdentity: { profileId: canonical.id, accountId: 101, login: "ada" },
           });
           expect(localUserIngressFor(harness.client)).toMatchObject({
             facts: {
@@ -1399,6 +1412,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         const sync = vi.fn(async () => ({
           profileId: canonical.id,
           updatedAt: canonical.updatedAt,
+          githubIdentity: { accountId: 101, login: "ada" },
         }));
         createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(sync);
         resolveConnectAuthStateMock.mockResolvedValueOnce({
@@ -1455,7 +1469,11 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   it("resolves a GitHub-backed role before registering the connection or sending hello", async () => {
     await withGatewayTestState({ label: "gateway-github-role-before-hello" }, async () => {
       const canonical = ensureProfileForEmail("canonical@example.test");
-      const syncCompletion = createGatewayHarnessGate<{ profileId: string; updatedAt: number }>();
+      const syncCompletion = createGatewayHarnessGate<{
+        profileId: string;
+        updatedAt: number;
+        githubIdentity: { accountId: number; login: string };
+      }>();
       const sync = vi.fn(async () => await syncCompletion.promise);
       createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(sync);
       loadConfigMock.mockImplementationOnce(() => ({
@@ -1504,12 +1522,17 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       await waitForFast(() => expect(sync).toHaveBeenCalledOnce());
       expect(harness.client).toBeNull();
       expect(harness.socketSend).not.toHaveBeenCalled();
-      syncCompletion.resolve({ profileId: canonical.id, updatedAt: canonical.updatedAt });
+      syncCompletion.resolve({
+        profileId: canonical.id,
+        updatedAt: canonical.updatedAt,
+        githubIdentity: { accountId: 101, login: "ada" },
+      });
 
       await waitForFast(() => {
         expect(harness.client).toMatchObject({
           connect: { scopes: ["operator.read"] },
           authenticatedUserProfile: { profileId: canonical.id },
+          authenticatedGitHubIdentity: { profileId: canonical.id, accountId: 101, login: "ada" },
         });
         expect(harness.socketSend).toHaveBeenCalled();
       });

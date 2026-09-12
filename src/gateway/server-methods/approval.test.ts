@@ -37,6 +37,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import type { ExecApprovalManagerOptions } from "../exec-approval-manager.types.js";
+import { projectOperatorApprovalSnapshot } from "../operator-approval-snapshot.js";
 import { getOperatorApprovalDetailed, insertOperatorApproval } from "../operator-approval-store.js";
 
 function getOperatorApproval(params: Parameters<typeof getOperatorApprovalDetailed>[0]) {
@@ -49,6 +50,8 @@ import {
   cancelWorkerTurnClaimBoundApprovals,
 } from "./approval-run-cancellation.js";
 import { createApprovalHandlers } from "./approval.js";
+import { createExecApprovalHandlers } from "./exec-approval.js";
+import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const prepareApprovalChannelCustodyMock = vi.hoisted(() => vi.fn());
@@ -255,7 +258,12 @@ function createContext(
 
 async function invoke(params: {
   handlers: ReturnType<typeof createApprovalHandlers>;
-  method: "approval.get" | "approval.history" | "approval.resolve";
+  method:
+    | "approval.get"
+    | "approval.history"
+    | "approval.resolve"
+    | "exec.approval.resolve"
+    | "plugin.approval.resolve";
   body: Record<string, unknown>;
   client: GatewayRequestHandlerOptions["client"];
   context?: GatewayRequestHandlerOptions["context"];
@@ -288,6 +296,157 @@ function approvalFromResult(result: unknown) {
 }
 
 describe("unified approval handlers", () => {
+  it.each(["exec", "plugin", "system-agent"] as const)(
+    "captures the winning human for %s without disclosing it in session events",
+    async (kind) => {
+      const databaseOptions = createDatabaseOptions();
+      const managers = createManagers(databaseOptions);
+      const pending =
+        kind === "exec"
+          ? registerExec(managers.exec, { id: "actor" })
+          : kind === "plugin"
+            ? registerPlugin(managers.plugin, { id: "actor" })
+            : registerSystemAgent(managers.systemAgent, "actor");
+      const handlers = createApprovalHandlers({
+        execApprovalManager: managers.exec,
+        pluginApprovalManager: managers.plugin,
+        systemAgentApprovalManager: managers.systemAgent,
+        databaseOptions,
+      });
+      const first = createClient({ deviceId: "reviewer" })!;
+      first.authenticatedUserId = "first@example.test";
+      first.authenticatedUserProfile = {
+        profileId: "person-a",
+        displayName: "Not persisted",
+        hasAvatar: false,
+        updatedAt: 1,
+      };
+      first.authenticatedGitHubIdentity = {
+        profileId: "person-a",
+        accountId: 101,
+        login: "reviewer-a",
+      };
+      const second = {
+        ...first,
+        authenticatedUserId: "second@example.test",
+        authenticatedGitHubIdentity: { profileId: "person-b", accountId: 102, login: "reviewer-b" },
+      };
+      const body = { id: "actor", kind, decision: "allow-once" };
+      const response = await invoke({ handlers, method: "approval.resolve", body, client: first });
+      const decisionActor = { profileId: "person-a", githubLogin: "reviewer-a" };
+      expect(response.result).toMatchObject({
+        applied: true,
+        approval: { decisionActor, source: { agentId: "main", sessionKey: "agent:main:child" } },
+      });
+      expect(validateApprovalResolveResult(response.result)).toBe(true);
+      for (const decision of ["allow-once", "deny"]) {
+        const replay = await invoke({
+          handlers,
+          method: "approval.resolve",
+          body: { ...body, decision },
+          client: second,
+        });
+        expect(replay.result).toMatchObject({ applied: false, approval: { decisionActor } });
+      }
+      await expect(pending.decision).resolves.toBe("allow-once");
+      const stored = getOperatorApproval({ id: "actor", databaseOptions })!;
+      expect(projectOperatorApprovalSnapshot(stored, "")).not.toHaveProperty("decisionActor");
+      const history = await invoke({
+        handlers,
+        method: "approval.history",
+        body: {},
+        client: first,
+      });
+      expect(history.result).toMatchObject({ items: [{ decisionActor }] });
+      expect(JSON.stringify(vi.mocked(response.context.broadcast).mock.calls)).not.toContain(
+        "reviewer-a",
+      );
+      vi.spyOn(Date, "now").mockReturnValue(stored.resolvedAtMs! + 30 * 24 * 60 * 60_000);
+      const expiredGet = await invoke({
+        handlers,
+        method: "approval.get",
+        body: { id: "actor" },
+        client: first,
+      });
+      const expiredReplay = await invoke({
+        handlers,
+        method: "approval.resolve",
+        body,
+        client: first,
+      });
+      for (const expired of [expiredGet, expiredReplay]) {
+        expect(approvalFromResult(expired.result)).not.toHaveProperty("decisionActor");
+        expect(approvalFromResult(expired.result)).toMatchObject({
+          status: "allowed",
+          resolver: { kind: "device", id: "reviewer" },
+        });
+      }
+    },
+  );
+
+  it.each(["exec", "plugin"] as const)(
+    "retains verified attribution through the legacy %s adapter",
+    async (kind) => {
+      const databaseOptions = createDatabaseOptions();
+      const managers = createManagers(databaseOptions);
+      const pending =
+        kind === "exec"
+          ? registerExec(managers.exec, { id: "legacy-actor" })
+          : registerPlugin(managers.plugin, { id: "legacy-actor" });
+      const handlers =
+        kind === "exec"
+          ? createExecApprovalHandlers(managers.exec)
+          : createPluginApprovalHandlers(managers.plugin);
+      const client = createClient({ deviceId: "reviewer" })!;
+      client.authenticatedUserId = "reviewer@example.test";
+      client.authenticatedUserProfile = {
+        profileId: "person-a",
+        displayName: null,
+        hasAvatar: false,
+        updatedAt: 1,
+      };
+      const response = await invoke({
+        handlers,
+        method: kind === "exec" ? "exec.approval.resolve" : "plugin.approval.resolve",
+        body: { id: "legacy-actor", decision: "allow-once" },
+        client,
+      });
+      expect(response.ok).toBe(true);
+      await expect(pending.decision).resolves.toBe("allow-once");
+      expect(getOperatorApproval({ id: "legacy-actor", databaseOptions })).toMatchObject({
+        decisionActor: { profileId: "person-a" },
+      });
+    },
+  );
+
+  it("rejects forged actor fields without persisting human attribution", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerExec(managers.exec, { id: "forged-actor" });
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+    const response = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: {
+        id: "forged-actor",
+        kind: "exec",
+        decision: "allow-once",
+        decisionActor: { profileId: "forged", githubLogin: "forged" },
+      },
+      client: createClient({ deviceId: "reviewer" }),
+    });
+    expect(approvalFromResult(response.result)).toMatchObject({
+      status: "denied",
+      reason: "malformed-verdict",
+    });
+    expect(approvalFromResult(response.result)).not.toHaveProperty("decisionActor");
+    await expect(pending.decision).resolves.toBe("deny");
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     for (const manager of managersForCleanup.splice(0)) {

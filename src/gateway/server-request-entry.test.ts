@@ -139,7 +139,11 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
             hasAvatar: false,
             updatedAt: 1,
           };
-          return { profileId: "entry-profile", updatedAt: 1 };
+          return {
+            profileId: "entry-profile",
+            updatedAt: 1,
+            githubIdentity: { accountId: 101, login: "entry" },
+          };
         };
       }
       const harness = createDispatchTestHarness({
@@ -415,7 +419,11 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
         hasAvatar: false,
         updatedAt: 1,
       };
-      return { profileId: "typed-profile", updatedAt: 1 };
+      return {
+        profileId: "typed-profile",
+        updatedAt: 1,
+        githubIdentity: { accountId: 101, login: "typed" },
+      };
     };
     const facade = createInternalAgentTurnFacade({
       client,

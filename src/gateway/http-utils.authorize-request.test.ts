@@ -253,7 +253,11 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
   );
 
   it("uses the verified GitHub profile before dispatching a request without roles", async () => {
-    const sync = vi.fn().mockResolvedValue({ profileId: "profile-github", updatedAt: 3 });
+    const sync = vi.fn().mockResolvedValue({
+      profileId: "profile-github",
+      updatedAt: 3,
+      githubIdentity: { accountId: 101, login: "reviewer" },
+    });
     vi.mocked(githubIdentity.createAuthenticatedGitHubIdentitySync).mockReturnValue(sync);
     vi.mocked(profileStore.getUserProfileDisplay).mockReturnValue({
       id: "profile-github-canonical",

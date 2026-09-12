@@ -2,7 +2,10 @@
 import type { WebSocket } from "ws";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
-import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.js";
+import type {
+  AuthenticatedGitHubIdentity,
+  AuthenticatedGitHubIdentitySync,
+} from "../github-user-identity.js";
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { PluginNodeCapabilityClient } from "../plugin-node-capability.js";
 import type { WorkerConnectionIdentity } from "../worker-environments/connection-identity.js";
@@ -48,6 +51,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
   authenticatedUserIsTailscaleProvider?: boolean;
   authenticatedGitHubIdentitySync?: AuthenticatedGitHubIdentitySync;
+  /** Verified account binding captured at authentication, never accepted from wire params. */
+  authenticatedGitHubIdentity?: AuthenticatedGitHubIdentity;
   authenticatedUserProfile?: {
     profileId: string;
     displayName: string | null;

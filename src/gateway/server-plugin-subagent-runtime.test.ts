@@ -361,7 +361,11 @@ describe("plugin background completions", () => {
         entered.resolve();
         await verification.promise;
         client.authenticatedUserProfile = operatorProfile;
-        return { profileId: operatorProfile.profileId, updatedAt: Date.now() };
+        return {
+          profileId: operatorProfile.profileId,
+          updatedAt: Date.now(),
+          githubIdentity: { accountId: 101, login: "operator" },
+        };
       };
       const result = completeScoped(client, { agentId: "main" });
       const rejected = expect(result).rejects.toThrow(/retired|current gateway instance binding/u);

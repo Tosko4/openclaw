@@ -47,7 +47,11 @@ export function sharingPolicyClient(params: {
       : {}),
     ...(params.githubSyncPending
       ? {
-          authenticatedGitHubIdentitySync: async () => ({ profileId: "pending", updatedAt: 1 }),
+          authenticatedGitHubIdentitySync: async () => ({
+            profileId: "pending",
+            updatedAt: 1,
+            githubIdentity: { accountId: 101, login: "pending-reviewer" },
+          }),
         }
       : {}),
   };

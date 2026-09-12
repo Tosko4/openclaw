@@ -24,7 +24,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import { ensureColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type {
   DB as OpenClawStateKyselyDatabase,
   OperatorApprovals,
@@ -34,6 +34,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { normalizeGitHubLogin } from "../utils/github-login.js";
 import {
   mintCronStandingGrantLocked,
   type CronStandingGrantMintSpec,
@@ -80,6 +81,37 @@ export type OperatorApprovalResolver = {
   id: string | null;
 };
 
+export type OperatorApprovalDecisionActor = {
+  profileId: string;
+  githubLogin?: string;
+};
+
+export function normalizeOperatorApprovalDecisionActor(
+  profileId: unknown,
+  githubLogin?: unknown,
+): OperatorApprovalDecisionActor | undefined {
+  if (typeof profileId !== "string" || !profileId.trim() || profileId.length > 256) {
+    return undefined;
+  }
+  const login = typeof githubLogin === "string" ? normalizeGitHubLogin(githubLogin) : undefined;
+  return { profileId, ...(login ? { githubLogin: login } : {}) };
+}
+
+const decisionActorSchemaDatabases = new WeakSet<DatabaseSync>();
+
+function ensureDecisionActorSchema(options: OpenClawStateDatabaseOptions = {}): void {
+  const database = openOpenClawStateDatabase(options);
+  if (decisionActorSchemaDatabases.has(database.db)) {
+    return;
+  }
+  runOpenClawStateWriteTransaction(({ db }) => {
+    ensureColumn(db, "operator_approvals", "resolver_profile_id TEXT");
+    ensureColumn(db, "operator_approvals", "resolver_github_login TEXT");
+  }, options);
+  // Cache only committed DDL; a rolled-back ensure must remain retryable.
+  decisionActorSchemaDatabases.add(database.db);
+}
+
 export type OperatorApprovalRecord = {
   id: string;
   resolutionRef: string;
@@ -98,9 +130,21 @@ export type OperatorApprovalRecord = {
   terminalReason: OperatorApprovalTerminalReason | null;
   resolvedAtMs: number | null;
   resolver: OperatorApprovalResolver | null;
+  decisionActor?: OperatorApprovalDecisionActor;
   consumedAtMs: number | null;
   consumedBy: string | null;
 };
+
+export function projectOperatorApprovalDecisionActor(
+  record: OperatorApprovalRecord,
+  nowMs = Date.now(),
+): OperatorApprovalDecisionActor | undefined {
+  // Known-ID lookups can outlive opportunistic parent pruning; actor disclosure cannot.
+  return record.resolvedAtMs !== null &&
+    record.resolvedAtMs > nowMs - OPERATOR_APPROVAL_TERMINAL_RETENTION_MS
+    ? record.decisionActor
+    : undefined;
+}
 
 type NewOperatorApproval = {
   id: string;
@@ -433,6 +477,11 @@ function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApprovalRe
   const decision = row.decision as OperatorApprovalDecision | null;
   const terminalReason = row.terminal_reason as OperatorApprovalTerminalReason | null;
   const resolverKind = row.resolver_kind as OperatorApprovalResolverKind | null;
+  // Audit metadata never participates in lifecycle validation or execution authority.
+  const decisionActor =
+    row.terminal_reason === "user" && (resolverKind === "device" || resolverKind === "runtime")
+      ? normalizeOperatorApprovalDecisionActor(row.resolver_profile_id, row.resolver_github_login)
+      : undefined;
   if (
     !presentation ||
     !isWellFormedApprovalId(row.approval_id) ||
@@ -511,6 +560,7 @@ function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApprovalRe
           },
     consumedAtMs: row.consumed_at_ms,
     consumedBy: row.consumed_by,
+    ...(decisionActor ? { decisionActor } : {}),
   };
 }
 
@@ -1679,6 +1729,7 @@ export function resolveOperatorApproval(params: {
   id: string;
   decision: OperatorApprovalDecision;
   resolver: OperatorApprovalResolver;
+  decisionActor?: OperatorApprovalDecisionActor;
   expectedKind?: OperatorApprovalKind;
   runtimeEpoch?: string;
   nowMs?: number;
@@ -1691,6 +1742,16 @@ export function resolveOperatorApproval(params: {
 }): ResolveOperatorApprovalResult {
   const id = requireApprovalId(params.id);
   const resolverId = normalizeNullableString(params.resolver.id);
+  const decisionActor =
+    params.resolver.kind === "device" || params.resolver.kind === "runtime"
+      ? normalizeOperatorApprovalDecisionActor(
+          params.decisionActor?.profileId,
+          params.decisionActor?.githubLogin,
+        )
+      : undefined;
+  if (decisionActor) {
+    ensureDecisionActorSchema(params.databaseOptions);
+  }
   const runtimeEpoch =
     params.runtimeEpoch === undefined
       ? undefined
@@ -1739,6 +1800,12 @@ export function resolveOperatorApproval(params: {
         resolved_at_ms: auditTimestampMs,
         resolver_kind: params.resolver.kind,
         resolver_id: resolverId,
+        ...("resolver_profile_id" in row
+          ? {
+              resolver_profile_id: decisionActor?.profileId ?? null,
+              resolver_github_login: decisionActor?.githubLogin ?? null,
+            }
+          : {}),
         updated_at_ms: auditTimestampMs,
       })
       .where("approval_id", "=", id)

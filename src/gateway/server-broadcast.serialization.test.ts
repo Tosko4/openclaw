@@ -508,6 +508,7 @@ describe("presence recipient projection", () => {
       pending.authenticatedGitHubIdentitySync = async () => ({
         profileId: "creator",
         updatedAt: 1,
+        githubIdentity: { accountId: 101, login: "creator" },
       });
       const node = makeClient("node").client;
       node.connect.role = "node";

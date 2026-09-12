@@ -451,6 +451,8 @@ CREATE TABLE IF NOT EXISTS operator_approvals (
   resolved_at_ms INTEGER,
   resolver_kind TEXT CHECK (resolver_kind IN ('device', 'channel', 'runtime', 'system')),
   resolver_id TEXT,
+  resolver_profile_id TEXT,
+  resolver_github_login TEXT,
   consumed_at_ms INTEGER,
   consumed_by TEXT,
   CHECK (expires_at_ms >= created_at_ms),

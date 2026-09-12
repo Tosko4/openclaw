@@ -6,7 +6,34 @@ import {
   getUserProfileDisplay,
 } from "../../../state/user-profiles.js";
 import type { GatewayAuthResult } from "../../auth.js";
-import type { createAuthenticatedGitHubIdentitySync } from "../../github-user-identity.js";
+import {
+  createAuthenticatedGitHubIdentitySync,
+  type AuthenticatedGitHubIdentity,
+  type AuthenticatedGitHubIdentitySync,
+} from "../../github-user-identity.js";
+
+export function prepareGatewayConnectGitHubIdentity(
+  params: Parameters<typeof createAuthenticatedGitHubIdentitySync>[0],
+) {
+  const prepared: {
+    resolve: AuthenticatedGitHubIdentitySync | undefined;
+    identity?: AuthenticatedGitHubIdentity;
+  } = { resolve: undefined };
+  const sync = createAuthenticatedGitHubIdentitySync(params);
+  if (sync) {
+    prepared.resolve = async () => {
+      const result = await sync();
+      // Keep the verified binding together even if profile display refresh follows a merge.
+      prepared.identity = {
+        profileId: result.profileId,
+        accountId: result.githubIdentity.accountId,
+        login: result.githubIdentity.login,
+      };
+      return result;
+    };
+  }
+  return prepared;
+}
 
 export function resolveAuthenticatedProfile(profileId: string, updatedAt: number) {
   const { id, displayName, avatarRevision, hasAvatar } = getUserProfileDisplay(profileId);

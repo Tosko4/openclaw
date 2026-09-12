@@ -25,7 +25,6 @@ import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../.
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import { buildAuthenticatedPresenceUser } from "../../authenticated-presence-user.js";
 import { shouldUseGatewayOwnerProfile } from "../../gateway-owner-profile.js";
-import { createAuthenticatedGitHubIdentitySync } from "../../github-user-identity.js";
 import {
   attachGatewayLocalUserIngress,
   prepareGatewayLocalUserIngress,
@@ -55,6 +54,7 @@ import {
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
 import {
+  prepareGatewayConnectGitHubIdentity,
   resolveAuthenticatedProfile,
   resolveGatewayConnectUserProfile,
 } from "./connect-user-profile.js";
@@ -188,11 +188,12 @@ export async function attachAuthenticatedGatewayConnect(
     ? classifyTailscaleLogin(authResult.tailscaleIdentity.login)
     : undefined;
   const authenticatedUserIsTailscaleProvider = tailscaleLogin?.kind === "provider";
-  const resolveAuthenticatedGitHubIdentity = createAuthenticatedGitHubIdentitySync({
+  const gitHubIdentity = prepareGatewayConnectGitHubIdentity({
     authResult,
     authConfig: context.configSnapshot.gateway?.auth,
     requestHeaders: context.handler.upgradeReq.headers,
   });
+  const resolveAuthenticatedGitHubIdentity = gitHubIdentity.resolve;
   const rolesConfigured = Boolean(context.configSnapshot.gateway?.roles);
   const sharedSecretOperatorOwner =
     role === "operator" && (authMethod === "token" || authMethod === "password");
@@ -426,6 +427,7 @@ export async function attachAuthenticatedGatewayConnect(
     ...(authenticatedUserId ? { authenticatedUserId } : {}),
     ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+    ...(gitHubIdentity.identity ? { authenticatedGitHubIdentity: gitHubIdentity.identity } : {}),
     clientIp: reportedClientIp,
     ...(context.browserOrigin ? { browserOrigin: context.browserOrigin } : {}),
     ...(Object.keys(internal).length > 0 ? { internal } : {}),
@@ -461,6 +463,7 @@ export async function attachAuthenticatedGatewayConnect(
     nextClient.authenticatedGitHubIdentitySync = async () => {
       const result = await resolveAuthenticatedGitHubIdentity();
       attachAuthenticatedProfile(result.profileId, result.updatedAt);
+      nextClient.authenticatedGitHubIdentity = gitHubIdentity.identity;
       return result;
     };
   }
