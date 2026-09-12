@@ -37,13 +37,17 @@ export function nextWorkboardCardPosition(
   return Math.max(0, ...positions) + 1000;
 }
 
+type WorkboardCardDropMove =
+  | { id: string; status: WorkboardStatus; position: number }
+  | { id: string; expectedUpdatedAt: number; position: number };
+
 export function planWorkboardCardDrop(
   cards: readonly WorkboardCard[],
   card: WorkboardCard,
   status: WorkboardStatus,
   beforeCardId: string | null,
   boardFilter: WorkboardUiState["boardFilter"],
-): Array<{ id: string; status: WorkboardStatus; position: number }> {
+): WorkboardCardDropMove[] {
   const peers = cards
     .filter(
       (candidate) =>
@@ -69,7 +73,7 @@ export function planWorkboardCardDrop(
       : next - previous > 1
         ? Math.floor((previous + next) / 2)
         : previous + 1000;
-  const moves: Array<{ id: string; status: WorkboardStatus; position: number }> = [];
+  const moves: WorkboardCardDropMove[] = [];
   // Positions are nonnegative integers. Make room from the end when the gap is full.
   let occupied = position;
   for (const peer of peers.slice(index)) {
@@ -77,7 +81,7 @@ export function planWorkboardCardDrop(
       break;
     }
     occupied += 1000;
-    moves.push({ id: peer.id, status, position: occupied });
+    moves.push({ id: peer.id, expectedUpdatedAt: peer.updatedAt, position: occupied });
   }
   return [...moves.toReversed(), { id: card.id, status, position }];
 }

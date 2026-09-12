@@ -134,6 +134,7 @@ export function installWorkboardBoardMock(seed: ReturnType<typeof buildWorkboard
       const input = params as {
         id?: string;
         patch?: Partial<MockCard>;
+        expectedUpdatedAt?: number;
         boardId?: string;
         templateId?: string;
       } & Partial<MockCard>;
@@ -146,7 +147,21 @@ export function installWorkboardBoardMock(seed: ReturnType<typeof buildWorkboard
         });
         return;
       }
-      const now = Date.now();
+      if (
+        existing &&
+        input.expectedUpdatedAt !== undefined &&
+        input.expectedUpdatedAt !== existing.updatedAt
+      ) {
+        respond({
+          __mockError: {
+            code: "workboard_conflict",
+            message: "Card changed while you were editing. Review the latest values and retry.",
+            details: { type: "workboard_card_conflict", card: existing },
+          },
+        });
+        return;
+      }
+      const now = existing ? Math.max(Date.now(), existing.updatedAt + 1) : Date.now();
       const boardId = existing?.metadata.automation.boardId ?? input.boardId ?? "default";
       const status = patch.status ?? existing?.status ?? "todo";
       if (!statuses.includes(status)) {
@@ -164,6 +179,7 @@ export function installWorkboardBoardMock(seed: ReturnType<typeof buildWorkboard
         sessionKey: patch.sessionKey ?? existing?.sessionKey ?? "",
         status,
         position:
+          patch.position ??
           existing?.position ??
           Math.max(
             0,
@@ -264,7 +280,7 @@ export function installWorkboardBoardMock(seed: ReturnType<typeof buildWorkboard
       respond({ __mockError: { code: "INVALID_REQUEST", message: "Unknown card or status." } });
       return;
     }
-    const now = Date.now();
+    const now = Math.max(Date.now(), card.updatedAt + 1);
     const moved: MockCard = {
       ...card,
       status: input.status,

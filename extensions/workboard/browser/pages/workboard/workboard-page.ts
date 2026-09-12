@@ -2,6 +2,7 @@ import { html, nothing, render } from "lit";
 import type { ControlUiView } from "openclaw/plugin-sdk/control-ui";
 import { createWorkboardClient } from "../../api/gateway.ts";
 import { renderAgentPicker } from "../../components/host-components.ts";
+import { icons } from "../../components/icons.ts";
 import { renderWorkboardBoardGlyph } from "../../components/workboard-board-glyph.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -223,6 +224,19 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
                       : nothing
                   }
                   <span>${selectedBoard ? workboardBoardName(selectedBoard) : "Workboard"}</span>
+                  ${
+                    selectedBoard?.automationJobId
+                      ? html`<a
+                          class="chip workboard-automation-chip"
+                          href=${`${host.basePath}/automations`}
+                          title=${t("workboard.automationAttachedTitle")}
+                          aria-label=${t("workboard.automationAttachedTitle")}
+                          >${icons.calendarClock}<span
+                            >${t("workboard.automationAttached")}</span
+                          ></a
+                        >`
+                      : nothing
+                  }
                 </div>
               </div>
             `,

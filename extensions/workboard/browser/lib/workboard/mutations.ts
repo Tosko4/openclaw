@@ -211,18 +211,23 @@ export async function moveWorkboardCard(
   let reloadAfterFailure = false;
   try {
     for (const move of moves) {
-      const payload = await params.client.request("workboard.cards.move", move);
+      const payload =
+        "expectedUpdatedAt" in move
+          ? await params.client.request("workboard.cards.update", {
+              id: move.id,
+              expectedUpdatedAt: move.expectedUpdatedAt,
+              patch: { position: move.position },
+            })
+          : await params.client.request("workboard.cards.move", move);
       replaceCard(state, normalizeCardPayload(payload));
     }
   } catch (error) {
     state.error = formatError(error);
-    if (moves.length > 1) {
-      // Peer moves commit separately; a lost acknowledgment can leave local order stale.
-      state.mutationReadiness = "canonical_reload_required";
-      state.loaded = false;
-      state.loadAttempted = false;
-      reloadAfterFailure = true;
-    }
+    // Even a single move can commit before its acknowledgment is lost.
+    state.mutationReadiness = "canonical_reload_required";
+    state.loaded = false;
+    state.loadAttempted = false;
+    reloadAfterFailure = true;
   } finally {
     for (const move of moves) {
       state.busyCardIds.delete(move.id);
