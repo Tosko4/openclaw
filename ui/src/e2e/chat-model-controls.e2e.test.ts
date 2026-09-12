@@ -167,6 +167,31 @@ suite.define(() => {
           deferredMethods: ["sessions.patch"],
           methodResponses: {
             "sessions.list": sessionList,
+            "models.authStatus": {
+              ts: 1,
+              providers: [
+                {
+                  provider: "openai",
+                  displayName: "OpenAI",
+                  status: "ok",
+                  profiles: [
+                    {
+                      profileId: personal.authProfileId,
+                      type: "oauth",
+                      status: "ok",
+                      email: "personal@example.com",
+                    },
+                    {
+                      profileId: work.authProfileId,
+                      type: "oauth",
+                      status: "ok",
+                      email: "work@example.com",
+                    },
+                  ],
+                  usage: { providerId: "openai", windows: [], plan: "ChatGPT Pro" },
+                },
+              ],
+            },
             "models.list": {
               commands: [],
               models,
@@ -179,7 +204,8 @@ suite.define(() => {
             },
             "users.listModelAccounts": {
               profileId: "test-person",
-              accounts: [personal],
+              // Reopening retries an empty inventory; a populated one stays cached.
+              accounts: input === "keyboard" ? [] : [personal],
               nextCursor: "accounts-page-2",
               links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
             },
@@ -190,12 +216,23 @@ suite.define(() => {
         const model = composer.locator('[data-chat-model-select="true"]');
         await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
         await model.click();
+        const heading = composer.locator('[data-chat-model-provider="openai"]');
+        await expect
+          .poll(() => heading.textContent())
+          .toContain("Subscription · personal@example.com");
         const account = composer.locator("[data-chat-account-selection]");
         const picker = account;
         const trigger = picker.locator("[data-chat-account-group-toggle]");
         await expect.poll(() => trigger.textContent()).toContain(personal.label);
         for (const width of [320, 768, 1280]) {
           await page.setViewportSize({ width, height: 900 });
+          expect(await heading.getAttribute("title")).toBe("Subscription · personal@example.com");
+          expect(
+            await heading.locator(".chat-controls__auth-meta svg").evaluate((icon) => ({
+              width: getComputedStyle(icon).width,
+              height: getComputedStyle(icon).height,
+            })),
+          ).toEqual({ width: "13px", height: "13px" });
           await expect
             .poll(async () => {
               const box = await account.boundingBox();
@@ -212,6 +249,9 @@ suite.define(() => {
         await trigger.click();
         const more = picker.locator('[data-chat-account-option="more"]');
         await expect.poll(() => more.isVisible()).toBe(true);
+        expect(
+          await picker.locator('[data-chat-account-option="current"]').textContent(),
+        ).toContain("personal@example.com");
         await trigger.click();
         await expect.poll(() => more.isVisible()).toBe(false);
         await expect.poll(() => account.isVisible()).toBe(true);
@@ -236,6 +276,13 @@ suite.define(() => {
             links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
           });
           await expect.poll(() => loading.isVisible()).toBe(false);
+          await expect
+            .poll(() => more.evaluate((element) => element === document.activeElement))
+            .toBe(true);
+        } else {
+          expect(await gateway.getRequests("users.listModelAccounts")).toHaveLength(
+            refreshRequests.length,
+          );
         }
         expect(
           await picker
@@ -256,15 +303,27 @@ suite.define(() => {
         });
         expect(nextPage.params).toEqual({ cursor: "accounts-page-2" });
         await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+        const loading = picker.locator('[data-chat-account-option="loading"]');
+        await expect.poll(() => loading.isVisible()).toBe(true);
+        const manage = picker.locator('[data-chat-account-option="manage"]');
+        if (input === "keyboard") {
+          await manage.focus();
+        }
         await gateway.resolveDeferred("users.listModelAccounts", {
           profileId: "test-person",
           accounts: [work],
           links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
         });
+        await expect.poll(() => loading.isVisible()).toBe(false);
+        if (input === "keyboard") {
+          // Paging shifts this action's row; removing Loading must preserve its focus.
+          expect(await manage.evaluate((button) => button === document.activeElement)).toBe(true);
+        }
         const workOption = picker.locator(
           `[data-chat-account-option="account:${work.authProfileId}"]`,
         );
         await expect.poll(() => workOption.isVisible()).toBe(true);
+        expect(await workOption.textContent()).toContain("work@example.com");
         if (artifactDir) {
           await page.screenshot({
             animations: "disabled",
@@ -304,6 +363,7 @@ suite.define(() => {
           reason: "patch",
         });
         await expect.poll(() => trigger.textContent()).toContain(work.label);
+        await expect.poll(() => heading.textContent()).toContain("Subscription · work@example.com");
         expect(await gateway.getRequests("users.selectModelAccount")).toHaveLength(0);
         expect(await gateway.getRequests("users.unlinkAuthProfile")).toHaveLength(0);
         if (artifactDir) {
