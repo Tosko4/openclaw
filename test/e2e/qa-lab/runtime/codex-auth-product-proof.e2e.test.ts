@@ -475,12 +475,13 @@ describe("Codex auth product proof", () => {
         // A metadata patch alone does not prove the selected profile reaches native execution.
         await runConfiguredTurn("qa-codex-profile-binding-pinned");
 
-        const logoutResult = await client.request("models.authLogout", {
-          provider: "openai",
-          agentId: "main",
-          profileIds: [MISSING_PROFILE_ID],
-        });
-        expect(logoutResult, testInstance.logs()).toEqual({
+        await expect(
+          client.request("models.authLogout", {
+            provider: "openai",
+            agentId: "main",
+            profileIds: [MISSING_PROFILE_ID],
+          }),
+        ).resolves.toEqual({
           provider: "openai",
           removedProfiles: [MISSING_PROFILE_ID],
           abortedRunIds: [],
