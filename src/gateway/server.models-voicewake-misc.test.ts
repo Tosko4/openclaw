@@ -132,7 +132,10 @@ const buildAgentCatalogFixture = (): AgentCatalogFixtureEntry[] => [
   },
 ];
 
-const expectedSortedCatalog = (gptTestZTags?: string[]): ModelCatalogRpcEntry[] => [
+const expectedSortedCatalog = (
+  gptTestZTags?: string[],
+  claudeTestBTags?: string[],
+): ModelCatalogRpcEntry[] => [
   {
     id: "claude-test-a",
     name: "A-Model",
@@ -146,6 +149,7 @@ const expectedSortedCatalog = (gptTestZTags?: string[]): ModelCatalogRpcEntry[] 
     provider: "anthropic",
     available: false,
     contextWindow: 1000,
+    ...(claudeTestBTags ? { tags: claudeTestBTags } : {}),
   },
   {
     id: "gpt-test-a",
@@ -522,7 +526,7 @@ describe("gateway server models + voicewake", () => {
       expect(res2.ok).toBe(true);
 
       const models = res1.payload?.models ?? [];
-      expect(models).toEqual(expectedSortedCatalog());
+      expect(models).toEqual(expectedSortedCatalog(undefined, ["default"]));
 
       expect(agentDiscoveryMock.discoverCalls).toBe(0);
     });
@@ -561,7 +565,16 @@ describe("gateway server models + voicewake", () => {
       async () => {
         await withModelsConfig(
           {
-            agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+            agents: { defaults: { model: { primary: "anthropic/claude-test-a" } } },
+            models: {
+              providers: {
+                anthropic: {
+                  api: "anthropic-messages",
+                  baseUrl: "https://api.anthropic.com",
+                  models: [{ id: "claude-test-a", name: "A-Model", contextWindow: 200_000 }],
+                },
+              },
+            },
           },
           async () => {
             await seedAgentModelCatalog();
@@ -570,9 +583,13 @@ describe("gateway server models + voicewake", () => {
             expect(res.ok).toBe(true);
             expect(res.payload?.models).toStrictEqual([
               {
-                id: "claude-opus-4-6",
-                name: "claude-opus-4-6",
+                id: "claude-test-a",
+                name: "A-Model",
                 provider: "anthropic",
+                contextWindow: 200_000,
+                reasoning: false,
+                thinkingDefault: "off",
+                thinkingLevels: [{ id: "off", label: "off" }],
                 available: false,
                 unavailableReason: "missing-auth",
                 tags: ["default"],

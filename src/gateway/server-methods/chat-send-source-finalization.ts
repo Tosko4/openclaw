@@ -54,7 +54,7 @@ function selectChatSendAgentReplyPayloads(params: {
   return params.deliveredReplies
     .filter((entry) => {
       const { payload } = entry;
-      return getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority ||
+      return getReplyPayloadMetadata(payload)?.hostFinalReply ||
         isSourceReplyTranscriptMirrorPayload(payload)
         ? entry.kind === "final" && payload.isError !== true
         : !params.hasReturnedAgentErrorPayloads && isReplyPayloadStatusNotice(payload);

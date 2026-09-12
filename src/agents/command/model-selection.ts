@@ -71,6 +71,7 @@ type AgentRunContext = ReturnType<typeof resolveAgentRunContext>;
 
 export async function resolveEmbeddedModelSelection(params: {
   cfg: OpenClawConfig;
+  catalogOwnerConfig?: OpenClawConfig;
   opts: AgentCommandOpts;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -145,7 +146,7 @@ export async function resolveEmbeddedModelSelection(params: {
 
   const { loadPreparedModelCatalogSnapshot } = await import("../prepared-model-catalog.js");
   const catalogSnapshot = await loadPreparedModelCatalogSnapshot({
-    config: params.cfg,
+    config: params.catalogOwnerConfig ?? params.cfg,
     agentId: params.sessionAgentId,
     workspaceDir: params.workspaceDir,
     readOnly: true,
@@ -521,6 +522,7 @@ export async function resolveEmbeddedModelSelection(params: {
     const runtimeCatalog = normalizeThinkingCatalogProviders(
       await loadProviderScopedThinkingCatalog({
         config: params.cfg,
+        catalogOwnerConfig: params.catalogOwnerConfig,
         provider,
         model,
         ...(params.sessionAgentId ? { agentId: params.sessionAgentId } : {}),

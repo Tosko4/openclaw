@@ -60,26 +60,6 @@ type ThinkingProviderPolicySource = NonNullable<
   Parameters<typeof resolveThinkingProfile>[0]["providerPolicySource"]
 >;
 
-function listGatewayThinkingLevelOptions(params: {
-  provider: string;
-  model: string;
-  modelCatalog?: ModelCatalogEntry[];
-  catalogResolver?: ThinkingCatalogResolver;
-  agentRuntime: string;
-  configuredReasoning?: boolean;
-  providerPolicySource?: ThinkingProviderPolicySource;
-}) {
-  return resolveThinkingProfile({
-    provider: params.provider,
-    model: params.model,
-    catalog: params.modelCatalog,
-    catalogResolver: params.catalogResolver,
-    agentRuntime: params.agentRuntime,
-    configuredReasoning: params.configuredReasoning,
-    providerPolicySource: params.providerPolicySource,
-  }).levels.map(({ id, label }) => ({ id, label }));
-}
-
 function resolveGatewaySessionThinkingLevel(params: {
   provider: string;
   catalogProvider?: string;
@@ -205,15 +185,15 @@ export function resolveGatewayModelThinkingProfile(params: {
   if (cached) {
     return cached;
   }
-  const thinkingLevels = listGatewayThinkingLevelOptions({
+  const thinkingLevels = resolveThinkingProfile({
     provider: thinkingPolicyProvider,
     model: params.model,
-    modelCatalog: params.modelCatalog,
+    catalog: params.modelCatalog,
     catalogResolver: params.catalogResolver,
     agentRuntime,
     configuredReasoning: params.configuredReasoning,
     providerPolicySource: params.providerPolicySource,
-  });
+  }).levels.map(({ id, label }) => ({ id, label }));
   const metadata = {
     thinkingLevels,
     thinkingDefault:

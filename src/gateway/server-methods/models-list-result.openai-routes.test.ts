@@ -644,7 +644,7 @@ describe("models.list OpenAI routes", () => {
             provider: "openai",
             agentRuntime: IMPLICIT_OPENCLAW_RUNTIME,
             available: false,
-            tags: ["fallback#1"],
+            tags: ["default", "fallback#1"],
           });
         },
       );
@@ -692,7 +692,7 @@ describe("models.list OpenAI routes", () => {
             alias: "fast",
             agentRuntime: IMPLICIT_OPENCLAW_RUNTIME,
             available: false,
-            tags: ["fallback#1", "configured"],
+            tags: ["default", "fallback#1", "configured"],
           },
         ],
       });

@@ -457,6 +457,7 @@ async function agentCommandInternal(
         () =>
           resolveEmbeddedModelSelection({
             cfg,
+            catalogOwnerConfig: prepared.commandRuntimeContext?.config,
             opts,
             sessionEntry,
             sessionStore,

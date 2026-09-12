@@ -224,6 +224,8 @@ export type ReplyPayloadMetadata = {
   assistantTranscriptIdempotencyKey?: string;
   /** Original session-writer claim that must still hold at final delivery. */
   sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
+  /** The host finalizer owns this reply's publication outside the runtime stream. */
+  hostFinalReply?: true;
   /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
   finalDeliveryCapture?: object;
   /** One host-visible status gates a child-completion wake for this exact turn. */

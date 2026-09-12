@@ -977,20 +977,14 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
   });
 
-  it("does not coerce partial list page or limit tokens", async () => {
-    const result = await handleModelsCommand(
-      buildParams("/models openai page=2next limit=1x"),
-      true,
-    );
+  it.each(["/models openai page=2next limit=1x", "/models openai 9007199254740992"])(
+    "ignores invalid pagination tokens in %s",
+    async (command) => {
+      const result = await handleModelsCommand(buildParams(command), true);
 
-    expect(result?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
-  });
-
-  it("ignores unsafe bare list page tokens", async () => {
-    const result = await handleModelsCommand(buildParams("/models openai 9007199254740992"), true);
-
-    expect(result?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
-  });
+      expect(result?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
+    },
+  );
 
   it("does not synthesize bare fallback refs into restricted picker rows", async () => {
     modelCatalogMocks.loadModelCatalog.mockReturnValue([
@@ -1044,16 +1038,10 @@ describe("handleModelsCommand", () => {
     const result = await handleModelsCommand(params, true);
 
     expect(result?.reply?.text).toContain("Models (anthropic · 🔑 target-auth) — showing 1-2 of 2");
-    const [authLabelParams] = expectDefined(
-      (
-        modelAuthLabelMocks.resolveModelAuthLabel.mock.calls as unknown as Array<
-          [{ provider?: string; workspaceDir?: string }]
-        >
-      )[0],
-      "(modelAuthLabelMocks.resolveModelAuthLabel.mock.calls as unknown as Array<\n        [{ provider?: string; workspaceDir?: string }]\n      >)[0] test invariant",
-    );
-    expect(authLabelParams.provider).toBe("anthropic");
-    expect(authLabelParams.workspaceDir).toBe("/tmp");
+    expect(modelAuthLabelMocks.resolveModelAuthLabel.mock.calls[0]?.[0]).toMatchObject({
+      provider: "anthropic",
+      workspaceDir: "/tmp",
+    });
   });
 
   it("labels OpenAI provider pages with the canonical auth provider id", async () => {

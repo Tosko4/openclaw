@@ -434,6 +434,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             const runtimeCatalog = normalizeThinkingCatalogProviders(
               await loadProviderScopedThinkingCatalog({
                 config: cfg,
+                catalogOwnerConfig: params.prepared.commandRuntimeContext?.config,
                 provider: providerOverride,
                 model: modelOverride,
                 agentId: sessionAgentId,

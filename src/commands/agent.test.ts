@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 // Register shared mocks before imports bind their production exports.
@@ -22,6 +23,7 @@ import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import {
   readAgentRunTerminalError,
@@ -30,6 +32,7 @@ import {
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
+  appendTranscriptMessage,
   listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
@@ -2302,6 +2305,37 @@ describe("agentCommand", () => {
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
         { id: "gpt-5.4", name: "Configured fallback", provider: "openai" },
       ];
+      attemptExecutionMocks.useRealRunAgentAttempt = true;
+      vi.mocked(runEmbeddedAgent).mockImplementation(async (params) => {
+        expect(params).toMatchObject({ agentId: "main", sessionId, sessionKey });
+        await expectDefined(
+          params.userTurnTranscriptRecorder,
+          "admitted user recorder",
+        ).persistApproved();
+        const written = await appendTranscriptMessage(
+          { agentId: "main", sessionId, sessionKey, storePath: store },
+          { message: { role: "assistant", content: [{ type: "text", text: "ok" }] }, cwd: home },
+        );
+        return {
+          payloads: [
+            setReplyPayloadMetadata(
+              { text: "ok" },
+              {
+                assistantTranscriptOwned: true,
+                assistantTranscriptEntryId: written.messageId,
+              },
+            ),
+          ],
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              provider: expectDefined(params.provider, "admitted provider"),
+              model: expectDefined(params.model, "admitted model"),
+            },
+          },
+        };
+      });
       mockModelCatalogOnce(catalog);
       const actualDelivery = await vi.importActual<typeof import("../agents/command/delivery.js")>(
         "../agents/command/delivery.js",
@@ -2338,6 +2372,28 @@ describe("agentCommand", () => {
         { provider: "openai", model: "gpt-4.1-mini" },
       ]);
       expect(readSessionStore<SessionEntry>(store)[sessionKey]).toMatchObject(pinnedState);
+      const assistantMessages = (
+        await loadTranscriptEvents({
+          agentId: "main",
+          sessionId,
+          sessionKey,
+          storePath: store,
+        })
+      ).flatMap((event) => {
+        const message = asOptionalRecord(asOptionalRecord(event)?.message);
+        return message?.role === "assistant" ? [message] : [];
+      });
+      expect(assistantMessages).toMatchObject([
+        {
+          content: [
+            {
+              type: "text",
+              text: "Pinned model anthropic/claude-opus-4-6 is not in your allow list. This reply used the default (openai/gpt-4.1-mini). Use /model to change it.\n\nok",
+            },
+          ],
+        },
+        { content: [{ type: "text", text: "ok" }] },
+      ]);
     });
   });
 

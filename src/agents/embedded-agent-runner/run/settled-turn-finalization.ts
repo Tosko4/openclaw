@@ -287,7 +287,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       markReplyPayloadForSourceSuppressionDelivery(payload);
     }
     if (sessionWriterDeliveryAuthority) {
-      setReplyPayloadMetadata(payload, { sessionWriterDeliveryAuthority });
+      setReplyPayloadMetadata(payload, { sessionWriterDeliveryAuthority, hostFinalReply: true });
     }
   });
   // A failure-honest final answer cannot turn a settled cron denial into success.

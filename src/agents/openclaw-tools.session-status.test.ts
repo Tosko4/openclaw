@@ -2804,6 +2804,49 @@ describe("session_status tool", () => {
     });
   });
 
+  it("rejects a blocked stored pin without an authored primary and permits an allowed replacement", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "no-authored-primary",
+        updatedAt: 10,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        modelOverrideSource: "user",
+      },
+    });
+    mockConfig = {
+      ...createMockConfig(),
+      agents: {
+        defaults: {
+          modelPolicy: { allow: ["anthropic/claude-sonnet-4-6"] },
+        },
+      },
+    };
+    const tool = getSessionStatusTool();
+
+    await expect(
+      tool.execute("blocked-pin-without-primary", { model: "openai/gpt-5.4" }),
+    ).rejects.toThrow('Model "openai/gpt-5.4" is not allowed.');
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+
+    const result = await tool.execute("allowed-replacement-without-primary", {
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    expect(result.details).toMatchObject({
+      ok: true,
+      modelProvider: "anthropic",
+      modelOverride: "anthropic/claude-sonnet-4-6",
+    });
+    expect(latestMockCallArg(updateSessionStoreMock, 1)).toMatchObject({
+      main: {
+        sessionId: "no-authored-primary",
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        modelOverrideSource: "user",
+      },
+    });
+  });
+
   it("resolves a model alias configured only on the target agent", async () => {
     resetSessionStore({
       main: { sessionId: "s1", updatedAt: 10 },

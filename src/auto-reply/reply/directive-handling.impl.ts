@@ -585,8 +585,7 @@ export async function handleDirectiveOnly(
       elevatedChanged,
       reasoningChanged,
     });
-  }
-  if (params.persistenceState) {
+  } else {
     params.persistenceState.outcome = {
       kind: "applied",
       provider: resolvedProvider,

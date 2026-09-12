@@ -9,10 +9,10 @@ import {
   rewriteAssistantTranscriptMessageByTurnIdentity,
   type AssistantTranscriptRewriteStart,
 } from "../../config/sessions/transcript-assistant-rewrite.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import {
   getReplyPayloadMetadata,
   isReplyPayloadSessionWriterDeliveryAuthorized,
@@ -27,7 +27,7 @@ export type ModelNoticeTranscript = {
   scope: SessionTranscriptWriteScope & { sessionId: string; sessionKey: string };
   start: AssistantTranscriptRewriteStart;
   expectedSession: Pick<
-    SessionEntry,
+    InternalSessionEntry,
     "sessionId" | "lifecycleRevision" | "activeWriterRunId" | "providerOverride" | "modelOverride"
   >;
   assertCurrent?: () => void;
@@ -39,7 +39,7 @@ type ModelNoticePublication = {
   notice: string;
   transcript?: ModelNoticeTranscript;
   deferred: boolean;
-  publication: ReturnType<typeof createDeferredCore>;
+  publication: Deferred;
   persisted?: RewriteResult;
   pending?: Promise<RewriteResult>;
   acknowledge: () => Promise<void>;
@@ -52,7 +52,10 @@ function publicationFor(payload: ReplyPayload) {
   return callback ? publications.get(callback) : undefined;
 }
 
-function isCurrent(owner: ModelNoticePublication, current: SessionEntry | undefined): boolean {
+function isCurrent(
+  owner: ModelNoticePublication,
+  current: InternalSessionEntry | undefined,
+): boolean {
   const target = owner.transcript;
   if (!target || !current) {
     return false;
@@ -69,7 +72,7 @@ function isCurrent(owner: ModelNoticePublication, current: SessionEntry | undefi
   );
 }
 
-function readCurrent(owner: ModelNoticePublication): SessionEntry | undefined {
+function readCurrent(owner: ModelNoticePublication): InternalSessionEntry | undefined {
   const target = owner.transcript;
   return target
     ? loadSessionEntryReadOnly({ ...target.scope, readConsistency: "latest" })
@@ -80,15 +83,17 @@ function prependNoticeText(message: Record<string, unknown>, notice: string) {
   const prependText = (value: unknown) => {
     const blocks = Array.isArray(value) ? value : [];
     let inserted = false;
-    const content = blocks.map((block) => {
+    const content: unknown[] = [];
+    for (const block of blocks) {
       const record = asOptionalRecord(block);
       if (inserted || record?.type !== "text" || typeof record.text !== "string") {
-        return block;
+        content.push(block);
+        continue;
       }
       inserted = true;
       const { textSignature: _textSignature, ...rest } = record;
-      return { ...rest, text: record.text ? `${notice}\n\n${record.text}` : notice };
-    });
+      content.push({ ...rest, text: record.text ? `${notice}\n\n${record.text}` : notice });
+    }
     return inserted ? content : [{ type: "text", text: notice }, ...content];
   };
   return {
@@ -185,7 +190,9 @@ export function bindModelNoticePublication(params: {
   payload: ReplyPayload;
   notice: string;
   transcript?: ModelNoticeTranscript;
-  recordReceipt?: (canCommit: (current: SessionEntry | undefined) => boolean) => Promise<void>;
+  recordReceipt?: (
+    canCommit: (current: InternalSessionEntry | undefined) => boolean,
+  ) => Promise<void>;
 }): void {
   const existing = publicationFor(params.original);
   if (existing) {

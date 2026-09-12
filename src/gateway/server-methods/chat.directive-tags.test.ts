@@ -4240,6 +4240,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           assistantTranscriptOwned: true,
           assistantTranscriptIdempotencyKey: idempotencyKey,
           deliverDespiteSourceReplySuppression: true,
+          hostFinalReply: true,
           sessionWriterDeliveryAuthority: {
             agentId: "main",
             expectedLifecycleRevision: "revision-a",
@@ -4282,6 +4283,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     setReplyPayloadMetadata(sourceReply.payload, {
       assistantTranscriptOwned: true,
       assistantTranscriptIdempotencyKey: idempotencyKey,
+      hostFinalReply: true,
       sessionWriterDeliveryAuthority: {
         agentId: "main",
         expectedLifecycleRevision: "revision-a",

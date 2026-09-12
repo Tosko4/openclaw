@@ -23,7 +23,6 @@ import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -1157,25 +1156,12 @@ function buildAllowedModelSetFromPrepared(
 
   // The operator's primary is usable independently of session-switch restrictions.
   // Read authored config, not the caller's current session selection.
-  const primaryRef =
-    authoredPrimary ??
-    resolveConfiguredModelRef({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
-      allowManifestNormalization: params.allowManifestNormalization,
-      allowPluginNormalization: params.allowPluginNormalization,
-      manifestPlugins: params.manifestPlugins,
-    });
-  const primaryKey = modelKey(primaryRef.provider, primaryRef.model);
-  const primaryAllowed =
-    Boolean(authoredPrimary) ||
-    (visibility.exactModelRefs.length > 0 && wildcardModelKeys.size === 0) ||
-    isModelKeyAllowedBySet(wildcardModelKeys, primaryKey);
-  const primaryIdentity = primaryAllowed ? addAllowedCatalogRef(primaryRef) : undefined;
-  if (primaryAllowed) {
+  const primaryRef = authoredPrimary;
+  const primaryKey = primaryRef ? modelKey(primaryRef.provider, primaryRef.model) : undefined;
+  const primaryAllowed = primaryKey !== undefined && Boolean(authoredPrimary);
+  const primaryIdentity =
+    primaryAllowed && primaryRef ? addAllowedCatalogRef(primaryRef) : undefined;
+  if (primaryAllowed && primaryKey) {
     allowedKeys.add(primaryKey);
   }
 
@@ -1661,105 +1647,6 @@ export function dedupeModelCatalogEntries(
   return dedupeByKey(entries, modelCatalogEntryKey);
 }
 
-function resolveEffectiveDefaultModel(
-  params: ModelPolicyPreparationParams,
-  prepared: ReturnType<typeof prepareModelPolicy>,
-  allowed: AllowedModelSet,
-): ModelVisibilityPolicy["effectiveDefault"] {
-  const primary =
-    prepared.authoredPrimary ??
-    resolveConfiguredModelRef({
-      ...params,
-      defaultProvider: params.defaultProvider,
-      defaultModel: params.defaultModel ?? DEFAULT_MODEL,
-    });
-  const snapshot = params.modelCatalog;
-  // Config-only readers cannot establish absence. A failed refresh cannot establish withdrawal.
-  if (
-    !prepared.authoredPrimary ||
-    !snapshot ||
-    snapshot.authoritative === false ||
-    snapshot.refreshFailed
-  ) {
-    return {
-      ref: resolveAllowedModelSelection({
-        ...params,
-        ...primary,
-        allows: allowed.allows,
-        allowedCatalog: allowed.allowedCatalog,
-      }),
-    };
-  }
-  const catalog = mergeModelCatalogEntries({
-    primary: snapshot.entries,
-    secondary: prepared.configuredCatalog,
-  });
-  // A captured physical route can be omitted from the logical browse rows.
-  const primaryEntry =
-    findModelCatalogEntry(catalog, {
-      provider: primary.provider,
-      modelId: primary.model,
-    }) ??
-    findModelCatalogEntry(
-      snapshot.routeVariants.filter((entry) => !entry.nativeRuntime),
-      { provider: primary.provider, modelId: primary.model },
-    );
-  const { runtime } = resolveAgentHarnessPolicy({
-    config: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    provider: primary.provider,
-    modelId: primary.model,
-    modelApi: primaryEntry?.api,
-    modelBaseUrl: primaryEntry?.baseUrl,
-  });
-  const nativeCatalog = snapshot.entries.filter((entry) => entry.nativeRuntime === runtime);
-  const nativeRuntime = runtime !== "auto" && runtime !== "openclaw";
-  // Host inventory cannot establish that a native runtime withdrew a model.
-  if (nativeRuntime && nativeCatalog.length === 0) {
-    return { ref: primary };
-  }
-  if (
-    nativeRuntime
-      ? findModelCatalogEntry(nativeCatalog, { provider: primary.provider, modelId: primary.model })
-      : primaryEntry ||
-        snapshot.resolvedConfiguredModelRefs?.some(
-          (ref) => modelKey(ref.provider, ref.model) === modelKey(primary.provider, primary.model),
-        )
-  ) {
-    return { ref: primary };
-  }
-  const preferred = resolveConfiguredProviderFallback({
-    cfg: params.cfg,
-    defaultProvider: primary.provider,
-    defaultModel: primary.model,
-  });
-  const preferredEntry = preferred
-    ? findModelCatalogEntry(catalog, { provider: preferred.provider, modelId: preferred.model })
-    : undefined;
-  const primaryKey = modelKey(primary.provider, primary.model);
-  const replacement = [
-    ...(preferredEntry ? [preferredEntry] : []),
-    ...prepared.configuredCatalog,
-    ...catalog,
-  ].find(
-    (entry) =>
-      modelKey(entry.provider, entry.id) !== primaryKey &&
-      entry.status !== "deprecated" &&
-      entry.status !== "disabled" &&
-      (!nativeRuntime ||
-        normalizeProviderId(entry.provider) !== normalizeProviderId(primary.provider) ||
-        Boolean(
-          findModelCatalogEntry(nativeCatalog, { provider: entry.provider, modelId: entry.id }),
-        )) &&
-      allowed.allowsByList({ provider: entry.provider, model: entry.id }),
-  );
-  return {
-    ref: replacement ? { provider: replacement.provider, model: replacement.id } : null,
-    missingPrimary: primaryKey,
-  };
-}
-
 export function createModelVisibilityPolicyWithFallbacks(
   params: {
     cfg: OpenClawConfig;
@@ -1774,13 +1661,12 @@ export function createModelVisibilityPolicyWithFallbacks(
     allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
-): ModelVisibilityPolicy {
+): Omit<ModelVisibilityPolicy, "effectiveDefault"> {
   const prepared = prepareModelPolicy(params);
   const { visibility, policyAliasIndex, selectionAliasIndex, configuredCatalog } = prepared;
   const wildcardModelKeys = visibility.wildcardModelKeys;
   const allowed = buildAllowedModelSetFromPrepared(params, prepared);
   const resolveModelCatalogIdentityKey = createModelCatalogIdentityKeyResolver();
-  const effectiveDefault = resolveEffectiveDefaultModel(params, prepared, allowed);
   const configuredKeys = new Set(configuredCatalog.map(resolveModelCatalogIdentityKey));
   const retainedKeys = new Set<string>();
   const addConfiguredRef = (
@@ -1838,8 +1724,7 @@ export function createModelVisibilityPolicyWithFallbacks(
     // retention, but are not user-selectable overrides unless policy also allows them.
     addConfiguredRef(fallback, true, selectionAliasIndex);
   }
-  const policy: ModelVisibilityPolicy = {
-    effectiveDefault,
+  const policy: Omit<ModelVisibilityPolicy, "effectiveDefault"> = {
     allowAny: allowed.allowAny,
     configuredCatalog,
     allowedCatalog: allowed.allowedCatalog,

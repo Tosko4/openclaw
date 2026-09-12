@@ -79,12 +79,24 @@ it.each([
   {
     name: "persists the delivered Telegram policy notice in shared history before suppressing it on web turns",
     withPhoto: false,
+    failDelivery: "none",
   },
   {
     name: "preserves the delivered Telegram photo and policy notice in shared history across web turns and restart",
     withPhoto: true,
+    failDelivery: "none",
   },
-])("$name", async ({ withPhoto }) => {
+  {
+    name: "Telegram webhook retries the notice after its send failed without recording a receipt",
+    withPhoto: false,
+    failDelivery: "notice",
+  },
+  {
+    name: "Telegram webhook keeps the persisted notice receipt when a later diagnostic payload fails",
+    withPhoto: false,
+    failDelivery: "diagnostic",
+  },
+] as const)("$name", async ({ withPhoto, failDelivery }) => {
   const scratch = tempDirs.make("openclaw-telegram-policy-history-");
   const responsePath = path.join(scratch, "response.json");
   const requestPath = path.join(scratch, "requests.ndjson");
@@ -115,6 +127,8 @@ it.each([
   const failures: string[] = [];
   const calls: Array<{ method: string; body: Record<string, unknown> }> = [];
   const deliveries: Array<{ method: string; text: string; messageId: number }> = [];
+  const rejectedDeliveries: Array<{ method: string; text: string }> = [];
+  let failNextTextAfter: number | undefined;
   const photoUploads: Array<{ name: string; bytes: number }> = [];
   const botId = 424242;
   const botToken = `${botId}:${"A".repeat(35)}`;
@@ -153,6 +167,27 @@ it.each([
             : {},
       );
       calls.push({ method, body });
+      if (method === "sendMessage" && failNextTextAfter !== undefined) {
+        if (failNextTextAfter === 0) {
+          failNextTextAfter = undefined;
+          const text = z.string().parse(body.text);
+          response.once("finish", () => {
+            rejectedDeliveries.push({ method, text });
+            changes.emit("change");
+          });
+          response.writeHead(403, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              ok: false,
+              error_code: 403,
+              description: "Forbidden: fixture delivery rejected",
+            }),
+          );
+          return;
+        }
+        failNextTextAfter -= 1;
+      }
+
       let result: unknown;
       if (method === "getMe") result = bot;
       else if (method === "getWebhookInfo")
@@ -302,6 +337,7 @@ it.each([
     },
     config: {
       cron: { enabled: false },
+      commands: { ownerAllowFrom: [`telegram:${senderId}`] },
       session: { dmScope: "main", mainKey: "main" },
       agents: {
         ownership: "explicit",
@@ -441,8 +477,7 @@ it.each([
       .map((record) => z.object({ model: z.string() }).parse(record.body).model);
   }
   let updateId = 0;
-  async function telegramTurn(text: string, expectedReply: string) {
-    const before = deliveries.length;
+  async function sendTelegramUpdate(text: string) {
     const response = await fetch(webhookUrl, {
       method: "POST",
       headers: {
@@ -461,6 +496,10 @@ it.each([
       }),
     });
     expect(response.status).toBe(200);
+  }
+  async function telegramTurn(text: string, expectedReply: string) {
+    const before = deliveries.length;
+    await sendTelegramUpdate(text);
     const outbound = await observe(
       "Telegram reply did not settle",
       () => deliveries.slice(before),
@@ -514,6 +553,64 @@ it.each([
   ]);
   expect(edit.code, edit.stderr).toBe(0);
   await startGateway();
+  if (failDelivery !== "none") {
+    const before = deliveries.length;
+    if (failDelivery === "diagnostic") {
+      await call("sessions.patch", { key: sessionKey, traceLevel: "raw" });
+    }
+    failNextTextAfter = failDelivery === "notice" ? 0 : 1;
+    await sendTelegramUpdate("Please answer during the delivery failure.");
+    await observe(
+      "The selected Telegram payload was not rejected",
+      () => rejectedDeliveries,
+      (rejected) => rejected.length === 1,
+    );
+    const rejected = rejectedDeliveries[0];
+    expect(rejected.method).toBe("sendMessage");
+    if (failDelivery === "notice") {
+      expect(rejected.text).toContain(notice);
+      expect(deliveries.slice(before)).toEqual([]);
+    } else {
+      expect(deliveries.slice(before).map((delivery) => delivery.text)).toEqual([notifiedAnswer]);
+      expect(rejected.text).toContain("Usage (Session Total)");
+      expect(rejected.text).not.toContain(notice);
+      await observe(
+        "The delivered notice was not retained after the diagnostic failure",
+        async () => historySchema.parse(await call("chat.history", { sessionKey, limit: 20 })),
+        (history) => history.messages.some((message) => messageText(message) === notifiedAnswer),
+      );
+      await call("sessions.patch", { key: sessionKey, traceLevel: "off" });
+    }
+    const retryHistory = await telegramTurn(
+      "Please retry after the delivery failure.",
+      failDelivery === "notice" ? notifiedAnswer : "Receipt response.",
+    );
+    expect(
+      retryHistory.messages.filter(
+        (message) => message.role === "assistant" && messageText(message).includes(notice),
+      ),
+    ).toHaveLength(1);
+    expect(retryHistory.sessionInfo).toEqual({ model: "fixture-pin", modelOverrideSource: "user" });
+    expect(await modelRequests()).toEqual(["fixture-pin", "fixture-primary", "fixture-primary"]);
+    await stopGateway();
+    await startGateway();
+    const restarted = await telegramTurn("Please answer after restart.", "Receipt response.");
+    expect(
+      restarted.messages.filter(
+        (message) => message.role === "assistant" && messageText(message).includes(notice),
+      ),
+    ).toHaveLength(1);
+    expect(restarted.sessionInfo).toEqual({ model: "fixture-pin", modelOverrideSource: "user" });
+    expect(await modelRequests()).toEqual([
+      "fixture-pin",
+      "fixture-primary",
+      "fixture-primary",
+      "fixture-primary",
+    ]);
+    expect(rejectedDeliveries).toHaveLength(1);
+    expect(failures).toEqual([]);
+    return;
+  }
   const notifiedHistory = await telegramTurn(
     "Please answer after the policy change.",
     notifiedAnswer,

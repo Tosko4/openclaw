@@ -530,7 +530,7 @@ describe("runReplyAgent blocked session pin", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
-  it("answers on the primary, preserves the pin, and records the notice only after delivery", async () => {
+  it("runs the primary without native pin authority and refuses a receipt without a transcript", async () => {
     const sessionKey = "main";
     const storePath = path.join(rootDir, "sessions.json");
     const pin = {
@@ -549,7 +549,7 @@ describe("runReplyAgent blocked session pin", () => {
       payloads: [{ text: "Answer from the primary." }],
       meta: { agentMeta: { provider: "anthropic", model: "claude" } },
     });
-    for (const turn of [1, 2]) {
+    for (let turn = 0; turn < 2; turn += 1) {
       const sessionEntry = expectDefined(
         loadSessionEntry({ storePath, sessionKey }),
         "stored session",
@@ -579,20 +579,17 @@ describe("runReplyAgent blocked session pin", () => {
       const result = await run.run();
       const payload = expectDefined(Array.isArray(result) ? result[0] : result, "reply payload");
       expect(payload.text).toContain("Answer from the primary.");
-      if (turn === 1) {
-        expect(payload.text).toContain(
-          "Pinned model anthropic/blocked-model is not in your allow list.",
-        );
-        expect(payload.text).toContain("This reply used the default (anthropic/claude).");
-        expect(payload.text).toContain("/model");
-        expect(loadSessionEntry({ storePath, sessionKey })?.modelPolicyNotice).toBeUndefined();
-        await expectDefined(
-          getReplyPayloadMetadata(payload)?.onFinalDeliverySuccess,
-          "delivery receipt",
-        )();
-      } else {
-        expect(payload.text).not.toContain("allow list");
-      }
+      expect(payload.text).toContain(
+        "Pinned model anthropic/blocked-model is not in your allow list.",
+      );
+      expect(payload.text).toContain("This reply used the default (anthropic/claude).");
+      expect(payload.text).toContain("/model");
+      expect(loadSessionEntry({ storePath, sessionKey })?.modelPolicyNotice).toBeUndefined();
+      await expectDefined(
+        getReplyPayloadMetadata(payload)?.onFinalDeliverySuccess,
+        "delivery acknowledgment",
+      )();
+      expect(loadSessionEntry({ storePath, sessionKey })?.modelPolicyNotice).toBeUndefined();
       expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject(pin);
     }
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
