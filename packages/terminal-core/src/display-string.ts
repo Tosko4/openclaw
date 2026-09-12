@@ -1,8 +1,6 @@
 import os from "node:os";
-import {
-  lowercasePreservingWhitespace,
-  resolveEffectiveHomeDir,
-} from "@openclaw/normalization-core";
+import { lowercasePreservingWhitespace } from "@openclaw/normalization-core";
+import { resolveEffectiveHomeDir } from "@openclaw/normalization-core/home-dir";
 
 // Display-safe string helpers for shortening user home paths.
 

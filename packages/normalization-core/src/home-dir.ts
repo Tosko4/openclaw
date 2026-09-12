@@ -52,7 +52,7 @@ export function resolveEffectiveHomeDir(
     return resolveOsHomeDir(env, homedir);
   }
   if (explicitHome === "~" || explicitHome.startsWith("~/") || explicitHome.startsWith("~\\")) {
-    const osHome = resolveOsHomeDir(env, homedir);
+    const osHome = resolveRawOsHomeDir(env, homedir);
     if (!osHome) {
       return options?.preserveUnresolvedTilde ? path.resolve(explicitHome) : undefined;
     }

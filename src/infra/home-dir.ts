@@ -5,7 +5,7 @@ import {
   normalizeHomeDirValue,
   resolveEffectiveHomeDir,
   resolveOsHomeDir,
-} from "@openclaw/normalization-core";
+} from "@openclaw/normalization-core/home-dir";
 import { tryProcessCwd } from "./safe-cwd.js";
 
 export { resolveEffectiveHomeDir, resolveOsHomeDir };
