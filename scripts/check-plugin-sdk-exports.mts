@@ -22,6 +22,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { checkRedactSdkCompatibility } from "./check-redact-sdk-compat.mjs";
 import {
   MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
   MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
@@ -77,6 +78,7 @@ sessionManager.persist({});`
   : "";
 
 let missing = 0;
+missing += checkRedactSdkCompatibility(repoRoot, tsgoPath);
 
 {
   const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-plugin-sdk-consumer-"));
