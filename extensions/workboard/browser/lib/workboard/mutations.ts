@@ -25,7 +25,12 @@ import {
   type WorkboardHost,
 } from "./runtime.ts";
 import { applyTaskSummariesToState, listWorkboardTasks } from "./task-links.ts";
-import type { WorkboardCard, WorkboardDispatchSummary, WorkboardStatus } from "./types.ts";
+import type {
+  WorkboardCard,
+  WorkboardDeleteResult,
+  WorkboardDispatchSummary,
+  WorkboardStatus,
+} from "./types.ts";
 
 function normalizeDispatchSummary(value: unknown): WorkboardDispatchSummary {
   const countArray = (key: string) =>
@@ -323,7 +328,7 @@ export async function deleteWorkboardCard(params: {
   cardId: string;
   expectedUpdatedAt?: number;
   requestUpdate?: () => void;
-}) {
+}): Promise<WorkboardDeleteResult | false> {
   const state = getWorkboardState(params.host);
   if (
     !params.client ||
@@ -338,14 +343,23 @@ export async function deleteWorkboardCard(params: {
   state.error = null;
   params.requestUpdate?.();
   try {
-    await params.client.request("workboard.cards.delete", {
+    const result = await params.client.request<WorkboardDeleteResult>("workboard.cards.delete", {
       id: params.cardId,
       ...(params.expectedUpdatedAt !== undefined
         ? { expectedUpdatedAt: params.expectedUpdatedAt }
         : {}),
     });
-    setWorkboardCards(state, removeCardAndReferences(state.cards, params.cardId));
-    return true;
+    const referenceUpdates = new Map(
+      (result.referenceUpdates ?? []).map((receipt) => [receipt.id, receipt]),
+    );
+    const remaining = removeCardAndReferences(state.cards, params.cardId).map((card) => {
+      const receipt = referenceUpdates.get(card.id);
+      return receipt && card.updatedAt === receipt.previousUpdatedAt
+        ? { ...card, updatedAt: receipt.updatedAt }
+        : card;
+    });
+    setWorkboardCards(state, remaining);
+    return result;
   } catch (error) {
     reconcileCardConflict(state, error);
     state.error = formatError(error);

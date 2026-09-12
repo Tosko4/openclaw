@@ -577,6 +577,85 @@ describe("renderWorkboard", () => {
     },
   );
 
+  it.each(["none", "before cleanup", "after cleanup"] as const)(
+    "deletes linked selections without adopting unrelated edits: %s",
+    async (concurrentEdit) => {
+      const parent = createWorkboardCard({ id: "parent" });
+      const child = createWorkboardCard({
+        id: "child",
+        position: 2000,
+        metadata: {
+          links: [{ id: "link", type: "parent", targetCardId: parent.id, createdAt: 1 }],
+        },
+      });
+      const previousUpdatedAt = child.updatedAt + (concurrentEdit === "before cleanup" ? 1 : 0);
+      const cleanupUpdatedAt = previousUpdatedAt + 1;
+      const latest = {
+        ...child,
+        metadata: undefined,
+        updatedAt: cleanupUpdatedAt + (concurrentEdit === "after cleanup" ? 1 : 0),
+        title: concurrentEdit === "none" ? child.title : "Edited by another client",
+      };
+      const request = vi.fn().mockImplementation(async (_method, params) => {
+        if (params.id === parent.id) {
+          if (concurrentEdit !== "none") {
+            setWorkboardCards(state, [
+              parent,
+              {
+                ...latest,
+                updatedAt:
+                  concurrentEdit === "before cleanup" ? previousUpdatedAt : latest.updatedAt,
+              },
+            ]);
+          }
+          return {
+            deleted: true,
+            referenceUpdates: [{ id: child.id, previousUpdatedAt, updatedAt: cleanupUpdatedAt }],
+          };
+        }
+        if (params.expectedUpdatedAt !== latest.updatedAt) {
+          throw new GatewayProtocolRequestError({
+            code: "workboard_conflict",
+            message: "Card changed. Review and retry.",
+            details: { type: "workboard_card_conflict", card: latest },
+          });
+        }
+        return { deleted: true };
+      });
+      const { state, container, renderView } = createWorkboardView({
+        client: { request, addEventListener: () => () => undefined },
+        canWrite: true,
+      });
+      state.cards = [parent, child];
+      state.selectedCardIds = new Set([parent.id, child.id]);
+      renderView();
+      expectDefined(
+        container.querySelector<HTMLButtonElement>(".workboard-selection__delete"),
+        "delete selected",
+      ).click();
+      renderView();
+      expectDefined(
+        container.querySelector<HTMLButtonElement>('.workboard-bulk-dialog button[type="submit"]'),
+        "confirm delete",
+      ).click();
+      await vi.waitFor(() => expect(state.bulkSaving).toBe(false));
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(request).toHaveBeenNthCalledWith(2, "workboard.cards.delete", {
+        id: child.id,
+        expectedUpdatedAt: concurrentEdit === "before cleanup" ? child.updatedAt : cleanupUpdatedAt,
+      });
+      if (concurrentEdit === "none") {
+        expect(state.cards).toEqual([]);
+        expect(state.selectedCardIds.size).toBe(0);
+        expect(state.error).toBeNull();
+      } else {
+        expect(state.cards).toEqual([latest]);
+        expect(state.selectedCardIds).toEqual(new Set([child.id]));
+        expect(state.error).toContain("Card changed. Review and retry.");
+      }
+    },
+  );
+
   it.each(["move", "archive", "delete"] as const)(
     "stops bulk %s on a newer card revision and retains it for retry",
     async (action) => {

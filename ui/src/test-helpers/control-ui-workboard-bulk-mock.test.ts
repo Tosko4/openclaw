@@ -56,3 +56,57 @@ it.for(["move", "archive", "delete"] as const)(
     expect(socket.frames.filter((frame) => frame.type === "event")).toHaveLength(events.length + 1);
   },
 );
+
+it("returns link cleanup revisions so the next guarded mock delete can succeed", async ({
+  gatewayPage,
+}) => {
+  const parent = {
+    id: "parent",
+    title: "Parent",
+    status: "todo",
+    priority: "normal",
+    labels: [],
+    position: 1000,
+    createdAt: 1,
+    updatedAt: 10,
+    metadata: { automation: { boardId: "default" } },
+  };
+  const child = {
+    ...parent,
+    id: "child",
+    metadata: {
+      ...parent.metadata,
+      links: [{ id: "link", type: "parent", targetCardId: parent.id, createdAt: 1 }],
+    },
+  };
+  const seed = {
+    boards: [{ id: "default" }],
+    cards: [parent, child],
+    tasks: [],
+    methodResponses: { "workboard.cards.list": { statuses: ["todo", "done"] } },
+  };
+  gatewayPage.execute("Date.now = () => 10;");
+  gatewayPage.execute(createControlUiMockGatewayInitScript());
+  gatewayPage.execute(`(${installWorkboardBoardMock.toString()})(${JSON.stringify(seed)})`);
+  const socket = gatewayPage.connect();
+  await flushMockTimers();
+  expect(
+    await socket.request("parent", "workboard.cards.delete", {
+      id: parent.id,
+      expectedUpdatedAt: 10,
+    }),
+  ).toEqual({
+    deleted: true,
+    referenceUpdates: [{ id: child.id, previousUpdatedAt: 10, updatedAt: 11 }],
+  });
+  expect((await socket.request("list", "workboard.cards.list", {})).cards).toEqual([
+    { ...child, updatedAt: 11, metadata: parent.metadata },
+  ]);
+  expect(
+    await socket.request("child", "workboard.cards.delete", {
+      id: child.id,
+      expectedUpdatedAt: 11,
+    }),
+  ).toEqual({ deleted: true });
+  expect((await socket.request("empty", "workboard.cards.list", {})).cards).toEqual([]);
+});

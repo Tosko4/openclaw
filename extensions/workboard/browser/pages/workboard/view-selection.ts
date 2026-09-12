@@ -182,9 +182,19 @@ async function applySelection(
         case "archive":
           applied = await archiveWorkboardCard({ ...common, archived: true });
           break;
-        case "delete":
-          applied = await deleteWorkboardCard(common);
+        case "delete": {
+          const result = await deleteWorkboardCard(common);
+          applied = Boolean(result);
+          if (result) {
+            for (const receipt of result.referenceUpdates ?? []) {
+              const observation = observations.get(receipt.id);
+              if (observation?.updatedAt === receipt.previousUpdatedAt) {
+                observations.set(receipt.id, { ...observation, updatedAt: receipt.updatedAt });
+              }
+            }
+          }
           break;
+        }
       }
       if (!applied) {
         state.error ??= t("workboard.bulkUnavailable");

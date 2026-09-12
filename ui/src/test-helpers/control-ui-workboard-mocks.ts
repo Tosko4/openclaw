@@ -1,3 +1,4 @@
+import type { WorkboardCard } from "@openclaw/workboard-contract";
 import type { ControlUiMockGateway } from "./control-ui-e2e.ts";
 import type { buildWorkboardMocks } from "./control-ui-workboard-fixtures.ts";
 
@@ -16,6 +17,7 @@ export function installWorkboardBoardMock(seed: ReturnType<typeof buildWorkboard
       automation: { boardId: string };
       templateId?: string;
       archivedAt?: number;
+      links?: NonNullable<WorkboardCard["metadata"]>["links"];
       comments?: { id: string; body: string; createdAt: number }[];
     };
     notes?: string;
@@ -285,7 +287,25 @@ export function installWorkboardBoardMock(seed: ReturnType<typeof buildWorkboard
       return;
     }
     const deleted = workboardCards.delete(input.id);
-    respond({ deleted });
+    const referenceUpdates: Array<{ id: string; previousUpdatedAt: number; updatedAt: number }> =
+      [];
+    if (deleted) {
+      for (const card of workboardCards.values()) {
+        const { links, ...metadata } = card.metadata;
+        if (!links?.some((link) => link.targetCardId === input.id)) {
+          continue;
+        }
+        const updatedAt = Math.max(Date.now(), card.updatedAt + 1);
+        const remainingLinks = links.filter((link) => link.targetCardId !== input.id);
+        workboardCards.set(card.id, {
+          ...card,
+          updatedAt,
+          metadata: { ...metadata, ...(remainingLinks.length ? { links: remainingLinks } : {}) },
+        });
+        referenceUpdates.push({ id: card.id, previousUpdatedAt: card.updatedAt, updatedAt });
+      }
+    }
+    respond({ deleted, ...(referenceUpdates.length ? { referenceUpdates } : {}) });
     if (deleted) {
       emit("plugin.workboard.changed", { epoch: "workboard-mock", revision: ++revision });
     }

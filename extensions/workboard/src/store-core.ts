@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type {
   WorkboardBoardMetadata,
   WorkboardCard,
+  WorkboardDeleteResult,
   WorkboardEvent,
   WorkboardLink,
   WorkboardMetadata,
@@ -435,19 +436,37 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
     return entry?.version === 1 ? entry.card : undefined;
   }
 
-  private async removeReferencesToCard(cardId: string): Promise<void> {
+  private async removeReferencesToCard(
+    cardId: string,
+  ): Promise<NonNullable<WorkboardDeleteResult["referenceUpdates"]>> {
+    const referenceUpdates: NonNullable<WorkboardDeleteResult["referenceUpdates"]> = [];
     for (const card of await this.list()) {
-      const links = card.metadata?.links;
-      if (!links?.some((link) => link.targetCardId === cardId)) {
+      if (!card.metadata?.links?.some((link) => link.targetCardId === cardId)) {
         continue;
       }
-      await this.updateCard(card.id, {
-        metadata: {
-          ...card.metadata,
-          links: links.filter((link) => link.targetCardId !== cardId),
-        },
+      let previousUpdatedAt = card.updatedAt;
+      const result = await this.updateLatestCard(card.id, (current) => {
+        const links = current.metadata?.links;
+        if (!links?.some((link) => link.targetCardId === cardId)) {
+          return undefined;
+        }
+        previousUpdatedAt = current.updatedAt;
+        return {
+          metadata: {
+            ...current.metadata,
+            links: links.filter((link) => link.targetCardId !== cardId),
+          },
+        };
       });
+      if (result.updated) {
+        referenceUpdates.push({
+          id: card.id,
+          previousUpdatedAt,
+          updatedAt: result.card.updatedAt,
+        });
+      }
     }
+    return referenceUpdates;
   }
 
   async create(
@@ -901,14 +920,14 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
   async delete(
     id: string,
     options: { expectedUpdatedAt?: number } = {},
-  ): Promise<{ deleted: boolean }> {
+  ): Promise<WorkboardDeleteResult> {
     return await this.enqueueMutation(async () => await this.deleteDirect(id, options));
   }
 
   protected async deleteDirect(
     id: string,
     options: { expectedUpdatedAt?: number } = {},
-  ): Promise<{ deleted: boolean }> {
+  ): Promise<WorkboardDeleteResult> {
     const cardId = id.trim();
     const deleted =
       options.expectedUpdatedAt === undefined
@@ -933,8 +952,11 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
         await this.attachmentStore.delete(entry.key);
       }
     }
-    await this.removeReferencesToCard(cardId);
-    return { deleted: true };
+    const referenceUpdates = await this.removeReferencesToCard(cardId);
+    return {
+      deleted: true,
+      ...(referenceUpdates.length > 0 ? { referenceUpdates } : {}),
+    };
   }
 
   async addComment(

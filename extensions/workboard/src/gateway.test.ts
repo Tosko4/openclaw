@@ -32,7 +32,7 @@ describe("workboard gateway methods", () => {
     async (action) => {
       type Handler = Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
       const methods = new Map<string, Handler>();
-      const store = new WorkboardStore(createMemoryStore());
+      const store = createWorkboardSqliteTestStore();
       const api = createTestPluginApi({
         registerGatewayMethod: (name, handler) => {
           methods.set(name, handler);

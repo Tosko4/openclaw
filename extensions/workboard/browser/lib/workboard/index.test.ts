@@ -3818,6 +3818,30 @@ describe("workboard controller", () => {
     });
   });
 
+  it("removes an already-absent local card after an acknowledged delete", async () => {
+    state.cards = [sampleCard];
+    const client = createClient({ "workboard.cards.delete": { deleted: false } });
+    await expect(deleteCard(client, sampleCard.id)).resolves.toEqual({ deleted: false });
+    expect(state.cards).toEqual([]);
+  });
+
+  it.each([false, true])(
+    "applies cleanup revisions only to matching local observations (newer=%s)",
+    async (newer) => {
+      const parent = makeCard({ id: "parent" });
+      const child = makeCard({ id: "child", updatedAt: newer ? 30 : 10 });
+      state.cards = [parent, child];
+      const client = createClient({
+        "workboard.cards.delete": {
+          deleted: true,
+          referenceUpdates: [{ id: child.id, previousUpdatedAt: 10, updatedAt: 20 }],
+        },
+      });
+      await deleteCard(client, parent.id);
+      expect(state.cards).toEqual([{ ...child, updatedAt: newer ? 30 : 20 }]);
+    },
+  );
+
   it("removes stale dependency links from local cards after delete", async () => {
     const parent = makeCard({
       id: "parent-1",

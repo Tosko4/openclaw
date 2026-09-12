@@ -306,6 +306,70 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it.each(["unchanged", "edited"] as const)(
+    "reports only committed reference cleanup revisions for %s peers",
+    async (peerChange) => {
+      const harness = createConcurrentSqliteHarness("openclaw-workboard-delete-references-");
+      try {
+        const parent = await harness.host.create({ title: "Selected parent" });
+        const child = await harness.host.create({ title: "Selected child" });
+        const unrelated = await harness.host.create({ title: "Unrelated" });
+        const linked = await harness.host.linkCards(parent.id, child.id);
+        const deleted = harness.paused.pauseAfterMatchingWrite(
+          (key, value) => key === parent.id && value === undefined,
+        );
+        const pending = harness.operation.delete(parent.id);
+        const outcome = pending.then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        await deleted.reached;
+        const cleanup = harness.paused.pauseNextWrite();
+        deleted.resume();
+        await cleanup.reached;
+        let beforeCleanup = linked;
+        if (peerChange === "edited") {
+          await harness.host.addComment(child.id, { body: "Keep this external comment" });
+          beforeCleanup = await harness.host.addLink(child.id, {
+            targetCardId: unrelated.id,
+            type: "relates_to",
+          });
+        }
+        cleanup.resume();
+        const result = await outcome;
+        expect(result).not.toHaveProperty("error");
+        const current = await harness.host.get(child.id);
+        expect(
+          current?.metadata?.links?.some((link) => link.targetCardId === parent.id) ?? false,
+        ).toBe(false);
+        if (peerChange === "edited") {
+          expect(current?.metadata?.comments).toEqual(beforeCleanup.metadata?.comments);
+          expect(current?.metadata?.links).toEqual(
+            beforeCleanup.metadata?.links?.filter((link) => link.targetCardId !== parent.id),
+          );
+        }
+        expect(result).toEqual({
+          value: {
+            deleted: true,
+            referenceUpdates: [
+              {
+                id: child.id,
+                previousUpdatedAt: beforeCleanup.updatedAt,
+                updatedAt: current?.updatedAt,
+              },
+            ],
+          },
+        });
+        await expect(harness.host.get(unrelated.id)).resolves.toEqual(unrelated);
+        await expect(
+          harness.operation.delete(child.id, { expectedUpdatedAt: current?.updatedAt }),
+        ).resolves.toEqual({ deleted: true });
+      } finally {
+        harness.close();
+      }
+    },
+  );
+
   it.each(["move", "archive", "delete"] as const)(
     "rejects stale %s without changing the newer card",
     async (action) => {
