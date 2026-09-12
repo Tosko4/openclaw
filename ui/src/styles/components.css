@@ -4007,18 +4007,6 @@ td.data-table-key-col {
   white-space: nowrap;
 }
 
-.agent-select__option-state,
-.agent-select__option-check {
-  display: inline-flex;
-  align-items: center;
-  color: var(--muted);
-}
-
-.agent-select__option-check svg {
-  width: 16px;
-  height: 16px;
-}
-
 .agent-select__option-description {
   overflow: hidden;
   color: var(--muted);
