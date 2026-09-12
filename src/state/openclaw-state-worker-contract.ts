@@ -1,4 +1,5 @@
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import type { PluginStateWorkerOperations } from "../plugin-state/plugin-state-worker-contract.js";
 import type { TaskFlowView } from "../plugins/runtime/task-domain-types.js";
 import type {
   TaskFlowRegistryUpdate,
@@ -25,7 +26,7 @@ type TaskFlowReadQuery = {
 };
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
-export type OpenClawStateWorkerOperations = {
+export type OpenClawStateWorkerOperations = PluginStateWorkerOperations & {
   "flows.createManaged": {
     input: { flow: TaskFlowRecord };
     output: TaskFlowRecord;

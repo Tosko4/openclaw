@@ -80,7 +80,10 @@ import { createToolingIsolatedVitestConfig } from "./vitest/vitest.tooling-isola
 import { createToolingVitestConfig } from "./vitest/vitest.tooling.config.ts";
 import { createTuiVitestConfig } from "./vitest/vitest.tui.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
-import { bundledPluginDependentUnitTestFiles } from "./vitest/vitest.unit-paths.mjs";
+import {
+  bundledPluginDependentUnitTestFiles,
+  databaseWorkerCoreTestFiles,
+} from "./vitest/vitest.unit-paths.mjs";
 import { createUtilsVitestConfig } from "./vitest/vitest.utils.config.ts";
 import { createWizardVitestConfig } from "./vitest/vitest.wizard.config.ts";
 
@@ -601,7 +604,6 @@ describe("scoped vitest configs", () => {
       defaultExtensionLineConfig,
       defaultExtensionProviderOpenAiConfig,
       defaultExtensionSignalConfig,
-      defaultExtensionSlackConfig,
       defaultAutoReplyConfig,
       defaultAutoReplyCoreConfig,
       defaultAutoReplyTopLevelConfig,
@@ -617,6 +619,7 @@ describe("scoped vitest configs", () => {
     }
 
     expectForkedNonIsolatedRunner(defaultCommandsConfig);
+    expectForkedNonIsolatedRunner(defaultExtensionSlackConfig);
 
     expectThreadedNonIsolatedRunner(defaultUiConfig);
     expectThreadedIsolatedRunner(defaultExtensionMemoryConfig);
@@ -871,11 +874,7 @@ describe("scoped vitest configs", () => {
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",
     ]);
-    expect(testConfig.include).toEqual([
-      "memory-core/**/*.test.ts",
-      "memory-lancedb/**/*.test.ts",
-      "memory-wiki/**/*.test.ts",
-    ]);
+    expect(testConfig.include).toEqual(["memory-lancedb/**/*.test.ts", "memory-wiki/**/*.test.ts"]);
   });
 
   it("keeps telegram plugin tests out of the shared extensions lane", () => {
@@ -1028,7 +1027,10 @@ describe("scoped vitest configs", () => {
   it("normalizes infra include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultInfraConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
-    expect(testConfig.include).toEqual(["infra/**/*.test.ts"]);
+    expect(testConfig.include).toEqual([
+      "infra/**/*.test.ts",
+      ...databaseWorkerCoreTestFiles.map((file) => file.replace(/^src\//u, "")),
+    ]);
   });
 
   it("normalizes runtime config include patterns relative to the scoped dir", () => {

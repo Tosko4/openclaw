@@ -7,7 +7,11 @@ import { commandsLightTestFiles } from "./vitest.commands-light-paths.mjs";
 import { gatewayPluginTestFiles } from "./vitest.gateway-server-paths.mjs";
 import { pluginSdkLightTestFiles } from "./vitest.plugin-sdk-paths.mjs";
 import { isToolingIsolatedTestFile } from "./vitest.tooling-isolated-paths.mjs";
-import { boundaryTestFiles, bundledPluginDependentUnitTestFiles } from "./vitest.unit-paths.mjs";
+import {
+  boundaryTestFiles,
+  bundledPluginDependentUnitTestFiles,
+  databaseWorkerCoreTestFiles,
+} from "./vitest.unit-paths.mjs";
 
 const normalizeRepoPath = (value) => value.replaceAll("\\", "/");
 
@@ -308,6 +312,9 @@ function matchesAnyGlob(file, patterns) {
 const unitFastCandidateFileByPath = new Map();
 
 function isUnitFastCandidateFile(file) {
+  if (databaseWorkerCoreTestFiles.includes(file)) {
+    return false;
+  }
   const cached = unitFastCandidateFileByPath.get(file);
   if (cached !== undefined) {
     return cached;

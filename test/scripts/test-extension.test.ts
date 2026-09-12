@@ -304,12 +304,16 @@ describe("scripts/test-extension.mts", () => {
     ).toEqual([[root]]);
   });
 
-  it("resolves memory extensions onto the memory vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "memory-core", cwd: process.cwd() });
+  it.each([
+    ["memory-core", "test/vitest/vitest.extension-database-workers.config.ts"],
+    ["memory-lancedb", "test/vitest/vitest.extension-memory.config.ts"],
+    ["memory-wiki", "test/vitest/vitest.extension-memory.config.ts"],
+  ])("resolves %s onto its memory storage owner", (extensionId, config) => {
+    const plan = resolveExtensionTestPlan({ targetArg: extensionId, cwd: process.cwd() });
 
-    expect(plan.extensionId).toBe("memory-core");
-    expect(plan.config).toBe("test/vitest/vitest.extension-memory.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("memory-core"));
+    expect(plan.extensionId).toBe(extensionId);
+    expect(plan.config).toBe(config);
+    expect(plan.roots).toContain(bundledPluginRoot(extensionId));
     expect(plan.hasTests).toBe(true);
   });
 
@@ -480,6 +484,11 @@ describe("scripts/test-extension.mts", () => {
         roots: [bundledPluginRoot("browser")],
       },
       {
+        config: "test/vitest/vitest.extension-database-workers.config.ts",
+        extensionIds: ["memory-core"],
+        roots: [bundledPluginRoot("memory-core")],
+      },
+      {
         config: "test/vitest/vitest.extension-diffs.config.ts",
         extensionIds: ["diffs"],
         roots: [bundledPluginRoot("diffs")],
@@ -513,11 +522,6 @@ describe("scripts/test-extension.mts", () => {
         config: "test/vitest/vitest.extension-media.config.ts",
         extensionIds: ["vydra"],
         roots: [bundledPluginRoot("vydra")],
-      },
-      {
-        config: "test/vitest/vitest.extension-memory.config.ts",
-        extensionIds: ["memory-core"],
-        roots: [bundledPluginRoot("memory-core")],
       },
       {
         config: "test/vitest/vitest.extension-misc.config.ts",

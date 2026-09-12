@@ -1,4 +1,8 @@
-export const databaseWorkerExtensionTestRoots = ["extensions/logbook", "extensions/team-reports"];
+export const databaseWorkerExtensionTestRoots = [
+  "extensions/logbook",
+  "extensions/memory-core",
+  "extensions/team-reports",
+];
 
 export const databaseWorkerExtensionTestFiles = [
   "extensions/imessage/src/approval-reactions.persistence.test.ts",

@@ -1,5 +1,6 @@
 export const unitTestIncludePatterns: string[];
 export const boundaryTestFiles: string[];
+export const databaseWorkerCoreTestFiles: string[];
 export const bundledPluginDependentUnitTestFiles: string[];
 export const unitTestAdditionalExcludePatterns: string[];
 export function isUnitConfigTestFile(file: string): boolean;

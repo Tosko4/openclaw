@@ -1,3 +1,4 @@
+import { err, ok } from "@openclaw/normalization-core/result";
 import {
   readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
@@ -7,6 +8,31 @@ import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js
 import type { SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  countLivePluginStateNamespaceEntries,
+  deletePluginStateEntry,
+  lookupPluginStateEntry,
+  registerPluginStateEntry,
+} from "../plugin-state/plugin-state-store.kernel.js";
+import {
+  clearPluginStateNamespace,
+  consumePluginStateEntry,
+  deletePluginStateEntryIfEqual,
+  registerPluginStateEntryIfAbsent,
+} from "../plugin-state/plugin-state-store.mutations.js";
+import {
+  listPluginStateEntries,
+  lookupPluginStateEntries,
+} from "../plugin-state/plugin-state-store.reads.js";
+import {
+  withPluginStateDatabaseReadOnly,
+  wrapPluginStateError,
+} from "../plugin-state/plugin-state-store.sqlite.js";
+import {
+  isPluginStateWorkerCommand,
+  pluginStateWorkerOperations,
+} from "../plugin-state/plugin-state-worker-contract.js";
+import { capturePluginStateWorkerFailure } from "../plugin-state/plugin-state-worker-errors.js";
 import { mapTaskFlowView } from "../tasks/task-domain-views.js";
 import {
   assertControllerId,
@@ -34,6 +60,7 @@ import {
   clearOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
 import {
+  isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
@@ -141,6 +168,136 @@ export function openExistingSqliteWorkerBackend(
             reason: "persist_failed",
             ...(observed ? { current: observed } : {}),
           };
+        }
+      }
+      if (isPluginStateWorkerCommand(command)) {
+        const description = pluginStateWorkerOperations[command.type];
+        const options = {
+          path: context.databasePath,
+          env: getSqliteWorkerStateContext().environment,
+        };
+        if (
+          command.type === "pluginState.lookup" ||
+          command.type === "pluginState.lookupMany" ||
+          command.type === "pluginState.entries" ||
+          command.type === "pluginState.count"
+        ) {
+          try {
+            switch (command.type) {
+              case "pluginState.lookup":
+                return ok(
+                  withPluginStateDatabaseReadOnly(
+                    "lookup",
+                    (store) => lookupPluginStateEntry(store, command.input),
+                    options,
+                  ),
+                );
+              case "pluginState.lookupMany": {
+                const rows =
+                  withPluginStateDatabaseReadOnly(
+                    "lookup",
+                    (store) => lookupPluginStateEntries(store, command.input),
+                    options,
+                  ) ?? command.input.keys.map(() => ok(undefined));
+                return ok(
+                  rows.map((row) =>
+                    row.ok ? row : err(capturePluginStateWorkerFailure(row.error)),
+                  ),
+                );
+              }
+              case "pluginState.entries":
+                return ok(
+                  withPluginStateDatabaseReadOnly(
+                    "entries",
+                    (store) => listPluginStateEntries(store, command.input),
+                    options,
+                  ) ?? [],
+                );
+              case "pluginState.count":
+                return ok(
+                  withPluginStateDatabaseReadOnly(
+                    "count",
+                    ({ db }) =>
+                      countLivePluginStateNamespaceEntries(db, {
+                        ...command.input,
+                        now: Date.now(),
+                      }),
+                    options,
+                  ) ?? 0,
+                );
+            }
+          } catch (error) {
+            return err(
+              capturePluginStateWorkerFailure(
+                wrapPluginStateError(
+                  error,
+                  description.operation,
+                  description.code,
+                  description.message,
+                  context.databasePath,
+                ),
+              ),
+            );
+          }
+        }
+        try {
+          if (!isOpenClawStateDatabaseOpen(context.databasePath)) {
+            open();
+          }
+        } catch (error) {
+          return err(
+            capturePluginStateWorkerFailure(
+              wrapPluginStateError(
+                error,
+                description.operation,
+                "PLUGIN_STATE_OPEN_FAILED",
+                "Failed to open the plugin state database.",
+                context.databasePath,
+              ),
+            ),
+          );
+        }
+        try {
+          return ok(
+            runOpenClawStateWriteTransaction((store) => {
+              switch (command.type) {
+                case "pluginState.register":
+                  return registerPluginStateEntry(
+                    store,
+                    command.input,
+                    command.input.maxPluginEntries,
+                  );
+                case "pluginState.registerIfAbsent":
+                  return registerPluginStateEntryIfAbsent(
+                    store,
+                    command.input,
+                    command.input.maxPluginEntries,
+                  );
+                case "pluginState.deleteIfEqual":
+                  return deletePluginStateEntryIfEqual(store, command.input);
+                case "pluginState.consume":
+                  return consumePluginStateEntry(store, command.input);
+                case "pluginState.delete":
+                  return deletePluginStateEntry(store.db, command.input) > 0;
+                case "pluginState.clear":
+                  return clearPluginStateNamespace(store.db, command.input);
+                default:
+                  throw new Error("Plugin-state read command entered its write path");
+              }
+            }, options),
+          );
+        } catch (error) {
+          return err(
+            capturePluginStateWorkerFailure(
+              wrapPluginStateError(
+                error,
+                description.operation,
+                description.code,
+                description.message,
+                context.databasePath,
+              ),
+            ),
+          );
         }
       }
       const { db } = open();

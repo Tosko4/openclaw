@@ -63,6 +63,7 @@ import {
   resolveUnitFastTimerTestIncludePattern,
 } from "../test/vitest/vitest.unit-fast-paths.mjs";
 import {
+  databaseWorkerCoreTestFiles,
   isBoundaryTestFile,
   isBundledPluginDependentUnitTestFile,
   isUnitConfigTestFile,
@@ -1334,7 +1335,10 @@ function expandExplicitSourceTestTargets(targetArgs: string[], cwd: string, watc
       // The full aggregate already includes the dedicated database-worker project.
       return [targetArg];
     }
-    const databaseWorkerTargets = databaseWorkerExtensionTestFiles.filter((file) =>
+    const databaseWorkerTargets = [
+      ...databaseWorkerCoreTestFiles,
+      ...databaseWorkerExtensionTestFiles,
+    ].filter((file) =>
       isGlobTarget(relative)
         ? path.matchesGlob(file, relative)
         : isExistingDirectoryTarget(targetArg, cwd) && isPathAtOrUnder(file, relative),
@@ -3549,6 +3553,9 @@ function classifyTarget(arg: string, cwd: string) {
   const relative = toRepoRelativeTarget(arg, cwd);
   if (databaseWorkerExtensionTestFiles.includes(relative)) {
     return "extensionDatabaseWorkers";
+  }
+  if (databaseWorkerCoreTestFiles.includes(relative)) {
+    return "infra";
   }
   const configTargetKind = resolveVitestConfigTargetKind(relative);
   if (configTargetKind) {

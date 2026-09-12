@@ -12,6 +12,7 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -556,6 +557,7 @@ export function createManagerIndexFixture(deps: {
     await Promise.all(Array.from(managers).map((manager) => manager.close()));
     await deps.closeAllMemorySearchManagers();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     resetMemoryCoreDreamingStateForTests();
     clearRegistry();

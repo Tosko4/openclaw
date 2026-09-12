@@ -34,6 +34,7 @@ import {
 } from "./vitest/vitest.contracts-shared.ts";
 import { createExtensionDatabaseWorkersVitestConfig } from "./vitest/vitest.extension-database-workers.config.ts";
 import { createExtensionImessageVitestConfig } from "./vitest/vitest.extension-imessage.config.ts";
+import { createExtensionSlackVitestConfig } from "./vitest/vitest.extension-slack.config.ts";
 import { createExtensionsVitestConfig } from "./vitest/vitest.extensions.config.ts";
 import { createGatewayMethodsIsolatedVitestConfig } from "./vitest/vitest.gateway-methods-isolated.config.ts";
 import { createGatewayMethodsVitestConfig } from "./vitest/vitest.gateway-methods.config.ts";
@@ -44,6 +45,7 @@ import {
 } from "./vitest/vitest.gateway-server-paths.mjs";
 import { createGatewayServerVitestConfig } from "./vitest/vitest.gateway-server.config.ts";
 import { createGatewayVitestConfig } from "./vitest/vitest.gateway.config.ts";
+import { createInfraVitestConfig } from "./vitest/vitest.infra.config.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
 import {
   repoRoot,
@@ -58,6 +60,7 @@ import { createUnitFastFakeTimersVitestConfig } from "./vitest/vitest.unit-fast-
 import { createUnitFastIsolatedVitestConfig } from "./vitest/vitest.unit-fast-isolated.config.ts";
 import unitFastRootConfig from "./vitest/vitest.unit-fast-root.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
+import { databaseWorkerCoreTestFiles, isUnitConfigTestFile } from "./vitest/vitest.unit-paths.mjs";
 
 const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-");
 const scopedGatewayMethodsIsolatedTestFiles = [
@@ -514,7 +517,38 @@ describe("projects vitest config", () => {
     expect(testConfig.sequence).toMatchObject({ groupOrder: 1 });
   });
 
-  it.each(["logbook", "team-reports"])(
+  it("routes real core database worker integrations through the forked infra owner", () => {
+    const project = "test/vitest/vitest.infra.config.ts";
+    const config = requireTestConfig(createInfraVitestConfig({}));
+    expect(config.pool).toBe("forks");
+    expect(config.isolate).toBe(true);
+    for (const file of databaseWorkerCoreTestFiles) {
+      expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
+      expect(isUnitConfigTestFile(file)).toBe(false);
+      expect(config.include).toContain(file.replace(/^src\//u, ""));
+    }
+    for (const target of ["src/plugin-state", "src/plugin-state/*.test.ts"]) {
+      const plans = buildVitestRunPlans([target]);
+      expect(plans.find((plan) => plan.config === project)?.includePatterns).toEqual(
+        databaseWorkerCoreTestFiles.filter((file) => file.startsWith("src/plugin-state/")),
+      );
+      expect(plans.some((plan) => plan.config === "test/vitest/vitest.unit.config.ts")).toBe(true);
+    }
+  });
+
+  it("keeps Slack's real cooldown store in its forked project", () => {
+    const project = "test/vitest/vitest.extension-slack.config.ts";
+    expect(requireTestConfig(createExtensionSlackVitestConfig({})).pool).toBe("forks");
+    expect(
+      buildVitestRunPlans(["extensions/slack/src/monitor/presence-cooldown-store.test.ts"]).map(
+        (plan) => plan.config,
+      ),
+    ).toEqual([project]);
+    expect(resolveExtensionTestConfig("extensions/slack")).toBe(project);
+    expect(rootVitestProjects).toContain(project);
+  });
+
+  it.each(["logbook", "memory-core", "team-reports"])(
     "runs %s database owners in main-thread hosts across focused and full suites",
     (pluginId) => {
       const project = "test/vitest/vitest.extension-database-workers.config.ts";
@@ -533,6 +567,7 @@ describe("projects vitest config", () => {
       expect(testConfig.isolate).toBe(true);
       expect(testConfig.include).toEqual([
         "logbook/**/*.test.ts",
+        "memory-core/**/*.test.ts",
         "team-reports/**/*.test.ts",
         "imessage/src/approval-reactions.persistence.test.ts",
       ]);

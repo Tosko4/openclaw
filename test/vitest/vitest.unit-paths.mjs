@@ -28,6 +28,21 @@ export const bundledPluginDependentUnitTestFiles = [
   "src/plugins/loader.test.ts",
 ];
 
+// These core integrations exercise the application-owned SQLite worker broker.
+export const databaseWorkerCoreTestFiles = [
+  "src/plugin-sdk/runtime-doctor-migrations.test.ts",
+  "src/plugin-state/plugin-state-store.test.ts",
+  "src/plugin-state/plugin-state-store.bulk.test.ts",
+  "src/plugin-state/plugin-state-store.errors.test.ts",
+  "src/plugin-state/plugin-state-store.expiry.test.ts",
+  "src/plugin-state/plugin-state-store.fresh-store.test.ts",
+  "src/plugin-state/plugin-state-store.persistence.test.ts",
+  "src/plugin-state/plugin-state-store.retention.test.ts",
+  "src/plugin-state/plugin-state-store.runtime.test.ts",
+  "src/plugin-state/plugin-state-store.schema.test.ts",
+  "src/plugin-state/plugin-state-worker.test.ts",
+];
+
 export const unitTestAdditionalExcludePatterns = [
   "src/gateway/**",
   "packages/gateway-client/**",
@@ -68,6 +83,7 @@ export const unitTestAdditionalExcludePatterns = [
   "src/infra/path-env.test.ts",
   "src/infra/stable-node-path.test.ts",
   ...bundledPluginDependentUnitTestFiles,
+  ...databaseWorkerCoreTestFiles,
   "src/config/doc-baseline.integration.test.ts",
   "src/config/schema.base.generated.test.ts",
   "src/config/schema.help.quality.test.ts",

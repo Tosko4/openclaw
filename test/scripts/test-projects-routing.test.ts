@@ -617,7 +617,7 @@ describe("test-projects args", () => {
 
     expect(plans).toEqual([
       {
-        config: "test/vitest/vitest.extension-memory.config.ts",
+        config: "test/vitest/vitest.extension-database-workers.config.ts",
         forwardedArgs: [],
         includePatterns: expect.arrayContaining([
           "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
