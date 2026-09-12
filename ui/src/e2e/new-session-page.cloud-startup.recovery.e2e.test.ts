@@ -123,7 +123,15 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
+      const where = page.locator("wa-popover.new-session-page__where-popover");
+      const afterShow = where.evaluate(
+        (element) =>
+          new Promise<void>((resolve) => {
+            element.addEventListener("wa-after-show", () => resolve(), { once: true });
+          }),
+      );
       await page.locator("#new-session-where-trigger").click();
+      await afterShow;
       await page.locator('[data-value="cloud:aws"]').hover();
       await page.locator('[data-value="machine:fast"]').click();
       await expect
