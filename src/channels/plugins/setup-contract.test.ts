@@ -17,9 +17,13 @@ describe("defineChannelSetupContract", () => {
     expect(resolveChannelSetupExecutionAdapter({})).toBeUndefined();
   });
 
-  it.each(["channel-owned", "metadata-only"])(
-    "channels.add keeps ignored aliases ineligible during cold promotion with %s setup",
-    (source) => {
+  it.each(
+    ["channel-owned", "metadata-only"].flatMap((source) =>
+      [undefined, "work-phone"].map((defaultAccount) => ({ source, defaultAccount })),
+    ),
+  )(
+    "keeps ignored aliases ineligible during cold promotion: $source, default=$defaultAccount",
+    ({ source, defaultAccount }) => {
       const next = withPluginCache(createPluginCache(), () => {
         const promotion = {
           accountKeyPolicy: { canonicalAliasesRequireOwnField: "account" },
@@ -39,7 +43,7 @@ describe("defineChannelSetupContract", () => {
           channels: {
             demo: {
               account: "+12025550123",
-              defaultAccount: "work-phone",
+              defaultAccount,
               accounts: {
                 "Work Phone": { dmPolicy: "open", allowFrom: ["*"] },
               },
@@ -56,7 +60,7 @@ describe("defineChannelSetupContract", () => {
       });
 
       expect(next.channels?.demo).toEqual({
-        defaultAccount: "work-phone",
+        defaultAccount,
         accounts: {
           "Work Phone": { dmPolicy: "open", allowFrom: ["*"] },
           default: { account: "+12025550123" },

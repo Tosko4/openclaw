@@ -365,30 +365,33 @@ function resolveSingleAccountPromotionTarget(params: {
   channel: ChannelSectionBase;
   setupSurface?: ChannelSetupPromotionSurface;
 }): string {
+  const accounts = params.channel.accounts ?? {};
+  const resolveTargetKey = (accountId: string) =>
+    resolveChannelAccountKey(
+      accounts,
+      normalizeAccountId(accountId),
+      params.channelKey,
+      normalizeAccountId,
+      params.setupSurface?.accountKeyPolicy,
+    );
   const pluginTarget = params.setupSurface?.resolveSingleAccountPromotionTarget?.({
     channel: params.channel,
   });
+  // Explicit plugin targets may create an account; inferred targets must already be eligible.
   if (pluginTarget?.trim()) {
-    return normalizeAccountId(pluginTarget);
+    return resolveTargetKey(pluginTarget) ?? normalizeAccountId(pluginTarget);
   }
-  const accounts = params.channel.accounts ?? {};
   const normalizedDefaultAccount =
     typeof params.channel.defaultAccount === "string" && params.channel.defaultAccount.trim()
       ? normalizeAccountId(params.channel.defaultAccount)
       : undefined;
-  if (normalizedDefaultAccount) {
-    return (
-      resolveChannelAccountKey(
-        accounts,
-        normalizedDefaultAccount,
-        params.channelKey,
-        normalizeAccountId,
-        params.setupSurface?.accountKeyPolicy,
-      ) ?? DEFAULT_ACCOUNT_ID
-    );
-  }
   const namedAccounts = Object.keys(accounts).filter(Boolean);
-  return namedAccounts.length === 1 ? (namedAccounts[0] ?? DEFAULT_ACCOUNT_ID) : DEFAULT_ACCOUNT_ID;
+  const targetAccountId =
+    normalizedDefaultAccount ??
+    (namedAccounts.length === 1 ? (namedAccounts[0] ?? DEFAULT_ACCOUNT_ID) : DEFAULT_ACCOUNT_ID);
+  return (
+    resolveTargetKey(targetAccountId) ?? resolveTargetKey(DEFAULT_ACCOUNT_ID) ?? DEFAULT_ACCOUNT_ID
+  );
 }
 
 /**
@@ -420,29 +423,20 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
   if (hasAccounts && keysToMove.length === 0) {
     return params.cfg;
   }
-  const targetAccountId = hasAccounts
+  const targetAccountKey = hasAccounts
     ? resolveSingleAccountPromotionTarget({
         channel: base,
         channelKey: params.channelKey,
         setupSurface: params.setupSurface,
       })
     : DEFAULT_ACCOUNT_ID;
-  // Reuse the existing account key spelling so configs like `accounts.Ops` keep their shape.
-  const resolvedTargetAccountKey =
-    resolveChannelAccountKey(
-      accounts,
-      targetAccountId,
-      params.channelKey,
-      normalizeAccountId,
-      params.setupSurface?.accountKeyPolicy,
-    ) ?? targetAccountId;
   return moveSingleAccountKeysIntoAccount({
     cfg: params.cfg,
     channelKey: params.channelKey,
     channel: base,
     accounts,
     keysToMove,
-    targetAccountId: resolvedTargetAccountKey,
-    baseAccount: accounts[resolvedTargetAccountKey],
+    targetAccountId: targetAccountKey,
+    baseAccount: accounts[targetAccountKey],
   });
 }
