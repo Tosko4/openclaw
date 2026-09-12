@@ -249,6 +249,7 @@ export async function readIncrementalChatHistoryTail(params: {
   let projectionDirty = false;
   let scanLimit = rawHistoryWindowMessages;
   let scannedBytes = 0;
+  const pendingByteChunks: unknown[][] = [];
   let nextChunkMessages = SILENT_CHAT_HISTORY_TAIL_SCAN_CHUNK_MESSAGES;
   while (offset + rawPageMessages < readPage.totalMessages) {
     if (projectionDirty && estimatedVisibleMessages >= params.max) {
@@ -302,9 +303,20 @@ export async function readIncrementalChatHistoryTail(params: {
     estimatedVisibleMessages += project(chunkRawMessages, contextMessage, false, []).projection
       .messages.length;
     projectionDirty = true;
-    scannedBytes += Buffer.byteLength(JSON.stringify(page.messages), "utf8");
-    if (rawPageMessages > rawHistoryWindowMessages && scannedBytes >= params.maxBytes) {
-      break;
+    // Count the discarded context and its comma without retaining another raw copy.
+    if (contextMessage !== undefined) {
+      scannedBytes += Buffer.byteLength(JSON.stringify(contextMessage), "utf8") + 1;
+    }
+    pendingByteChunks.push(chunkRawMessages);
+    // Ordinary pages finish before this sparse-scan budget is consulted.
+    if (rawPageMessages > rawHistoryWindowMessages) {
+      for (const messages of pendingByteChunks) {
+        scannedBytes += Buffer.byteLength(JSON.stringify(messages), "utf8");
+      }
+      pendingByteChunks.length = 0;
+      if (scannedBytes >= params.maxBytes) {
+        break;
+      }
     }
     // Grow sparse scans geometrically while bounding each indexed page's allocation.
     nextChunkMessages = Math.min(
