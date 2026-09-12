@@ -23,8 +23,8 @@ beforeEach(resetIsolatedCompletionTestState);
 
 describe("runIsolatedCompletion native authorization", () => {
   it("rejects a caller retired while native quota reconciliation is pending", async () => {
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
+    const entered = createDeferred();
+    const release = createDeferred();
     const retired = new Error("The completion owner retired during quota reconciliation.");
     let current = true;
     const reconcile = vi

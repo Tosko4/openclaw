@@ -440,17 +440,13 @@ export async function runPreparedEmbeddedLoop(
       if (normalizedAttempt.action === "complete") {
         return normalizedAttempt.result;
       }
-      if (normalizedAttempt.action === "retry") {
-        bootstrapPromptWarningSignaturesSeen =
-          normalizedAttempt.bootstrapPromptWarningSignaturesSeen;
-        lastRunPromptUsage = normalizedAttempt.lastRunPromptUsage;
-        accumulatedReplayState = normalizedAttempt.replayState;
-        recordRunRetry(runRetryBudget, normalizedAttempt.retryKind);
-        continue;
-      }
       bootstrapPromptWarningSignaturesSeen = normalizedAttempt.bootstrapPromptWarningSignaturesSeen;
       lastRunPromptUsage = normalizedAttempt.lastRunPromptUsage;
       accumulatedReplayState = normalizedAttempt.replayState;
+      if (normalizedAttempt.action === "retry") {
+        recordRunRetry(runRetryBudget, normalizedAttempt.retryKind);
+        continue;
+      }
       if (permissionChanges.prepareRestart()) {
         input.laneController.throwIfAborted();
         sessionPromptState.continueFromCurrentTranscript();

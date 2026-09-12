@@ -294,40 +294,28 @@ function inspectAuthProfileJsonCell(
   if (tableInspection) {
     return tableInspection;
   }
-  let raw: string;
+  let raw: string | undefined;
   if (databaseKind === "shared-state") {
-    const cell = readSharedAuthKvCell(
+    raw = readSharedAuthKvCell(
       db,
       target === "store" ? SHARED_STORE_STATE_KEY : SHARED_STATE_STATE_KEY,
     );
-    if (cell === undefined) {
-      return { status: "missing", reason: "row" };
-    }
-    raw = cell;
-  } else if (target === "store") {
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      getAgentAuthProfileKysely(db)
-        .selectFrom("auth_profile_store")
-        .select("store_json")
-        .where("store_key", "=", PRIMARY_ROW_KEY),
-    );
-    if (!row) {
-      return { status: "missing", reason: "row" };
-    }
-    raw = row.store_json;
   } else {
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      getAgentAuthProfileKysely(db)
-        .selectFrom("auth_profile_state")
-        .select("state_json")
-        .where("state_key", "=", PRIMARY_ROW_KEY),
-    );
-    if (!row) {
-      return { status: "missing", reason: "row" };
-    }
-    raw = row.state_json;
+    const kysely = getAgentAuthProfileKysely(db);
+    const query =
+      target === "store"
+        ? kysely
+            .selectFrom("auth_profile_store")
+            .select("store_json as payload")
+            .where("store_key", "=", PRIMARY_ROW_KEY)
+        : kysely
+            .selectFrom("auth_profile_state")
+            .select("state_json as payload")
+            .where("state_key", "=", PRIMARY_ROW_KEY);
+    raw = executeSqliteQueryTakeFirstSync(db, query)?.payload;
+  }
+  if (raw === undefined) {
+    return { status: "missing", reason: "row" };
   }
   try {
     return { status: "readable", raw: JSON.parse(raw) as unknown };

@@ -363,7 +363,9 @@ export function createFullModelCatalogAccess(params: {
     if (includeNative && !options.providerIds) {
       nativeCatalogAcquired = false;
     }
-    if (!privateRequest) attempt.started(providers);
+    if (!privateRequest) {
+      attempt.started(providers);
+    }
     // Discovery is read-only. Holding the directory build queue here would block an auth
     // replacement and every picker waiting for its static publication.
     const promise = (async () => {
@@ -613,7 +615,9 @@ export function createFullModelCatalogAccess(params: {
         : (fullCatalog ?? staticCatalog);
     })()
       .catch((error: unknown) => {
-        if (privateRequest) throw error;
+        if (privateRequest) {
+          throw error;
+        }
         return attempt.failed(error);
       })
       .finally(() => {
@@ -675,7 +679,9 @@ export function createFullModelCatalogAccess(params: {
       return inventory?.runtimeModels;
     },
     loadFullModelCatalog: async (options) => {
-      if (options?.requestScope?.authStore) return acquireCatalog(options);
+      if (options?.requestScope?.authStore) {
+        return acquireCatalog(options);
+      }
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         return await Promise.race([

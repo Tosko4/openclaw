@@ -77,8 +77,9 @@ function resolveCatalogAuthProfileOrder(params: {
       profileId: pinned,
       now: Date.now(),
     }).eligible
-  )
+  ) {
     return [];
+  }
   return prependAuthProfilePin(
     resolveAuthProfileOrderWithMetadata({
       cfg: params.config,

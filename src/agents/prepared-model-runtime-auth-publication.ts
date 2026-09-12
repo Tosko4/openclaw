@@ -152,8 +152,9 @@ export class PreparedModelRuntimeAuthPublicationOwner {
         owner.provenance !== "configured" ||
         owner.pending ||
         owner.needsRefresh
-      )
+      ) {
         continue;
+      }
       void owner.snapshot?.loadFullModelCatalog?.({ changedOnly: true }).catch((error: unknown) => {
         if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
           log.warn(`provider catalog refresh failed: ${String(error)}`);

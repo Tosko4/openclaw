@@ -318,7 +318,9 @@ export function createPreparedModelCatalogWorker(
     const controller = new AbortController();
     const assertRequestCurrent = () => {
       assertCurrent();
-      if (!isRequestCurrent()) throw superseded();
+      if (!isRequestCurrent()) {
+        throw superseded();
+      }
     };
     const timeout = setTimeout(
       () => controller.abort(new WorkerTaskError("worker task timed out", "timeout")),
@@ -331,8 +333,10 @@ export function createPreparedModelCatalogWorker(
         if (!isCurrent()) {
           void stop(superseded());
         }
-        for (const [active, request] of requests) {
-          if (!request.isCurrent()) active.abort(superseded());
+        for (const [active, pendingRequest] of requests) {
+          if (!pendingRequest.isCurrent()) {
+            active.abort(superseded());
+          }
         }
       }, PREPARED_MODEL_CATALOG_WORKER_GENERATION_POLL_MS);
       generationPoll.unref();
