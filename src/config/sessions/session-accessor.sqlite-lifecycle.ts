@@ -286,30 +286,18 @@ export async function resetSessionEntryLifecycle(
             // Reset only advances the live entry and route. Historical rows stay searchable;
             // disk-budget cleanup owns durable extraction before reclaiming them.
           }, toDatabaseOptions(resolved));
-          if (current) {
-            emitSessionIdentityMutation({
-              agentId: resolved.agentId,
-              kind: "reset",
-              previous: {
-                ...(current.entry.sessionId ? { sessionId: current.entry.sessionId } : {}),
-                sessionKeys: targetSnapshot.map((row) => row.sessionKey),
-              },
-              current: {
-                ...(nextEntry.sessionId ? { sessionId: nextEntry.sessionId } : {}),
-                sessionKeys: [params.target.canonicalKey],
-              },
-            });
-          } else {
-            emitSessionIdentityMutation({
-              agentId: resolved.agentId,
-              kind: "create",
-              previous: { sessionKeys: [] },
-              current: {
-                ...(nextEntry.sessionId ? { sessionId: nextEntry.sessionId } : {}),
-                sessionKeys: [params.target.canonicalKey],
-              },
-            });
-          }
+          emitSessionIdentityMutation({
+            agentId: resolved.agentId,
+            kind: current ? "reset" : "create",
+            previous: {
+              ...(current?.entry.sessionId ? { sessionId: current.entry.sessionId } : {}),
+              sessionKeys: targetSnapshot.map((row) => row.sessionKey),
+            },
+            current: {
+              ...(nextEntry.sessionId ? { sessionId: nextEntry.sessionId } : {}),
+              sessionKeys: [params.target.canonicalKey],
+            },
+          });
           await params.afterEntryMutation?.(mutation);
           return {
             ...mutation,

@@ -1,10 +1,8 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { isMainThread, threadId, type Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import type { OpenClawAgentDatabaseClaim } from "../../state/openclaw-agent-db-identity.js";
 import {
   createSqliteTranscriptArchiveWorker,
@@ -18,6 +16,10 @@ import type {
   SqliteSessionReclamationPlan,
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
+import {
+  runSqliteMutationWorkerRequest,
+  type SqliteMutationWorkerMessage,
+} from "./session-accessor.sqlite-worker-request.js";
 
 type DatabaseOptions = SqliteSessionReclamationPlan["databaseOptions"];
 export type SqliteReclamationWorkerRequest = {
@@ -28,9 +30,7 @@ export type SqliteReclamationWorkerRequest = {
 };
 type WorkerCleanup = { cleanupWarnings: string[]; settled: boolean };
 export type SqliteReclamationWorkerMessage =
-  | { type: "commit-request"; operationId: number }
-  | { type: "admission-request" | "admission-release"; operationId: number; admissionId: number }
-  | { type: "reclaimed"; operationId: number; result: SqliteSessionReclamationResult }
+  | SqliteMutationWorkerMessage<SqliteSessionReclamationResult>
   | ({ type: "closed" } & WorkerCleanup);
 
 const log = createSubsystemLogger("session-sqlite");
@@ -90,150 +90,25 @@ export class SqliteReclamationWorker {
       }
       const operationId = ++this.operationId;
       let exitCode: number | undefined;
-      const operation = new Promise<SqliteSessionReclamationResult>((resolve, reject) => {
-        let result: SqliteSessionReclamationResult | undefined;
-        let workerError: Error | undefined;
-        let admission:
-          | {
-              id: number;
-              released: Deferred;
-              diagnostics: SqliteSessionReclamationAdmissionDiagnostics;
-            }
-          | undefined;
-        let admissionId = 0;
-        let completed = false;
-        const admissionTasks: Promise<void>[] = [];
-        const fail = (error: unknown) => {
-          workerError ??= toStringifiedError(error);
-          this.failure ??= workerError;
-          void worker.terminate();
-        };
-        const finish = (code?: number) => {
-          completed = true;
+      const operation = runSqliteMutationWorkerRequest<SqliteSessionReclamationResult>({
+        worker,
+        operationId,
+        completion: "result",
+        getFailure: () => this.failure,
+        onExit: (code) => {
           exitCode = code;
-          if (admission) {
-            admission.diagnostics.releaseCause =
-              code === undefined ? "worker-release" : "worker-exit";
-            admission.released.resolve();
+        },
+        onCommitRequest: () => {
+          const errors = params.onCommitRequest();
+          if (errors.length) {
+            log.warn("SQLite session reclamation recovered commit settlement errors", {
+              errors: errors.map(String),
+              path: options.path,
+            });
           }
-          worker.off("message", receive);
-          worker.off("exit", exit);
-          void Promise.all(admissionTasks).then(() => {
-            const failure = workerError ?? this.failure;
-            if (failure) {
-              // Parent authority errors outrank the Worker's generic unwind error.
-              this.failure = failure;
-              this.reportedFailure = failure;
-              reject(failure);
-            } else if (!result) {
-              reject(new Error("SQLite session reclamation Worker exited without results"));
-            } else {
-              resolve(result);
-            }
-          }, reject);
-        };
-        const exit = (code: number) => finish(code);
-        // Worker events inherit its first caller; bind each admission to this victim instead.
-        const receive = AsyncLocalStorage.bind((message: SqliteReclamationWorkerMessage) => {
-          if (message.type === "closed" || message.operationId !== operationId) {
-            return;
-          }
-          if (message.type === "commit-request") {
-            try {
-              const errors = params.onCommitRequest();
-              if (errors.length) {
-                log.warn("SQLite session reclamation recovered commit settlement errors", {
-                  errors: errors.map(String),
-                  path: options.path,
-                });
-              }
-            } catch (error) {
-              // The rejected shared gate makes the Worker roll back and unwind.
-              workerError ??= toStringifiedError(error);
-            }
-          } else if (message.type === "admission-request") {
-            if (admission || message.admissionId !== admissionId + 1) {
-              fail(
-                new Error(
-                  "SQLite reclamation Worker requested invalid write admission; cleanup is uncertain, restart OpenClaw before deleting the owning agent",
-                ),
-              );
-              return;
-            }
-            const requested = {
-              id: ++admissionId,
-              released: createDeferredCore(),
-              diagnostics: { admissionId } satisfies SqliteSessionReclamationAdmissionDiagnostics,
-            };
-            admission = requested;
-            const task = params
-              .withWriteAdmission(async (refusal) => {
-                if (completed) {
-                  return undefined;
-                }
-                if (refusal) {
-                  workerError ??= toStringifiedError(refusal.error);
-                }
-                worker.postMessage(
-                  {
-                    type: "admission",
-                    operationId,
-                    admissionId: requested.id,
-                    allowed: refusal === undefined && workerError === undefined,
-                  },
-                  [],
-                );
-                // Denial holds the FIFO until exit. Success releases only after the
-                // transaction settled; the caller publishes before this writer returns.
-                await requested.released.promise;
-                return completed && !workerError && !this.failure ? result : undefined;
-              }, requested.diagnostics)
-              .catch(async (error: unknown) => {
-                workerError ??= toStringifiedError(error);
-                if (!completed && admission === requested) {
-                  try {
-                    worker.postMessage(
-                      {
-                        type: "admission",
-                        operationId,
-                        admissionId: requested.id,
-                        allowed: false,
-                      },
-                      [],
-                    );
-                  } catch (dispatchError) {
-                    fail(
-                      new AggregateError(
-                        [workerError, dispatchError],
-                        "SQLite reclamation admission failed and Worker cleanup is uncertain; restart OpenClaw before deleting the owning agent",
-                      ),
-                    );
-                  }
-                }
-                await requested.released.promise;
-              });
-            admissionTasks.push(task);
-          } else if (message.type === "admission-release") {
-            if (!admission || message.admissionId !== admission.id) {
-              fail(
-                new Error(
-                  "SQLite reclamation Worker released invalid write admission; cleanup is uncertain, restart OpenClaw before deleting the owning agent",
-                ),
-              );
-              return;
-            }
-            const released = admission;
-            admission = undefined;
-            released.diagnostics.releaseCause = "worker-release";
-            released.released.resolve();
-          } else if (message.type === "reclaimed") {
-            result = message.result;
-            finish();
-          }
-        });
-        worker.on("message", receive);
-        worker.once("exit", exit);
-        try {
+        },
+        withWriteAdmission: params.withWriteAdmission,
+        dispatch: () =>
           worker.postMessage(
             {
               type: "reclaim",
@@ -242,11 +117,11 @@ export class SqliteReclamationWorker {
               plan: params.plan,
             } satisfies SqliteReclamationWorkerRequest,
             params.transferList,
-          );
-        } catch (error) {
-          // Uncertain dispatch is terminal; never replay on a successor Worker.
-          fail(error);
-        }
+          ),
+      }).catch((error: unknown) => {
+        this.failure = toStringifiedError(error);
+        this.reportedFailure = this.failure;
+        throw this.failure;
       });
       const observeCompletion = (outcome: "resolved" | "rejected") => {
         const elapsedMs = Math.round(performance.now() - startedAt);

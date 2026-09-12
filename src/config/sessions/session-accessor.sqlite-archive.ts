@@ -11,6 +11,11 @@ import {
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
+import {
+  runSqliteMutationWorkerRequest,
+  type SqliteWorkerWriteAdmission,
+} from "./session-accessor.sqlite-worker-request.js";
+import type { SessionColdWorkerData } from "./session-cold-storage-worker.js";
 
 export type SessionStateDeletePlan = {
   agentId: string;
@@ -88,15 +93,34 @@ export function createSqliteTranscriptArchiveWorker(workerData: object): Worker 
   });
 }
 
-function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
-  expectedMessageType: "done" | "published";
-  workerData: object;
-}): Promise<Result[]> {
+type TranscriptArchiveWorkerOperation<Result> =
+  | { expectedMessageType: "done" | "published"; workerData: object }
+  | {
+      expectedMessageType: "reclaimed";
+      workerData: SessionColdWorkerData;
+      onCommitRequest: () => void;
+      withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
+    };
+
+function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
+  params: TranscriptArchiveWorkerOperation<Result>,
+): Promise<Result[]> {
   let worker: Worker;
   try {
     worker = createSqliteTranscriptArchiveWorker(params.workerData);
   } catch (error) {
     return Promise.reject(toStringifiedError(error));
+  }
+
+  if (params.expectedMessageType === "reclaimed") {
+    // Cold mutations retain their one-shot cleanup/exit lifetime, never a sweep connection.
+    return runSqliteMutationWorkerRequest<Result>({
+      worker,
+      operationId: 0,
+      completion: "exit",
+      onCommitRequest: params.onCommitRequest,
+      withWriteAdmission: params.withWriteAdmission,
+    }).then((result) => [result]);
   }
 
   return new Promise((resolve, reject) => {
@@ -143,10 +167,9 @@ export function runExclusiveSqliteTranscriptArchiveWorker<T>(run: () => Promise<
   );
 }
 
-function runSqliteTranscriptArchiveWorkerOperation<Result>(params: {
-  expectedMessageType: "done" | "published";
-  workerData: object;
-}): Promise<Result[]> {
+export function runSqliteTranscriptArchiveWorkerOperation<Result>(
+  params: TranscriptArchiveWorkerOperation<Result>,
+): Promise<Result[]> {
   return runExclusiveSqliteTranscriptArchiveWorker(() =>
     spawnSqliteTranscriptArchiveWorkerOperation<Result>(params),
   );
