@@ -48,6 +48,7 @@ import {
   convergeUpdateDoctorMigrationPlugins,
   withPrePluginUpdateDoctorEnv,
 } from "./update-command-fresh-doctor.js";
+import { collectPostCorePluginFailureFacts } from "./update-command-plugins-internals.js";
 import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
@@ -357,10 +358,15 @@ async function updateFinalizeCommandInternal(
   }
 }
 
-function pluginOutcome(result: PostCorePluginUpdateResult): "failed" | "warning" | "completed" {
-  return result.status === "error"
-    ? "failed"
-    : result.status === "warning"
-      ? "warning"
-      : "completed";
+function pluginOutcome(result: PostCorePluginUpdateResult): {
+  outcome: "failed" | "warning" | "completed";
+  failureFacts?: PostCorePluginUpdateResult["failureFacts"];
+} {
+  return {
+    outcome:
+      result.status === "error" ? "failed" : result.status === "warning" ? "warning" : "completed",
+    ...(result.status === "error"
+      ? { failureFacts: collectPostCorePluginFailureFacts(result) }
+      : {}),
+  };
 }

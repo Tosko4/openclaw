@@ -97,16 +97,18 @@ describe("config snapshot plugin metadata", () => {
     },
   );
 
-  it("defers executable plugin repair diagnostics without relaxing full schema validation", async () => {
+  it("tracks included-file revisions while deferring executable plugin repair diagnostics", async () => {
     const root = tempDirs.make("openclaw-config-deferred-doctor-");
     const context = createContext(root);
     context.options.pluginValidation = "full";
     context.deps.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
     context.deps.env.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR = "1";
+    const includedPath = path.join(root, "node-host.json");
+    fs.writeFileSync(includedPath, JSON.stringify({ browserProxy: { enabled: "invalid" } }));
     fs.writeFileSync(
       context.configPath,
       JSON.stringify({
-        nodeHost: { browserProxy: { enabled: "invalid" } },
+        nodeHost: { $include: "node-host.json" },
         channels: { discord: {} },
         routing: { allowFrom: ["fixture"] },
       }),
@@ -120,6 +122,13 @@ describe("config snapshot plugin metadata", () => {
     expect(snapshot.legacyIssues).toEqual(
       expect.arrayContaining([expect.objectContaining({ path: "routing.allowFrom" })]),
     );
+    fs.writeFileSync(includedPath, JSON.stringify({ browserProxy: { enabled: "still-invalid" } }));
+    const changed = await readConfigFileSnapshotFromContext(context);
+    expect(changed.raw).toBe(snapshot.raw);
+    expect(changed.hash).not.toBe(snapshot.hash);
+    expect(changed.valid).toBe(false);
+    expect(changed.issues).toEqual(snapshot.issues);
+    expect(changed.legacyIssues).toEqual(snapshot.legacyIssues);
     expect(doctor).not.toHaveBeenCalled();
   });
 
