@@ -50,7 +50,12 @@ class ChatControllerCatalogTest {
       advanceUntilIdle()
 
       assertEquals(listOf("primary"), controller.modelCatalog.value.map { it.id })
-      assertEquals(listOf("default"), controller.modelCatalog.value.single().tags)
+      assertEquals(
+        listOf("default"),
+        controller.modelCatalog.value
+          .single()
+          .tags,
+      )
       assertEquals(
         GatewayModelAllowList(
           hiddenCount = 2,
