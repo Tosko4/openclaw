@@ -187,19 +187,6 @@ function generationFactsMatch(
   });
 }
 
-async function defaultBuildCommands(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-}): Promise<{ commands?: unknown[] }> {
-  const { buildCommandsListResult } = await import("./commands-list-result.js");
-  return buildCommandsListResult({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    includeArgs: true,
-    scope: "text",
-  });
-}
-
 export function createGatewayChatMetadataRuntime(params: {
   getConfig: () => OpenClawConfig;
   getContext: () => GatewayRequestContext;
@@ -228,7 +215,10 @@ export function createGatewayChatMetadataRuntime(params: {
     getAuthStoreRevision: getRuntimeAuthProfileStoreSnapshotRevision,
     getSkillsVersion: getSkillsSnapshotVersion,
     getPluginRegistryVersion: getActivePluginRegistryVersion,
-    buildCommands: defaultBuildCommands,
+    buildCommands: async (commandParams) => {
+      const { buildCommandsListResult } = await import("./commands-list-result.js");
+      return buildCommandsListResult({ ...commandParams, includeArgs: true, scope: "text" });
+    },
     buildProjection: prepareChatMetadataModelProjection,
     ...params.deps,
   };

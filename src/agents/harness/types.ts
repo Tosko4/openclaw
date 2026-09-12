@@ -144,6 +144,7 @@ export type AgentHarnessSettledTurnFinalizationResult = {
   usage?: import("../usage.js").NormalizedUsage;
   /** The harness owns assistant persistence, including intentional suppression. */
   assistantTranscriptOwned?: boolean;
+  /** Physical ID of the persisted assistant row, when available; not a stream index. */
   assistantTranscriptEntryId?: string;
   /** Exact idempotency key for the harness-owned assistant transcript row. */
   assistantTranscriptIdempotencyKey?: string;
