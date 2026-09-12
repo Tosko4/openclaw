@@ -17,6 +17,11 @@ export function startTriageRepairTask(params: {
   };
   assertCurrent();
   const backing = params.backing;
+  // Managed helpers do not consume the joined task result. Repair still runs,
+  // but only the original foreground parent can settle this optional projection.
+  if (backing.generation.lifetime.kind !== "foreground") {
+    return undefined;
+  }
   const observation = observeTriageBacking(backing);
   if (
     observation.kind !== "matched" ||

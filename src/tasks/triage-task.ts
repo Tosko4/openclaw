@@ -60,12 +60,8 @@ export function readTriageTaskDetail(task: TaskRecord) {
 }
 
 /** Retention above is deliberately separate from this fresh observation of execution. */
-export function triageTaskProgressSummary(task: TaskRecord): string | undefined {
-  if (
-    task.runtime !== "cli" ||
-    task.taskKind !== "triage_repair" ||
-    (task.status !== "queued" && task.status !== "running")
-  ) {
+export function triageTaskExecutionPhase(task: TaskRecord): "running" | "closing" | undefined {
+  if (task.status !== "running" || task.endedAt) {
     return undefined;
   }
   const detail = readTriageTaskDetail(task);
@@ -81,18 +77,31 @@ export function triageTaskProgressSummary(task: TaskRecord): string | undefined 
       ? observeTriageBacking(detail.backing)
       : { kind: "unavailable", reason: "invalid-reference" };
   if (
-    task.status === "running" &&
     observation.kind === "matched" &&
     observation.helper === "live" &&
     observation.executor === "live" &&
-    observation.lifetime === "matched"
+    observation.lifetime === "matched" &&
+    (observation.phase === "running" || observation.phase === "closing")
   ) {
-    if (observation.phase === "running") {
-      return "Repair executing; effects not yet verified. Cancellation unavailable.";
-    }
-    if (observation.phase === "closing") {
-      return "Repair settling; completion unconfirmed. Cancellation unavailable.";
-    }
+    return observation.phase;
+  }
+  return undefined;
+}
+
+export function triageTaskProgressSummary(task: TaskRecord): string | undefined {
+  if (
+    task.runtime !== "cli" ||
+    task.taskKind !== "triage_repair" ||
+    (task.status !== "queued" && task.status !== "running")
+  ) {
+    return undefined;
+  }
+  const phase = triageTaskExecutionPhase(task);
+  if (phase === "running") {
+    return "Repair executing; effects not yet verified. Cancellation unavailable.";
+  }
+  if (phase === "closing") {
+    return "Repair settling; completion unconfirmed. Cancellation unavailable.";
   }
   return "Repair execution unconfirmed; do not retry automatically. Cancellation unavailable.";
 }

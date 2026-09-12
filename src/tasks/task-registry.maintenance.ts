@@ -75,7 +75,7 @@ import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registry.types.js";
 import type { ActiveTaskRestartBlocker } from "./task-restart-blocker.js";
 import { resolveEffectiveTaskCleanupAfter, resolveTaskCleanupAfter } from "./task-retention.js";
-import { readTriageTaskDetail } from "./triage-task.js";
+import { readTriageTaskDetail, triageTaskExecutionPhase } from "./triage-task.js";
 export { CRON_HISTORY_KEEP_PER_JOB } from "./cron-history-retention.js";
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
@@ -886,6 +886,15 @@ export function getInspectableActiveTaskRestartBlockers(): ActiveTaskRestartBloc
   const blockers: ActiveTaskRestartBlocker[] = [];
   for (const task of reconcileTaskRecordsForOperatorInspection(candidates)) {
     if (!isTaskRestartBlocker(task)) {
+      continue;
+    }
+    // Retained repair history is not evidence of live work. Unknown or ended
+    // backing stays unconfirmed without delaying a restart or rewriting the row.
+    if (
+      task.runtime === "cli" &&
+      task.taskKind === "triage_repair" &&
+      !triageTaskExecutionPhase(task)
+    ) {
       continue;
     }
     const blocker: ActiveTaskRestartBlocker = {
