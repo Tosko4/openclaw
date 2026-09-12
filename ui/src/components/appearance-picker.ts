@@ -79,6 +79,7 @@ export class AppearanceGlyph extends OpenClawLitElement {
 
   static override styles = css`
     :host {
+      color: var(--appearance-color, inherit);
       display: inline-flex;
       align-items: center;
       justify-content: center;

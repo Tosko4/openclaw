@@ -18,6 +18,7 @@ export function createControlUiComponents(options: {
     load: () => Promise<E>,
     apply: (element: E, props: P, current: () => ApplicationContext<RouteId>) => void,
     listen?: (element: E, props: () => P) => () => void,
+    observe?: (context: ApplicationContext<RouteId>, refresh: () => void) => () => void,
   ): ControlUiComponentHandle<P> {
     options.current();
     options.signal.throwIfAborted();
@@ -66,6 +67,9 @@ export function createControlUiComponents(options: {
         container.append(element);
         const context = current();
         const stops = [context.gateway.subscribe(refresh), context.agents.subscribe(refresh)];
+        if (observe) {
+          stops.push(observe(context, refresh));
+        }
         unsubscribe = () => stops.forEach((stop) => stop());
       })
       .catch((error: unknown) => {
@@ -94,14 +98,19 @@ export function createControlUiComponents(options: {
           return new AgentAvatar();
         },
         (element, next, current) => {
-          const agentsList = current().agents.state.agentsList;
+          const context = current();
+          const agentsList = context.agents.state.agentsList;
           const id = next.agentId || agentsList?.defaultId || "";
           element.option = {
             value: id,
             label: next.label,
-            agent: agentsList?.agents.find((agent) => agent.id === id),
+            agent: agentsList?.agents.find((agent) => agent.id === id) ?? { id },
           };
+          element.identity = context.agentIdentity.get(id);
+          void context.agentIdentity.ensure([id]);
         },
+        undefined,
+        (context, refresh) => context.agentIdentity.subscribe(refresh),
       ),
     mountAppearancePicker: (container, props) =>
       mount(

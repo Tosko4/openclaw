@@ -19,6 +19,7 @@ export type ControlUiDialogProps = {
 };
 
 export type ControlUiAgentAvatarProps = {
+  /** An empty string uses the host's default agent. */
   agentId: string;
   label: string;
 };
