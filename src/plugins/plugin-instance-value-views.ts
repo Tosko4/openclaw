@@ -199,7 +199,7 @@ function restorePluginArgumentViews(
   args: unknown[],
   originals: WeakMap<object, object>,
 ): unknown[] {
-  const nodes = new Map<object, { parents: Set<object>; descriptors?: PropertyDescriptorMap }>();
+  const nodes = new Map<object, { parents?: object[]; original?: object }>();
   const replacements = new Map<object, object>();
   const visit = (value: unknown, parent?: object) => {
     if (!value || typeof value !== "object") {
@@ -229,38 +229,38 @@ function restorePluginArgumentViews(
           return;
         }
       }
-      const descriptors: PropertyDescriptorMap | undefined = original
-        ? undefined
-        : Object.getOwnPropertyDescriptors(value);
       // Caller methods and accessors can depend on this exact object's identity.
       // Keep their containers opaque instead of cloning them to restore a nested handle.
-      if (
-        descriptors &&
-        Reflect.ownKeys(descriptors).some((key) => {
-          const descriptor = descriptors[key]!;
-          return !("value" in descriptor) || typeof descriptor.value === "function";
-        })
-      ) {
-        return;
+      let children: object[] | undefined;
+      if (!original) {
+        for (const key of Reflect.ownKeys(value)) {
+          const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+          if (!("value" in descriptor) || typeof descriptor.value === "function") {
+            return;
+          }
+          if (descriptor.value && typeof descriptor.value === "object") {
+            (children ??= []).push(descriptor.value);
+          }
+        }
       }
-      node = { parents: new Set(), descriptors };
+      node = { original };
       nodes.set(value, node);
       if (original) {
         replacements.set(value, original);
-      } else {
-        for (const key of Reflect.ownKeys(descriptors!)) {
-          visit(descriptors![key]!.value, value);
+      } else if (children) {
+        for (const child of children) {
+          visit(child, value);
         }
       }
     }
     if (parent) {
-      node.parents.add(parent);
+      (node.parents ??= []).push(parent);
     }
   };
   args.forEach((value) => visit(value));
   // Copy only changed ancestors; visiting all parents also preserves cycles and shared children.
   for (const value of replacements.keys()) {
-    for (const parent of nodes.get(value)!.parents) {
+    for (const parent of nodes.get(value)!.parents ?? []) {
       if (!replacements.has(parent)) {
         replacements.set(
           parent,
@@ -270,8 +270,9 @@ function restorePluginArgumentViews(
     }
   }
   for (const [value, replacement] of replacements) {
-    const descriptors = nodes.get(value)!.descriptors;
-    if (descriptors) {
+    if (!nodes.get(value)!.original) {
+      // Descriptor copies are needed only for ancestors whose nested views changed.
+      const descriptors = Object.getOwnPropertyDescriptors(value);
       for (const key of Reflect.ownKeys(descriptors)) {
         const descriptor = descriptors[key]!;
         descriptor.value = replacements.get(descriptor.value) ?? descriptor.value;
