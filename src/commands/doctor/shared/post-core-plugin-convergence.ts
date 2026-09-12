@@ -204,7 +204,11 @@ export async function runPostCorePluginConvergence(params: {
 }): Promise<PostCoreConvergenceResult> {
   return await withPluginLifecycleLease(
     { env: params.env, assertCurrent: params.beforePersistentEffect },
-    () => runPostCorePluginConvergenceWithLease(params),
+    (lease) =>
+      runPostCorePluginConvergenceWithLease({
+        ...params,
+        beforePersistentEffect: () => lease.assertOwned(),
+      }),
   );
 }
 

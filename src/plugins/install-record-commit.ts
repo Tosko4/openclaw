@@ -441,9 +441,20 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
   indexWrite: InstalledPluginIndexWriteReceipt;
 }> {
   return await withPluginLifecycleLease({}, async (lease) => {
-    // Keep the composed caller/plugin authority through marker IO and its
-    // compensation; the earlier index commit does not authorize later effects.
-    const assertCurrent = lease.assertOwned.bind(lease);
+    // A transient ownership-read failure still ends this commit. Retrying the
+    // guard must not authorize compensation after a partially completed marker IO.
+    let refusal: { error: unknown } | undefined;
+    const assertCurrent = () => {
+      if (refusal) {
+        throw refusal.error;
+      }
+      try {
+        lease.assertOwned();
+      } catch (error) {
+        refusal = { error };
+        throw error;
+      }
+    };
     let tentativeWrite: InstalledPluginIndexWriteReceipt | undefined;
     const retainedMarkerPaths: string[] = [];
     const clearedMarkerSnapshots: Array<{ markerPath: string; contents: string }> = [];

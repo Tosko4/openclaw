@@ -2,8 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withUpdateCommandExecutor } from "../../../cli/update-cli/update-command-executor.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { cleanupRetainedPluginInstallGenerations } from "../../../gateway/server-retained-plugin-cleanup.js";
+import * as temporaryState from "../../../infra/tmp-openclaw-dir.js";
+import { createUpdateRun } from "../../../infra/update-run-ledger.js";
 import { commitPluginInstallRecordsWithConfig } from "../../../plugins/install-record-commit.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -23,6 +26,121 @@ import { runPostCorePluginConvergence } from "./post-core-plugin-convergence.js"
 afterEach(() => vi.restoreAllMocks());
 
 describe("post-core plugin persistence cancellation", () => {
+  it.each(["managed", "registered"] as const)(
+    "fences %s host-link effects when only the raw plugin lease is revoked",
+    async (layout) => {
+      await withOpenClawTestState({ label: `plugin-raw-lease-${layout}` }, async (state) => {
+        const cfg = { plugins: { enabled: false } };
+        await state.writeConfig(cfg);
+        const control = state.path("control");
+        fs.mkdirSync(control);
+        vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+        const packageDir =
+          layout === "managed"
+            ? state.statePath("npm", "node_modules", "peer-plugin")
+            : state.statePath("extensions", "peer-plugin");
+        const nodeModules = path.join(packageDir, "node_modules");
+        const linkPath = path.join(nodeModules, "openclaw");
+        fs.mkdirSync(nodeModules, { recursive: true });
+        fs.writeFileSync(
+          path.join(packageDir, "package.json"),
+          JSON.stringify({
+            name: "peer-plugin",
+            version: "1.0.0",
+            peerDependencies: { openclaw: "*" },
+          }),
+        );
+        fs.symlinkSync(state.root, linkPath, "junction");
+        const baselineInstallRecords: Record<string, PluginInstallRecord> =
+          layout === "managed"
+            ? {}
+            : {
+                "peer-plugin": {
+                  source: "npm",
+                  spec: "peer-plugin@1.0.0",
+                  installPath: packageDir,
+                },
+              };
+        const configBefore = fs.readFileSync(state.configPath, "utf8");
+        const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
+        await withUpdateCommandExecutor(run.runId, async (executor) => {
+          const fence = await executor.enter(state.root, { preflight: true });
+          const controller = new AbortController();
+          let revocations = 0;
+          let rowAtRevocation: ReturnType<typeof readPersistedInstalledPluginIndexRowSync>;
+          const revoke = () => {
+            if (controller.signal.aborted) {
+              return;
+            }
+            revocations += 1;
+            rowAtRevocation = readPersistedInstalledPluginIndexRowSync({ env: state.env });
+            controller.abort(new Error("plugin lease revoked while updater remains current"));
+          };
+          const unlink = fs.promises.unlink.bind(fs.promises);
+          const unlinkSpy = vi.spyOn(fs.promises, "unlink").mockImplementation(async (file) => {
+            await unlink(file);
+            if (layout === "managed" && file === linkPath) {
+              revoke();
+            }
+          });
+          const lstat = fs.promises.lstat.bind(fs.promises);
+          const lstatSpy = vi.spyOn(fs.promises, "lstat").mockImplementation(async (...args) => {
+            const result = await lstat(...args);
+            if (layout === "registered" && args[0] === linkPath) {
+              revoke();
+            }
+            return result;
+          });
+          const symlinkSpy = vi.spyOn(fs.promises, "symlink");
+          const params = {
+            cfg,
+            env: state.env,
+            baselineInstallRecords,
+            beforePersistentEffect: fence.assertCurrent,
+          };
+          try {
+            await expect(
+              withPluginLifecycleLease({ env: state.env, signal: controller.signal }, () =>
+                runPostCorePluginConvergence(params),
+              ),
+            ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+            expect(controller.signal.aborted).toBe(true);
+            expect(revocations).toBe(1);
+            expect(() => fence.assertCurrent()).not.toThrow();
+            expect(unlinkSpy.mock.calls.filter(([file]) => file === linkPath)).toHaveLength(
+              layout === "managed" ? 1 : 0,
+            );
+            expect(symlinkSpy.mock.calls.filter(([, target]) => target === linkPath)).toHaveLength(
+              0,
+            );
+            if (layout === "managed") {
+              expect(fs.existsSync(linkPath)).toBe(false);
+            } else {
+              expect(fs.readlinkSync(linkPath)).toBe(state.root);
+            }
+            expect(rowAtRevocation).toBeDefined();
+            expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(
+              rowAtRevocation,
+            );
+            expect(fs.readFileSync(state.configPath, "utf8")).toBe(configBefore);
+          } finally {
+            unlinkSpy.mockRestore();
+            lstatSpy.mockRestore();
+            symlinkSpy.mockRestore();
+          }
+
+          const fresh = await runPostCorePluginConvergence(params);
+          expect(fresh.errored).toBe(false);
+          expect(fresh.warnings).toEqual([]);
+          expect(fresh.changes.length).toBeGreaterThan(0);
+          expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+          expect(fs.realpathSync(linkPath)).not.toBe(fs.realpathSync(state.root));
+          expect(() => fence.assertCurrent()).not.toThrow();
+        });
+      });
+    },
+  );
+
   it("keeps restored indexed packages usable under a fresh owner after marker compensation is interrupted", async () => {
     await withOpenClawTestState({ label: "plugin-marker-fresh-owner" }, async (state) => {
       const cfg = { plugins: { enabled: false } };
