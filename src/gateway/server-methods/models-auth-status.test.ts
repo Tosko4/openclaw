@@ -24,6 +24,7 @@ import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-valu
 import { resolveProviderAuthLookupMaps } from "../../secrets/provider-env-vars.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type BuildAuthHealthSummary = typeof import("../../agents/auth-health.js").buildAuthHealthSummary;
@@ -159,7 +160,10 @@ function createOptions(
     client: { connect: { scopes } } as never,
     isWebchatConnect: () => false,
     respond,
-    context: { getRuntimeConfig: mocks.getRuntimeConfig } as unknown,
+    context: createDirectChatContext({
+      getRuntimeConfig: mocks.getRuntimeConfig,
+      reconcileConfigAfterExternalWrite: async () => "applied",
+    }),
   } as unknown as GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> };
 }
 
@@ -218,6 +222,7 @@ function createLogoutOptions(
   const respond = vi.fn();
   const context = {
     getRuntimeConfig: mocks.getRuntimeConfig,
+    reconcileConfigAfterExternalWrite: async () => "applied",
     chatAbortControllers: new Map(),
     chatRunState: createChatRunState(),
     removeChatRun: vi.fn(),
@@ -245,7 +250,10 @@ function createOrderOptions(
     client: null,
     isWebchatConnect: () => false,
     respond,
-    context: { getRuntimeConfig: mocks.getRuntimeConfig } as unknown,
+    context: {
+      getRuntimeConfig: mocks.getRuntimeConfig,
+      reconcileConfigAfterExternalWrite: async () => "applied",
+    } as unknown,
   } as unknown as GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> };
 }
 

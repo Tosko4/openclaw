@@ -58,6 +58,7 @@ vi.mock("./config-reload.js", async () => {
           stop: hoisted.stop,
           hotReloadStatus: () => hoisted.hotReloadStatus.current,
           isReloading: () => false,
+          reconcileExternalWrite: async () => "applied" as const,
           applyPluginLifecycleChange: vi.fn(),
         };
       },

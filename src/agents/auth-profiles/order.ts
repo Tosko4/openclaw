@@ -236,6 +236,8 @@ type ResolveAuthProfileOrderParams = {
   /** Exact prepared metadata for request paths that must not rediscover plugin aliases. */
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
   preferredProfile?: string;
+  /** A successful automatic source remains eligible until an explicit order replaces it. */
+  retainedProfile?: string;
   /** Model that will consume the profile, for model-scoped cooldowns. */
   forModel?: string;
   /** Account-wide selection ignores windows limited to one model. */
@@ -351,6 +353,16 @@ export function resolveAuthProfileOrderWithMetadata(
     );
   };
   let filtered = baseOrder.filter(isValidProfile);
+  const retainedProfile = params.retainedProfile;
+  if (
+    explicitOrder === undefined &&
+    retainedProfile &&
+    !filtered.includes(retainedProfile) &&
+    storeProfiles.includes(retainedProfile) &&
+    isValidProfile(retainedProfile)
+  ) {
+    filtered.unshift(retainedProfile);
+  }
   let repairedFallbackToStoreProfiles = false;
 
   // Repair stored-order and config-profile drift from older setup flows:

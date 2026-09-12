@@ -188,6 +188,9 @@ type GatewayKernelContext = {
   getRuntimeConfig: () => OpenClawConfig;
   /** Live reload owner, including same-config restart work and shutdown. */
   isConfigReloadSettled: () => boolean;
+  reconcileConfigAfterExternalWrite: () => Promise<
+    import("../../config/runtime-write-application.js").RuntimeConfigWriteApplicationStatus
+  >;
   /** Prepared listener certificate pin; undefined when Gateway TLS is disabled. */
   gatewayTlsFingerprint?: string;
   sessionCompanion?: import("../session-companion.js").SessionCompanionService;

@@ -27,6 +27,9 @@ export type GatewayConfigReloaderHandle = {
   getDeferredChannelReloads?: () => readonly GatewayDeferredChannelReload[];
   applyPluginLifecycleChange: import("../plugins/lifecycle.js").PluginLifecycleRuntimeApply;
   isConfigReloadSettled: () => boolean;
+  reconcileExternalWrite: () => Promise<
+    import("../config/runtime-write-application.js").RuntimeConfigWriteApplicationStatus
+  >;
 };
 
 /** Mutable handles owned by a running gateway server process. */
@@ -74,6 +77,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
         throw new Error("Plugin lifecycle is unavailable before Gateway startup completes.");
       },
       isConfigReloadSettled: () => false,
+      reconcileExternalWrite: async () => "unclaimed",
     } satisfies GatewayConfigReloaderHandle,
     agentUnsub: null as (() => Promise<void> | void) | null,
     heartbeatUnsub: null as (() => void) | null,

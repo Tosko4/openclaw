@@ -104,6 +104,7 @@ function createLocalGatewayRequestContext(
     getRuntimeConfig: params.getRuntimeConfig,
     // Embedded calls have no running Gateway application owner.
     isConfigReloadSettled: () => false,
+    reconcileConfigAfterExternalWrite: async () => "unclaimed",
     resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
     isTerminalEnabled: () => false,
     loadGatewayModelCatalog: (loadParams) =>

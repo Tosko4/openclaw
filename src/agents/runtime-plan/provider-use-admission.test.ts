@@ -39,6 +39,60 @@ const byteplusMetadataSnapshot = createPluginMetadataSnapshotFixture({
 });
 
 describe("resolveProviderUseAdmission", () => {
+  it.each(["retained", "ordered", "expired", "removed"] as const)(
+    "keeps status and execution aligned after a first profile declaration when B is %s",
+    (condition) => {
+      const provider = "byteplus-plan";
+      const config: OpenClawConfig = {
+        auth: {
+          profiles: { "account:A": { provider, mode: "api_key" } },
+          ...(condition === "ordered" ? { order: { [provider]: ["account:A"] } } : {}),
+        },
+      };
+      const authProfileStore: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          "account:A": { type: "api_key", provider, key: "new-account" },
+          ...(condition === "removed"
+            ? {}
+            : {
+                "account:B":
+                  condition === "expired"
+                    ? { type: "token" as const, provider, token: "expired-account", expires: 1 }
+                    : { type: "api_key" as const, provider, key: "working-account" },
+              }),
+        },
+      };
+      const expectedProfile = condition === "retained" ? "account:B" : "account:A";
+      const prepared = prepareAgentRuntimeAuth({
+        provider,
+        modelId: "plan-model",
+        config,
+        env: {},
+        authProfileStore,
+        metadataSnapshot: byteplusMetadataSnapshot,
+        preferredAuthProfileId: "account:B",
+      });
+      expect(prepared.attempts[0]).toMatchObject({ kind: "profile", profileId: expectedProfile });
+      const availability = createModelAuthAvailabilityResolver({
+        cfg: config,
+        env: {},
+        authStore: authProfileStore,
+        metadataSnapshot: byteplusMetadataSnapshot,
+        preferredAuthSource: () => ({
+          kind: "profile",
+          profileId: "account:B",
+          readiness: "ready",
+          cooldown: "clear",
+        }),
+      }).evaluateModelAuth(provider, { modelId: "plan-model" });
+      expect(availability).toMatchObject({
+        availability: true,
+        selectedProfileId: expectedProfile,
+      });
+    },
+  );
+
   it.each(["working", "missing", "pinned", "ordered", "retained-profile"] as const)(
     "routes a generated credential and saved account when the current source is %s",
     async (condition) => {

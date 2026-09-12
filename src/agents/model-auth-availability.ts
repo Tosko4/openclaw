@@ -566,6 +566,7 @@ export function createModelAuthAvailabilityResolver(
       store: orderStore,
       provider: normalized,
       preferredProfile: preferredProfileId,
+      retainedProfile: retainedAuthProfileId(normalized, { modelId: forModel }),
       forModel,
       readinessMode: "read-only",
     });

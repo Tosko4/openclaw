@@ -2607,6 +2607,207 @@ describe("startGatewayConfigReloader", () => {
     },
   );
 
+  it("reconciles an external write before its delayed watcher notification", async () => {
+    const applied = createDeferred();
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: {} },
+      auth: { profiles: { saved: { provider: "fixture", mode: "token" } } },
+    };
+    const harness = createReloaderHarness(
+      async () =>
+        makeSnapshot({
+          config: nextConfig,
+          sourceConfig: nextConfig,
+          parsed: nextConfig,
+          hash: "external-save",
+        }),
+      {
+        runTransaction: runWithGatewayIndependentRootWorkAdmission,
+        onConfigApplied: async () => {
+          expect(getActiveGatewayRootWorkCount({ excludeCurrent: true })).toBe(0);
+          await applied.promise;
+        },
+      },
+    );
+    const request = tryBeginGatewayRootWorkAdmission();
+    if (!request) {
+      throw new Error("expected gateway request admission");
+    }
+    try {
+      await harness.reloader.ready;
+      const result = request.run(() => harness.reloader.reconcileExternalWrite());
+      let settled = false;
+      void result.then(() => {
+        settled = true;
+      });
+      await vi.runAllTimersAsync();
+      expect(harness.onHotReload).toHaveBeenCalledOnce();
+      expect(settled).toBe(false);
+      applied.resolve();
+      await expect(result).resolves.toBe("applied");
+      expect(harness.onConfigApplied).toHaveBeenCalledWith(expect.any(Object), nextConfig);
+      await flushWatcherChange(harness);
+      expect(harness.onHotReload).toHaveBeenCalledOnce();
+    } finally {
+      applied.resolve();
+      await harness.reloader.stop();
+      request.release();
+    }
+  });
+
+  it("settles an unchanged external write even before the startup echo arrives", async () => {
+    const config: OpenClawConfig = { gateway: { reload: {} } };
+    const harness = createReloaderHarness(
+      async () =>
+        makeSnapshot({
+          config,
+          sourceConfig: config,
+          parsed: config,
+          hash: "startup-write",
+        }),
+      { initialConfig: config, initialInternalWriteHash: "startup-write" },
+    );
+    try {
+      await harness.reloader.ready;
+      const result = harness.reloader.reconcileExternalWrite();
+      await vi.runAllTimersAsync();
+      await expect(result).resolves.toBe("applied");
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+    } finally {
+      await harness.reloader.stop();
+    }
+  });
+
+  it("reports failed external application instead of acknowledging its receipt", async () => {
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: {} },
+      auth: { profiles: { saved: { provider: "fixture", mode: "token" } } },
+    };
+    const harness = createReloaderHarness(
+      async () =>
+        makeSnapshot({
+          config: nextConfig,
+          sourceConfig: nextConfig,
+          hash: "external-save",
+        }),
+      {
+        onHotReload: async () => {
+          throw new Error("publication failed");
+        },
+      },
+    );
+    try {
+      await harness.reloader.ready;
+      const result = harness.reloader.reconcileExternalWrite();
+      await vi.runAllTimersAsync();
+      await expect(result).resolves.toBe("failed");
+    } finally {
+      await harness.reloader.stop();
+    }
+  });
+
+  it("reconciles applied source bytes without replacing their runtime overlays", async () => {
+    const sourceConfig: OpenClawConfig = { gateway: { reload: {} } };
+    const runtimeConfig: OpenClawConfig = { gateway: { reload: {}, port: 18789 } };
+    const accepted = createDeferred();
+    const onConfigAccepted = vi.fn(async () => {
+      await accepted.promise;
+    });
+    const onEffectiveConfigUnchanged = vi.fn(async () => {
+      throw new GatewayConfigReloadSupersededError();
+    });
+    const harness = createReloaderHarness(
+      async () =>
+        makeSnapshot({
+          config: sourceConfig,
+          sourceConfig,
+          parsed: sourceConfig,
+          hash: "applied-source",
+        }),
+      {
+        initialConfig: runtimeConfig,
+        initialCompareConfig: sourceConfig,
+        initialSnapshotRawHash: "applied-source",
+        onConfigAccepted,
+        onEffectiveConfigUnchanged,
+      },
+    );
+    try {
+      await harness.reloader.ready;
+      const result = harness.reloader.reconcileExternalWrite();
+      let settled = false;
+      void result.then(() => {
+        settled = true;
+      });
+      await vi.runAllTimersAsync();
+      expect(settled).toBe(false);
+      expect(onConfigAccepted).toHaveBeenCalledWith(
+        runtimeConfig,
+        expect.any(Object),
+        sourceConfig,
+        { runtimeApplied: true },
+      );
+      accepted.resolve();
+      await expect(result).resolves.toBe("applied");
+      expect(onEffectiveConfigUnchanged).not.toHaveBeenCalled();
+    } finally {
+      accepted.resolve();
+      await harness.reloader.stop();
+    }
+  });
+
+  it("settles a rejected external candidate when no newer watcher replay owns it", async () => {
+    const config: OpenClawConfig = { gateway: { reload: {} } };
+    let rejectSource = true;
+    const harness = createReloaderHarness(
+      async () => makeSnapshot({ config, sourceConfig: config, hash: "unapplied-source" }),
+      {
+        initialConfig: config,
+        onEffectiveConfigUnchanged: async () => {
+          if (rejectSource) {
+            throw new GatewayConfigReloadSupersededError();
+          }
+          return { rollback: async () => {} };
+        },
+      },
+    );
+    try {
+      await harness.reloader.ready;
+      const result = harness.reloader.reconcileExternalWrite();
+      await vi.runAllTimersAsync();
+      await expect(result).resolves.toBe("superseded");
+      rejectSource = false;
+      const retry = harness.reloader.reconcileExternalWrite();
+      await vi.runAllTimersAsync();
+      await expect(retry).resolves.toBe("applied");
+    } finally {
+      await harness.reloader.stop();
+    }
+  });
+
+  it("settles external reconciliation when the watcher owner stops", async () => {
+    const harness = createReloaderHarness(async () => makeSnapshot({ hash: "external-save" }));
+    await harness.reloader.ready;
+    await harness.reloader.stop();
+    await expect(harness.reloader.reconcileExternalWrite()).resolves.toBe("stopped");
+  });
+
+  it("does not replace a newer write with an earlier external read", async () => {
+    const snapshot = createDeferred<ConfigFileSnapshot>();
+    const harness = createReloaderHarness(() => snapshot.promise);
+    try {
+      await harness.reloader.ready;
+      const result = harness.reloader.reconcileExternalWrite();
+      await Promise.resolve();
+      harness.emitWrite(makeZeroDebounceHookWrite("newer-write"));
+      snapshot.resolve(makeSnapshot({ hash: "earlier-write" }));
+      await expect(result).resolves.toBe("superseded");
+    } finally {
+      snapshot.resolve(makeSnapshot());
+      await harness.reloader.stop();
+    }
+  });
+
   it("captures writes while initial candidate preparation is pending", async () => {
     const gate = createDeferred();
     const write = makeZeroDebounceHookWrite("during-initialization");

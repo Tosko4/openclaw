@@ -17,6 +17,7 @@ describe("models.authRefresh learned catalog", () => {
         OPENCLAW_SKIP_CANVAS_HOST: "1",
         OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
       },
     });
     const provider = "renewal-fixture";

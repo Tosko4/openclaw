@@ -67,6 +67,7 @@ export function startManagedGatewayConfigReloader(
         throw new Error("Plugin lifecycle is unavailable in a minimal Gateway.");
       },
       isConfigReloadSettled: () => !lifecycle.signal.aborted,
+      reconcileExternalWrite: async () => "unclaimed",
     };
   }
 
@@ -515,6 +516,7 @@ export function startManagedGatewayConfigReloader(
     hotReloadStatus: configReloader.hotReloadStatus,
     getDeferredChannelReloads,
     applyPluginLifecycleChange: configReloader.applyPluginLifecycleChange,
+    reconcileExternalWrite: configReloader.reconcileExternalWrite,
     // Equal config revisions can still owe a plugin/runtime restart.
     isConfigReloadSettled: () =>
       configReloader.isReady() &&

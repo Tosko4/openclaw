@@ -95,6 +95,7 @@ describe("models.authStatus serving source", () => {
         OPENCLAW_SKIP_CANVAS_HOST: "1",
         OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
       },
     });
     const provider = "serving-fixture";
@@ -200,7 +201,15 @@ describe("models.authStatus serving source", () => {
             "serving:B": profileB,
           },
         });
+        await state.writeConfig({
+          ...cfg,
+          auth: { profiles: { "serving:A": { provider, mode: "api_key" } } },
+        });
         await client.request("models.authRefresh", { agentId: "main", operation: "login" });
+        expect(getRuntimeConfig().auth?.profiles?.["serving:A"]).toEqual({
+          provider,
+          mode: "api_key",
+        });
         const retained = await status();
         expect(retained.providers).toEqual(
           expect.arrayContaining([

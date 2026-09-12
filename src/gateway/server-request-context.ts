@@ -109,7 +109,7 @@ type GatewayRequestContextRuntime = Pick<
     > & {
       configReloader: Pick<
         GatewayCoreRuntime["runtimeState"]["configReloader"],
-        "isConfigReloadSettled" | "getDeferredChannelReloads"
+        "isConfigReloadSettled" | "getDeferredChannelReloads" | "reconcileExternalWrite"
       >;
     };
     lifecycle: Pick<GatewayCoreRuntime["lifecycle"], "closePreludeStarted">;
@@ -245,6 +245,10 @@ export function createGatewayRequestContext(
     getRuntimeConfig,
     isConfigReloadSettled: () =>
       !lifecycle.closePreludeStarted && runtimeState.configReloader.isConfigReloadSettled(),
+    reconcileConfigAfterExternalWrite: async () =>
+      lifecycle.closePreludeStarted
+        ? "stopped"
+        : await runtimeState.configReloader.reconcileExternalWrite(),
     getDeferredChannelReloads: () =>
       lifecycle.closePreludeStarted
         ? []
