@@ -93,12 +93,12 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
               ...(withWriteAdmission
                 ? {
                     withWriteAdmission: async (...args: Parameters<typeof withWriteAdmission>) => {
-                      const [run, ...admission] = args;
+                      const [runAdmitted, ...admission] = args;
                       await hooks.beforeWriteAdmission?.();
                       return withWriteAdmission(
                         async (refusal) => {
                           await hooks.afterWriteAdmission?.();
-                          return await run(refusal);
+                          return await runAdmitted(refusal);
                         },
                         ...admission,
                       );

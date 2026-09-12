@@ -225,7 +225,7 @@ export function closeOpenClawAgentDatabaseByPath(
   // Cache keys are lexical resolved paths. Do not realpath aliases here: a
   // symlink swap must never redirect cleanup onto a different cached database.
   const resolvedPath = path.resolve(pathname);
-  revokeAgentDatabaseResources(
+  void revokeAgentDatabaseResources(
     { path: resolvedPath, agentId: expectedAgentId },
     logResourceCloseFailure,
   );
@@ -337,7 +337,7 @@ export function settleOpenClawAgentDatabaseWorkerClose(
 
 /** Close cached agent handles, optionally restricted to one runtime root. */
 export function closeOpenClawAgentDatabases(rootPath?: string): void {
-  revokeAgentDatabaseResources({ rootPath }, logResourceCloseFailure);
+  void revokeAgentDatabaseResources({ rootPath }, logResourceCloseFailure);
   for (const pathname of cache.pending.keys()) {
     if (rootPath === undefined || isPathInside(rootPath, pathname)) {
       revokePendingAgentDatabaseOpen(pathname);

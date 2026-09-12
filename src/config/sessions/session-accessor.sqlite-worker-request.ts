@@ -227,7 +227,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
         released.diagnostics.releaseCause = "worker-release";
         released.released.resolve();
       } else if (message.type === "reclaimed") {
-        if (message.settled !== true) {
+        if (!message.settled) {
           fail(new Error("SQLite reclamation Worker omitted operation settlement"));
           return;
         }

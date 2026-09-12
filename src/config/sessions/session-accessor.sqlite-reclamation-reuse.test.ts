@@ -47,6 +47,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
     ...actual,
     Worker: class extends actual.Worker {
       constructor(filename: string | URL, options: WorkerOptions = {}) {
+        let workerOptions = options;
         if (options.workerData?.operation === "reclaim") {
           const preload = `
             import { realpathSync } from 'node:fs';
@@ -71,7 +72,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
               return statement;
             };
           `;
-          options = {
+          workerOptions = {
             ...options,
             workerData: { ...options.workerData, reclamationValidationChecks: validation.checks },
             execArgv: [
@@ -81,7 +82,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
             ],
           };
         }
-        super(filename, options);
+        super(filename, workerOptions);
       }
     },
   };

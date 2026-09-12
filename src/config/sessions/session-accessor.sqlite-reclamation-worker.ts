@@ -82,7 +82,7 @@ export function withSqliteReclamationWorker<T>(
         }
       } catch (cleanupError) {
         throw new AggregateError([error, cleanupError], "SQLite reclamation and cleanup failed", {
-          cause: error,
+          cause: cleanupError,
         });
       }
       throw error;
@@ -128,8 +128,8 @@ class SqliteReclamationWorker {
     });
     try {
       this.unregisterState = registerOpenClawStateDatabaseAsyncResource({
-        close: async (identity) => {
-          if (!identity || identity.key === this.stateAdmission.identity.key) {
+        close: async (closingIdentity) => {
+          if (!closingIdentity || closingIdentity.key === this.stateAdmission.identity.key) {
             await this.close();
           }
         },
