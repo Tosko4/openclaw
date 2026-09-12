@@ -164,7 +164,7 @@ function createProfileContext(
         // Explicit targets can come from history; lookup must not launch or restart a browser.
         if (targetId !== undefined && !(await rawAvailability.isReachable(undefined, { signal }))) {
           throw new BrowserProfileUnavailableError(
-            `Browser profile "${profile.name}" is not running. Start the browser or open a new tab, then select a current target.`,
+            `Browser control readiness check failed for profile "${profile.name}" before tab selection. This does not establish that the browser process is stopped.`,
           );
         }
         return await rawSelection.ensureTabAvailable(targetId, { ...options, signal });

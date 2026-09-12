@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   getBrowserControlServerBaseUrl,
   getCdpMocks,
+  getPwMocks,
   installBrowserControlServerHooks,
   makeResponse,
   setBrowserControlServerReachable,
@@ -9,7 +10,7 @@ import {
 } from "./server.control-server.test-harness.js";
 import { getBrowserTestFetch } from "./test-support/fetch.js";
 
-const { launchOpenClawChrome, stopOpenClawChrome } = await import("./chrome.js");
+const { isChromeCdpReady, launchOpenClawChrome, stopOpenClawChrome } = await import("./chrome.js");
 
 describe("browser control server historical targets", () => {
   installBrowserControlServerHooks();
@@ -27,17 +28,38 @@ describe("browser control server historical targets", () => {
     );
   }
 
-  it("does not start a stopped browser for a historical screenshot", async () => {
-    await startBrowserControlServerFromConfig();
-    vi.mocked(launchOpenClawChrome).mockClear();
+  it.each([false, true])(
+    "reports failed readiness without claiming the browser stopped (previously started: %s)",
+    async (started) => {
+      await startBrowserControlServerFromConfig();
+      if (started) {
+        expect((await request("/start", {})).status).toBe(200);
+      }
+      setBrowserControlServerReachable(false);
+      vi.mocked(isChromeCdpReady).mockClear();
+      vi.mocked(launchOpenClawChrome).mockClear();
+      vi.mocked(stopOpenClawChrome).mockClear();
+      vi.mocked(globalThis.fetch).mockClear();
 
-    const response = await request("/screenshot", { targetId: "closed-historical-tab" });
+      const response = await request("/screenshot", { targetId: "closed-historical-tab" });
 
-    expect(launchOpenClawChrome).not.toHaveBeenCalled();
-    expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ error: expect.stringContaining("not running") });
-    expect(await (await request("/tabs")).json()).toMatchObject({ running: false, tabs: [] });
-  });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error:
+          'Browser control readiness check failed for profile "openclaw" before tab selection. This does not establish that the browser process is stopped.',
+      });
+      expect(isChromeCdpReady).toHaveBeenCalledOnce();
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect(getCdpMocks().createTargetViaCdp).not.toHaveBeenCalled();
+      expect(getPwMocks().takeScreenshotViaPlaywright).not.toHaveBeenCalled();
+      expect(launchOpenClawChrome).not.toHaveBeenCalled();
+      expect(stopOpenClawChrome).not.toHaveBeenCalled();
+      expect(await (await request("/")).json()).toMatchObject({
+        pid: started ? 123 : null,
+      });
+      expect(await (await request("/tabs")).json()).toMatchObject({ running: false, tabs: [] });
+    },
+  );
 
   it.each([false, true])(
     "does not create a tab or stop a running browser for a missing target (empty: %s)",
