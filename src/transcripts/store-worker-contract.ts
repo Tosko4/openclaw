@@ -12,7 +12,7 @@ import type {
   readTranscriptSessionByIdentity,
   readTranscriptSessionEntries,
   readTranscriptSessionMatches,
-  readTranscriptSummary,
+  readStoredTranscriptSummary,
   readTranscriptUtterances,
 } from "./store-sqlite-read.js";
 import type {
@@ -62,7 +62,7 @@ export type TranscriptReadRequests = {
   };
   "transcripts.summary": {
     input: { session: SessionIdentity };
-    output: ReturnType<typeof readTranscriptSummary>;
+    output: ReturnType<typeof readStoredTranscriptSummary>;
   };
 };
 

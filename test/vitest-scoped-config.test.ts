@@ -26,6 +26,7 @@ import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.
 import { createCommandsVitestConfig } from "./vitest/vitest.commands.config.ts";
 import { createCronVitestConfig } from "./vitest/vitest.cron.config.ts";
 import { createDaemonVitestConfig } from "./vitest/vitest.daemon.config.ts";
+import { databaseWorkerCoreTestFiles } from "./vitest/vitest.database-worker-core-paths.mjs";
 import { createExtensionAcpxVitestConfig } from "./vitest/vitest.extension-acpx.config.ts";
 import { createExtensionBrowserVitestConfig } from "./vitest/vitest.extension-browser.config.ts";
 import { createExtensionDiffsVitestConfig } from "./vitest/vitest.extension-diffs.config.ts";
@@ -80,7 +81,10 @@ import { createToolingIsolatedVitestConfig } from "./vitest/vitest.tooling-isola
 import { createToolingVitestConfig } from "./vitest/vitest.tooling.config.ts";
 import { createTuiVitestConfig } from "./vitest/vitest.tui.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
-import { bundledPluginDependentUnitTestFiles } from "./vitest/vitest.unit-paths.mjs";
+import {
+  boundaryTestFiles,
+  bundledPluginDependentUnitTestFiles,
+} from "./vitest/vitest.unit-paths.mjs";
 import { createUtilsVitestConfig } from "./vitest/vitest.utils.config.ts";
 import { createWizardVitestConfig } from "./vitest/vitest.wizard.config.ts";
 
@@ -1025,10 +1029,14 @@ describe("scoped vitest configs", () => {
     expect(testConfig.exclude).not.toContain("src/gateway/sessions-history-http.test.ts");
   });
 
-  it("normalizes infra include patterns relative to the scoped dir", () => {
+  it("keeps infra and database worker consumers rooted at the repository", () => {
     const testConfig = requireTestConfig(defaultInfraConfig);
-    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
-    expect(testConfig.include).toEqual(["infra/**/*.test.ts"]);
+    expect(testConfig.dir).toBe(process.cwd());
+    expect(testConfig.include).toEqual(["src/infra/**/*.test.ts", ...databaseWorkerCoreTestFiles]);
+    expect(testConfig.exclude).toEqual(expect.arrayContaining(boundaryTestFiles));
+    for (const file of databaseWorkerCoreTestFiles) {
+      expect(matchingExcludePatterns(testConfig.exclude ?? [], file), file).toEqual([]);
+    }
   });
 
   it("normalizes runtime config include patterns relative to the scoped dir", () => {

@@ -11,7 +11,7 @@ import {
   readTranscriptSessionByIdentity,
   readTranscriptSessionEntries,
   readTranscriptSessionMatches,
-  readTranscriptSummary,
+  readStoredTranscriptSummary,
   readTranscriptUtterances,
 } from "./store-sqlite-read.js";
 import {
@@ -98,7 +98,10 @@ export function executeTranscriptRead(
           ),
         };
       case "transcripts.summary":
-        return { ok: true, value: readTranscriptSummary(database, command.input.params.session) };
+        return {
+          ok: true,
+          value: readStoredTranscriptSummary(database, command.input.params.session),
+        };
       default:
         throw new Error("Unknown transcript SQLite command");
     }

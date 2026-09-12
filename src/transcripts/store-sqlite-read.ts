@@ -127,7 +127,7 @@ export function readTranscriptUtterances(
     .map(utteranceFromRow);
 }
 
-export function readTranscriptSummary(
+export function readStoredTranscriptSummary(
   database: DatabaseSync,
   session: TranscriptSessionIdentity,
 ): { summary?: TranscriptsSummary; markdown?: string } {
