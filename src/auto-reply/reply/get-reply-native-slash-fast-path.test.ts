@@ -434,7 +434,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       overrideProvider: "openai",
       overrideModel: "gpt-5.5",
       expectedProvider: "openai",
-      expectedContextTokens: 200_000,
+      expectedContextTokens: 400_000,
     },
     {
       source: "user" as const,
@@ -446,7 +446,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       overrideProvider: "openai",
       overrideModel: "gpt-5.5",
       expectedProvider: "openai",
-      expectedContextTokens: 200_000,
+      expectedContextTokens: 400_000,
     },
   ])(
     "uses only user-selected or locked session overrides ($source, locked=$locked)",
@@ -595,6 +595,10 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         if (result.handled && result.reply && !Array.isArray(result.reply)) {
           await getReplyPayloadMetadata(result.reply)?.onFinalDeliverySuccess?.();
         }
+        expect(
+          loadExactSessionEntry({ sessionKey: targetSessionKey, storePath })?.entry
+            ?.modelPolicyNotice,
+        ).toBeUndefined();
         handleCommandsMock.mockResolvedValueOnce({
           shouldContinue: false,
           sessionCompaction: { compacted: true },
@@ -602,7 +606,9 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         });
         expect(await runCompact()).toMatchObject({
           handled: true,
-          reply: { text: "compacted again" },
+          reply: {
+            text: "Pinned model anthropic/claude-fable-5 is not in your allow list. This reply used the default (openai/gpt-5.5). Use /model to change it.\n\ncompacted again",
+          },
         });
         expect(
           loadExactSessionEntry({ sessionKey: targetSessionKey, storePath })?.entry,
@@ -621,7 +627,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
             ? testCase.expectedContextTokens
             : expectedProvider === "anthropic"
               ? 1_000_000
-              : 200_000,
+              : 400_000,
       });
     },
   );

@@ -46,11 +46,9 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
     read(
       createModelsTestOwner(
         config,
-        [
-          ...Object.entries(config.models?.providers ?? {}).flatMap(([provider, value]) =>
-            value.models.map((model) => ({ provider, id: model.id, name: model.name })),
-          ),
-        ],
+        Object.entries(config.models?.providers ?? {}).flatMap(([provider, value]) =>
+          value.models.map((model) => ({ provider, id: model.id, name: model.name })),
+        ),
         {},
       ),
     ),
@@ -1406,7 +1404,7 @@ vi.mock("./doctor-config-preflight.js", async () => {
 });
 
 vi.mock("./doctor-config-analysis.js", async (importOriginal) => {
-  const { collectInvalidHookTransformsDirWarnings } =
+  const { collectInvalidHookTransformsDirWarnings, collectUnsupportedInternalHookEntryWarnings } =
     await importOriginal<typeof import("./doctor-config-analysis.js")>();
   function formatConfigKeyPath(parts: Array<string | number>): string {
     if (parts.length === 0) {
@@ -1446,6 +1444,7 @@ vi.mock("./doctor-config-analysis.js", async (importOriginal) => {
     formatConfigKeyPath,
     noteImplicitFallbackClobberWarnings: noteImplicitFallbackClobberWarningsMock,
     collectInvalidHookTransformsDirWarnings,
+    collectUnsupportedInternalHookEntryWarnings,
     noteIncludeConfinementWarning: vi.fn(),
     noteOpencodeProviderOverrides: vi.fn(),
     noteMcpOriginWarning: vi.fn(),

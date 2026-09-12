@@ -370,12 +370,12 @@ describe("turn model selection command-path differential", () => {
           await expect(selection).rejects.toThrow("not allowed");
         } else if (mode === "no-primary") {
           await expect(selection).resolves.toMatchObject({
-            provider: DEFAULT_PROVIDER,
-            model: DEFAULT_MODEL,
+            provider: "fixture",
+            model: "parent",
             configuredDefaultAuthProfileId: undefined,
             allowListPolicyFallback: {
               pinnedModel: "fixture/child",
-              primaryModel: `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`,
+              primaryModel: "fixture/parent",
             },
           });
         } else {

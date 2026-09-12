@@ -309,3 +309,24 @@ export function collectInvalidHookTransformsDirWarnings(
     `- hooks.transformsDir: ${transformsDir} is outside ${transformsRoot}. Hook transform modules must live under ${transformsRoot}; move custom transforms there or remove hooks.transformsDir.`,
   ];
 }
+
+export function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): string[] {
+  const unsupportedKeysByEntry = Object.entries(cfg.hooks?.internal?.entries ?? {})
+    .filter(([, entry]) => entry && typeof entry === "object" && !Array.isArray(entry))
+    .map(([hookKey, entry]) => {
+      const unsupportedKeys = ["handler", "module", "extraDirs", "installs"].filter((key) =>
+        Object.hasOwn(entry, key),
+      );
+      return { hookKey, unsupportedKeys };
+    })
+    .filter(({ unsupportedKeys }) => unsupportedKeys.length > 0);
+
+  if (unsupportedKeysByEntry.length === 0) {
+    return [];
+  }
+
+  return unsupportedKeysByEntry.map(
+    ({ hookKey, unsupportedKeys }) =>
+      `- hooks.internal.entries.${hookKey}: unsupported loader key${unsupportedKeys.length === 1 ? "" : "s"} ${unsupportedKeys.join(", ")} will not load hook modules. Use bootstrap-extra-files for session bootstrap content, or create a managed/workspace hook directory with HOOK.md + handler.js. Doctor cannot rewrite this automatically because per-hook entry keys are open-ended hook configuration.`,
+  );
+}

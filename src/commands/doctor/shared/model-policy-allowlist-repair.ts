@@ -59,6 +59,8 @@ export async function prepareDoctorModelPolicyAllowlist(params: {
   const { openAIModelCatalogRoutePolicy } = await import("../../../agents/openai-model-routes.js");
   const { PreparedModelRuntimePublicationSupersededError } =
     await import("../../../agents/prepared-model-runtime.errors.js");
+  const { AuthProfileMigrationRequiredError } =
+    await import("../../../agents/auth-profiles/legacy-source-diagnostic.js");
   const { isManifestPluginAvailableForControlPlane } =
     await import("../../../plugins/manifest-contract-eligibility.js");
   return withPreparedModelCatalogOwner(
@@ -135,7 +137,18 @@ export async function prepareDoctorModelPolicyAllowlist(params: {
       }
       return result;
     },
-  );
+  ).catch((error: unknown) => {
+    if (!(error instanceof AuthProfileMigrationRequiredError)) {
+      throw error;
+    }
+    return {
+      config,
+      changes: [],
+      warnings: [
+        `Model allow-list inspection is deferred until legacy credentials are migrated. ${error.message}`,
+      ],
+    };
+  });
 }
 
 /** Migration metadata identifies an offer; only the Doctor caller can obtain consent. */

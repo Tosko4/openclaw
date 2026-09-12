@@ -35,7 +35,7 @@ import type {
   ModelsProviderMenu,
   ModelsRuntimeChoice,
   PreparedModelsProviderData,
-} from "./commands-models.js";
+} from "./commands-models.types.js";
 
 const CUSTOM_MODEL_SETUP_GUIDANCE =
   "Set up this connection with the custom-provider guide: https://docs.openclaw.ai/concepts/model-providers/custom-providers";

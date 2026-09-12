@@ -16,12 +16,7 @@ import {
 } from "../../tasks/task-status-access.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
-import {
-  clearAutoFallbackPrimaryProbeSelection,
-  entryMatchesAutoFallbackPrimaryProbe,
-  markAutoFallbackPrimaryProbe,
-  resolveEffectiveModelFallbacks,
-} from "../agent-scope.js";
+import { markAutoFallbackPrimaryProbe, resolveEffectiveModelFallbacks } from "../agent-scope.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import {
   runEmbeddedAgentEntry,
@@ -53,13 +48,12 @@ import {
   createAgentAttemptLifecycleCallbacks,
   type AgentAttemptLifecycleState,
 } from "./attempt-callbacks.js";
-import { persistAgentSession } from "./attempt-execution.shared.js";
 import { createCommandCompactionAccounting } from "./compaction-accounting.js";
 import { createAgentCommandLifecycle } from "./lifecycle.js";
 import { normalizeAgentCommandModelRef } from "./model-ref.js";
 import type { RunEmbeddedAgentAttemptParams } from "./run-embedded-attempt.types.js";
 import { loadAttemptExecutionRuntime, type AgentAttemptResult } from "./runtime-loaders.js";
-import { resolveInternalSessionEffectsSource } from "./session-helpers.js";
+import { resolveInternalSessionEffectsSource, settleAgentPrimaryProbe } from "./session-helpers.js";
 const log = createSubsystemLogger("agents/agent-command");
 const MAX_LIVE_SWITCH_RETRIES = 5;
 
@@ -328,36 +322,22 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         },
         sessionOverride: {
           kind: "reconcile-completed",
-          reconcile: async ({ provider: winnerProvider, model: winnerModel }) => {
-            if (
-              !autoFallbackPrimaryProbe ||
-              autoFallbackPrimaryProbeInterruptedByLiveSwitch ||
-              !sessionEntry ||
-              !sessionStore ||
-              !sessionKey ||
-              isModelSelectionLocked(sessionEntry) ||
-              params.suppressVisibleSessionEffects ||
-              params.preserveUserFacingSessionModelState ||
-              !entryMatchesAutoFallbackPrimaryProbe(sessionEntry, autoFallbackPrimaryProbe) ||
-              winnerProvider !== autoFallbackPrimaryProbe.provider ||
-              winnerModel !== autoFallbackPrimaryProbe.model
-            ) {
-              return;
-            }
-            const nextSessionEntry = { ...sessionEntry };
-            clearAutoFallbackPrimaryProbeSelection(nextSessionEntry);
-            sessionEntry = await persistAgentSession({
+          reconcile: async (winner) => {
+            const settlement = settleAgentPrimaryProbe({
+              probe: autoFallbackPrimaryProbe,
+              winner,
+              sessionEntry,
               sessionStore,
               sessionKey,
               storePath,
-              initialEntry: sessionEntry,
-              entry: nextSessionEntry,
-              shouldPersist: (current) =>
-                Boolean(
-                  current &&
-                  entryMatchesAutoFallbackPrimaryProbe(current, autoFallbackPrimaryProbe),
-                ),
+              preserveSelection:
+                autoFallbackPrimaryProbeInterruptedByLiveSwitch ||
+                params.suppressVisibleSessionEffects ||
+                params.preserveUserFacingSessionModelState,
             });
+            if (settlement) {
+              sessionEntry = await settlement;
+            }
           },
         },
         abortSignal: deferredLifecycle.signal,

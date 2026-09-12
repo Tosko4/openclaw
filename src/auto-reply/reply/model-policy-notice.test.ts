@@ -1,27 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { attachModelPolicyNotice } from "./model-policy-notice.js";
-
-const storage = vi.hoisted(() => ({ current: undefined as SessionEntry | undefined }));
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  patchSessionEntryCore: async (
-    _scope: object,
-    update: (entry: SessionEntry) => Partial<SessionEntry> | null,
-  ) => {
-    if (!storage.current) {
-      return null;
-    }
-    const patch = update(storage.current);
-    if (!patch) {
-      return null;
-    }
-    Object.assign(storage.current, patch);
-    return storage.current;
-  },
-}));
 
 function session(): SessionEntry {
   return {
@@ -46,12 +27,8 @@ function reply(
   });
 }
 
-beforeEach(() => {
-  storage.current = session();
-});
-
 describe("model policy reply notice", () => {
-  it("preserves the pin and repeats until successful delivery, then stays quiet", async () => {
+  it("preserves the pin and repeats when delivery has no transcript publication authority", async () => {
     const entry = session();
     const first = reply(entry);
     expect(first[0].text).toContain("Pinned model openai/old-model is not in your allow list");
@@ -59,37 +36,33 @@ describe("model policy reply notice", () => {
     expect(first[0].text).toContain("Use /model to change it.\n\nAnswer");
     expect(entry.modelPolicyNotice).toBeUndefined();
     expect(reply(entry)[0].text).toBe(first[0].text);
-    await getReplyPayloadMetadata(first[0])?.onFinalDeliverySuccess?.();
-    expect(storage.current?.modelPolicyNotice).toEqual({
-      sessionId: "session-1",
+    const acknowledge = getReplyPayloadMetadata(first[0])?.onFinalDeliverySuccess;
+    expect(acknowledge).toBeTypeOf("function");
+    await acknowledge?.();
+    expect(entry.modelPolicyNotice).toBeUndefined();
+    expect(reply(entry)[0].text).toBe(first[0].text);
+    expect(entry).toMatchObject({ providerOverride: "openai", modelOverride: "old-model" });
+  });
+
+  it("omits the notice when the current pin and session have a recorded receipt", () => {
+    const entry = session();
+    entry.modelPolicyNotice = {
+      sessionId: entry.sessionId,
       pinnedModel: "openai/old-model",
-    });
+    };
     expect(reply(entry)).toEqual([{ text: "Answer" }]);
     expect(entry).toMatchObject({ providerOverride: "openai", modelOverride: "old-model" });
   });
 
-  it.each(["pin", "session"])("does not acknowledge a stale %s after delivery", async (changed) => {
+  it.each(["pin", "session"])("notifies when a recorded receipt has a different %s", (changed) => {
     const entry = session();
-    const payload = reply(entry)[0];
-    storage.current = {
-      ...entry,
-      ...(changed === "pin" ? { modelOverride: "different-model" } : { sessionId: "session-2" }),
+    entry.modelPolicyNotice = {
+      sessionId: changed === "session" ? "old-session" : entry.sessionId,
+      pinnedModel: changed === "pin" ? "openai/another-model" : "openai/old-model",
     };
-    await getReplyPayloadMetadata(payload)?.onFinalDeliverySuccess?.();
-    expect(storage.current.modelPolicyNotice).toBeUndefined();
-    expect(entry.modelPolicyNotice).toBeUndefined();
-  });
-
-  it("notifies again after the pin changes or a new session starts", async () => {
-    const entry = session();
-    await getReplyPayloadMetadata(reply(entry)[0])?.onFinalDeliverySuccess?.();
-    applyModelOverrideToSessionEntry({
-      entry,
-      selection: { provider: "openai", model: "another-model" },
-    });
-    expect(reply(entry)[0].text).toContain("openai/another-model");
-    entry.modelPolicyNotice = { sessionId: "old-session", pinnedModel: "openai/another-model" };
-    expect(reply(entry)[0].text).toContain("Use /model");
+    expect(reply(entry)[0].text).toBe(
+      "Pinned model openai/old-model is not in your allow list. This reply used the default (openai/default-model). Use /model to change it.\n\nAnswer",
+    );
   });
 
   it("explains an unavailable primary without consuming the success notice", async () => {

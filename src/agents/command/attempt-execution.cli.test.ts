@@ -1178,6 +1178,7 @@ describe("CLI attempt execution", () => {
           hasStoredAutoFallbackProvenance: false,
           autoFallbackPrimaryProbe: undefined,
           allowListPolicyFallback: undefined,
+          missingConfiguredPrimary: undefined,
           sessionEntryForAttempt: params.sessionEntry,
           thinkingCatalog: [],
           immutableThinkLevel: "off",

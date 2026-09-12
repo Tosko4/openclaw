@@ -4,11 +4,9 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { ModelAllowList } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
@@ -17,13 +15,22 @@ import {
   PreparedModelRuntimePublicationSupersededError,
 } from "../../agents/prepared-model-runtime.errors.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import { projectPreparedModelsProviderData } from "./commands-models-catalog.js";
 import { formatModelsAllowListNotice } from "./commands-models-notice.js";
+import type {
+  ModelsBrowseOptions,
+  ModelsCommandSessionEntry,
+  ModelsProviderData,
+  ModelsProviderMenu,
+  ModelsRuntimeChoice,
+  PreparedModelsProviderData,
+} from "./commands-models.types.js";
 import type { CommandHandler } from "./commands-types.js";
+
+export type { ModelsProviderData, ModelsRuntimeChoice } from "./commands-models.types.js";
 
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;
@@ -31,55 +38,6 @@ const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
 export const MODEL_PICKER_CHANGED_MESSAGE =
   "Available models changed. Open /models and choose again.";
-
-type ModelsCommandSessionEntry = Partial<
-  Pick<
-    SessionEntry,
-    | "authProfileOverride"
-    | "authProfileOverrideSource"
-    | "modelProvider"
-    | "providerOverride"
-    | "model"
-    | "modelOverride"
-    | "modelSelectionLocked"
-    | "agentRuntimeOverride"
-  >
->;
-
-export type ModelsProviderData = {
-  allowList?: ModelAllowList;
-  byProvider: Map<string, Set<string>>;
-  pendingProviders?: readonly string[];
-  providers: string[];
-  resolvedDefault: { provider: string; model: string };
-  modelNames: Map<string, string>;
-  modelMenu?: {
-    modelNames: ReadonlyMap<string, string>;
-    byProvider: ReadonlyMap<string, ModelsProviderMenu>;
-  };
-  refreshWarning?: string;
-  runtimeChoicesByProvider?: Map<string, ModelsRuntimeChoice[]>;
-  runtimeChoicesByModel?: Map<string, ModelsRuntimeChoice[]>;
-  isCurrent?: () => boolean;
-};
-
-export type ModelsProviderMenu = { available: number; notice: string };
-export type PreparedModelsProviderData = ModelsProviderData & {
-  modelCatalog: ModelCatalogEntry[];
-};
-
-export type ModelsBrowseOptions = {
-  sessionKey?: string;
-  view?: "default" | "all";
-  workspaceDir?: string;
-  sessionEntry?: ModelsCommandSessionEntry;
-};
-
-export type ModelsRuntimeChoice = {
-  id: string;
-  label: string;
-  description: string;
-};
 
 type ParsedModelsCommand =
   | { action: "providers" }

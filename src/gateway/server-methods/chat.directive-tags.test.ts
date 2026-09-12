@@ -3866,6 +3866,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     "absent-identity",
     "rotated-key",
     "rotated-entry",
+    "changed-pin",
   ] as const)(
     "publishes native policy replies only after exact transcript reconciliation (%s)",
     async (target) => {
@@ -3899,6 +3900,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         sessionKey: "main",
         storePath: mockState.storePath,
       })[0];
+      let transcriptBeforePinChange: ReturnType<typeof loadTranscriptEventsSync> | undefined;
+      let watermarkBeforePinChange: ReturnType<typeof readSessionTranscriptWatermark> | undefined;
       dispatchInboundMessageMock.mockImplementationOnce(async (params: TestDispatchParams) => {
         expect(
           params.replyOptions?.onAgentRunStart?.("policy-run", undefined, {
@@ -3906,11 +3909,23 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             getResult: () => ({}),
           }),
         ).toBe("reply-dispatch");
+        if (target === "changed-pin") {
+          const recorder = expectDefined(
+            params.replyOptions?.userTurnTranscriptRecorder,
+            "chat.send user transcript recorder",
+          );
+          expect((await recorder.persistApproved())?.appended).toBe(true);
+        }
         const appended = await appendSourceReplyMirrorEntry({
           idempotencyKey,
           text: "Answer from the primary.",
         });
-        if (target === "entry" || target === "missing-entry" || target === "rotated-entry") {
+        if (
+          target === "entry" ||
+          target === "missing-entry" ||
+          target === "rotated-entry" ||
+          target === "changed-pin"
+        ) {
           setReplyPayloadMetadata(payload, {
             assistantTranscriptOwned: true,
             assistantTranscriptEntryId:
@@ -3923,6 +3938,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           await appendSourceReplyMirrorEntry({
             idempotencyKey,
             text: "Replacement session answer.",
+          });
+        }
+        if (target === "changed-pin") {
+          transcriptBeforePinChange = loadTranscriptEventsSync(transcriptScope());
+          watermarkBeforePinChange = readSessionTranscriptWatermark(transcriptScope());
+          await upsertSessionEntryCore(sessionEntryScope(), {
+            modelOverride: "replacement-model",
+            modelOverrideSource: "user",
           });
         }
         params.dispatcher.sendFinalReply(payload);
@@ -3942,6 +3965,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         expect(JSON.stringify(messages)).not.toContain("Use /model");
         if (target === "rotated-key" || target === "rotated-entry") {
           expect(JSON.stringify(messages)).toContain("Replacement session answer.");
+        }
+        if (target === "changed-pin") {
+          expect(readPersistedUserMessages()).toHaveLength(1);
+          expect(loadSqliteSessionEntry(sessionEntryScope())).toMatchObject({
+            sessionId: entry.sessionId,
+            providerOverride: "anthropic",
+            modelOverride: "replacement-model",
+            modelOverrideSource: "user",
+          });
+          expect(loadTranscriptEventsSync(transcriptScope())).toEqual(transcriptBeforePinChange);
+          expect(readSessionTranscriptWatermark(transcriptScope())).toEqual(
+            watermarkBeforePinChange,
+          );
+          expect(extractFirstTextBlock(lastBroadcastPayload(context))).toBeUndefined();
         }
         return;
       }
@@ -4031,7 +4068,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
                 ? { lifecycleRevision: "policy-replacement-lifecycle" }
                 : {};
           },
-          { preserveActivity: true, skipMaintenance: true },
+          { skipMaintenance: true },
         );
         await writerEntered.promise;
         params.dispatcher.sendFinalReply(payload);

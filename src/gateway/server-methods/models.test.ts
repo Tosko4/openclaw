@@ -1778,7 +1778,7 @@ describe("models.list", () => {
                         source: "model",
                       },
                       available,
-                      tags: ["configured"],
+                      tags: ["default", "configured"],
                       ...(!authenticated && catalogComplete
                         ? { unavailableReason: "missing-auth" }
                         : {}),
