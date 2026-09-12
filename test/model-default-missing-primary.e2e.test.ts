@@ -371,7 +371,7 @@ it.each([
     expect(resetHistory.sessionInfo).toEqual({
       modelProvider: "openai",
       model: "fixture-primary",
-      modelOverrideSource: "default",
+      modelOverrideSource: null,
     });
     if (withdrawn) {
       const unrunKey = "agent:main:unrun";

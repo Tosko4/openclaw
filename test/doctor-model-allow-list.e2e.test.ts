@@ -6,6 +6,7 @@ import { createServer as createHttpsServer } from "node:https";
 import { connect } from "node:net";
 import path from "node:path";
 import type { Duplex } from "node:stream";
+import { stripVTControlCharacters } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveSystemBin } from "../src/infra/resolve-system-bin.js";
 import {
@@ -199,12 +200,17 @@ describe("openclaw doctor allow-list consent through the CLI", () => {
     const before = await fs.readFile(instance.configPath, "utf8");
 
     const result = await instance.cli(["doctor", "--non-interactive"]);
+    const doctorText = stripVTControlCharacters(result.stdout)
+      .replaceAll("│", " ")
+      .replace(/\s+/gu, " ");
 
     expect(result.code, result.stderr).toBe(0);
     expect(catalogProxy.requests).toContainEqual({ method: "GET", url: "/v1/models" });
-    expect(result.stdout).not.toContain("is absent from the model catalog");
-    expect(result.stdout.includes("Model allow-list offer")).toBe(offer);
-    expect(result.stdout.includes("Model allow-list inspection is deferred")).toBe(deferred);
+    expect(doctorText).not.toContain("is absent from the model catalog");
+    expect(doctorText.includes("Model allow-list offer"), result.stdout).toBe(offer);
+    expect(doctorText.includes("Model allow-list inspection is deferred"), result.stdout).toBe(
+      deferred,
+    );
     expect(await fs.readFile(instance.configPath, "utf8")).toBe(before);
   });
 
