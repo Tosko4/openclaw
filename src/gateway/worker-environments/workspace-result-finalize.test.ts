@@ -212,6 +212,9 @@ describe("concurrent worker workspace results", () => {
       });
       const retain: NodeWorkerWorkspaceRetainEntry[] = [];
       const retained = createDeferred();
+      // An upload can fail before its siblings subscribe. They still await this
+      // same rejecting barrier; the observer only prevents an unhandled rejection.
+      void retained.promise.catch(() => undefined);
       let uploadsRemaining = count;
       const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
       const jobs = [];
@@ -280,20 +283,26 @@ describe("concurrent worker workspace results", () => {
             if (request.source.kind !== "local") {
               throw new Error("expected a local workspace source");
             }
-            const uploaded = await node.exec(
-              {
-                ...nodeIdentity,
-                argv: ["openclaw-internal-workspace-transfer"],
-                transfer: {
-                  direction: "upload",
-                  token: "fixture-upload",
-                  baseManifestRef: base.manifestRef,
-                  referenceManifestRef: base.manifestRef,
+            const uploaded = await node
+              .exec(
+                {
+                  ...nodeIdentity,
+                  argv: ["openclaw-internal-workspace-transfer"],
+                  transfer: {
+                    direction: "upload",
+                    token: "fixture-upload",
+                    baseManifestRef: base.manifestRef,
+                    referenceManifestRef: base.manifestRef,
+                  },
                 },
-              },
-              undefined,
-              { url: "ws://gateway.invalid" },
-            );
+                undefined,
+                { url: "ws://gateway.invalid" },
+              )
+              .catch((error: unknown) => {
+                // Release every waiter so allSettled reports the initiating failure.
+                retained.reject(error);
+                throw error;
+              });
             if (--uploadsRemaining === 0) {
               try {
                 await node.applyRetainSnapshot(
