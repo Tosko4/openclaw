@@ -34,8 +34,9 @@ export function startGatewayRuntimeGenerationMonitor(params: {
   readBuildId?: (buildInfoPath: string) => Promise<string | null>;
   scheduleRestart?: typeof scheduleGatewaySigusr1Restart;
 }): { stop(): Promise<void> } | null {
-  const installRoot = params.installRoot ?? gatewayInstallRoot;
-  const loadedBuildId = params.loadedBuildId ?? resolveRuntimeServiceBuildId();
+  const installRoot = params.installRoot === undefined ? gatewayInstallRoot : params.installRoot;
+  const loadedBuildId =
+    params.loadedBuildId === undefined ? resolveRuntimeServiceBuildId() : params.loadedBuildId;
   if (!installRoot || !loadedBuildId) {
     return null;
   }
