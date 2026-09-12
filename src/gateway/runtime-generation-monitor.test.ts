@@ -98,6 +98,40 @@ describe("startGatewayRuntimeGenerationMonitor", () => {
     expect(scheduleRestart).not.toHaveBeenCalled();
   });
 
+  it("does not schedule after stop while the stable generation probe is in flight", async () => {
+    vi.useFakeTimers();
+    let resolveInstallPending: ((value: boolean) => void) | undefined;
+    const isInstallPending = vi
+      .fn<(installRoot: string) => Promise<boolean>>()
+      .mockResolvedValueOnce(false)
+      .mockImplementationOnce(
+        () =>
+          new Promise<boolean>((resolve) => {
+            resolveInstallPending = resolve;
+          }),
+      );
+    const scheduleRestart = vi.fn(() => createScheduledRestart());
+    const monitor = startGatewayRuntimeGenerationMonitor({
+      log: { info: vi.fn(), warn: vi.fn() },
+      intervalMs: 100,
+      installRoot: "/openclaw",
+      loadedBuildId: "build-a",
+      readGeneration: vi.fn(async () => ({ buildId: "build-b" })),
+      isInstallPending,
+      scheduleRestart,
+      attemptedBuildIds: new Set(),
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(isInstallPending).toHaveBeenCalledTimes(2);
+    const stopped = monitor?.stop();
+    resolveInstallPending?.(false);
+    await stopped;
+
+    expect(scheduleRestart).not.toHaveBeenCalled();
+  });
+
   it("honors manual activation and bounds retries across monitor lifecycles", async () => {
     vi.useFakeTimers();
     const scheduleRestart = vi.fn(() => createScheduledRestart());

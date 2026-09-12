@@ -95,7 +95,12 @@ export function startGatewayRuntimeGenerationMonitor(params: {
       observedBuildId = null;
       return;
     }
-    if (await isInstallPending(installRoot)) {
+    const installPending = await isInstallPending(installRoot);
+    if (stopped || restartScheduled) {
+      observedBuildId = null;
+      return;
+    }
+    if (installPending) {
       observedBuildId = null;
       return;
     }
