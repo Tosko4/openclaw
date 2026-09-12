@@ -723,6 +723,41 @@ describe("isForeignBundledPluginRoot", () => {
     ).toBe(false);
   });
 
+  it("does not report a bundled directory when the running package root is unknown", () => {
+    // bun --compile sibling trees and module walk-up fallbacks resolve a bundled root
+    // that no argv/module-derived package root owns; failing closed there would strand
+    // the running installation's own plugins.
+    const current = seedInstall("openclaw-foreign-unknown-root-");
+    const spy = vi.spyOn(openClawRoot, "resolveOpenClawPackageRootSync").mockReturnValue(null);
+    try {
+      expect(
+        withPluginCache(createPluginCache(), () => isForeignBundledPluginRoot(current.pluginDir)),
+      ).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("does not report a linked source checkout's extensions directory", () => {
+    // `openclaw plugins install --link <checkout>/extensions/<id>` is the documented
+    // local development flow, so that directory is a deliberate override.
+    const current = seedInstall("openclaw-foreign-link-current-");
+    const checkout = makeRepoRoot("openclaw-foreign-link-checkout-");
+    fs.writeFileSync(
+      path.join(checkout, "package.json"),
+      JSON.stringify({ name: "openclaw" }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(checkout, "pnpm-workspace.yaml"), "packages: [extensions/*]\n");
+    fs.mkdirSync(path.join(checkout, "src"), { recursive: true });
+    seedBundledPluginTree(checkout, "extensions", "codex");
+    expect(
+      withCurrentInstall(current.root, () =>
+        isForeignBundledPluginRoot(path.join(checkout, "extensions", "codex")),
+      ),
+    ).toBe(false);
+  });
+
   it("does not report an ordinary external plugin directory", () => {
     const current = seedInstall("openclaw-foreign-external-");
     const externalRoot = makeRepoRoot("openclaw-foreign-external-plugin-");

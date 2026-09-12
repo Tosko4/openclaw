@@ -180,11 +180,15 @@ function resolveOwningBundledPackageRoot(rootDir: string): string | undefined {
   }
   const parent = path.dirname(extensionsDir);
   const parentName = path.basename(parent);
-  // Bundled trees are <root>/dist/extensions, <root>/dist-runtime/extensions, and
-  // <root>/extensions for source checkouts; the first two nest one level deeper.
-  const packageRoot =
-    parentName === "dist" || parentName === "dist-runtime" ? path.dirname(parent) : parent;
-  return isPluginInPackageBundledRoots({ rootDir, packageRoot }) ? packageRoot : undefined;
+  // Only compiled trees travel with an installation. A source checkout's
+  // <root>/extensions is the documented `plugins install --link` development
+  // target, which is a deliberate override rather than a stranded record.
+  if (parentName !== "dist" && parentName !== "dist-runtime") {
+    return undefined;
+  }
+  return isPluginInPackageBundledRoots({ rootDir, packageRoot: path.dirname(parent) })
+    ? path.dirname(parent)
+    : undefined;
 }
 
 /**
@@ -195,11 +199,34 @@ function resolveOwningBundledPackageRoot(rootDir: string): string | undefined {
  * shadow the bundled plugin of the current installation, which would silently
  * downgrade the plugin to an untrusted `origin-path` install.
  */
-export function isForeignBundledPluginRoot(rootDir: string): boolean {
+export function isForeignBundledPluginRoot(
+  rootDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   if (!resolveOwningBundledPackageRoot(rootDir)) {
     return false;
   }
-  return !resolvePackageRootsForBundledPlugins().some((packageRoot) =>
+  const realRootDir = safeRealpathSync(rootDir);
+  if (!realRootDir) {
+    return false;
+  }
+  // The bundled tree actually in use owns this plugin even when it sits outside any
+  // argv/module-derived package root. An OPENCLAW_BUNDLED_PLUGINS_DIR override and a
+  // compiled sibling layout both resolve that way, so consult it before the roots.
+  const activeBundledDir = resolveBundledPluginsDir(env);
+  const realActiveDir = activeBundledDir ? safeRealpathSync(activeBundledDir) : null;
+  if (realActiveDir && isPathInside(realActiveDir, realRootDir)) {
+    return false;
+  }
+  const runningRoots = resolvePackageRootsForBundledPlugins();
+  // Fail open when the running package root is unknown. Compiled sibling trees and
+  // module walk-up fallbacks resolve a bundled root that no argv/module-derived
+  // package root owns, and treating those as foreign would strand the install's
+  // own plugins.
+  if (runningRoots.length === 0) {
+    return false;
+  }
+  return !runningRoots.some((packageRoot) =>
     isPluginInPackageBundledRoots({ rootDir, packageRoot }),
   );
 }
