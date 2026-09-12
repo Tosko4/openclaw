@@ -56,7 +56,7 @@ function createRefreshOwner() {
   let config: OpenClawConfig = {
     agents: { entries: { main: { agentDir: "/tmp/login-original/main/agent" } } },
   };
-  const entered = createDeferredCore<void>();
+  const entered = createDeferredCore();
   const application = createDeferredCore<RuntimeConfigWriteApplicationStatus>();
   const readConfig = () => config;
   const refreshAuthState = (agentId: string) =>

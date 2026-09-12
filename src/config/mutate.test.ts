@@ -1988,6 +1988,8 @@ describe("config mutate helpers", () => {
       `Config write will strip JSON5 comments from ${pluginsPath}.`,
     ]);
     expect(validationMocks.validateConfigObjectWithPlugins).toHaveBeenCalledWith(nextConfig, {
+      configPath,
+      env: process.env,
       pluginValidation: "skip",
     });
     expect(ioMocks.createConfigIO).toHaveBeenCalledWith({

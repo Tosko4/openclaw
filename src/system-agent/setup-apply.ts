@@ -458,6 +458,7 @@ export async function applySystemAgentSetup(
     const afterSnapshot = afterRead.snapshot;
     requireValidSystemAgentSetupSnapshot(afterSnapshot);
     const expectedRuntime = validateConfigObjectWithPlugins(committed.nextConfig, {
+      configPath: committed.path,
       env: process.env,
       pluginMetadataSnapshot: afterRead.pluginMetadataSnapshot,
     });
