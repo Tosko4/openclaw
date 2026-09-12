@@ -375,6 +375,8 @@ describe("Codex auth product proof", () => {
           OPENCLAW_AGENT_HARNESS_FALLBACK: "none",
           OPENCLAW_QA_CODEX_APP_SERVER_VERSION: CODEX_APP_SERVER_VERSION,
           OPENCLAW_SKIP_PROVIDERS: undefined,
+          // Auth refresh consumes the configured owner published by full Gateway startup.
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         },
         config: {
           plugins: {
@@ -473,13 +475,12 @@ describe("Codex auth product proof", () => {
         // A metadata patch alone does not prove the selected profile reaches native execution.
         await runConfiguredTurn("qa-codex-profile-binding-pinned");
 
-        await expect(
-          client.request("models.authLogout", {
-            provider: "openai",
-            agentId: "main",
-            profileIds: [MISSING_PROFILE_ID],
-          }),
-        ).resolves.toEqual({
+        const logoutResult = await client.request("models.authLogout", {
+          provider: "openai",
+          agentId: "main",
+          profileIds: [MISSING_PROFILE_ID],
+        });
+        expect(logoutResult, testInstance.logs()).toEqual({
           provider: "openai",
           removedProfiles: [MISSING_PROFILE_ID],
           abortedRunIds: [],
