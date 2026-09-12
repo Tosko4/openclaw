@@ -850,39 +850,10 @@ describe("Where chip", () => {
   });
 
   it("omits automatic placement when no devices are paired and Auto is off", () => {
-    const state = resolveWhereChip({
+    const emptyContainer = renderPicker(false, undefined, {
       environments: [],
       cloudProfiles: [],
-      cloudProfileId: "",
-      deviceId: "",
     });
-    const emptyContainer = document.createElement("div");
-    render(
-      renderWhereChip({
-        state,
-        gatewayName: "",
-        environmentQuery: "",
-        onEnvironmentQueryInput: vi.fn(),
-        cloudProfileId: "",
-        deviceId: "",
-        worktreeAvailable: true,
-        submitting: false,
-        pendingPlacement: false,
-        popoverOpen: true,
-        popoverHiding: false,
-        isAdmin: false,
-        onGuardTransition: vi.fn(),
-        onPopoverShow: vi.fn(),
-        onPopoverHide: vi.fn(),
-        onPopoverAfterHide: vi.fn(),
-        onSelectDevice: vi.fn(),
-        onSelectAutoDevice: vi.fn(),
-        onSelectCloudProfile: vi.fn(),
-        onConnectMachine: vi.fn(),
-        onManageCloudWorkers: () => undefined,
-      }),
-      emptyContainer,
-    );
     expect(emptyContainer.querySelector('[data-value="auto-device"]')).toBeNull();
   });
 
