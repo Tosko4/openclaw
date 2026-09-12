@@ -541,6 +541,13 @@ async function handleTelegramModelCallback(params: {
     id: provider,
     count: byProvider.get(provider)?.size ?? 0,
   }));
+  const showChangedModelPicker = () =>
+    retryModelAction(() =>
+      editMessageWithButtons(
+        MODEL_PICKER_CHANGED_MESSAGE,
+        buildTelegramModelsMenuButtons({ providers: providerInfos }),
+      ),
+    );
 
   if (modelCallback.type === "providers" || modelCallback.type === "back") {
     if (providers.length === 0) {
@@ -567,23 +574,13 @@ async function handleTelegramModelCallback(params: {
   if (modelCallback.type === "list" || modelCallback.type === "list-ref") {
     const listSelection = resolveModelListCallback({ callback: modelCallback, providers });
     if (!listSelection) {
-      await retryModelAction(() =>
-        editMessageWithButtons(
-          MODEL_PICKER_CHANGED_MESSAGE,
-          buildTelegramModelsMenuButtons({ providers: providerInfos }),
-        ),
-      );
+      await showChangedModelPicker();
       return true;
     }
     const { provider, page } = listSelection;
     const modelSet = byProvider.get(provider);
     if (!modelSet) {
-      await retryModelAction(() =>
-        editMessageWithButtons(
-          MODEL_PICKER_CHANGED_MESSAGE,
-          buildTelegramModelsMenuButtons({ providers: providerInfos }),
-        ),
-      );
+      await showChangedModelPicker();
       return true;
     }
     const models = [...modelSet].toSorted((left, right) => left.localeCompare(right));
@@ -629,12 +626,7 @@ async function handleTelegramModelCallback(params: {
   }
   const selection = resolveModelSelection({ callback: modelCallback, providers, byProvider });
   if (selection.kind !== "resolved" || !byProvider.get(selection.provider)?.has(selection.model)) {
-    await retryModelAction(() =>
-      editMessageWithButtons(
-        MODEL_PICKER_CHANGED_MESSAGE,
-        buildTelegramModelsMenuButtons({ providers: providerInfos }),
-      ),
-    );
+    await showChangedModelPicker();
     return true;
   }
 

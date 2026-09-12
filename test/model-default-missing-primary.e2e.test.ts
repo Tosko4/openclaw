@@ -11,6 +11,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "./helpers/openclaw-test-instance.js";
+import { createDeferred } from "./helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 let instance: OpenClawTestInstance | undefined;
@@ -211,8 +212,8 @@ it.each([
     }
     await runtime.startGateway();
     const runId = randomUUID();
-    const hello = Promise.withResolvers<void>();
-    const final = Promise.withResolvers<unknown>();
+    const hello = createDeferred<void>();
+    const final = createDeferred<unknown>();
     const finalResult = final.promise.then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),

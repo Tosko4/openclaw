@@ -216,9 +216,6 @@ function resolveDiscordModelPickerModelIndex(params: {
   model: string;
 }): number | null {
   const models = listDiscordModelPickerProviderModels(params.data, params.provider);
-  if (!models.length) {
-    return null;
-  }
   const index = models.indexOf(params.model);
   if (index < 0) {
     return null;

@@ -15,6 +15,7 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import {
   createNativeSlashFastReplyParams,
+  createNativeSlashModelCatalogSnapshot,
   markCompleteReplyConfig,
 } from "./get-reply-fast-path.test-support.js";
 import * as sessionPersistence from "./session-entry-persistence.js";
@@ -65,25 +66,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       },
     });
     // Keep scoped thinking reads on the same catalog fixture as model selection.
-    const catalogSnapshot: ModelCatalogSnapshot = {
-      entries: [
-        {
-          id: "gpt-5.5",
-          name: "GPT",
-          provider: "openai",
-          contextWindow: 400_000,
-          reasoning: false,
-        },
-        {
-          id: "claude-fable-5",
-          name: "Fable",
-          provider: "anthropic",
-          contextWindow: 1_000_000,
-          reasoning: false,
-        },
-      ],
-      routeVariants: [],
-    };
+    const catalogSnapshot = createNativeSlashModelCatalogSnapshot();
     vi.spyOn(preparedModelCatalog, "loadPreparedModelCatalogSnapshot").mockResolvedValue(
       catalogSnapshot,
     );

@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { z } from "zod";
 import { GatewayClient } from "../src/gateway/client.js";
@@ -12,6 +13,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "./helpers/openclaw-test-instance.js";
+import { createDeferred } from "./helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 let instance: OpenClawTestInstance | undefined;
@@ -422,9 +424,11 @@ it.each([
         .logs()
         .matchAll(/webhook local listener on (http:\/\/127\.0\.0\.1:\d+\/telegram-history)/gu),
     ].at(-1);
-    if (!listener) throw new Error(`Webhook listener was not reported: ${runtime.logs()}`);
-    webhookUrl = listener[1];
-    const hello = Promise.withResolvers<void>();
+    webhookUrl = expectDefined(
+      listener?.[1],
+      `Webhook listener was not reported: ${runtime.logs()}`,
+    );
+    const hello = createDeferred<void>();
     observer = new GatewayClient({
       url: runtime.url,
       token: runtime.gatewayToken,
@@ -515,12 +519,18 @@ it.each([
       allowPendingDeliveryNotice && outbound[0]?.text === pendingDeliveryNotice ? 1 : 0;
     expect(outbound).toEqual([
       ...(replyIndex === 1
-        ? [{ method: "sendMessage", text: pendingDeliveryNotice, messageId: outbound[0].messageId }]
+        ? [
+            {
+              method: "sendMessage",
+              text: pendingDeliveryNotice,
+              messageId: expectDefined(outbound[0], "Pending Telegram delivery notice").messageId,
+            },
+          ]
         : []),
       {
         method: withPhoto ? "sendPhoto" : "sendMessage",
         text: expectedReply,
-        messageId: outbound[replyIndex].messageId,
+        messageId: expectDefined(outbound[replyIndex], "Delivered Telegram reply").messageId,
       },
     ]);
     return observe(
@@ -578,7 +588,7 @@ it.each([
       () => rejectedDeliveries,
       (rejected) => rejected.length === 1,
     );
-    const rejected = rejectedDeliveries[0];
+    const rejected = expectDefined(rejectedDeliveries[0], "Rejected Telegram payload");
     expect(rejected.method).toBe("sendMessage");
     if (failDelivery === "notice") {
       expect(rejected.text).toContain(notice);

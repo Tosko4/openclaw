@@ -127,6 +127,9 @@ vi.mock("./model-catalog.js", () => ({
 
 vi.mock("./model-catalog.runtime.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
+}));
+
+vi.mock("./prepared-model-catalog.js", () => ({
   loadPreparedModelCatalogSnapshot: vi.fn(async () =>
     compactionTestState.createUnacquiredCatalogSnapshot(),
   ),
