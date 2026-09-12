@@ -1,4 +1,5 @@
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import {
@@ -72,7 +73,6 @@ import {
   resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate,
   shouldBypassTrustedOfficialUnchangedNpmCheck,
   shouldSkipUnchangedNpmInstall,
-  type PluginUpdateChannelFallback,
   type PluginUpdateOutcome,
   type PluginUpdateSummary,
   type UpdateNpmInstalledPluginsOptions,
@@ -101,7 +101,7 @@ async function runInstalledPluginUpdate(
   assertCurrent?: () => void,
 ): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
-  const coreSync = params.syncOfficialPluginInstalls && params.disableOnFailure;
+  const retainOnUnavailable = params.retainOnUnavailable === true;
   const consentCallbacks = capturePluginCapabilityConsentHandlerErrors(params.onCapabilityConsent);
   const installs = params.config.plugins?.installs ?? {};
   const targets = new Set(params.pluginIds?.length ? params.pluginIds : Object.keys(installs));
@@ -124,11 +124,7 @@ async function runInstalledPluginUpdate(
   const recordFailure = (
     pluginId: string,
     message: string,
-    options: {
-      channelFallback?: PluginUpdateChannelFallback;
-      code?: string;
-      installedPayloadRunnable?: boolean;
-    } = {},
+    options: Parameters<typeof recordPluginUpdateFailure>[0]["options"] = {},
   ) => {
     const failure = recordPluginUpdateFailure({
       config: next,
@@ -205,10 +201,8 @@ async function runInstalledPluginUpdate(
         rootConfig: params.config,
       });
       if (!enableState.enabled && !officialNpmSpec && !officialClawHubSpec) {
-        recordSkippedOutcome(
-          pluginId,
-          `Skipping "${pluginId}" (${enableState.reason ?? "disabled by plugin config"}).`,
-        );
+        const reason = enableState.reason ?? "disabled by plugin config";
+        recordSkippedOutcome(pluginId, `Skipping "${pluginId}" (${reason}).`);
         continue;
       }
     }
@@ -229,9 +223,8 @@ async function runInstalledPluginUpdate(
       if (!(error instanceof NpmChannelResolutionError)) {
         throw error;
       }
-      if (!coreSync) {
+      if (!retainOnUnavailable) {
         outcomes.push({ pluginId, status: "error", code: error.code, message: error.message });
-        logger.warn?.(error.message);
         continue;
       }
       npmResolutionError = error;
@@ -240,6 +233,7 @@ async function runInstalledPluginUpdate(
       record.source === "clawhub"
         ? resolveClawHubUpdateSpecs({
             record,
+            officialSpec: trustedOfficialClawHubInstall?.clawhubSpec,
             officialSpecOverride: officialClawHubSpec,
             updateChannel,
             officialPackageName: trustedOfficialClawHubInstall ? recordClawHubPackage : undefined,
@@ -351,13 +345,13 @@ async function runInstalledPluginUpdate(
       let installedPayloadRunnable = false;
       if (
         (code === PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE ||
-          (coreSync && isUnavailablePluginSource("npm", { ok: false, code }))) &&
-        params.disableOnFailure &&
+          (retainOnUnavailable && isUnavailablePluginSource("npm", { ok: false, code }))) &&
+        (params.disableOnFailure || retainOnUnavailable) &&
         !params.dryRun &&
         currentVersion
       ) {
         const compatible =
-          !coreSync ||
+          !retainOnUnavailable ||
           isNpmMetadataCompatibleWithCurrentHost(
             { packageOpenClaw: installedManifest?.openclaw },
             { hostVersion: params.coreVersion, allowLegacyBareSemver: true },
@@ -370,11 +364,11 @@ async function runInstalledPluginUpdate(
           // Damaged or unreadable payloads do not qualify for retention.
         }
       }
-      if (coreSync && installedPayloadRunnable) {
+      if (retainOnUnavailable && installedPayloadRunnable) {
         const retainedMessage =
           `Retained "${pluginId}" at ${currentVersion}: target ${effectiveSpec}` +
           `${params.coreVersion ? ` for OpenClaw ${params.coreVersion}` : ""} is unavailable. ${message} ` +
-          `Retry "openclaw plugins update ${pluginId}" after the target is published or registry access recovers.`;
+          `Retry "${formatCliCommand(`openclaw plugins update ${pluginId}`)}" after the target is published or registry access recovers.`;
         logger.warn?.(retainedMessage);
         outcomes.push({
           pluginId,
@@ -474,7 +468,7 @@ async function runInstalledPluginUpdate(
           continue;
         }
       } else {
-        if (coreSync || !parseRegistryNpmSpec(effectiveSpec!)) {
+        if (retainOnUnavailable || !parseRegistryNpmSpec(effectiveSpec!)) {
           const code =
             metadataResult.category === "metadata-env"
               ? PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE
@@ -482,7 +476,7 @@ async function runInstalledPluginUpdate(
           await recordNpmFailure(`Failed to check ${pluginId}: ${metadataResult.error}`, code);
           continue;
         }
-        logger.warn?.(
+        logger.info?.(
           `Could not check ${pluginId} before update; falling back to installer path: ${metadataResult.error}`,
         );
       }
@@ -528,15 +522,19 @@ async function runInstalledPluginUpdate(
     });
     consentCallbacks.rethrowCallbackError();
     if (attempt.kind === "exception") {
-      if (attempt.error instanceof ManagedPluginLifecycleError && attempt.error.capabilityConsent) {
+      const error = attempt.error;
+      if (error instanceof ManagedPluginLifecycleError && error.capabilityConsent) {
         // Staging was rolled back; pending consent must not disable the previous installation.
         outcomes.push({
           pluginId,
           status: "error",
           code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
-          message: attempt.error.message,
+          message: error.message,
         });
         continue;
+      }
+      if (error instanceof ManagedPluginLifecycleError && error.kind === "invalid-request") {
+        throw error;
       }
       recordFailure(pluginId, attempt.message);
       continue;
@@ -610,7 +608,8 @@ async function runInstalledPluginUpdate(
           updateChannel,
           timeoutMs: params.timeoutMs,
           channelFallbackSuffix,
-          checkNewerExactPinnedClawHubDefaultLine: Boolean(trustedOfficialClawHubInstall),
+          checkNewerExactPinnedClawHubDefaultLine:
+            Boolean(trustedOfficialClawHubInstall) && recordSpec === record.spec,
         }),
       );
       completedCanonicalUpdates.add(pluginId);
@@ -691,7 +690,8 @@ async function runInstalledPluginUpdate(
         currentVersion,
         nextVersion,
         channelFallbackSuffix,
-        checkNewerExactPinnedClawHubDefaultLine: Boolean(trustedOfficialClawHubInstall),
+        checkNewerExactPinnedClawHubDefaultLine:
+          Boolean(trustedOfficialClawHubInstall) && recordSpec === record.spec,
         updateChannel,
         timeoutMs: params.timeoutMs,
       }),

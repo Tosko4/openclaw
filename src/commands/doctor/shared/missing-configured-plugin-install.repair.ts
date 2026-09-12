@@ -49,6 +49,11 @@ import {
   shouldDeferConfiguredPluginInstallRepair,
 } from "./update-phase.js";
 
+type PluginInstallRepairWarning = {
+  message: string;
+  pluginId?: string;
+};
+
 type RepairMissingPluginInstallsResult = {
   /** User-facing repair notes for installed or recovered plugin records. */
   changes: string[];
@@ -83,6 +88,7 @@ export async function repairMissingConfiguredPluginInstalls(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  onWarning?: (warning: PluginInstallRepairWarning) => void;
   beforePersistentEffect?: () => void | Promise<void>;
   /**
    * Optional pre-seeded records. When provided, this map is used instead of
@@ -99,6 +105,7 @@ export async function repairMissingConfiguredPluginInstalls(params: {
     pluginIds: collectConfiguredPluginIds(params.cfg, params.env),
     channelIds: collectConfiguredChannelIds(params.cfg, params.env),
     blockedPluginIds: collectBlockedPluginIds(params.cfg),
+    onWarning: params.onWarning,
     ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
     beforePersistentEffect: params.beforePersistentEffect,
     ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
@@ -114,6 +121,7 @@ export async function repairMissingPluginInstallsForIds(params: {
   env?: NodeJS.ProcessEnv;
   baselineRecords?: Record<string, PluginInstallRecord>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  onWarning?: (warning: PluginInstallRepairWarning) => void;
   beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls({
@@ -133,6 +141,7 @@ export async function repairMissingPluginInstallsForIds(params: {
         .filter((pluginId) => pluginId),
     ),
     ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
+    onWarning: params.onWarning,
     beforePersistentEffect: params.beforePersistentEffect,
     ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
   });
@@ -146,6 +155,7 @@ async function repairMissingPluginInstalls(params: {
   env?: NodeJS.ProcessEnv;
   baselineRecords?: Record<string, PluginInstallRecord>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  onWarning?: (warning: PluginInstallRepairWarning) => void;
   beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<RepairMissingPluginInstallsResult> {
   // Baseline, awaited review, package publication, and the index write share one generation.
@@ -187,6 +197,10 @@ async function repairMissingPluginInstallsWithLease(
   const changes: string[] = [];
   const notices: string[] = [];
   const warnings: string[] = [];
+  const warn = (message: string, pluginId?: string) => {
+    warnings.push(message);
+    params.onWarning?.({ message, ...(pluginId ? { pluginId } : {}) });
+  };
   const deferredRepairDetails: string[] = [];
   const failedPlugins = new Map<string, PluginUpdateOutcome | undefined>();
   const repairedPluginIds = new Set<string>();
@@ -216,7 +230,9 @@ async function repairMissingPluginInstallsWithLease(
         `Kept installed plugin "${pluginId}"; replacement deferred. ${messages.join(" ")}`,
       );
     } else {
-      warnings.push(...messages);
+      for (const message of messages) {
+        warn(message, pluginId);
+      }
       if (code === PLUGIN_CAPABILITY_CONSENT_REQUIRED) {
         outcome = { pluginId, status: "error", code, message: messages.join(" ") };
       }
@@ -309,9 +325,9 @@ async function repairMissingPluginInstallsWithLease(
               notices.push(stripAnsi(message));
               return;
             }
-            warnings.push(message);
+            warn(message);
           },
-          error: (message) => warnings.push(message),
+          error: (message) => warn(message),
         },
         ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
         beforePersistentEffect: params.beforePersistentEffect,
@@ -434,7 +450,7 @@ async function repairMissingPluginInstallsWithLease(
         } catch (error) {
           await params.beforePersistentEffect?.();
           lease.assertOwned();
-          warnings.push(
+          warn(
             `Failed to remove broken installed plugin "${candidate.pluginId}" at ${removalPath}: ${String(error)}`,
           );
         }
@@ -454,7 +470,9 @@ async function repairMissingPluginInstallsWithLease(
     if (installed.failedPluginId) {
       recordFailure(installed.failedPluginId, installed.warnings, installed.code);
     } else {
-      warnings.push(...installed.warnings);
+      for (const message of installed.warnings) {
+        warn(message);
+      }
     }
   }
 
