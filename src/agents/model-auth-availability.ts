@@ -900,6 +900,9 @@ export function createModelAuthAvailabilityResolver(
         availability: modeAllowed(provider, target, mode),
         selectedAuthMode: mode,
         evidence: "environment",
+        ...(environment.environmentVariable
+          ? { environmentVariable: environment.environmentVariable }
+          : {}),
       };
     }
     const hasCompatibleCodexSyntheticAuth =
@@ -1070,6 +1073,9 @@ export function createModelAuthAvailabilityResolver(
             selectedAuthMode: environmentMode,
             availability: modeAllowed(provider, target, environmentMode),
             evidence: environmentMode === "aws-sdk" ? "aws-sdk" : "environment",
+            ...(environment?.environmentVariable
+              ? { environmentVariable: environment.environmentVariable }
+              : {}),
           }
         : unprofiledEvaluation(provider, target);
     const direct = buildProviderModelAuthDirectSource({
