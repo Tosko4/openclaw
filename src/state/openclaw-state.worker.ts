@@ -32,6 +32,8 @@ import {
   readTaskRegistryMutationSnapshotInDatabase,
   summarizeTaskRecordsForFlowInDatabase,
 } from "../tasks/task-registry.store.kernel.js";
+import { ensureMeetingTranscriptsSchema } from "../transcripts/sqlite-schema.js";
+import { executeTranscriptRead } from "../transcripts/store-worker-read.js";
 import {
   closeOpenClawStateDatabaseByPath,
   clearOpenClawStateDatabaseOpenFailure,
@@ -184,6 +186,26 @@ export function openExistingSqliteWorkerBackend(
             reason: "persist_failed",
             ...(observed ? { current: observed } : {}),
           };
+        }
+      }
+      switch (command.type) {
+        case "transcripts.sessionEntries":
+        case "transcripts.matches":
+        case "transcripts.session":
+        case "transcripts.entry":
+        case "transcripts.latest":
+        case "transcripts.notes":
+        case "transcripts.libraryEntry":
+        case "transcripts.recentStopped":
+        case "transcripts.summaryRevision":
+        case "transcripts.utterances":
+        case "transcripts.summary": {
+          ensureMeetingTranscriptsSchema({
+            path: context.databasePath,
+            env: getSqliteWorkerStateContext().environment,
+            readOnly: command.input.readOnly,
+          });
+          return executeTranscriptRead(open().db, command);
         }
       }
       const { db } = open();

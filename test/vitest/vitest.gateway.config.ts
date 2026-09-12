@@ -1,4 +1,5 @@
 import {
+  gatewayDatabaseWorkerTestFiles,
   gatewayMethodsIsolatedTestFiles,
   gatewayPluginTestFiles,
   gatewayServerIsolatedTestFiles,
@@ -8,6 +9,7 @@ import { createProjectShardVitestConfig } from "./vitest.project-shard-config.ts
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 const gatewayProjectConfigs = [
+  "test/vitest/vitest.gateway-database-workers.config.ts",
   "test/vitest/vitest.gateway-core.config.ts",
   "test/vitest/vitest.gateway-client.config.ts",
   "test/vitest/vitest.gateway-methods.config.ts",
@@ -21,6 +23,7 @@ export function createGatewayVitestConfig(env?: Record<string, string | undefine
     dir: ".",
     env,
     exclude: [
+      ...gatewayDatabaseWorkerTestFiles,
       "src/gateway/gateway.test.ts",
       "src/gateway/server.startup-matrix-migration.integration.test.ts",
       ...gatewayMethodsIsolatedTestFiles,

@@ -12,6 +12,7 @@ import type {
   TaskRegistryStoreSnapshot,
 } from "../tasks/task-registry.store.types.js";
 import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
+import type { TranscriptReadOperations } from "../transcripts/store-worker-contract.js";
 import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js";
 
 type TaskLookupRecords = {
@@ -32,7 +33,7 @@ type TaskFlowReadQuery = {
 };
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
-export type OpenClawStateWorkerOperations = UserPreferenceWorkerOperations & {
+export type OpenClawStateWorkerOperations = UserPreferenceWorkerOperations & TranscriptReadOperations & {
   "flows.runTask": { input: ManagedTaskInFlowInput; output: RunTaskInFlowResult };
   "tasks.mutationSnapshot": { input: TaskRegistryMutationScope; output: TaskRegistryStoreSnapshot };
   "flows.createManaged": {

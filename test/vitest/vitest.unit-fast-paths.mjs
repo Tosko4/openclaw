@@ -4,7 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";
 import { commandsLightTestFiles } from "./vitest.commands-light-paths.mjs";
-import { gatewayPluginTestFiles } from "./vitest.gateway-server-paths.mjs";
+import { isDatabaseWorkerCoreTestFile } from "./vitest.database-worker-core-paths.mjs";
+import {
+  gatewayDatabaseWorkerTestFiles,
+  gatewayPluginTestFiles,
+} from "./vitest.gateway-server-paths.mjs";
 import { pluginSdkLightTestFiles } from "./vitest.plugin-sdk-paths.mjs";
 import { isToolingIsolatedTestFile } from "./vitest.tooling-isolated-paths.mjs";
 import { boundaryTestFiles, bundledPluginDependentUnitTestFiles } from "./vitest.unit-paths.mjs";
@@ -508,7 +512,9 @@ function analyzeUnitFastTestFile(cwd, file) {
   }
 
   let analysis;
-  if (isToolingIsolatedTestFile(file)) {
+  if (isDatabaseWorkerCoreTestFile(file) || gatewayDatabaseWorkerTestFiles.includes(file)) {
+    analysis = { file, unitFast: false, reasons: ["database-worker-owner"] };
+  } else if (isToolingIsolatedTestFile(file)) {
     // Explicit project ownership wins over inferred eligibility so full-suite
     // configs cannot run the same stateful tooling test in two worker pools.
     analysis = {

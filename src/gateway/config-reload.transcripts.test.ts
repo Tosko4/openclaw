@@ -9,7 +9,10 @@ import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/run
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTranscriptsAutoStartService } from "../transcripts/auto-start.js";
 import type {
@@ -31,8 +34,9 @@ import {
 import { commitGatewayConfigWrite } from "./server-methods/config-write-flow.js";
 
 const tempDirs = createTempDirTracker();
-afterEach(() => {
+afterEach(async () => {
   resetConfigRuntimeState();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
 });

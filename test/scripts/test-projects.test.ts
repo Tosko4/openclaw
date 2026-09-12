@@ -43,6 +43,8 @@ import {
   channelSessionContractPatterns,
   channelSurfaceContractPatterns,
 } from "../vitest/vitest.contracts-shared.ts";
+import { databaseWorkerCoreTestFiles } from "../vitest/vitest.database-worker-core-paths.mjs";
+import { gatewayDatabaseWorkerTestFiles } from "../vitest/vitest.gateway-server-paths.mjs";
 
 const normalizeRepoPath = toRepoPath;
 const CODEX_TEST_PROCESS_FILE_LIMIT = 12;
@@ -2118,6 +2120,48 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it.each(gatewayDatabaseWorkerTestFiles)(
+    "routes Gateway database consumer %s to its fork owner",
+    (testFile) => {
+      expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
+        config: "test/vitest/vitest.gateway-database-workers.config.ts",
+        includePatterns: [testFile],
+      });
+    },
+  );
+
+  it.each(["src/gateway", "src/gateway/**/*.test.ts"])(
+    "keeps Gateway database consumers in the aggregate for %s",
+    (target) => {
+      expectSingleVitestRunPlan(buildVitestRunPlans([target]), {
+        config: "test/vitest/vitest.gateway.config.ts",
+        includePatterns: ["src/gateway/**/*.test.ts"],
+      });
+    },
+  );
+
+  it.each(databaseWorkerCoreTestFiles)(
+    "routes host-owned database consumer %s to the infra fork shard",
+    (testFile) => {
+      expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
+        config: "test/vitest/vitest.infra.config.ts",
+        includePatterns: [testFile],
+      });
+    },
+  );
+
+  it.each(["src/transcripts", "src/agents/tools", "test"])(
+    "retains database worker ownership for directory target %s",
+    (directory) => {
+      const expected = databaseWorkerCoreTestFiles.filter((file) =>
+        file.startsWith(`${directory}/`),
+      );
+      const plans = buildVitestRunPlans([directory]);
+      const infra = plans.find((plan) => plan.config === "test/vitest/vitest.infra.config.ts");
+      expect(infra?.includePatterns).toEqual(expected);
+    },
+  );
+
   it.each(agentVitestProjectOwners.coreIsolated.include)(
     "routes isolated agent test %s to the isolated agents-core shard",
     (testFile) => {
@@ -2226,8 +2270,21 @@ describe("scripts/test-projects changed-target routing", () => {
     ],
     ["src/agents/runtime-plan", "test/vitest/vitest.agents-support.config.ts"],
     ["src/agents/tools", "test/vitest/vitest.agents-tools.config.ts"],
-  ])("routes focused agent directory %s to its owning shard", (directory, config) => {
+  ])("routes focused agent directory %s to its owning shards", (directory, config) => {
+    const databaseConsumers = databaseWorkerCoreTestFiles.filter((file) =>
+      file.startsWith(`${directory}/`),
+    );
     expect(buildVitestRunPlans([directory])).toEqual([
+      ...(databaseConsumers.length
+        ? [
+            {
+              config: "test/vitest/vitest.infra.config.ts",
+              forwardedArgs: [],
+              includePatterns: databaseConsumers,
+              watchMode: false,
+            },
+          ]
+        : []),
       {
         config,
         forwardedArgs: [directory],
@@ -2290,13 +2347,25 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(plans.map((plan) => plan.config)).not.toContain("test/vitest/vitest.agents.config.ts");
   });
 
-  it("keeps the broad agent test glob in the all-agents shard", () => {
+  it("keeps the broad agent test glob complete across agent and database owners", () => {
     const target = "src/agents/**/*.test.ts";
 
-    expectSingleVitestRunPlan(buildVitestRunPlans([target]), {
-      config: "test/vitest/vitest.agents.config.ts",
-      includePatterns: [target],
-    });
+    expect(buildVitestRunPlans([target])).toEqual([
+      {
+        config: "test/vitest/vitest.infra.config.ts",
+        forwardedArgs: [],
+        includePatterns: databaseWorkerCoreTestFiles.filter((file) =>
+          file.startsWith("src/agents/"),
+        ),
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.agents.config.ts",
+        forwardedArgs: [],
+        includePatterns: [target],
+        watchMode: false,
+      },
+    ]);
   });
 
   it.each([

@@ -15,7 +15,10 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-help
 import type { OpenClawPluginApi, OpenClawPluginServiceContext } from "../plugins/types.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { activeSessions } from "../transcripts/capture.js";
@@ -115,6 +118,7 @@ afterEach(async () => {
     await clearActivePluginRegistry();
   } finally {
     activeSessions.clear();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     clearRuntimeConfigSnapshot();
     resetGatewayWorkAdmission();

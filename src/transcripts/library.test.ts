@@ -13,7 +13,10 @@ import {
   executeSqliteQuerySync,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { activeSessions } from "./capture.js";
 import { exportTranscriptLibrary, getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
@@ -22,15 +25,22 @@ import {
   transcriptLibrarySession as session,
 } from "./library.store.test-support.js";
 import { readTranscriptLibraryStatus } from "./status.js";
-import { cursorScope, encodeCursor } from "./store-read.js";
+import {
+  cursorScope,
+  encodeCursor,
+  readLatestTranscriptEntry,
+  readTranscriptEntry,
+  readTranscriptLibraryEntry,
+} from "./store-read.js";
 import { meetingTranscriptDb } from "./store-sqlite.js";
 import { transcriptSessionSelector } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   activeSessions.clear();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -38,7 +48,21 @@ function fixture() {
   return createTranscriptLibraryStoreFixture(tempDirs.make("transcript-library-"));
 }
 
-function observeArchiveReads(database: DatabaseSync) {
+function observeArchiveReads(
+  store: ReturnType<typeof createTranscriptLibraryStoreFixture>["store"],
+  database: DatabaseSync,
+) {
+  // SQL allocation assertions use the same kernels locally; the worker fixture
+  // separately proves the real facade's transport and absence of parent SQL.
+  vi.spyOn(store, "readEntry").mockImplementation(async (selector, purpose) =>
+    readTranscriptEntry(database, selector, purpose),
+  );
+  vi.spyOn(store, "readLatestEntry").mockImplementation(async () =>
+    readLatestTranscriptEntry(database),
+  );
+  vi.spyOn(store, "readLibraryEntry").mockImplementation(async (params) =>
+    readTranscriptLibraryEntry(database, params),
+  );
   clearNodeSqliteKyselyCacheForDatabase(database);
   const queries: Array<{
     sql: string;
@@ -193,7 +217,7 @@ describe("transcript library SQLite reads", () => {
         import assert from "node:assert/strict";
         import { TranscriptsStore, transcriptSessionSelector } from ${JSON.stringify(new URL("./store.ts", import.meta.url).href)};
         import { listTranscriptLibrary } from ${JSON.stringify(new URL("./library.ts", import.meta.url).href)};
-        import { closeOpenClawStateDatabaseForTest } from ${JSON.stringify(new URL("../state/openclaw-state-db.ts", import.meta.url).href)};
+        import { closeOpenClawStateDatabaseAsync, closeOpenClawStateDatabaseForTest } from ${JSON.stringify(new URL("../state/openclaw-state-db.ts", import.meta.url).href)};
         const store = new TranscriptsStore(${JSON.stringify(path.join(stateDir, "transcripts"))});
         const local = ${JSON.stringify(local)};
         try {
@@ -215,6 +239,7 @@ describe("transcript library SQLite reads", () => {
           })).sessions.map(row => row.sessionId), ["local"]);
           assert.deepEqual(await store.readSession(transcriptSessionSelector(local)), local);
         } finally {
+          await closeOpenClawStateDatabaseAsync();
           closeOpenClawStateDatabaseForTest();
         }
       `,
@@ -290,6 +315,7 @@ describe("transcript library SQLite reads", () => {
     expect(db.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY name").all()).toEqual(
       schema,
     );
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     expect(database() === db).toBe(false);
     expect((await listTranscriptLibrary(store, {})).sessions).toHaveLength(1);
@@ -309,7 +335,7 @@ describe("transcript library SQLite reads", () => {
         phase: "active",
       });
     }
-    const reads = observeArchiveReads(database());
+    const reads = observeArchiveReads(store, database());
     await expect(readTranscriptLibraryStatus(store, {})).rejects.toThrow(
       expect.objectContaining({ type: "transcript_result_too_large" }),
     );
@@ -334,7 +360,7 @@ describe("transcript library SQLite reads", () => {
               speaker: { id: "x".repeat(600_000), label: "y".repeat(600_000) },
             },
       );
-      const reads = observeArchiveReads(database());
+      const reads = observeArchiveReads(store, database());
       await expect(
         getTranscriptLibrary(store, {
           selector: transcriptSessionSelector(target),
@@ -366,7 +392,7 @@ describe("transcript library SQLite reads", () => {
         text: "x".repeat(TRANSCRIPTS_RESULT_MAX_BYTES / 2),
       });
     }
-    const reads = observeArchiveReads(database());
+    const reads = observeArchiveReads(store, database());
     await expect(
       getTranscriptLibrary(store, { selector, includeUtterances: true, limit: 6 }),
     ).rejects.toThrow(expect.objectContaining({ type: "transcript_result_too_large" }));
@@ -395,7 +421,7 @@ describe("transcript library SQLite reads", () => {
     await store.appendUtteranceForSession(target, {
       text: "x".repeat(TRANSCRIPTS_RESULT_MAX_BYTES + 1),
     });
-    const reads = observeArchiveReads(database());
+    const reads = observeArchiveReads(store, database());
     const first = await getTranscriptLibrary(store, {
       selector: transcriptSessionSelector(target),
       includeUtterances: true,
@@ -438,7 +464,7 @@ describe("transcript library SQLite reads", () => {
           ? { endedAt: "x".repeat(TRANSCRIPTS_RESULT_MAX_BYTES + 1) }
           : {}),
       });
-      const reads = observeArchiveReads(database());
+      const reads = observeArchiveReads(store, database());
       await expect(listTranscriptLibrary(store, {})).rejects.toThrow(
         expect.objectContaining({ type: "transcript_result_too_large" }),
       );
@@ -462,7 +488,7 @@ describe("transcript library SQLite reads", () => {
     const second = session("b", { title: "x".repeat(TRANSCRIPTS_RESULT_MAX_BYTES + 1) });
     await store.writeSession(first);
     await store.writeSession(second);
-    const reads = observeArchiveReads(database());
+    const reads = observeArchiveReads(store, database());
     const page = await listTranscriptLibrary(store, { limit: 1 });
     expect(page.sessions.map((entry) => entry.sessionId)).toEqual(["a"]);
     expect(page.nextCursor).not.toBeNull();
@@ -508,7 +534,7 @@ describe("transcript library SQLite reads", () => {
         .where("session_id", "=", target.sessionId)
         .where("session_started_at", "=", target.startedAt),
     );
-    const reads = observeArchiveReads(database());
+    const reads = observeArchiveReads(store, database());
     expect(
       (await getTranscriptLibrary(store, { selector: transcriptSessionSelector(target) })).summary
         ?.overview,
@@ -614,7 +640,7 @@ describe("transcript library SQLite reads", () => {
     await store.writeSession(target);
     const text = '"'.repeat(600_000) + "é🦞";
     await store.appendUtteranceForSession(target, { text });
-    const reads = observeArchiveReads(database());
+    const reads = observeArchiveReads(store, database());
     await expect(
       getTranscriptLibrary(store, {
         selector: transcriptSessionSelector(target),
@@ -786,6 +812,7 @@ describe("transcript library SQLite reads", () => {
     }
     await store.writeSummary(summarizeTranscripts({ session: target, utterances }), target);
     // Reopen a raw legacy-shaped URL row without Doctor or read-time normalization.
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const selector = (await listTranscriptLibrary(store, {})).sessions[0]!.selector;
     for (const query of [

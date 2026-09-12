@@ -28,11 +28,18 @@ import {
   channelSessionContractPatterns,
   channelSurfaceContractPatterns,
 } from "../test/vitest/vitest.contracts-paths.mjs";
+import {
+  databaseWorkerCoreTestFiles,
+  isDatabaseWorkerCoreTestFile,
+} from "../test/vitest/vitest.database-worker-core-paths.mjs";
 import { codexExtensionTestRoots } from "../test/vitest/vitest.extension-codex-paths.mjs";
 import { databaseWorkerExtensionTestFiles } from "../test/vitest/vitest.extension-database-workers-paths.mjs";
 import { matrixExtensionTestRoots } from "../test/vitest/vitest.extension-matrix-paths.mjs";
 import { telegramExtensionTestRoots } from "../test/vitest/vitest.extension-telegram-paths.mjs";
-import { gatewayPluginTestFiles } from "../test/vitest/vitest.gateway-server-paths.mjs";
+import {
+  gatewayDatabaseWorkerTestFiles,
+  gatewayPluginTestFiles,
+} from "../test/vitest/vitest.gateway-server-paths.mjs";
 import { packageContractTestFiles } from "../test/vitest/vitest.package-contract-paths.mjs";
 import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
@@ -263,6 +270,8 @@ const FULL_AGENTIC_VITEST_CONFIG = "test/vitest/vitest.full-agentic.config.ts";
 const FULL_EXTENSIONS_VITEST_CONFIG = "test/vitest/vitest.full-extensions.config.ts";
 const GATEWAY_CLIENT_VITEST_CONFIG = "test/vitest/vitest.gateway-client.config.ts";
 const GATEWAY_CORE_VITEST_CONFIG = "test/vitest/vitest.gateway-core.config.ts";
+const GATEWAY_DATABASE_WORKERS_VITEST_CONFIG =
+  "test/vitest/vitest.gateway-database-workers.config.ts";
 const GATEWAY_METHODS_VITEST_CONFIG = "test/vitest/vitest.gateway-methods.config.ts";
 const GATEWAY_SERVER_VITEST_CONFIG = "test/vitest/vitest.gateway-server.config.ts";
 const GATEWAY_VITEST_CONFIG = "test/vitest/vitest.gateway.config.ts";
@@ -479,6 +488,7 @@ const VITEST_CONFIG_BY_KIND: Record<string, string> = {
   bundled: BUNDLED_VITEST_CONFIG,
   gateway: GATEWAY_VITEST_CONFIG,
   gatewayCore: GATEWAY_CORE_VITEST_CONFIG,
+  gatewayDatabaseWorkers: GATEWAY_DATABASE_WORKERS_VITEST_CONFIG,
   gatewayClient: GATEWAY_CLIENT_VITEST_CONFIG,
   gatewayMethods: GATEWAY_METHODS_VITEST_CONFIG,
   gatewayServer: GATEWAY_SERVER_VITEST_CONFIG,
@@ -3557,6 +3567,12 @@ function classifyTarget(arg: string, cwd: string) {
   if (gatewayPluginTestFiles.includes(relative)) {
     return "gatewayMethods";
   }
+  if (isDatabaseWorkerCoreTestFile(relative)) {
+    return "infra";
+  }
+  if (gatewayDatabaseWorkerTestFiles.includes(relative)) {
+    return "gatewayDatabaseWorkers";
+  }
   if (isAgentsCoreIsolatedTestFile(relative)) {
     return agentVitestProjectOwners.coreIsolated.kind;
   }
@@ -3986,6 +4002,20 @@ export function buildVitestRunPlans(
         : [targetArg]),
     );
     groupedTargets.set(kind, current);
+  }
+  const impliedDatabaseWorkerTargets = databaseWorkerCoreTestFiles.filter((file) =>
+    classifiedTargets.some(({ targetArg }) =>
+      includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
+    ),
+  );
+  if (impliedDatabaseWorkerTargets.length > 0) {
+    const current = groupedTargets.get("infra") ?? [];
+    for (const target of impliedDatabaseWorkerTargets) {
+      if (!current.includes(target)) {
+        current.push(target);
+      }
+    }
+    groupedTargets.set("infra", current);
   }
   const toolingTargets = groupedTargets.get("tooling") ?? [];
   if (
