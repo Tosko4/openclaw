@@ -5,6 +5,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatCliFailureLines } from "../cli/failure-output.js";
 import { createUpdateProgress } from "../cli/update-cli/progress.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultRuntime } from "../runtime.js";
@@ -772,46 +773,65 @@ describe("update candidate canary", () => {
     },
   );
 
-  it("distinguishes Gateway startup failures in progress and repair summaries", async () => {
-    let cause = "Gateway bind failed: address already in use";
-    const baseSpawn = mocks.spawn.getMockImplementation()!;
-    mocks.spawn.mockImplementation((command, args: string[], options) => {
-      if (!args.includes("gateway")) {
-        return baseSpawn(command, args, options);
-      }
-      const child = new FakeChild(nextPid++);
-      queueMicrotask(() => {
-        child.stderr.write(cause);
-        child.emit("close", 1);
-      });
-      return child;
-    });
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("listener unavailable")));
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    const presentation = createUpdateProgress(true);
-    try {
-      for (const diagnostic of [cause, "Gateway database could not be opened: permission denied"]) {
-        cause = diagnostic;
-        const result = await validateUpdateCandidateCanary({
-          root,
-          stateDir: root,
-          config: {},
-          env: {},
-          timeoutMs: 3000,
-          onStep: (step) => presentation.progress.onStepComplete?.({ ...step, index: 0, total: 0 }),
+  it.each(["raw", "cli"])(
+    "distinguishes %s Gateway startup failures in progress and repair summaries",
+    async (format) => {
+      let cause = "Gateway bind failed: address already in use";
+      const baseSpawn = mocks.spawn.getMockImplementation()!;
+      mocks.spawn.mockImplementation((command, args: string[], options) => {
+        if (!args.includes("gateway")) {
+          return baseSpawn(command, args, options);
+        }
+        const child = new FakeChild(nextPid++);
+        queueMicrotask(() => {
+          const output = Buffer.from(
+            format === "cli"
+              ? formatCliFailureLines({
+                  title: "The CLI command failed.",
+                  error: new Error(cause),
+                  env: {},
+                  argv: ["node", "openclaw", "gateway", "run"],
+                }).join("\n")
+              : cause,
+          );
+          for (let offset = 0; offset < output.length; offset += 7) {
+            child.stderr.write(output.subarray(offset, offset + 7));
+          }
+          child.emit("close", 1);
         });
-        expect(result.status).toBe("error");
-        expect(summarizeUpdateStepFailure(result.steps.at(-1)!)).toContain(diagnostic);
+        return child;
+      });
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("listener unavailable")));
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const presentation = createUpdateProgress(true);
+      try {
+        for (const diagnostic of [
+          cause,
+          "Gateway database could not be opened: permission denied",
+        ]) {
+          cause = diagnostic;
+          const result = await validateUpdateCandidateCanary({
+            root,
+            stateDir: root,
+            config: {},
+            env: {},
+            timeoutMs: 3000,
+            onStep: (step) =>
+              presentation.progress.onStepComplete?.({ ...step, index: 0, total: 0 }),
+          });
+          expect(result.status).toBe("error");
+          expect(summarizeUpdateStepFailure(result.steps.at(-1)!)).toContain(diagnostic);
+        }
+        const output = log.mock.calls.flat().join("\n");
+        expect(output).toContain("address already in use");
+        expect(output).toContain("permission denied");
+        expect(output).not.toContain("same failure");
+      } finally {
+        presentation.dispose();
+        log.mockRestore();
       }
-      const output = log.mock.calls.flat().join("\n");
-      expect(output).toContain("address already in use");
-      expect(output).toContain("permission denied");
-      expect(output).not.toContain("same failure");
-    } finally {
-      presentation.dispose();
-      log.mockRestore();
-    }
-  });
+    },
+  );
 
   it("reports the health failure without replaying earlier migration output", async () => {
     const cause =

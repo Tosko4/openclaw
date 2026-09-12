@@ -207,6 +207,7 @@ export async function validateUpdateCandidateCanary(params: {
   let stepStarted = started;
   let stepName = "Preparing update checks";
   const stepLog: string[] = [];
+  let stepFailureReason: string | undefined;
   let env: NodeJS.ProcessEnv = { ...sourceEnv };
   const capture = (chunk: Buffer | string) => {
     const safe = redactSupportString(
@@ -217,7 +218,14 @@ export async function validateUpdateCandidateCanary(params: {
     const lines = safe
       .split(/\r?\n/u)
       .filter(Boolean)
-      .map((line) => line.slice(-512));
+      .map((line) => {
+        // The root CLI renderer prints recovery hints after its actionable reason.
+        // Capture the reason before bounded log tails can discard it.
+        if (line.startsWith("[openclaw] Reason: ")) {
+          stepFailureReason = line.slice("[openclaw] Reason: ".length);
+        }
+        return line.slice(-512);
+      });
     logTail.push(...lines);
     stepLog.push(...lines);
     stepLog.splice(0, Math.max(0, stepLog.length - 40));
@@ -402,6 +410,7 @@ export async function validateUpdateCandidateCanary(params: {
       stepStarted = Date.now();
       stepName = command.name;
       stepLog.length = 0;
+      stepFailureReason = undefined;
       const doctorResultPath =
         phase === "doctor"
           ? createUpdatePostInstallDoctorResultPath(doctorResultOptions)
@@ -543,6 +552,7 @@ export async function validateUpdateCandidateCanary(params: {
         const summary = timedOut
           ? `${command.name} timed out.`
           : (readValidationFailure(running.outputExceeded() ? "" : running.stdout()) ??
+            stepFailureReason ??
             stepLog.at(-1) ??
             `${command.name} failed (exit code ${code ?? "unknown"}).`);
         step.failureSummary = redactSupportString(
@@ -564,6 +574,7 @@ export async function validateUpdateCandidateCanary(params: {
     stepStarted = gatewayStart;
     stepName = "Checking Gateway startup";
     stepLog.length = 0;
+    stepFailureReason = undefined;
     const running = launch(entry, [
       "gateway",
       "run",
@@ -631,7 +642,12 @@ export async function validateUpdateCandidateCanary(params: {
     const failure = error instanceof Error ? error.message : String(error);
     // Readiness errors describe the lifecycle, while the child's bounded output
     // explains its cause. Keep that cause first for terminal and repair summaries.
-    const details = phase === "startup" || phase === "readiness" ? stepLog.slice(-3) : [];
+    const details =
+      phase === "startup" || phase === "readiness"
+        ? stepFailureReason
+          ? [stepFailureReason]
+          : stepLog.slice(-3)
+        : [];
     const summary = redactSupportString(
       [...details, failure].join("\n"),
       { env, stateDir: params.stateDir },
