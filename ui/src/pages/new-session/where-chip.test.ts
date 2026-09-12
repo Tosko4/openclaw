@@ -23,6 +23,40 @@ function capacityCaption(row: Element | null | undefined) {
     ?.textContent?.trim();
 }
 
+function renderResolvedPicker(
+  state: Parameters<typeof renderWhereChip>[0]["state"],
+  isAdmin: boolean,
+) {
+  const container = document.createElement("div");
+  render(
+    renderWhereChip({
+      state,
+      gatewayName: "",
+      environmentQuery: "",
+      onEnvironmentQueryInput: vi.fn(),
+      cloudProfileId: "",
+      deviceId: "",
+      worktreeAvailable: true,
+      submitting: false,
+      pendingPlacement: false,
+      popoverOpen: true,
+      popoverHiding: false,
+      isAdmin,
+      onGuardTransition: vi.fn(),
+      onPopoverShow: vi.fn(),
+      onPopoverHide: vi.fn(),
+      onPopoverAfterHide: vi.fn(),
+      onSelectDevice: vi.fn(),
+      onSelectAutoDevice: vi.fn(),
+      onSelectCloudProfile: vi.fn(),
+      onConnectMachine: vi.fn(),
+      onManageCloudWorkers: () => undefined,
+    }),
+    container,
+  );
+  return container;
+}
+
 function renderPicker(
   isAdmin: boolean,
   autoPlacementMode?: "least-busy" | "eligible-order",
@@ -856,33 +890,7 @@ describe("Where chip", () => {
       cloudProfileId: "",
       deviceId: "",
     });
-    const emptyContainer = document.createElement("div");
-    render(
-      renderWhereChip({
-        state,
-        gatewayName: "",
-        environmentQuery: "",
-        onEnvironmentQueryInput: vi.fn(),
-        cloudProfileId: "",
-        deviceId: "",
-        worktreeAvailable: true,
-        submitting: false,
-        pendingPlacement: false,
-        popoverOpen: true,
-        popoverHiding: false,
-        isAdmin: false,
-        onGuardTransition: vi.fn(),
-        onPopoverShow: vi.fn(),
-        onPopoverHide: vi.fn(),
-        onPopoverAfterHide: vi.fn(),
-        onSelectDevice: vi.fn(),
-        onSelectAutoDevice: vi.fn(),
-        onSelectCloudProfile: vi.fn(),
-        onConnectMachine: vi.fn(),
-        onManageCloudWorkers: () => undefined,
-      }),
-      emptyContainer,
-    );
+    const emptyContainer = renderResolvedPicker(state, false);
     expect(emptyContainer.querySelector('[data-value="auto-device"]')).toBeNull();
   });
 
@@ -921,33 +929,7 @@ describe("Where chip", () => {
       cloudProfileId: "",
       deviceId: "",
     });
-    const container = document.createElement("div");
-    render(
-      renderWhereChip({
-        state,
-        gatewayName: "",
-        environmentQuery: "",
-        onEnvironmentQueryInput: vi.fn(),
-        cloudProfileId: "",
-        deviceId: "",
-        worktreeAvailable: true,
-        submitting: false,
-        pendingPlacement: false,
-        popoverOpen: true,
-        popoverHiding: false,
-        isAdmin: false,
-        onGuardTransition: vi.fn(),
-        onPopoverShow: vi.fn(),
-        onPopoverHide: vi.fn(),
-        onPopoverAfterHide: vi.fn(),
-        onSelectDevice: vi.fn(),
-        onSelectAutoDevice: vi.fn(),
-        onSelectCloudProfile: vi.fn(),
-        onConnectMachine: vi.fn(),
-        onManageCloudWorkers: () => undefined,
-      }),
-      container,
-    );
+    const container = renderResolvedPicker(state, false);
 
     const automatic = container.querySelector<HTMLButtonElement>('[data-value="auto-device"]');
     expect(automatic?.disabled).toBe(true);
@@ -1041,33 +1023,7 @@ describe("Where chip", () => {
         deviceId: "",
         devicePlacement,
       });
-      const container = document.createElement("div");
-      render(
-        renderWhereChip({
-          state,
-          gatewayName: "",
-          environmentQuery: "",
-          onEnvironmentQueryInput: vi.fn(),
-          cloudProfileId: "",
-          deviceId: "",
-          worktreeAvailable: true,
-          submitting: false,
-          pendingPlacement: false,
-          popoverOpen: true,
-          popoverHiding: false,
-          isAdmin: true,
-          onGuardTransition: vi.fn(),
-          onPopoverShow: vi.fn(),
-          onPopoverHide: vi.fn(),
-          onPopoverAfterHide: vi.fn(),
-          onSelectDevice: vi.fn(),
-          onSelectAutoDevice: vi.fn(),
-          onSelectCloudProfile: vi.fn(),
-          onConnectMachine: vi.fn(),
-          onManageCloudWorkers: () => undefined,
-        }),
-        container,
-      );
+      const container = renderResolvedPicker(state, true);
 
       const device = container.querySelector<HTMLButtonElement>('[data-value="device:runner"]');
       expect(device?.matches(':disabled, [aria-disabled="true"]')).toBe(disabled);
