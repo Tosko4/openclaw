@@ -1,57 +1,111 @@
-name: Plugin Init Scaffold Validation
+name: Signal SDK consumer proof
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/plugin-init-scaffold-validation.yml"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "scripts/validate-plugin-init-provider-scaffold.ts"
-      - "src/cli/plugins-authoring-command.ts"
-      - "src/cli/plugins-authoring-command.test.ts"
-      - "src/cli/plugins-cli.ts"
-      - "src/plugin-sdk/**"
-  pull_request:
-    types: [opened, reopened, synchronize, ready_for_review]
-    paths:
-      - ".github/workflows/plugin-init-scaffold-validation.yml"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "scripts/validate-plugin-init-provider-scaffold.ts"
-      - "src/cli/plugins-authoring-command.ts"
-      - "src/cli/plugins-authoring-command.test.ts"
-      - "src/cli/plugins-cli.ts"
-      - "src/plugin-sdk/**"
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  # Admission precedes job skips: isolate passive drafts before they can cancel useful work.
-  # Keep conversion events in the PR group where subscribed, as an intentional cancellation signal.
-  group: >-
-    ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.action != 'converted_to_draft'
-      && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
-      || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && github.event.pull_request.number || github.ref) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: signal-sdk-consumer-proof-${{ github.run_id }}
+  cancel-in-progress: false
 
 jobs:
-  validate-provider-scaffold:
-    name: Validate provider scaffold
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+  consumer:
+    name: Signal SDK consumer proof (${{ matrix.cell }})
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        cell: [released, candidate]
+    env:
+      PROOF_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+      NPM_CONFIG_IGNORE_SCRIPTS: "true"
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Initialize evidence
+        env:
+          CELL: ${{ matrix.cell }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/signal-sdk-proof/$CELL"
+          touch "$RUNNER_TEMP/signal-sdk-empty-npmrc"
+          printf 'NPM_CONFIG_USERCONFIG=%s\n' "$RUNNER_TEMP/signal-sdk-empty-npmrc" >> "$GITHUB_ENV"
+          printf '%s\n' 'Independent package declaration proof; not release qualification.' > "$RUNNER_TEMP/signal-sdk-proof/$CELL/purpose.txt"
 
-      - name: Setup Node environment
+      - name: Checkout fixed consumer owner
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 340142aaf7d7a0bb6b1bad8564c793d5440169a9
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout exact proof harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .proof-workflow
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: scripts/sdk-consumer-proof.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Setup fixed Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          node-version: "24.19.0"
           cache-mode: restore
           install-bun: "false"
+          install-deps: "false"
 
-      - name: Generate and validate provider scaffold
-        run: pnpm test:plugins:init-provider-scaffold
+      - name: Install owner dependencies without scripts
+        env:
+          CELL: ${{ matrix.cell }}
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile --ignore-scripts --filter openclaw 2>&1 | tee "$RUNNER_TEMP/signal-sdk-proof/$CELL/owner-install.log"
+
+      - name: Download and verify fixed sealed package
+        if: matrix.cell == 'candidate'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node .proof-workflow/scripts/sdk-consumer-proof.mjs download candidate 2>&1 | tee "$RUNNER_TEMP/signal-sdk-proof/candidate/download.log"
+
+      - name: Create unchanged consumer
+        env:
+          CELL: ${{ matrix.cell }}
+        run: |
+          set -euo pipefail
+          node --import ./scripts/tsx.mjs .proof-workflow/scripts/sdk-consumer-proof.mjs prepare "$CELL" 2>&1 | tee "$RUNNER_TEMP/signal-sdk-proof/$CELL/prepare.log"
+
+      - name: Install consumer package without scripts
+        env:
+          CELL: ${{ matrix.cell }}
+        run: |
+          set -euo pipefail
+          node --import ./scripts/tsx.mjs .proof-workflow/scripts/sdk-consumer-proof.mjs install "$CELL" 2>&1 | tee "$RUNNER_TEMP/signal-sdk-proof/$CELL/install.log"
+
+      - name: Compile actual installed declarations
+        env:
+          CELL: ${{ matrix.cell }}
+        run: |
+          set -euo pipefail
+          node --import ./scripts/tsx.mjs .proof-workflow/scripts/sdk-consumer-proof.mjs compile "$CELL" 2>&1 | tee "$RUNNER_TEMP/signal-sdk-proof/$CELL/compiler.log"
+
+      - name: Collect cell receipts and package lock
+        if: always()
+        env:
+          CELL: ${{ matrix.cell }}
+        run: node .proof-workflow/scripts/sdk-consumer-proof.mjs collect "$CELL"
+
+      - name: Upload complete cell evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: signal-sdk-consumer-${{ matrix.cell }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/signal-sdk-proof/${{ matrix.cell }}/
+          if-no-files-found: error
+          retention-days: 14
