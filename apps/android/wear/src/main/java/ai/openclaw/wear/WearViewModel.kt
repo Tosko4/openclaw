@@ -676,8 +676,22 @@ internal class WearViewModel(
         throw err
       } catch (err: Throwable) {
         if (!sendAttemptTracker.isCurrent(attempt) || !isCurrentSessionAction(session, routeGeneration)) return@launch
-        sendAttemptTracker.markAmbiguous(attempt)
-        recordFailureForSession(err, session, routeGeneration)
+        if (err is WearProxyException && err.code == "invalid_request") {
+          // The phone's lowercase validation error rejects before Gateway delivery.
+          // Retire the invocation and its pending Abort together so corrected input can proceed.
+          sendAttemptTracker.retire(session.key, session.phoneNodeId, attempt.idempotencyKey)
+          mutableState.update { state ->
+            state.copy(
+              sending = false,
+              pendingReply = state.pendingReply?.takeUnless { it.runId == attempt.idempotencyKey },
+              replyAbort = state.replyAbort?.takeUnless { it.replyRunId == attempt.idempotencyKey },
+              failure = err.toWearConversationFailure(),
+            )
+          }
+        } else {
+          sendAttemptTracker.markAmbiguous(attempt)
+          recordFailureForSession(err, session, routeGeneration)
+        }
       } finally {
         mutableState.update { state ->
           if (sendAttemptTracker.isCurrent(attempt) && isCurrentSessionAction(session, routeGeneration, state)) {

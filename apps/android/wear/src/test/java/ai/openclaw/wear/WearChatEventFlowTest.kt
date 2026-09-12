@@ -1143,6 +1143,82 @@ class WearChatEventFlowTest {
     }
 
   @Test
+  @Config(qualifiers = "w400dp-h800dp-mdpi")
+  fun phoneValidationRejectionReleasesAppInputAndRetiresOnlyRejectedSend() =
+    withFlow { flow ->
+      // WearProxyControllerTest.rejectsUnknownOrOversizedWatchFieldsBeforeGateway
+      // proves this exact lowercase wire error for 4,001 characters without a Gateway call.
+      val invalidText = "x".repeat(4_001)
+      val rejectedGate = CompletableDeferred<Unit>()
+      val oldAbortGate = CompletableDeferred<Unit>()
+      flow.observeApp(autoSpeak = true)
+      val speech = shadowOf(checkNotNull(ShadowTextToSpeech.getLastTextToSpeechInstance()))
+      speech.onInitListener.onInit(TextToSpeech.SUCCESS)
+      flow.sendFails = true
+      flow.sendErrorCode = "invalid_request"
+      flow.sendGate = rejectedGate
+      flow.submitFromApp(invalidText)
+      val rejectedRun = flow.runId
+      assertTrue(flow.state.sending)
+      flow.abortAccepted = false
+      flow.abortGate = oldAbortGate
+      assertEquals(
+        true,
+        flow
+          .appAction("Abort run")
+          .config[SemanticsActions.OnClick]
+          .action
+          ?.invoke(),
+      )
+      flow.idle()
+      assertEquals(rejectedRun, flow.state.pendingAbortRunId)
+      rejectedGate.complete(Unit)
+      flow.idle()
+      assertEquals(false, flow.state.sending)
+      assertNull(flow.state.pendingReply)
+      assertNull(flow.state.replyAbort)
+      assertNull(flow.state.replyCompletion)
+      assertEquals(WearConversationFailure.INTERNAL_ERROR, flow.state.conversationFailure)
+      assertTrue(SemanticsProperties.Disabled !in flow.appAction("Type").config)
+
+      flow.sendGate = null
+      flow.submitFromApp(invalidText)
+      assertTrue("Definite rejection retires the key even for identical input", rejectedRun != flow.runId)
+      assertNull(flow.state.pendingReply)
+      assertEquals(false, flow.state.sending)
+
+      val correctedGate = CompletableDeferred<Unit>()
+      flow.sendFails = false
+      flow.sendGate = correctedGate
+      flow.submitFromApp("Corrected message")
+      val correctedRun = flow.runId
+      assertEquals(listOf(invalidText, invalidText, "Corrected message"), flow.sentMessages)
+      assertEquals(3, flow.sentRunIds.distinct().size)
+      assertEquals(correctedRun, flow.state.pendingReply?.runId)
+      assertTrue(flow.state.sending)
+      assertNull(flow.state.failure)
+      val historyRequests = flow.historyRequests
+      oldAbortGate.complete(Unit)
+      flow.idle()
+      assertEquals("Retired Abort cannot reload over the corrected send", historyRequests, flow.historyRequests)
+      assertEquals(correctedRun, flow.state.pendingReply?.runId)
+      assertTrue(flow.state.sending)
+      assertNull(flow.state.failure)
+      assertTrue(SemanticsProperties.Disabled in flow.appAction("Type").config)
+
+      correctedGate.complete(Unit)
+      flow.idle()
+      assertEquals(false, flow.state.sending)
+      assertEquals(correctedRun, flow.state.pendingReply?.runId)
+      assertTrue("Rejected sends must not speak a reply", speech.spokenTextList.isEmpty())
+      flow.historyMessages = """[{"id":"corrected","role":"assistant","content":"Corrected reply","idempotencyKey":"$correctedRun"}]"""
+      flow.emit("final", eventRunId = correctedRun)
+      assertNull(flow.state.pendingReply)
+      assertTrue(SemanticsProperties.Disabled !in flow.appAction("Type").config)
+      assertEquals(listOf("Corrected reply"), speech.spokenTextList)
+    }
+
+  @Test
   fun abortingAnAmbiguousPendingSendRetiresItsRetryKey() =
     withFlow { flow ->
       flow.sendFails = true
@@ -1330,23 +1406,32 @@ class WearChatEventFlowTest {
 
   @Test
   fun lateSendCallbacksCannotRetireOrReplaceANewerAttempt() {
-    for (lateFailure in listOf(false, true)) {
+    for (lateErrorCode in listOf(null, "internal_error", "invalid_request")) {
       withFlow { flow ->
         val oldGate = CompletableDeferred<Unit>()
         flow.sendGate = oldGate
-        flow.sendFails = lateFailure
+        flow.sendFails = lateErrorCode != null
+        flow.sendErrorCode = lateErrorCode ?: "internal_error"
         flow.send()
         val oldRun = flow.runId
         flow.emit("final", eventRunId = oldRun)
         assertEquals("A definitive terminal releases the old sending state", false, flow.state.sending)
-        flow.sendGate = null
+        val newerGate = CompletableDeferred<Unit>()
+        flow.sendGate = newerGate
         flow.sendFails = true
+        flow.sendErrorCode = "internal_error"
         assertEquals(true, flow.vm.sendReply("New request"))
         flow.idle()
         val newerRun = flow.runId
         oldGate.complete(Unit)
         flow.idle()
         assertEquals(newerRun, flow.state.pendingReply?.runId)
+        assertTrue("A retired callback cannot clear the newer sending flag", flow.state.sending)
+        assertNull("A retired rejection cannot replace the newer feedback", flow.state.failure)
+        newerGate.complete(Unit)
+        flow.idle()
+        assertTrue(checkNotNull(flow.state.pendingReply).retryable)
+        flow.sendGate = null
         flow.sendFails = false
         assertEquals(true, flow.vm.sendReply("New request"))
         flow.idle()
@@ -1425,18 +1510,28 @@ class WearChatEventFlowTest {
     }
 
   @Test
-  fun noOpAbortDoesNotRetireAnUnresolvedSend() =
-    withFlow { flow ->
-      flow.send()
-      val ownRun = flow.runId
-      flow.abortAccepted = false
-      flow.vm.abort()
-      flow.idle()
-      assertEquals(ownRun, flow.state.pendingReply?.runId)
-      assertEquals(false, flow.vm.sendReply("Another message"))
-      flow.emit("aborted", eventRunId = ownRun)
-      assertNull(flow.state.pendingReply)
+  fun noOpAbortDoesNotRetireAnUnresolvedSend() {
+    for (ambiguous in listOf(false, true)) {
+      withFlow { flow ->
+        flow.sendFails = ambiguous
+        flow.send()
+        val ownRun = flow.runId
+        flow.abortAccepted = false
+        flow.vm.abort()
+        flow.idle()
+        assertEquals(ownRun, flow.state.pendingReply?.runId)
+        assertEquals(ambiguous, flow.state.pendingReply?.retryable)
+        assertEquals(false, flow.vm.sendReply("Another message"))
+        if (ambiguous) {
+          flow.sendFails = false
+          flow.send()
+          assertEquals("No-op Abort and empty history preserve the uncertain key", listOf(ownRun, ownRun), flow.sentRunIds)
+        }
+        flow.emit("aborted", eventRunId = ownRun)
+        assertNull(flow.state.pendingReply)
+      }
     }
+  }
 
   @Test
   @Config(qualifiers = "w400dp-h800dp-mdpi")
@@ -2349,6 +2444,7 @@ class WearChatEventFlowTest {
     var historyRequests = 0
     var sendRequests = 0
     var sendFails = false
+    var sendErrorCode = "internal_error"
     var gatewayConnected = true
     var statusFails = false
     var historyErrorCode = "internal_error"
@@ -2357,6 +2453,7 @@ class WearChatEventFlowTest {
     var abortGate: CompletableDeferred<Unit>? = null
     var sessionList = """[{"key":"agent:main:proof","displayName":"Test chat","hasActiveRun":false}]"""
     val sentRunIds = mutableListOf<String>()
+    val sentMessages = mutableListOf<String>()
     var historyMessages = "[]"
     var historyRun: JsonObject? = null
     var historyGate: CompletableDeferred<Unit>? = null
@@ -2479,8 +2576,8 @@ class WearChatEventFlowTest {
       val request = (WearProtocolCodec.decode(bytes) as WearDecodeResult.Success).message as WearMessage.Request
       val responseSequence = sequence
       val historyError = request.method == WearRpcMethod.ChatHistory && historyFails
-      val sendError = request.method == WearRpcMethod.ChatSend && sendFails
-      val failed = historyError || sendError || (request.method == WearRpcMethod.ChatAbort && abortFails) || (request.method == WearRpcMethod.ProxyStatus && statusFails)
+      val sendError = WearRpcError(sendErrorCode, "Send result unavailable").takeIf { request.method == WearRpcMethod.ChatSend && sendFails }
+      val failed = historyError || sendError != null || (request.method == WearRpcMethod.ChatAbort && abortFails) || (request.method == WearRpcMethod.ProxyStatus && statusFails)
       val result =
         when (request.method) {
           WearRpcMethod.ProxyStatus -> {
@@ -2524,6 +2621,10 @@ class WearChatEventFlowTest {
                 .jsonPrimitive.content
             runId = requestedRunId
             sentRunIds += requestedRunId
+            sentMessages +=
+              request.params
+                .getValue("message")
+                .jsonPrimitive.content
             sendGate?.await()
             buildJsonObject {
               put("runId", requestedRunId)
@@ -2543,7 +2644,7 @@ class WearChatEventFlowTest {
             requestId = request.requestId,
             ok = !failed,
             result = result.takeUnless { failed },
-            error = WearRpcError(if (historyError) historyErrorCode else "internal_error", if (sendError) "Send result unavailable" else "Request unavailable").takeIf { failed },
+            error = sendError ?: WearRpcError(if (historyError) historyErrorCode else "internal_error", "Request unavailable").takeIf { failed },
             eventStreamId = "epoch-a",
             eventSequence = responseSequence,
           ),
