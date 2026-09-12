@@ -114,6 +114,7 @@ function createPausedCardStore(delegate: WorkboardCardStore) {
         return await delegate.lookup(key);
       },
       async delete(key) {
+        await beforeWrite();
         const deleted = await delegate.delete(key);
         if (deleted) {
           await afterWrite(key);
@@ -304,6 +305,85 @@ describe("WorkboardStore", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it.each(["move", "archive", "delete"] as const)(
+    "rejects stale %s without changing the newer card",
+    async (action) => {
+      const harness = createConcurrentSqliteHarness("openclaw-workboard-action-cas-");
+      try {
+        const base = await harness.host.create({ title: "Original", status: "todo" });
+        const newer = await harness.host.update(base.id, { title: "Newer title" });
+        const options = { expectedUpdatedAt: base.updatedAt };
+        const pending =
+          action === "move"
+            ? harness.operation.move(base.id, "blocked", 2000, undefined, options)
+            : action === "archive"
+              ? harness.operation.archive(base.id, true, options)
+              : harness.operation.delete(base.id, options);
+        await expect(pending).rejects.toMatchObject({
+          name: "WorkboardCardConflictError",
+          current: newer,
+        });
+        await expect(harness.host.get(base.id)).resolves.toEqual(newer);
+        const currentOptions = { expectedUpdatedAt: newer.updatedAt };
+        if (action === "delete") {
+          await expect(harness.operation.delete(base.id, currentOptions)).resolves.toEqual({
+            deleted: true,
+          });
+          await expect(harness.host.get(base.id)).resolves.toBeUndefined();
+        } else if (action === "move") {
+          await harness.operation.move(base.id, "blocked", 2000, undefined, currentOptions);
+          await expect(harness.host.get(base.id)).resolves.toMatchObject({
+            title: "Newer title",
+            status: "blocked",
+            position: 2000,
+          });
+        } else {
+          await harness.operation.archive(base.id, true, currentOptions);
+          await expect(harness.host.get(base.id)).resolves.toMatchObject({
+            title: "Newer title",
+            metadata: { archivedAt: expect.any(Number) },
+          });
+        }
+      } finally {
+        harness.close();
+      }
+    },
+  );
+
+  it.each(["move", "archive", "delete"] as const)(
+    "rejects %s when another host writes after the initial read",
+    async (action) => {
+      const harness = createConcurrentSqliteHarness("openclaw-workboard-action-race-");
+      try {
+        const base = await harness.host.create({ title: "Original", status: "todo" });
+        const pause = harness.paused.pauseNextWrite();
+        const options = { expectedUpdatedAt: base.updatedAt };
+        const pending =
+          action === "move"
+            ? harness.operation.move(base.id, "blocked", 2000, undefined, options)
+            : action === "archive"
+              ? harness.operation.archive(base.id, true, options)
+              : harness.operation.delete(base.id, options);
+        const outcome = pending.then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        await pause.reached;
+        const newer = await harness.host.update(base.id, {
+          title: "Host edit",
+          labels: ["preserved"],
+        });
+        pause.resume();
+        await expect(outcome).resolves.toMatchObject({
+          error: { name: "WorkboardCardConflictError", current: newer },
+        });
+        await expect(harness.host.get(base.id)).resolves.toEqual(newer);
+      } finally {
+        harness.close();
+      }
+    },
+  );
 
   it("rejects stale card edits across sqlite connections", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-cas-"));

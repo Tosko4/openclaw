@@ -21,7 +21,12 @@ import {
   type WorkboardCard,
   type WorkboardStatus,
 } from "../../lib/workboard/types.ts";
-import { buildAssignableAgentPickerOptions } from "./agent-filter.ts";
+import {
+  buildAssignableAgentPickerOptions,
+  matchesAgentScope,
+  matchesAgentFilter,
+} from "./agent-filter.ts";
+import { matchesBoardFilter } from "./board-filter.ts";
 import {
   canMutate,
   formatPriorityLabel,
@@ -39,7 +44,61 @@ type SelectionAction =
   | { kind: "update"; patch: (card: WorkboardCard) => CardPatch }
   | { kind: "archive" | "delete" };
 
-async function applySelection(props: WorkboardProps, cardIds: string[], action: SelectionAction) {
+const selectionScopes = new WeakMap<object, string>();
+
+export function matchesWorkboardCardScope(props: WorkboardProps, card: WorkboardCard): boolean {
+  const state = getWorkboardState(props.host);
+  return (
+    matchesBoardFilter(card, state.boardFilter) &&
+    matchesAgentScope(
+      card,
+      props.agentsList?.defaultId ?? props.defaultAgentId,
+      props.scopeAgentId,
+    ) &&
+    (props.showAgentFilter === false ||
+      matchesAgentFilter(card, props.agentsList, state.agentFilter))
+  );
+}
+
+export function reconcileSelectionScope(props: WorkboardProps) {
+  const state = getWorkboardState(props.host);
+  const scope = JSON.stringify([
+    state.boardFilter,
+    props.scopeAgentId ?? null,
+    props.agentsList?.defaultId ?? props.defaultAgentId ?? null,
+    props.showAgentFilter === false ? null : state.agentFilter,
+  ]);
+  const previous = selectionScopes.get(props.host);
+  if (previous !== undefined && previous !== scope) {
+    state.selectedCardIds = new Set();
+    state.bulkDialog = null;
+    state.bulkResult = null;
+  }
+  selectionScopes.set(props.host, scope);
+  const eligible = new Set(
+    state.cards
+      .filter((card) => isActiveWorkboardCard(card) && matchesWorkboardCardScope(props, card))
+      .map((card) => card.id),
+  );
+  for (const id of state.selectedCardIds) {
+    if (!eligible.has(id)) {
+      state.selectedCardIds.delete(id);
+    }
+  }
+  if (state.bulkDialog) {
+    state.bulkDialog.cardIds = state.bulkDialog.cardIds.filter((id) => eligible.has(id));
+    if (!state.bulkDialog.cardIds.length) {
+      state.bulkDialog = null;
+    }
+  }
+}
+
+async function applySelection(
+  props: WorkboardProps,
+  cardIds: string[],
+  action: SelectionAction,
+  observedCards = getWorkboardState(props.host).cards.filter((card) => cardIds.includes(card.id)),
+) {
   const state = getWorkboardState(props.host);
   if (
     !props.client ||
@@ -52,6 +111,11 @@ async function applySelection(props: WorkboardProps, cardIds: string[], action: 
     return;
   }
   const owner = workboardHost();
+  const selection = state.selectedCardIds;
+  const board = state.boardFilter;
+  const agentScope = owner.agents.scopeId;
+  const localAgent = state.agentFilter;
+  const observations = new Map(observedCards.map((card) => [card.id, card]));
   state.bulkSaving = true;
   state.bulkResult = null;
   state.error = null;
@@ -60,6 +124,10 @@ async function applySelection(props: WorkboardProps, cardIds: string[], action: 
   try {
     for (const cardId of cardIds) {
       if (
+        selection !== state.selectedCardIds ||
+        board !== state.boardFilter ||
+        agentScope !== owner.agents.scopeId ||
+        localAgent !== state.agentFilter ||
         owner.signal.aborted ||
         !owner.connection.connected ||
         !owner.connection.canWrite ||
@@ -69,14 +137,25 @@ async function applySelection(props: WorkboardProps, cardIds: string[], action: 
         break;
       }
       const card = state.cards.find((entry) => entry.id === cardId);
-      if (!card || !isActiveWorkboardCard(card) || !state.selectedCardIds.has(cardId)) {
-        state.selectedCardIds.delete(cardId);
+      if (
+        !card ||
+        !isActiveWorkboardCard(card) ||
+        !matchesWorkboardCardScope(props, card) ||
+        !state.selectedCardIds.has(cardId)
+      ) {
+        selection.delete(cardId);
         continue;
+      }
+      const observed = observations.get(cardId);
+      if (!observed) {
+        state.error = t("workboard.bulkUnavailable");
+        break;
       }
       const common = {
         host: props.host,
         client: props.client,
         cardId,
+        expectedUpdatedAt: observed.updatedAt,
         requestUpdate: props.onRequestUpdate,
       };
       let applied = false;
@@ -94,10 +173,10 @@ async function applySelection(props: WorkboardProps, cardIds: string[], action: 
             state.cards.find((entry) => entry.id === cardId)?.status === action.status;
           break;
         case "update": {
-          const patch = action.patch(card);
+          const patch = action.patch(observed);
           applied =
             Object.keys(patch).length === 0 ||
-            (await updateWorkboardCardProperties({ ...common, card, patch }));
+            (await updateWorkboardCardProperties({ ...common, card: observed, patch }));
           break;
         }
         case "archive":
@@ -112,13 +191,19 @@ async function applySelection(props: WorkboardProps, cardIds: string[], action: 
         break;
       }
       completed += 1;
-      state.selectedCardIds.delete(cardId);
+      selection.delete(cardId);
+    }
+    if (selection !== state.selectedCardIds) {
+      return;
     }
     state.bulkResult = { completed, total: cardIds.length };
     if (state.error) {
       state.error = `${t("workboard.bulkResult", { completed: String(completed), total: String(cardIds.length) })} ${state.error}`;
       if (state.bulkDialog) {
         state.bulkDialog.cardIds = cardIds.filter((id) => state.selectedCardIds.has(id));
+        state.bulkDialog.observedCards = state.cards.filter((card) =>
+          state.bulkDialog?.cardIds.includes(card.id),
+        );
       }
     } else {
       state.bulkDialog = null;
@@ -146,10 +231,19 @@ export function renderSelectionActions(props: WorkboardProps) {
   const disabled = !canMutate(props) || !props.connected || busy;
   const openDialog = (kind: "edit" | "delete") => {
     state.error = null;
+    const observedCards = state.cards.filter((card) => cardIds.includes(card.id));
     state.bulkDialog =
       kind === "delete"
-        ? { kind, cardIds }
-        : { kind, cardIds, priority: "", agentId: KEEP_AGENT, labels: "", labelMode: "keep" };
+        ? { kind, cardIds, observedCards }
+        : {
+            kind,
+            cardIds,
+            observedCards,
+            priority: "",
+            agentId: KEEP_AGENT,
+            labels: "",
+            labelMode: "keep",
+          };
     props.onRequestUpdate?.();
   };
   return html`
@@ -303,6 +397,7 @@ export function renderSelectionDialog(props: WorkboardProps) {
       draft.kind === "delete"
         ? { kind: "delete" }
         : { kind: "update", patch: (card) => editPatch(draft, card) },
+      draft.observedCards,
     );
   return renderDialog(
     {

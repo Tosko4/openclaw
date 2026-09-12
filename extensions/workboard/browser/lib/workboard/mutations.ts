@@ -169,12 +169,29 @@ export async function addWorkboardCardComment(params: {
   }
 }
 
+function reconcileCardConflict(
+  state: ReturnType<typeof getWorkboardState>,
+  error: unknown,
+): boolean {
+  if (
+    isGatewayRequestError(error) &&
+    error.code === "workboard_conflict" &&
+    isRecord(error.details) &&
+    error.details.type === "workboard_card_conflict"
+  ) {
+    replaceCard(state, normalizeCardPayload(error.details));
+    return true;
+  }
+  return false;
+}
+
 export async function moveWorkboardCard(
   params: {
     host: WorkboardHost;
     client: GatewayBrowserClient | null;
     cardId: string;
     status: WorkboardStatus;
+    expectedUpdatedAt?: number;
     requestUpdate?: () => void;
   } & (
     | { position: number; beforeCardId?: never }
@@ -224,16 +241,23 @@ export async function moveWorkboardCard(
               expectedUpdatedAt: move.expectedUpdatedAt,
               patch: { position: move.position },
             })
-          : await params.client.request("workboard.cards.move", move);
+          : await params.client.request("workboard.cards.move", {
+              ...move,
+              ...(params.expectedUpdatedAt !== undefined && move.id === params.cardId
+                ? { expectedUpdatedAt: params.expectedUpdatedAt }
+                : {}),
+            });
       replaceCard(state, normalizeCardPayload(payload));
     }
   } catch (error) {
     state.error = formatError(error);
-    // Even a single move can commit before its acknowledgment is lost.
-    state.mutationReadiness = "canonical_reload_required";
-    state.loaded = false;
-    state.loadAttempted = false;
-    reloadAfterFailure = true;
+    if (!reconcileCardConflict(state, error)) {
+      // Even a single move can commit before its acknowledgment is lost.
+      state.mutationReadiness = "canonical_reload_required";
+      state.loaded = false;
+      state.loadAttempted = false;
+      reloadAfterFailure = true;
+    }
   } finally {
     for (const move of moves) {
       state.busyCardIds.delete(move.id);
@@ -284,14 +308,7 @@ export async function updateWorkboardCardProperties(params: {
     replaceCard(state, normalizeCardPayload(payload));
     return true;
   } catch (error) {
-    if (
-      isGatewayRequestError(error) &&
-      error.code === "workboard_conflict" &&
-      isRecord(error.details) &&
-      error.details.type === "workboard_card_conflict"
-    ) {
-      replaceCard(state, normalizeCardPayload(error.details));
-    }
+    reconcileCardConflict(state, error);
     state.error = formatError(error);
     return false;
   } finally {
@@ -304,6 +321,7 @@ export async function deleteWorkboardCard(params: {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
   cardId: string;
+  expectedUpdatedAt?: number;
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
@@ -320,10 +338,16 @@ export async function deleteWorkboardCard(params: {
   state.error = null;
   params.requestUpdate?.();
   try {
-    await params.client.request("workboard.cards.delete", { id: params.cardId });
+    await params.client.request("workboard.cards.delete", {
+      id: params.cardId,
+      ...(params.expectedUpdatedAt !== undefined
+        ? { expectedUpdatedAt: params.expectedUpdatedAt }
+        : {}),
+    });
     setWorkboardCards(state, removeCardAndReferences(state.cards, params.cardId));
     return true;
   } catch (error) {
+    reconcileCardConflict(state, error);
     state.error = formatError(error);
     return false;
   } finally {
@@ -337,6 +361,7 @@ export async function archiveWorkboardCard(params: {
   client: GatewayBrowserClient | null;
   cardId: string;
   archived?: boolean;
+  expectedUpdatedAt?: number;
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
@@ -356,10 +381,14 @@ export async function archiveWorkboardCard(params: {
     const payload = await params.client.request("workboard.cards.archive", {
       id: params.cardId,
       archived: params.archived ?? true,
+      ...(params.expectedUpdatedAt !== undefined
+        ? { expectedUpdatedAt: params.expectedUpdatedAt }
+        : {}),
     });
     replaceCard(state, normalizeCardPayload(payload));
     return true;
   } catch (error) {
+    reconcileCardConflict(state, error);
     state.error = formatError(error);
     return false;
   } finally {

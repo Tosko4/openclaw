@@ -65,10 +65,11 @@ export type WorkboardHealthKey =
   | "failedAttempts";
 
 export type WorkboardBulkDialog =
-  | { kind: "delete"; cardIds: string[] }
+  | { kind: "delete"; cardIds: string[]; observedCards: WorkboardCard[] }
   | {
       kind: "edit";
       cardIds: string[];
+      observedCards: WorkboardCard[];
       priority: WorkboardPriority | "";
       agentId: string;
       labels: string;

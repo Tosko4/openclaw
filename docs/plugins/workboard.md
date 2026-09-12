@@ -447,6 +447,18 @@ Gateway RPC methods live under `workboard.*`:
 | `operator.read`  | `cards.list`, `cards.export`, `cards.diagnostics`, attachment list/get, notification event reads, `boards.list`, `cards.stats`, `cards.runs`                                                                                                                                                                                                                                                            |
 | `operator.write` | `cards.diagnostics.refresh`, create/captureSession/update/move/delete/comment/link/linkDependency/proof/artifact, attachment add/delete, worker log, protocol violation, claim/heartbeat/release/promote/reassign/reclaim/complete/block/unblock/start, `cards.dispatch`, `cards.bulk`, archive, `boards.upsert`/`archive`/`delete`, `cards.specify`/`decompose`, notification subscribe/delete/advance |
 
+`workboard.cards.update`, `workboard.cards.move`, `workboard.cards.archive`, and
+`workboard.cards.delete` accept an optional `expectedUpdatedAt` request field.
+Pass the finite numeric `updatedAt` from the card you read to guard the write.
+If the card has changed, the request fails with `workboard_conflict` and returns
+its latest card in `error.details.card` (`error.details.type` is
+`workboard_card_conflict`). Review that card before retrying. Omitting the field
+keeps the method's existing unguarded request behavior.
+
+Control UI bulk actions use each card's observed revision and stop on a conflict.
+Remaining cards stay selected for review and retry; the batch does not silently
+retry against newer revisions or overwrite another client's changes.
+
 No RPC method requires `operator.admin`. Browsers connected with read-only
 operator access can inspect the board but cannot mutate cards. An admin scope
 widens accepted Workboard host paths. It does not change the methods available.

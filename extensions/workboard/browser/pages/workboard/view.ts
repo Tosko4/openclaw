@@ -19,15 +19,9 @@ import {
 import {
   agentDisplayName,
   buildAgentFilterOptions,
-  matchesAgentFilter,
-  matchesAgentScope,
   normalizeActiveAgentFilter,
 } from "./agent-filter.ts";
-import {
-  buildBoardFilterOptions,
-  matchesBoardFilter,
-  WORKBOARD_ALL_BOARDS_FILTER,
-} from "./board-filter.ts";
+import { buildBoardFilterOptions, WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
 import { getVisibleDetailCard, renderCardDetailsPanel } from "./view-card-details.ts";
 import { openCreateModal, renderCardModal, workboardCardModalId } from "./view-card-modal.ts";
 import { renderColumn } from "./view-card.ts";
@@ -53,29 +47,28 @@ import {
 } from "./view-helpers.ts";
 import { workboardPopoverRef } from "./view-popover.ts";
 import { boardScrollEdgesRef } from "./view-scroll-fade.ts";
-import { renderSelectionActions, renderSelectionDialog } from "./view-selection.ts";
+import {
+  matchesWorkboardCardScope,
+  reconcileSelectionScope,
+  renderSelectionActions,
+  renderSelectionDialog,
+} from "./view-selection.ts";
 import type { WorkboardSelectOption } from "./workboard-select.ts";
 
 const workboardFilterPopoverId = "workboard-filter-popover";
 
 export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void }) {
   const state = getWorkboardState(props.host);
-  const defaultAgentId = props.agentsList?.defaultId ?? props.defaultAgentId;
   const agentOptions = buildAgentFilterOptions(props.agentsList, state.cards);
   state.agentFilter = normalizeActiveAgentFilter(agentOptions, state.agentFilter);
+  reconcileSelectionScope(props);
   const boardOptions = buildBoardFilterOptions(state.boards, state.cards);
   // A valid route can outlive a deleted board. Keep that id as the active
   // filter so the page becomes empty instead of silently showing every card.
   const activeBoardFilter = state.boardFilter;
   const scopedCards = state.cards
     .filter((card) => state.showArchived || !card.metadata?.archivedAt)
-    .filter((card) => matchesBoardFilter(card, activeBoardFilter))
-    .filter((card) => matchesAgentScope(card, defaultAgentId, props.scopeAgentId))
-    .filter(
-      (card) =>
-        props.showAgentFilter === false ||
-        matchesAgentFilter(card, props.agentsList, state.agentFilter),
-    )
+    .filter((card) => matchesWorkboardCardScope(props, card))
     .filter((card) => matchesFilter(card, { query: state.query, priority: "all" }));
   const now = Date.now();
   const cardsForFilters = (ignore?: "status" | "priority" | "attention") =>

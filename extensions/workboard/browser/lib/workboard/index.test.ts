@@ -2214,13 +2214,21 @@ describe("workboard controller", () => {
     });
     await loadBoard(client);
     state.selectedCardIds = new Set([removed.id, archived.id, retained.id]);
-    state.bulkDialog = { kind: "delete", cardIds: [removed.id, archived.id, retained.id] };
+    state.bulkDialog = {
+      kind: "delete",
+      cardIds: [removed.id, archived.id, retained.id],
+      observedCards: [removed, archived, retained],
+    };
     state.statusFilter = new Set(["todo"]);
     state.query = "no visible matches";
 
     await refreshWorkboard({ host, client, source: "live" });
     expect(state.selectedCardIds).toEqual(new Set([retained.id]));
-    expect(state.bulkDialog).toEqual({ kind: "delete", cardIds: [retained.id] });
+    expect(state.bulkDialog).toEqual({
+      kind: "delete",
+      cardIds: [retained.id],
+      observedCards: [removed, archived, retained],
+    });
     expect(state.statusFilter).toEqual(new Set(["todo"]));
     expect(state.query).toBe("no visible matches");
 
