@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { isMainThread, threadId } from "node:worker_threads";
+import { isMainThread, threadId, type Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -11,6 +11,7 @@ import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
+  closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
@@ -385,10 +386,10 @@ describe("cold transcript storage workers", () => {
     const originalWorker = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
     vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
       (params) => {
-        const withWriteAdmission = params.withWriteAdmission;
-        if (!withWriteAdmission) {
+        if (params.expectedMessageType !== "reclaimed") {
           return originalWorker(params);
         }
+        const withWriteAdmission = params.withWriteAdmission;
         let admissions = 0;
         return originalWorker({
           ...params,
@@ -402,6 +403,9 @@ describe("cold transcript storage workers", () => {
         });
       },
     );
+    const workers: Worker[] = [];
+    const observeWorker = (worker: Worker) => workers.push(worker);
+    process.on("worker", observeWorker);
     try {
       await expect(runSessionColdStorageMaintenance({ config: fixture.config })).resolves.toEqual({
         archivedTranscripts: 2,
@@ -433,7 +437,10 @@ describe("cold transcript storage workers", () => {
           exitCode: 0,
         })),
       );
+      expect(workers.length).toBeGreaterThan(0);
+      expect(workers.every((worker) => worker.threadId === -1)).toBe(true);
     } finally {
+      process.off("worker", observeWorker);
       vi.restoreAllMocks();
       await flushLogger();
       setLoggerOverride(null);
@@ -510,6 +517,7 @@ describe("cold transcript storage workers", () => {
         const result = await originalWorker(params);
         if (
           !held &&
+          params.expectedMessageType === "done" &&
           "operation" in params.workerData &&
           params.workerData.operation === "cold-prepare"
         ) {
@@ -563,51 +571,74 @@ describe("cold transcript storage workers", () => {
     ).toBeUndefined();
   });
 
-  it("rolls back every candidate when maintenance authority is revoked at commit", async () => {
-    const fixture = await createBatchFixture();
-    const originalWorker = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
-    let prepared = false;
-    let revoked = false;
-    vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
-      async (params) => {
-        if ("operation" in params.workerData && params.workerData.operation === "cold-prepare") {
-          const result = await originalWorker(params);
-          prepared = true;
-          return result;
-        }
-        if (
-          prepared &&
-          "operation" in params.workerData &&
-          params.workerData.operation === "cold-mutate"
-        ) {
-          return originalWorker({
-            ...params,
-            onCommitRequest: () => {
-              revoked = true;
-              params.onCommitRequest?.();
-            },
-          });
-        }
-        return originalWorker(params);
-      },
-    );
-    await expect(
-      runSessionColdStorageMaintenance({
-        config: fixture.config,
-        assertCurrent: () => {
-          if (revoked) {
-            throw new Error("Test maintenance authority was revoked");
+  it.each(["authority", "retained claim"])(
+    "rolls back every candidate when maintenance %s is revoked at commit",
+    async (revocation) => {
+      const fixture = await createBatchFixture();
+      const originalWorker = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
+      let prepared = false;
+      let revoked = false;
+      let closeElapsedMs = 0;
+      vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
+        async (params) => {
+          if (
+            params.expectedMessageType === "done" &&
+            "operation" in params.workerData &&
+            params.workerData.operation === "cold-prepare"
+          ) {
+            const result = await originalWorker(params);
+            prepared = true;
+            return result;
           }
+          if (prepared && params.expectedMessageType === "reclaimed") {
+            return originalWorker({
+              ...params,
+              onCommitRequest: () => {
+                const started = performance.now();
+                revoked =
+                  revocation === "retained claim"
+                    ? closeOpenClawAgentDatabaseByPath(fixture.options.path)
+                    : true;
+                closeElapsedMs = performance.now() - started;
+                params.onCommitRequest();
+              },
+            });
+          }
+          return originalWorker(params);
         },
-      }),
-    ).rejects.toThrow(/revoked|authorization|refus/i);
-    expect(prepared).toBe(true);
-    expect(revoked).toBe(true);
-    expect(fixture.snapshot()).toEqual(fixture.original);
-    expect(
-      fixture.database().prepare("SELECT * FROM session_transcript_cold_archives").all(),
-    ).toEqual([]);
-  });
+      );
+      const workers: Worker[] = [];
+      const observeWorker = (worker: Worker) => workers.push(worker);
+      process.on("worker", observeWorker);
+      try {
+        await expect(
+          runSessionColdStorageMaintenance({
+            config: fixture.config,
+            assertCurrent: () => {
+              if (revoked && revocation === "authority") {
+                throw new Error("Test maintenance authority was revoked");
+              }
+            },
+          }),
+        ).rejects.toThrow(
+          revocation === "authority"
+            ? "Test maintenance authority was revoked"
+            : "claim is no longer current",
+        );
+        expect(workers.length).toBeGreaterThan(0);
+        expect(workers.every((worker) => worker.threadId === -1)).toBe(true);
+      } finally {
+        process.off("worker", observeWorker);
+      }
+      expect(prepared).toBe(true);
+      expect(revoked).toBe(true);
+      expect(closeElapsedMs).toBeLessThan(2_000);
+      expect(fixture.snapshot()).toEqual(fixture.original);
+      expect(
+        fixture.database().prepare("SELECT * FROM session_transcript_cold_archives").all(),
+      ).toEqual([]);
+    },
+  );
 
   it("preserves cold metadata, refuses synchronous history and retention deletion, and restores on async read", async () => {
     const fixture = await createFixture();

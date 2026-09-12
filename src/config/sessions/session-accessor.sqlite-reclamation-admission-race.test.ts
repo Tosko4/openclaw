@@ -5,7 +5,10 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
@@ -38,25 +41,45 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-archive.js")>();
   return {
     ...actual,
-    runSqliteTranscriptArchiveWorkerOperation: (
-      params: Parameters<typeof actual.runSqliteTranscriptArchiveWorkerOperation>[0],
-    ) =>
-      actual.runSqliteTranscriptArchiveWorkerOperation({
-        ...params,
-        onCommitRequest: params.onCommitRequest
-          ? () => {
-              archiveMaterializationHook.beforeCommitRequest?.();
-              params.onCommitRequest?.();
-              archiveMaterializationHook.afterCommitRequest?.();
-            }
-          : undefined,
-      }),
     materializeSessionStateDeletePlans: async (
       ...args: Parameters<typeof actual.materializeSessionStateDeletePlans>
     ) => {
       await archiveMaterializationHook.beforeMaterialize?.();
       return await actual.materializeSessionStateDeletePlans(...args);
     },
+  };
+});
+
+vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./session-accessor.sqlite-reclamation-worker.js")>();
+  return {
+    ...actual,
+    withSqliteReclamationWorker: ((options, claim, run, assertRequestCurrent) =>
+      actual.withSqliteReclamationWorker(
+        options,
+        claim,
+        async (worker) => {
+          const originalRun = worker.run.bind(worker);
+          const spy = vi.spyOn(worker, "run").mockImplementation((params) => {
+            return originalRun({
+              ...params,
+              onCommitRequest: () => {
+                archiveMaterializationHook.beforeCommitRequest?.();
+                const errors = params.onCommitRequest();
+                archiveMaterializationHook.afterCommitRequest?.();
+                return errors;
+              },
+            });
+          });
+          try {
+            return await run(worker);
+          } finally {
+            spy.mockRestore();
+          }
+        },
+        assertRequestCurrent,
+      )) satisfies typeof actual.withSqliteReclamationWorker,
   };
 });
 
@@ -69,12 +92,13 @@ describe("SQLite reclamation admission races", () => {
     storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     archiveMaterializationHook.beforeMaterialize = undefined;
     archiveMaterializationHook.beforeReclaim = undefined;
     archiveMaterializationHook.beforeCommitRequest = undefined;
     archiveMaterializationHook.afterCommitRequest = undefined;
     vi.restoreAllMocks();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
   });
 

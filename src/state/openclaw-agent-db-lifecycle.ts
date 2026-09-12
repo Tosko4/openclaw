@@ -16,7 +16,16 @@ import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOwnerInspection,
 } from "./openclaw-agent-db-contract.js";
-import { releaseOpenClawAgentDatabaseLease } from "./openclaw-agent-db-lease.js";
+import {
+  readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim,
+  releaseOpenClawAgentDatabaseLease,
+  type OpenClawAgentDatabaseWorkerLeaseReceipt,
+} from "./openclaw-agent-db-lease.js";
+import {
+  drainAgentDatabaseResources,
+  matchesAgentDatabaseClose,
+  revokeAgentDatabaseResources,
+} from "./openclaw-agent-db-resources.js";
 import {
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
@@ -69,6 +78,10 @@ const cache = resolveGlobalSingleton<AgentDatabaseLifecycle>(
     retainedCloses: new Set(),
   }),
 );
+
+function logResourceCloseFailure(pathname: string, error: unknown): void {
+  agentDbLog.warn("Agent database resource close failed", { path: pathname, error });
+}
 
 /** Each physical-open generator owns these checkpoints across any integrity await. */
 export function startAgentDatabaseOpenTiming(
@@ -212,6 +225,10 @@ export function closeOpenClawAgentDatabaseByPath(
   // Cache keys are lexical resolved paths. Do not realpath aliases here: a
   // symlink swap must never redirect cleanup onto a different cached database.
   const resolvedPath = path.resolve(pathname);
+  revokeAgentDatabaseResources(
+    { path: resolvedPath, agentId: expectedAgentId },
+    logResourceCloseFailure,
+  );
   // Revocation is immediate; the async owner retains its lease until native work joins.
   revokePendingAgentDatabaseOpen(resolvedPath, expectedAgentId);
   for (const retained of cache.retainedCloses) {
@@ -244,6 +261,23 @@ export type OpenClawAgentDatabaseWorkerCloseResult = {
   errors: Error[];
   settled: boolean;
 };
+
+/** Capture only the exact claim belonging to this admitted Worker connection. */
+export function readOpenClawAgentDatabaseWorkerLeaseReceipt(
+  pathname: string,
+): OpenClawAgentDatabaseWorkerLeaseReceipt {
+  const resolvedPath = path.resolve(pathname);
+  const database = cache.databases.get(resolvedPath);
+  const lease = cache.leases.get(resolvedPath);
+  if (!database?.db.isOpen || !lease || cache.failures.has(resolvedPath)) {
+    throw new Error(`Agent database Worker has no admitted lease: ${resolvedPath}`);
+  }
+  return readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim(lease.leaseId, {
+    agentId: database.agentId,
+    path: database.path,
+    env: lease.env,
+  });
+}
 
 /**
  * Converge a terminating worker's cached handle and durable lease without
@@ -303,6 +337,7 @@ export function settleOpenClawAgentDatabaseWorkerClose(
 
 /** Close cached agent handles, optionally restricted to one runtime root. */
 export function closeOpenClawAgentDatabases(rootPath?: string): void {
+  revokeAgentDatabaseResources({ rootPath }, logResourceCloseFailure);
   for (const pathname of cache.pending.keys()) {
     if (rootPath === undefined || isPathInside(rootPath, pathname)) {
       revokePendingAgentDatabaseOpen(pathname);
@@ -322,19 +357,45 @@ export function closeOpenClawAgentDatabases(rootPath?: string): void {
 
 /** Drain native opens before a lifecycle owner releases shared state or removes its root. */
 export async function closeOpenClawAgentDatabasesAsync(rootPath?: string): Promise<void> {
-  while (true) {
-    const pending = [...cache.activePending].filter(
-      (owner) => rootPath === undefined || isPathInside(rootPath, owner.path),
-    );
-    if (pending.length === 0) {
-      break;
+  await drainAgentDatabaseResources({ rootPath }, async () => {
+    while (true) {
+      const pending = [...cache.activePending].filter(
+        (owner) => rootPath === undefined || isPathInside(rootPath, owner.path),
+      );
+      if (pending.length === 0) {
+        break;
+      }
+      for (const owner of pending) {
+        revokePendingAgentDatabaseOpen(owner.path);
+      }
+      await Promise.allSettled(pending.map((owner) => owner.promise));
     }
-    for (const owner of pending) {
-      revokePendingAgentDatabaseOpen(owner.path);
+    closeOpenClawAgentDatabases(rootPath);
+  });
+}
+
+/** Drain the exact retained owner before deletion, quarantine, or file replacement. */
+export async function closeOpenClawAgentDatabaseByPathAsync(
+  pathname: string,
+  expectedAgentId?: string,
+): Promise<boolean> {
+  const selection = { path: path.resolve(pathname), agentId: expectedAgentId };
+  revokePendingAgentDatabaseOpen(selection.path, expectedAgentId);
+  return drainAgentDatabaseResources(selection, async () => {
+    while (true) {
+      const pending = [...cache.activePending].filter((owner) =>
+        matchesAgentDatabaseClose(selection, owner),
+      );
+      if (pending.length === 0) {
+        break;
+      }
+      for (const owner of pending) {
+        revokePendingAgentDatabaseOpen(owner.path, expectedAgentId);
+      }
+      await Promise.allSettled(pending.map((owner) => owner.promise));
     }
-    await Promise.allSettled(pending.map((owner) => owner.promise));
-  }
-  closeOpenClawAgentDatabases(rootPath);
+    return closeOpenClawAgentDatabaseByPath(selection.path, expectedAgentId);
+  });
 }
 
 /** Read a database's durable role and agent owner without mutating it. */
@@ -370,3 +431,4 @@ export function inspectOpenClawAgentDatabaseOwner(
 }
 
 export { cache as agentDatabaseLifecycle };
+export { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-resources.js";

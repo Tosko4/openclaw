@@ -111,15 +111,31 @@ The worker opens its database under the session writer, then releases that write
 while full integrity and foreign-key checks run on the same connection. Unrelated
 session writes can continue during those checks. It reacquires the writer and
 revalidates current authority before index repair, schema work, or deletion.
-The connection and lease remain owned throughout admission; refusal unwinds that
-owner, and final writer admission remains held until the worker exits.
+The process retains at most one validated reclamation worker connection and lease,
+with a 60-second idle retirement. Each deletion keeps its own transaction, retained
+parent claim, numbered write admission, and current-authority checks in its own
+async context. The worker clears operation buffers and acknowledges transaction
+settlement before the parent publishes committed removals and releases that
+operation's writer admission. Later requests reuse the connection only for the
+same physical database and shared-state owner; every request checks its live lease.
+
+Switching databases, deletion, quarantine, maintenance, root retirement, and shutdown
+revoke reuse and join native worker exit before releasing the database owner. Pending
+commit requests are rejected before synchronous close can wait on their writer lock.
+Crash cleanup can release only the exact admitted lease receipt, after native exit;
+uncertain cleanup remains an error and never causes mutation replay. A fresh physical
+connection always repeats full checks. These lifetimes are documented in the
+[accepted reclamation design](https://github.com/openclaw/openclaw/pull/140897#issuecomment-5647899202).
+Archive materialization, file publication, and cold mutations retain their separate
+one-shot workers; cold mutations join their existing page maintenance and native exit.
 
 Disk-budget cleanup rechecks protection after archive materialization. A candidate
 already excluded by that fresh protection set is canceled before worker admission
 and is not counted as reclaimed. After releasing its lifecycle holds, cleanup
 remeasures physical usage before considering another candidate, so space freed by
-a peer does not cause unnecessary eviction. Every admitted worker still performs
-the full integrity, foreign-key, and current-owner checks described here.
+a peer does not cause unnecessary eviction. Every physical worker connection open
+still performs the full integrity and foreign-key checks; every victim revalidates
+current ownership and protection.
 
 Archive publication and cascading deletion remain atomic. Before COMMIT, the
 worker publishes its authorization request in shared memory and waits for the
