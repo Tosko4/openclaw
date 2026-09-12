@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-migration.js";
+import { listExistingAgentDatabaseTargets } from "../config/sessions/targets-existing.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -12,7 +13,6 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { listExistingAgentDatabaseTargets } from "./doctor-session-sqlite-readers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

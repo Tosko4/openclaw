@@ -5,6 +5,7 @@ import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.js";
 import { searchSessionTranscripts } from "../config/sessions/session-transcript-search.js";
+import { resolveTargetSqlitePath } from "../config/sessions/targets-existing.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -20,7 +21,6 @@ import {
   type SessionSqliteMigrationMove,
 } from "./doctor-session-sqlite-migration-run.js";
 import * as migrationRun from "./doctor-session-sqlite-migration-run.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 
 function transcript(id: string, phrase: string) {
