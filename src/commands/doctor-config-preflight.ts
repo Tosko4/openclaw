@@ -7,7 +7,6 @@ import { resolveIsConfigReadOnly, resolveStateDir } from "../config/paths.js";
 import { inspectShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import type {
   MigrationCheckpointIdentity,
   StartupMigrationLease,
@@ -34,9 +33,11 @@ import {
 } from "./doctor-config-preflight-legacy-config.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 import {
+  createDoctorRehearsalSnapshotPreparation,
   needsRefreshedPluginIndexPersistence,
   persistRefreshedPluginIndex,
   readDoctorConfigPreflightSnapshot,
+  shouldSkipPluginValidationForDoctorConfigPreflight,
   type DoctorConfigPreflightPluginSnapshotRead,
 } from "./doctor-config-preflight-plugin-index.js";
 import {
@@ -68,13 +69,6 @@ import { shouldSkipLegacyUpdateDoctorConfigWrite } from "./doctor/shared/update-
 const loadState = createLazyRuntimeModule(() => import("../infra/state-migrations.state-dir.js"));
 
 const loadCronRepair = createLazyRuntimeModule(() => import("./doctor/cron/legacy-repair.js"));
-
-/** Returns true during updater-managed config rewrites where plugin validation may be stale. */
-export function shouldSkipPluginValidationForDoctorConfigPreflight(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS);
-}
 
 /**
  * Runs early doctor config checks before the main config repair flow.
@@ -232,6 +226,9 @@ export async function runDoctorConfigPreflight(
       warnings: gatewayStartupCheckpointRequired ? [] : result.warnings,
     });
   };
+  const getSnapshotPreparation = createDoctorRehearsalSnapshotPreparation(
+    noteStartupStateMigrationResult,
+  );
   const migratePluginDoctorState = async (config: OpenClawConfig) => {
     const { autoMigrateLegacyPluginDoctorState } =
       await import("../infra/state-migrations.plugin-doctor.js");
@@ -283,6 +280,7 @@ export async function runDoctorConfigPreflight(
         observe: gatewayStartupCheckpointRequired ? false : options.observe,
         preparePluginMetadataSnapshot: options.preparePluginMetadataSnapshot === true,
         skipPluginValidation: shouldSkipPluginValidationForDoctorConfigPreflight(),
+        prepareSnapshot: getSnapshotPreparation(options.doctorOnlyStateMigrations === true),
       }),
     );
   const readAdmittedStartupSnapshot = () =>

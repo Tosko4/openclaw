@@ -122,6 +122,7 @@ type PreparedModelCatalogWorker = Readonly<{
     Pick<PreparedModelRuntimeCatalogFacts, "modelCatalog" | "configuredRuntimeModels"> & {
       runtimeModels: Map<string, Model[]>;
       providerExpiries: Map<string, number>;
+      configuredProviderModelIds: Map<string, readonly string[]>;
     }
   >;
 }>;
@@ -322,6 +323,7 @@ export function createPreparedModelCatalogWorker(
         configuredRuntimeModels: message.configuredRuntimeModels,
         runtimeModels: message.runtimeModels,
         providerExpiries: message.providerExpiries,
+        configuredProviderModelIds: message.configuredProviderModelIds,
       };
     },
     loadAuth: async ({ providerIds, profileIds }) => {

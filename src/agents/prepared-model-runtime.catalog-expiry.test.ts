@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { Model } from "../llm/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -103,18 +104,20 @@ function fixture() {
   };
   const owner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttempt"> = {};
   let current = true;
-  const access = createFullModelCatalogAccess({
-    agentFacts,
-    catalogFacts: {
-      modelCatalog: { entries: [], routeVariants: [] },
-      templateModelRegistry: ModelRegistry.inMemory(authStorage),
-      configuredRuntimeModels: [],
-      inlineProviderModels: [],
-    },
-    pluginGeneration: generation,
-    inventoryOwner: owner,
-    isCurrent: () => current,
-  });
+  const createAccess = (facts = agentFacts) =>
+    createFullModelCatalogAccess({
+      agentFacts: facts,
+      catalogFacts: {
+        modelCatalog: { entries: [], routeVariants: [] },
+        templateModelRegistry: ModelRegistry.inMemory(authStorage),
+        configuredRuntimeModels: [],
+        inlineProviderModels: [],
+      },
+      pluginGeneration: generation,
+      inventoryOwner: owner,
+      isCurrent: () => current,
+    });
+  const access = createAccess();
   function reply(ids = ["alpha", "beta", "gamma"], expires = 1_100, revision = "first") {
     const entries = ids.map((provider) => ({ provider, id: revision, name: revision }));
     const modelCatalog: ModelCatalogSnapshot = {
@@ -134,7 +137,8 @@ function fixture() {
     });
     return {
       modelCatalog,
-      runtimeModels: new Map(),
+      runtimeModels: new Map<string, Model[]>(),
+      configuredProviderModelIds: new Map(ids.map((provider) => [provider, [revision]])),
       configuredRuntimeModels: [],
       providerExpiries: new Map(
         ids.map((provider) => [provider, provider === "gamma" ? 9_000 : expires]),
@@ -144,6 +148,8 @@ function fixture() {
   worker.loadCatalog.mockImplementation(async (ids) => reply(ids ? [...ids] : undefined));
   return {
     access,
+    createAccess,
+    agentFacts,
     owner,
     native,
     reply,
@@ -154,6 +160,83 @@ function fixture() {
 }
 
 describe("prepared provider expiry publication", () => {
+  it("projects retained membership for each agent across scoped and native publication", async () => {
+    const f = fixture();
+    const reply = (providers?: readonly string[]) => {
+      const result = f.reply(providers ? [...providers] : undefined, 4_000);
+      for (const provider of result.configuredProviderModelIds.keys()) {
+        result.modelCatalog.entries.push({ provider, id: "extra", name: "Extra" });
+        result.runtimeModels.set(
+          provider,
+          ["first", "extra"].map((id): Model => ({
+            id,
+            name: id,
+            provider,
+            api: "openai-completions",
+            baseUrl: "https://fixture.invalid",
+            reasoning: false,
+            input: ["text"],
+            contextWindow: 4096,
+            maxTokens: 1024,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          })),
+        );
+      }
+      return result;
+    };
+    worker.loadCatalog.mockImplementation(async (ids) => reply(ids));
+    const first = await f.access.loadFullModelCatalog();
+    const ids = (access: ReturnType<typeof createFullModelCatalogAccess>, provider: string) =>
+      access
+        .readPublishedModels()
+        ?.get(provider)
+        ?.map((model) => model.id);
+    expect(first.entries).toContainEqual(
+      expect.objectContaining({ provider: "alpha", id: "native" }),
+    );
+    expect(first.entries.some(({ id }) => id === "extra")).toBe(false);
+    expect(first.routeVariants.some(({ id }) => id === "extra")).toBe(false);
+    expect(ids(f.access, "alpha")).toEqual(["first"]);
+    expect(f.owner.catalogInventory?.runtimeModels.get("alpha")?.map(({ id }) => id)).toEqual([
+      "first",
+      "extra",
+    ]);
+    const alphaMembership = f.owner.catalogInventory!.configuredProviderModelIds.get("alpha");
+    const gammaMembership = f.owner.catalogInventory!.configuredProviderModelIds.get("gamma");
+    await f.access.loadFullModelCatalog({ providerIds: ["beta"], refresh: true });
+    expect(f.owner.catalogInventory!.configuredProviderModelIds.get("alpha")).toBe(alphaMembership);
+    expect(f.owner.catalogInventory!.configuredProviderModelIds.get("gamma")).toBe(gammaMembership);
+    expect(ids(f.access, "beta")).toEqual(["first"]);
+    expect(isPreparedModelCatalogFull(f.access.readFullModelCatalog()!)).toBe(true);
+    const config = {
+      ...f.agentFacts.input.config,
+      agents: {
+        ...f.agentFacts.input.config.agents,
+        entries: {
+          narrow: { modelPolicy: { allow: ["alpha/first"] } },
+          wide: { modelPolicy: { allow: ["alpha/*"] } },
+        },
+      },
+    };
+    const calls = worker.loadCatalog.mock.calls.length;
+    for (const agentId of ["wide", "narrow"] as const) {
+      const access = f.createAccess({
+        ...f.agentFacts,
+        input: { ...f.agentFacts.input, config, agentId },
+      });
+      const catalog = access.readFullModelCatalog()!;
+      expect(
+        catalog.entries.some(({ provider, id }) => provider === "alpha" && id === "extra"),
+      ).toBe(agentId === "wide");
+      expect(
+        catalog.routeVariants.some(({ provider, id }) => provider === "alpha" && id === "extra"),
+      ).toBe(agentId === "wide");
+      expect(ids(access, "alpha")).toEqual(agentId === "wide" ? ["first", "extra"] : ["first"]);
+      expect(ids(access, "beta")).toEqual(["first"]);
+    }
+    expect(worker.loadCatalog).toHaveBeenCalledTimes(calls);
+  });
+
   it("returns saved inventory while refreshing expired providers without native reacquisition", async () => {
     const f = fixture();
     const initial = await f.access.loadFullModelCatalog();

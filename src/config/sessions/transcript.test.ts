@@ -14,7 +14,9 @@ import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
 } from "../../shared/transcript-only-openclaw-assistant.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import {
   loadTranscriptEvents,
@@ -67,6 +69,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         storePath,
       });
     } finally {
+      closeOpenClawAgentDatabasesForTest(tempDir);
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -221,6 +224,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         }),
       );
     } finally {
+      closeOpenClawAgentDatabasesForTest(tempDir);
+      await cleanupSessionStateForTest({ stateDir: path.join(tempDir, "default-state") });
       if (previousStateDir === undefined) {
         deleteTestEnvValue("OPENCLAW_STATE_DIR");
       } else {
@@ -294,6 +299,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(event.sessionKey).toBe(configuredSessionKey);
     } finally {
       emitSpy.mockRestore();
+      closeOpenClawAgentDatabasesForTest(tempDir);
+      await cleanupSessionStateForTest({ stateDir: path.join(tempDir, "default-state") });
       if (previousStateDir === undefined) {
         deleteTestEnvValue("OPENCLAW_STATE_DIR");
       } else {

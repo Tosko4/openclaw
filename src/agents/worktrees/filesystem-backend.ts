@@ -142,6 +142,22 @@ export async function detectWorktreeFilesystemBackend(
     if (apfsFilesystem.type === undefined || volume.type !== apfsFilesystem.type) {
       return null;
     }
+    const parentAcl = apfsFilesystem.readDirectoryAcl(parentPath);
+    if (parentAcl === undefined || parentAcl === "inheritable") {
+      return null;
+    }
+    const assertCloneAcls = (directory: string, parent: string) => {
+      const acl = apfsFilesystem.readDirectoryAcl(parent);
+      // A private Git template can retain ACLs from its own parent. Do not
+      // transplant those into another checkout or repair ACLs independently of Git.
+      if (
+        acl === undefined ||
+        acl === "inheritable" ||
+        apfsFilesystem.readDirectoryAcl(directory) !== "none"
+      ) {
+        throw new Error("APFS directory cloning cannot preserve directory ACLs; use Git checkout");
+      }
+    };
     return {
       id: "apfs",
       async createTemplate(destination, templateOptions) {
@@ -153,11 +169,17 @@ export async function detectWorktreeFilesystemBackend(
         if (!stats.isDirectory()) {
           throw new Error(`Worktree template is not a directory: ${source}`);
         }
+        const parent = path.dirname(destination);
+        assertCloneAcls(source, parent);
         assertActive(cloneOptions);
         // Join the atomic native operation even on cancellation, so recovery
         // cannot race a clone still writing the destination on another thread.
         await apfsFilesystem.cloneDirectory(source, destination);
         assertActive(cloneOptions);
+        // Selection may precede a long template checkout. Recheck around the
+        // native call, including ACLs inherited/copied onto the new root, so a
+        // changed policy takes the existing cleanup + native Git fallback.
+        assertCloneAcls(destination, parent);
       },
     };
   }

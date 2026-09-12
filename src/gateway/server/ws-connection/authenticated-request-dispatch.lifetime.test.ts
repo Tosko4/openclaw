@@ -10,6 +10,9 @@ import type { GatewayRequestOptions } from "../../server-methods/types.js";
 afterEach(() => {
   vi.doUnmock("./authenticated-request-dispatch.server-methods.runtime.js");
   vi.doUnmock("./request-start.js");
+  vi.doUnmock("../../session-sharing.js");
+  vi.doUnmock("../../session-sharing-target-input.js");
+  vi.doUnmock("../../server-methods/gateway-personal-caller.js");
   vi.resetModules();
 });
 
@@ -65,6 +68,24 @@ describe("authenticated request completion", { concurrent: false }, () => {
               : handleGatewayRequest,
         };
       });
+      if (stage === "profile authorization") {
+        // This admin auxiliary request has no session target or personal-caller policy.
+        // Keep the real router/profile fence without loading those unrelated runtimes.
+        vi.doMock("../../session-sharing.js", async () => {
+          const { SessionMutationAuthorizationChangedError } =
+            await import("../../session-mutation-authorization-error.js");
+          return {
+            SessionMutationAuthorizationChangedError,
+            resolveSessionMutationAuthorization: () => ({ error: null }),
+          };
+        });
+        vi.doMock("../../session-sharing-target-input.js", () => ({
+          resolveDirectIncognitoTargets: () => [],
+        }));
+        vi.doMock("../../server-methods/gateway-personal-caller.js", () => ({
+          isSyntheticGatewayCaller: () => false,
+        }));
+      }
       if (stage === "start scheduler") {
         vi.doMock("./request-start.js", () => ({ scheduleGatewayRequestStart: hold }));
       }

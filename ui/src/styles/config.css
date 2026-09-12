@@ -23,6 +23,12 @@
   gap: var(--space-3);
 }
 
+.session-source__icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
 /* Toolbar: mode toggle / section tabs */
 .config-toolbar {
   display: flex;

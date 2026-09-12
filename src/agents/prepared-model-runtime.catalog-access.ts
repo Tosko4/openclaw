@@ -1,15 +1,12 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import pLimit from "p-limit";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
-import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
 import {
   getPreparedModelFullCatalogAuth,
@@ -22,7 +19,7 @@ import type {
   PreparedModelRuntimeAgentFacts,
   PreparedModelRuntimeCatalogFacts,
 } from "./prepared-model-runtime.catalog-contract.js";
-import { prepareConfiguredRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
+import { createPreparedModelCatalogProjection } from "./prepared-model-runtime.catalog-projection.js";
 import {
   assertPreparedModelRuntimeInputCurrent,
   PreparedModelRuntimePublicationSupersededError,
@@ -35,7 +32,6 @@ import {
   mergePreparedProviderCatalog,
   isPreparedModelCatalogFull,
   markPreparedModelCatalogFull,
-  materializePreparedModelCatalog,
   mergePreparedNativeCatalog,
   prepareModelCatalogPublication,
 } from "./prepared-model-runtime.full-catalog.js";
@@ -112,43 +108,22 @@ export function createFullModelCatalogAccess(params: {
   inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttempt">;
 }): PreparedModelRuntimeCatalogAccess {
   let currentConfiguredRuntimeModels = params.catalogFacts.configuredRuntimeModels;
-  // Retain discovery, not the retired worker or its runtime capability projection.
-  const project = (catalog: ModelCatalogSnapshot) => {
-    const configured = prepareConfiguredRuntimeFacts({
-      agentFacts: params.agentFacts,
-      workspaceFacts: params.pluginGeneration,
-      templateModelRegistry: params.catalogFacts.templateModelRegistry,
-      configuredRuntimeModels: currentConfiguredRuntimeModels,
-    }).modelCatalog;
-    const current = materializePreparedModelCatalog(
-      configured,
-      params.agentFacts.runtimeCapabilityModels,
-    );
-    const projected = materializePreparedModelCatalog(
-      catalog,
-      params.agentFacts.runtimeCapabilityModels,
-      current.staticEntries,
-    );
-    projected.entries = dedupeByKey(
-      [...projected.entries, ...current.entries],
-      resolveModelCatalogIdentityKey,
-    );
-    projected.routeVariants = dedupeByKey(
-      [...projected.routeVariants, ...current.routeVariants],
-      (entry) =>
-        JSON.stringify([
-          resolveModelCatalogIdentityKey(entry),
-          entry.api,
-          entry.baseUrl,
-          entry.nativeRuntime,
-        ]),
-    );
-    prepareModelCatalogThinkingPolicies({
-      catalog: projected,
-      metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
-      providers: params.pluginGeneration.pluginRegistry?.providers,
-    });
-    return attempt.withRefreshStatus(projected);
+  let publishedRuntimeModels: PreparedModelCatalogInventory["runtimeModels"] | undefined;
+  const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
+    params.pluginGeneration.pluginMetadataSnapshot,
+    params.agentFacts.input.config,
+    params.agentFacts.env,
+  );
+  const projectInventory = createPreparedModelCatalogProjection({ ...params, normalizeProvider });
+  const project = (
+    catalog: ModelCatalogSnapshot,
+    source:
+      | Pick<PreparedModelCatalogInventory, "runtimeModels" | "configuredProviderModelIds">
+      | undefined = inventory,
+  ) => {
+    const projected = projectInventory(catalog, currentConfiguredRuntimeModels, source);
+    publishedRuntimeModels = projected.runtimeModels;
+    return attempt.withRefreshStatus(projected.catalog);
   };
   const inventoryKey = preparedModelInventoryKey(params.agentFacts.input);
   const nativeSource = fingerprintPreparedRuntimeFacts({
@@ -157,11 +132,6 @@ export function createFullModelCatalogAccess(params: {
     plugins: params.agentFacts.input.config.plugins,
     configuredModelRefs: params.agentFacts.configuredModelRefs,
   });
-  const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
-    params.pluginGeneration.pluginMetadataSnapshot,
-    params.agentFacts.input.config,
-    params.agentFacts.env,
-  );
   const previousInventory = params.inventoryOwner.catalogInventory;
   const previousAuth =
     previousInventory && getPreparedModelFullCatalogAuth(previousInventory.catalog);
@@ -212,6 +182,11 @@ export function createFullModelCatalogAccess(params: {
           ),
           runtimeModels: new Map(
             [...previousInventory.runtimeModels].filter(([provider]) =>
+              retainedProviders.has(normalizeProvider(provider)),
+            ),
+          ),
+          configuredProviderModelIds: new Map(
+            [...previousInventory.configuredProviderModelIds].filter(([provider]) =>
               retainedProviders.has(normalizeProvider(provider)),
             ),
           ),
@@ -400,6 +375,7 @@ export function createFullModelCatalogAccess(params: {
             configuredRuntimeModels,
             runtimeModels,
             providerExpiries,
+            configuredProviderModelIds,
           } = await worker.loadCatalog(providerIds);
           assertCurrent();
           const scope = new Set(
@@ -480,7 +456,14 @@ export function createFullModelCatalogAccess(params: {
           }
           setPreparedModelFullCatalogAuth(publication.catalog, auth);
           currentConfiguredRuntimeModels = configuredRuntimeModels;
-          const catalog = project(publication.catalog);
+          const membershipSource = new Map([
+            ...(inventory?.configuredProviderModelIds ?? []),
+            ...configuredProviderModelIds,
+          ]);
+          const catalog = project(publication.catalog, {
+            runtimeModels: publication.runtimeModels,
+            configuredProviderModelIds: membershipSource,
+          });
           setPreparedModelFullCatalogAuth(catalog, auth);
           assertCurrent();
           const completedProviders = new Map(providerIds ? inventory?.providers : undefined);
@@ -503,6 +486,7 @@ export function createFullModelCatalogAccess(params: {
           }
           inventory = {
             ...publication,
+            configuredProviderModelIds: membershipSource,
             key: inventoryKey,
             pluginFingerprint,
             nativeSource,
@@ -610,6 +594,7 @@ export function createFullModelCatalogAccess(params: {
           inventory = {
             catalog: mergePreparedNativeCatalog(rawCatalog, rawInventory),
             runtimeModels: inventory?.runtimeModels ?? new Map(),
+            configuredProviderModelIds: inventory?.configuredProviderModelIds ?? new Map(),
             key: inventoryKey,
             pluginFingerprint,
             nativeSource,
@@ -685,7 +670,7 @@ export function createFullModelCatalogAccess(params: {
     },
     readPublishedModels: () => {
       assertCurrent();
-      return inventory?.runtimeModels;
+      return publishedRuntimeModels;
     },
     loadFullModelCatalog: async (options) => {
       let timer: ReturnType<typeof setTimeout> | undefined;

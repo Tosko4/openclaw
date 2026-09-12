@@ -136,6 +136,28 @@ if (!require("node:worker_threads").isMainThread) {
         models: { [`${PROVIDER_ID}/sqlite-model`]: { agentRuntime: { id: HARNESS_ID } } },
       },
     },
+    ...(cachedCatalog
+      ? {
+          models: {
+            providers: {
+              [PROVIDER_ID]: {
+                api: "openai-completions" as const,
+                baseUrl: "https://worker-catalog.invalid/v1",
+                models: [
+                  {
+                    id: "sqlite-model",
+                    name: "SQLite model",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    maxTokens: 4096,
+                  },
+                ],
+              },
+            },
+          },
+        }
+      : {}),
     plugins: {
       allow: [PLUGIN_ID],
       load: { paths: [pluginFile] },
@@ -268,6 +290,10 @@ describe("prepared model catalog worker generation mismatch", () => {
     });
     const first = await worker.loadCatalog([PROVIDER_ID]);
     expect(first.providerExpiries).toEqual(new Map([[PROVIDER_ID, 2_000]]));
+    expect(first.configuredProviderModelIds).toEqual(new Map([[PROVIDER_ID, ["sqlite-model"]]]));
+    expect(first.runtimeModels.get(PROVIDER_ID)?.map(({ id }) => id)).toContain(
+      "plugin-generation-v1",
+    );
     expect(workerBoundary.directories).toHaveLength(1);
     const directory = workerBoundary.directories[0]!;
     expect(fs.existsSync(directory)).toBe(true);
@@ -277,6 +303,7 @@ describe("prepared model catalog worker generation mismatch", () => {
     fs.writeFileSync(fixture.clockFile, "1250");
     const cached = await worker.loadCatalog([PROVIDER_ID]);
     expect(cached.providerExpiries).toEqual(first.providerExpiries);
+    expect(cached.configuredProviderModelIds).toEqual(first.configuredProviderModelIds);
     expect(workerBoundary.directories).toEqual([directory]);
     expect(cached.modelCatalog.entries).toContainEqual(
       expect.objectContaining({ provider: PROVIDER_ID, id: "sqlite-model" }),

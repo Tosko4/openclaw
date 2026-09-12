@@ -49,6 +49,7 @@ export type PreparedModelWorkerResult =
       snapshot: ModelCatalogSnapshot;
       runtimeModels: Map<string, Model[]>;
       providerExpiries: Map<string, number>;
+      configuredProviderModelIds: Map<string, readonly string[]>;
       configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
       credentials: Readonly<AuthStorageData>;
       providerAuthLabels: ModelCatalogAuthLabels;

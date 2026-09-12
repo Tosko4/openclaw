@@ -1,6 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue } from "../config/types.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
+import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import type { StateMigrationResult } from "./doctor-config-preflight.state-migration.test-helpers.js";
 
 const autoMigrateLegacyStateDir = vi.hoisted(() =>
@@ -75,6 +78,13 @@ const addDoctorLegacyIssues = vi.hoisted(() =>
   }),
 );
 const note = vi.hoisted(() => vi.fn());
+const rehearsal = vi.hoisted(() =>
+  vi.fn(async () => ({ copiedFiles: 2, warnings: ["rehearsal advisory"] })),
+);
+vi.mock("../infra/update-candidate-plugin-repair.js", () => ({
+  completeUpdateCandidatePluginRehearsal: rehearsal,
+}));
+const dirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../infra/state-migrations.doctor.js", () => ({
   autoMigrateLegacyState,
@@ -226,6 +236,41 @@ describe("runDoctorConfigPreflight state migration input", () => {
       }
       expect(result.snapshot.sourceConfig).toEqual(original.sourceConfig);
       expect(snapshot).toEqual(original);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps rehearsal completion separate from migration convergence (%s)",
+    async (converged) => {
+      const snapshot = retiredInstallSnapshot();
+      const original = structuredClone(snapshot);
+      readConfigFileSnapshot.mockResolvedValueOnce(snapshot);
+      await withEnvAsync(
+        {
+          ...buildUpdateRehearsalPathEnv(dirs.make("preflight-convergence-rehearsal-")),
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+          OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "0",
+          OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
+          OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
+        },
+        async () => {
+          const result = await runDoctorConfigPreflight({
+            migrateLegacyConfig: false,
+            invalidConfigNote: false,
+            doctorOnlyStateMigrations: true,
+            ...(converged ? { migrationPluginsConverged: true as const } : {}),
+          });
+          expect(rehearsal).toHaveBeenCalledTimes(1);
+          expect(autoMigrateLegacyState).toHaveBeenCalledTimes(converged ? 1 : 0);
+          expect(note).toHaveBeenCalledWith(
+            expect.stringContaining("rehearsal advisory"),
+            expect.any(String),
+          );
+          expect(result.snapshot.sourceConfig).toEqual(original.sourceConfig);
+          expect(snapshot).toEqual(original);
+        },
+      );
     },
   );
 
