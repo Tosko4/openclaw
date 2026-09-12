@@ -1839,7 +1839,15 @@ describe("models.list", () => {
     expect(respond).toHaveBeenCalledWith(
       true,
       {
-        models: [{ id: "llama-secure", name: "Llama Secure", provider: "vllm", available: false }],
+        models: [
+          {
+            id: "llama-secure",
+            name: "Llama Secure",
+            provider: "vllm",
+            available: false,
+            tags: ["default"],
+          },
+        ],
       },
       undefined,
     );
@@ -1876,7 +1884,13 @@ describe("models.list", () => {
       true,
       {
         models: [
-          { id: "llama-managed", name: "Llama Managed", provider: "vllm", available: false },
+          {
+            id: "llama-managed",
+            name: "Llama Managed",
+            provider: "vllm",
+            available: false,
+            tags: ["default"],
+          },
         ],
       },
       undefined,
@@ -2438,6 +2452,7 @@ describe("models.list", () => {
                 name: "Llama Secure",
                 provider: "vllm",
                 available: fixture.available,
+                tags: ["default"],
                 ...(fixture.unavailableReason
                   ? { unavailableReason: fixture.unavailableReason }
                   : {}),
