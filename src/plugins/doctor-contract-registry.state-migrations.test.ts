@@ -25,6 +25,7 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 let clearPluginDoctorContractRegistryCache: typeof import("./doctor-contract-registry.test-fixtures.js").clearPluginDoctorContractRegistryCache;
 let listPluginDoctorLegacyConfigRules: typeof import("./doctor-contract-registry.js").listPluginDoctorLegacyConfigRules;
 let listPluginDoctorStateMigrationEntries: typeof import("./doctor-contract-registry.js").listPluginDoctorStateMigrationEntries;
+let collectPluginDoctorMigrationBackupResources: typeof import("./doctor-contract-registry.js").collectPluginDoctorMigrationBackupResources;
 let resolveLivePluginDoctorStateMigrationInventory: typeof import("./doctor-contract-registry.js").resolveLivePluginDoctorStateMigrationInventory;
 let waitForPluginCacheRetirement:
   | typeof import("./plugin-cache.js").waitForPluginCacheRetirement
@@ -62,6 +63,39 @@ function writeLegacySetupEntry(
   };
 }
 
+function installMigrationBackupResources(resources: unknown, declared = true): void {
+  const pluginRoot = makeTempDir();
+  fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n");
+  mocks.createJiti.mockImplementation(() => () => ({
+    stateMigrations: [
+      {
+        id: "legacy-index",
+        label: "Legacy index",
+        ...(declared ? { collectBackupResources: () => resources } : {}),
+        detectLegacyState: () => {
+          throw new Error("backup inventory must not detect or migrate state");
+        },
+        migrateLegacyState: () => {
+          throw new Error("backup inventory must not detect or migrate state");
+        },
+      },
+    ],
+  }));
+  mocks.loadPluginManifestRegistry.mockReturnValue({
+    plugins: [
+      {
+        id: "index-owner",
+        origin: "bundled",
+        rootDir: pluginRoot,
+        channels: [],
+        providers: [],
+        doctorContract: { stateMigrations: [{ id: "legacy-index" }] },
+      },
+    ],
+    diagnostics: [],
+  });
+}
+
 afterEach(async () => {
   setPluginDoctorContractRegistryModuleLoaderFactoryForTest?.(undefined);
   try {
@@ -77,6 +111,7 @@ describe("doctor-contract-registry state migrations", () => {
     ({
       listPluginDoctorLegacyConfigRules,
       listPluginDoctorStateMigrationEntries,
+      collectPluginDoctorMigrationBackupResources,
       resolveLivePluginDoctorStateMigrationInventory,
     } = await import("./doctor-contract-registry.js"));
     ({
@@ -97,6 +132,79 @@ describe("doctor-contract-registry state migrations", () => {
     }
     setPluginDoctorContractRegistryModuleLoaderFactoryForTest(mocks.createJiti);
     clearPluginDoctorContractRegistryCache();
+  });
+
+  it("preserves read-only backup resources through the declared migration artifact", async () => {
+    installMigrationBackupResources([{ path: "/external/index.db", kind: "sqlite" }]);
+
+    const [entry] = listPluginDoctorStateMigrationEntries({ config: {}, env: {} });
+    const resources = await entry?.migration.collectBackupResources?.({
+      config: {},
+      env: {},
+      stateDir: "/state",
+    });
+    expect(resources ?? []).toEqual([{ path: "/external/index.db", kind: "sqlite" }]);
+    expect(
+      await collectPluginDoctorMigrationBackupResources({
+        config: {},
+        env: {},
+        stateDir: "/state",
+        warnings: [],
+      }),
+    ).toEqual([{ path: path.normalize("/external/index.db"), kind: "sqlite" }]);
+  });
+
+  it("records a warning for undeclared private migration resources and continues capture", async () => {
+    installMigrationBackupResources([], false);
+    const warnings: Parameters<typeof collectPluginDoctorMigrationBackupResources>[0]["warnings"] =
+      [];
+    await expect(
+      collectPluginDoctorMigrationBackupResources({
+        config: {},
+        env: {},
+        stateDir: "/state",
+        warnings,
+      }),
+    ).resolves.toEqual([]);
+    expect(warnings).toEqual([
+      {
+        kind: "undeclared-migration-resources",
+        pluginId: "index-owner",
+        message:
+          "index-owner migration declares no data resources; its private state is not in the recovery set",
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "relative path",
+      resources: [{ path: "relative/index.db", kind: "sqlite" }],
+      error: "Invalid migration backup resource",
+    },
+    {
+      name: "unknown resource kind",
+      resources: [{ path: "/external/index.db", kind: "unknown" }],
+      error: "Invalid migration backup resource",
+    },
+    {
+      name: "conflicting resource kinds",
+      resources: [
+        { path: "/external/index.db", kind: "sqlite" },
+        { path: "/external/index.db", kind: "file" },
+      ],
+      error: "Conflicting migration backup resource kinds",
+    },
+  ])("refuses incomplete recovery inventories: $name", async ({ resources, error }) => {
+    installMigrationBackupResources(resources);
+    await expect(
+      collectPluginDoctorMigrationBackupResources({
+        config: {},
+        env: {},
+        stateDir: "/state",
+        warnings: [],
+      }),
+    ).rejects.toThrow(error);
   });
 
   it("freezes dynamic and declared live actions in stable owner order", () => {

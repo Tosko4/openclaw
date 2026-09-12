@@ -17,6 +17,7 @@ const RETAINED_STEP_NAMES = [
   "notice:activating",
   "notice:verifying",
   "previous generation restoration",
+  "state rollback",
   "post-update verification",
   "driver:adopted",
   "driver:identity-unavailable",
@@ -102,10 +103,11 @@ function boundedJson(input: unknown, maxBytes = JSON_BYTES): string {
 }
 
 function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
-  const { driver, previousDrivers, ...diagnostics } = origin;
+  const { driver, previousDrivers, updateRecoveryCapture, ...diagnostics } = origin;
   const identities = JSON.stringify({ driver, previousDrivers });
   const boundedDiagnostics = boundedJson(diagnostics, JSON_BYTES - Buffer.byteLength(identities));
-  return `{${[identities.slice(1, -1), boundedDiagnostics.slice(1, -1)].filter(Boolean).join(",")}}`;
+  const recovery = JSON.stringify({ updateRecoveryCapture });
+  return `{${[identities.slice(1, -1), boundedDiagnostics.slice(1, -1), recovery.slice(1, -1)].filter(Boolean).join(",")}}`;
 }
 
 export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOptions): UpdateRuns {
@@ -143,8 +145,8 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
         ]
       : [];
   });
-  // Process identities are exact observations, never redacted diagnostic strings.
-  const { driver, previousDrivers, ...originDiagnostics } = input.origin;
+  // Recovery receipts and process identities must remain exact, not diagnostic excerpts.
+  const { driver, previousDrivers, updateRecoveryCapture, ...originDiagnostics } = input.origin;
   const record = UpdateRunRecordSchema.parse(
     mapJsonText({ ...input, origin: originDiagnostics }, (value) => {
       let text = redactSensitiveText(value, { mode: "tools" });
@@ -158,6 +160,7 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     ...record.origin,
     driver,
     previousDrivers,
+    updateRecoveryCapture,
   });
   return {
     run_id: record.runId,

@@ -1,17 +1,25 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-db-maintenance.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
 } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { hasErrnoCode } from "./errno.js";
+import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "./kysely-sync.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
 import { inspectUpdateRunAbandonment } from "./update-run-activity.js";
 import { decodeRun } from "./update-run-codec.js";
 import type { UpdateFetchFailure, UpdateRunRecord } from "./update-run-record.js";
@@ -37,7 +45,46 @@ export async function getUpdateRunAsync(
   );
 }
 
+/** Recovery reads the stable run record even when the candidate migrated application state ahead. */
+export async function getUpdateRunForRecovery(
+  runId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<UpdateRunRecord | undefined> {
+  const pathname = path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env));
+  try {
+    await fs.stat(pathname);
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  }
+  const snapshot = await prepareSqliteReadOnlyLocation(pathname, { preserveSourceArtifacts: true });
+  try {
+    const db = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
+    try {
+      assertOpenClawStateDatabaseOwner(db, { pathname });
+      return tableExists(db, "update_runs") ? readUpdateRunRecord(db, runId) : undefined;
+    } finally {
+      clearNodeSqliteKyselyCacheForDatabase(db);
+      db.close();
+    }
+  } finally {
+    snapshot.cleanup();
+  }
+}
+
 type ListInput = { limit?: number; active?: boolean; reason?: string };
+
+/** A capped active-owner listing cannot establish complete recovery ownership. */
+export function requireCompleteActiveUpdateRuns(runs: UpdateRunRecord[]): UpdateRunRecord[] {
+  if (runs.length >= 100) {
+    throw new Error(
+      "Doctor cannot verify every active update owner; resolve update history first.",
+    );
+  }
+  return runs;
+}
 
 function readRuns(db: DatabaseSync, input: ListInput): UpdateRunRecord[] {
   if (!tableExists(db, "update_runs")) {

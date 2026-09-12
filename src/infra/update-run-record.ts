@@ -24,6 +24,35 @@ export type UpdateRunRecord = z.infer<typeof UpdateRunRecordSchema>;
 export type UpdateRunPhase = UpdateRunRecord["phase"];
 export type UpdateRunStep = UpdateRunRecord["steps"][number];
 
+export function hasActiveUpdateDoctorStep(
+  run: UpdateRunRecord | undefined,
+): run is UpdateRunRecord {
+  return (
+    run?.status === "running" &&
+    run.steps.some((step) => step.step === "openclaw doctor" && step.status === "in_progress")
+  );
+}
+
+export function resolveUpdateRecoveryTerminalOutcome(
+  run: UpdateRunRecord | undefined,
+  manifestSha256: string,
+): "committed" | "restored" | undefined {
+  if (
+    !run ||
+    (run.origin.updateRecoveryCapture &&
+      run.origin.updateRecoveryCapture.manifestSha256 !== manifestSha256)
+  ) {
+    return undefined;
+  }
+  if (run.status === "succeeded") {
+    return "committed";
+  }
+  if (run.status === "rolled-back" || run.origin.updateRecoveryCapture?.restored === true) {
+    return "restored";
+  }
+  return undefined;
+}
+
 export type FinishUpdateRunResult = {
   status: Exclude<UpdateRunRecord["status"], "running">;
   reason?: string;

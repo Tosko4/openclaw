@@ -6,6 +6,7 @@ import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import { normalizeUpdatePostInstallDoctorWarnings } from "../../infra/update-doctor-result.js";
 import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
+import type { UpdateRecoveryBackupRef } from "../../infra/update-recovery-backup-contract.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -24,6 +25,10 @@ import {
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 export async function convergeUpdatePlugins(params: {
+  updateRecoveryBackup?: UpdateRecoveryBackupRef;
+  candidateUpdateRecovery?: "parent-v1";
+  deferFailureRecoveryToParent?: boolean;
+  preparePersistentMutation?: () => Promise<UpdateRecoveryBackupRef>;
   coreAlreadyCurrent?: boolean;
   result: UpdateRunResult;
   root: string;
@@ -49,6 +54,13 @@ export async function convergeUpdatePlugins(params: {
   cancelled?: boolean;
 }> {
   const postUpdateRoot = params.result.root ?? params.root;
+  const prepareMutation = async () => {
+    if (!params.updateRecoveryBackup && params.preparePersistentMutation) {
+      params.updateRecoveryBackup = await params.preparePersistentMutation();
+      params.candidateUpdateRecovery = "parent-v1";
+    }
+    await params.beforePersistentEffect?.();
+  };
   const preUpdateConfig = params.configSnapshot.valid
     ? {
         sourceConfig: params.configSnapshot.sourceConfig,
@@ -68,9 +80,11 @@ export async function convergeUpdatePlugins(params: {
     postUpdateRoot,
   );
   const retainedDifferentRuntime =
+    !params.deferFailureRecoveryToParent &&
     params.coreAlreadyCurrent === true &&
     (runtimeRootChanged || (versionComparison !== null && versionComparison !== 0));
   const shouldResumePostCoreInFreshProcess =
+    !params.deferFailureRecoveryToParent &&
     (!params.coreAlreadyCurrent || retainedDifferentRuntime) &&
     shouldResumePostCoreUpdateInFreshProcess({
       // An already-current install can still differ from the retained updater.
@@ -182,7 +196,7 @@ export async function convergeUpdatePlugins(params: {
             acceptCapabilities: params.opts.acceptCapabilities,
             timeoutMs: params.updateStepTimeoutMs,
             pluginInstallRecords,
-            beforePersistentEffect: params.beforePersistentEffect,
+            beforePersistentEffect: prepareMutation,
           });
         });
       }
@@ -194,7 +208,15 @@ export async function convergeUpdatePlugins(params: {
           root: postUpdateRoot,
           pluginUpdate: postCorePluginUpdate,
           freshDoctorRequired: postCorePluginUpdate.changed,
-          beforeDoctor: params.beforeDoctor,
+          beforeDoctor: async () => {
+            await prepareMutation();
+            await params.beforeDoctor?.();
+          },
+          get updateRecoveryBackup() {
+            return params.candidateUpdateRecovery === "parent-v1"
+              ? params.updateRecoveryBackup
+              : undefined;
+          },
           yes: params.opts.yes === true,
           json: params.opts.json === true,
           timeoutMs: params.updateStepTimeoutMs,
@@ -255,6 +277,7 @@ export async function convergeUpdatePlugins(params: {
         params.coreAlreadyCurrent &&
         resultWithPostUpdate.status !== "error" &&
         (postCorePluginUpdate?.changed ||
+          params.updateRecoveryBackup !== undefined ||
           (params.requestedChannel !== null && params.requestedChannel !== params.storedChannel))
       ) {
         resultWithPostUpdate = { ...resultWithPostUpdate, status: "ok" };

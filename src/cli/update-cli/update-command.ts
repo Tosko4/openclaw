@@ -601,6 +601,10 @@ async function updateCommandInternal(
     assertUpdatePackageActivationAdmission(captureUpdateCommandExecutorAuthority(fence).installKey);
     // Cleanup, state-write admission and updater autostart belong after complete target admission.
     await withOwnedManagedUpdateEnv(env, async () => {
+      const { assertUpdateCommandBackupRecovery } =
+        await import("./update-command-backup-lifecycle.js");
+      await assertUpdateCommandBackupRecovery({ opts, root, env: process.env });
+      fence.assertCurrent();
       await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
       fence.assertCurrent();
       await assertOpenClawStateWriteAllowedAtPath({
@@ -657,6 +661,9 @@ async function updateCommandInternal(
   result.runId = run.runId;
   if (result.status === "skipped" && result.reason === "already-current") {
     stop();
+    // Git no-ops still need their executor before plugin convergence can capture state.
+    run.executorFence ??= await executor.enter(result.root ?? root, { preflight: true });
+    run.executorFence.assertCurrent();
     return await finishAlreadyCurrentUpdate({
       ...currentCoreFinalization,
       root: result.root ?? root,
@@ -707,9 +714,12 @@ async function updateCommandInternal(
         env: ownedManagedUpdateContext?.env ?? run.env,
       });
   run.executorFence?.assertCurrent();
-  if (opts.recovery || rollbackBlockedReason) {
-    // A migrated database belongs to the candidate runtime. The old process
-    // must not reopen it, including during error reporting or outer cleanup.
+  if (
+    opts.recovery ||
+    rollbackBlockedReason ||
+    (finalization.updateRecoveryBackup && finalization.candidateUpdateRecovery === "parent-v1")
+  ) {
+    // The parent keeps restoration authority until protected convergence has settled.
     recoveryState.ledgerHandoffOwned = true;
     const continued = await continueMigratedUpdateInFreshProcess(
       { ...finalization, rollbackBlockedReason },

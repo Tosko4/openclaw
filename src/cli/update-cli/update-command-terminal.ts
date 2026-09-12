@@ -24,7 +24,11 @@ import { completeUpdateCommandRun } from "./update-command-run.js";
 
 type Run = NonNullable<UpdateCommandOptions["run"]>;
 type Publisher = (failure?: unknown) => Promise<UpdateRunResult>;
-const terminalOwners = new WeakMap<Run, { publish?: Publisher }>();
+type TerminalOwner = {
+  publish?: Publisher;
+  capture?: { result: UpdateRunResult; retire: (result: UpdateRunResult) => Promise<void> };
+};
+const terminalOwners = new WeakMap<Run, TerminalOwner>();
 
 /** Finalization prepares a report; the outer invocation owns its publication. */
 export function deferUpdateCommandTerminalResult(
@@ -43,11 +47,22 @@ export function hasDeferredUpdateCommandTerminalResult(run: Run): boolean {
   return terminalOwners.get(run)?.publish !== undefined;
 }
 
+export function deferUpdateCommandCaptureRetirement(
+  run: Run | undefined,
+  result: UpdateRunResult,
+  retire: (result: UpdateRunResult) => Promise<void>,
+): boolean {
+  const owner = run && terminalOwners.get(run);
+  if (!owner) return false;
+  owner.capture = { result, retire };
+  return true;
+}
+
 /** Enclose the real executor so its final checks and release precede terminal output. */
 export async function withUpdateCommandTerminalResult<T>(
   operation: (registerRun: (run: Run) => void) => Promise<T>,
 ): Promise<T> {
-  const owner: { publish?: Publisher } = {};
+  const owner: TerminalOwner = {};
   let run: Run | undefined;
   let registrationOpen = true;
   const registerRun = (admitted: Run) => {
@@ -68,8 +83,10 @@ export async function withUpdateCommandTerminalResult<T>(
       terminalOwners.delete(run);
     }
   }
+  let captureResult = owner.capture?.result;
   if (owner.publish) {
     const result = await owner.publish("error" in outcome ? outcome.error : undefined);
+    captureResult = result;
     if ("error" in outcome) {
       const failure = outcome.error;
       if (failure instanceof UpdateCommandPendingRecoveryFailure) {
@@ -92,6 +109,9 @@ export async function withUpdateCommandTerminalResult<T>(
   }
   if ("error" in outcome) {
     throw outcome.error;
+  }
+  if (captureResult) {
+    await owner.capture?.retire(captureResult);
   }
   return outcome.value;
 }

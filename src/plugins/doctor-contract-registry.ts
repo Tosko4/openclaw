@@ -21,6 +21,8 @@ import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.
 import {
   coercePluginDoctorContractModule,
   type PluginDoctorContractModule,
+  type PluginDoctorMigrationBackupResource,
+  type PluginDoctorMigrationBackupWarning,
   type PluginDoctorStateMigration,
 } from "./doctor-contract-module.js";
 import { pluginDoctorContractRegistryLoaderState } from "./doctor-contract-registry-loader-state.js";
@@ -401,6 +403,21 @@ export function listPluginDoctorStateMigrationEntries(params?: {
     resolvePluginDoctorStateMigrationRecords(params ?? {}),
     params?.validateDeclarations,
   );
+}
+
+/** Inspect plugin-owned migration paths before the updater captures its recovery set. */
+export async function collectPluginDoctorMigrationBackupResources(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  warnings: PluginDoctorMigrationBackupWarning[];
+  workspaceDir?: string;
+}): Promise<PluginDoctorMigrationBackupResource[]> {
+  const entries = loadPluginDoctorStateMigrationEntries(
+    resolvePluginDoctorStateMigrationRecords({ ...params, artifactPreservingReadOnly: true }),
+  );
+  const { collectPluginDoctorMigrationResources } = await import("./doctor-migration-resources.js");
+  return await collectPluginDoctorMigrationResources(entries, params);
 }
 
 function loadPluginDoctorStateMigrationEntries(

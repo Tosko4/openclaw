@@ -10,6 +10,8 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { createConfigIO } from "../../config/config.js";
 import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../../infra/file-lock.js";
+import { tryAcquireExclusiveSqliteCoordinator } from "../../infra/sqlite-coordinator.js";
+import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
   captureUpdateDoctorConfigWrites,
@@ -19,6 +21,8 @@ import { NativePackageRollbackError } from "../../infra/update-native-package-st
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { createUpdateCommandBackup } from "./update-command-backup-lifecycle.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
@@ -142,6 +146,99 @@ describe("verified package rollback", () => {
       return "ok";
     });
   });
+  it.each([false, true])(
+    "restores captured state with writer custody (independent writer=%s)",
+    async (writerActive) => {
+      const env = { OPENCLAW_STATE_DIR: path.join(dirs.make("rollback-state-capture-"), "state") };
+      const configSnapshot = await readPreviousConfig(env);
+      const run = {
+        runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+        env,
+        executorFence: { assertCurrent() {} },
+      };
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      const database = new DatabaseSync(databasePath);
+      database.exec(
+        "CREATE TABLE capture_fixture (value TEXT); INSERT INTO capture_fixture VALUES ('before')",
+      );
+      database.close();
+      const backup = await createUpdateCommandBackup({ opts: { run }, root: previousRoot, env });
+      const changed = new DatabaseSync(databasePath);
+      changed.exec("UPDATE capture_fixture SET value = 'after'");
+      changed.close();
+      const anchor = acquireGatewayLifecycleCoordinator({ databasePath });
+      anchor.release();
+      const writer = writerActive ? tryAcquireExclusiveSqliteCoordinator(anchor.path) : null;
+      if (writerActive) expect(writer).not.toBeNull();
+      const rollback = vi.fn(async () => {
+        const contender = tryAcquireExclusiveSqliteCoordinator(anchor.path);
+        contender?.release();
+        expect(contender).toBeNull();
+        return {
+          name: "package rollback",
+          activePackageRoot: previousRoot,
+          command: "restore",
+          cwd: previousRoot,
+          exitCode: 0,
+          durationMs: 1,
+        };
+      });
+      let outcome: Awaited<ReturnType<typeof rollbackFailedUpdate>>;
+      try {
+        outcome = await rollbackFailedUpdate({
+          result: {
+            status: "error",
+            mode: "npm",
+            root: candidateRoot,
+            reason: "doctor-failed",
+            before: { version: "2026.9.1" },
+            steps: [],
+            durationMs: 1,
+          },
+          previousRoot,
+          previousVerified: true,
+          configSnapshot,
+          updateRecoveryBackup: backup,
+          packageTransaction: { backupRoot: previousRoot, complete: async () => {}, rollback },
+          opts: { run, json: true },
+          preManagedServiceStop: {
+            stopped: true,
+            running: true,
+            inspected: true,
+            runtimeInspected: true,
+            serviceEnv: env,
+          },
+          timeoutMs: 1000,
+        });
+      } finally {
+        writer?.release();
+      }
+      expect(outcome.stateRestored).toBe(!writerActive);
+      expect(rollback).toHaveBeenCalledTimes(writerActive ? 0 : 1);
+      expect(mocks.restart).toHaveBeenCalledTimes(writerActive ? 0 : 1);
+      const restored = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(restored.prepare("SELECT value FROM capture_fixture").get()?.value).toBe(
+          writerActive ? "after" : "before",
+        );
+      } finally {
+        restored.close();
+      }
+      if (!writerActive) {
+        expect(outcome.result.steps).toContainEqual(
+          expect.objectContaining({
+            advisory: {
+              kind: "recoverable-maintenance",
+              message: `State restored: discarded post-capture writes to sqlite ${databasePath}.`,
+            },
+          }),
+        );
+      }
+      const released = tryAcquireExclusiveSqliteCoordinator(anchor.path);
+      released?.release();
+      expect(released).not.toBeNull();
+    },
+  );
   it.each([
     { reachable: true, duringStop: false },
     { reachable: false, duringStop: false },

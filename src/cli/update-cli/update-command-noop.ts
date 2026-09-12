@@ -1,9 +1,20 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { createPackageIntegrityReader } from "../../infra/package-update-integrity.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
+import type { UpdateRecoveryBackupRef } from "../../infra/update-recovery-backup-contract.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { readPackageVersion, resolveNodeRunner, UpdatePreMutationError } from "./shared.js";
+import {
+  createUpdateCommandBackup,
+  preflightUpdateCommandBackup,
+  reconcileUpdateCommandBackups,
+} from "./update-command-backup-lifecycle.js";
 import { maybeRepairLegacyConfigForUpdateChannel } from "./update-command-config.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
@@ -15,8 +26,10 @@ import {
   captureOwnedManagedUpdateContext,
   revalidateUpdateDatabaseContext,
 } from "./update-command-managed-context.js";
+import { inspectUpdateRuntimeCapability } from "./update-command-migrated.js";
 import { preflightConfiguredNpmPluginTargets } from "./update-command-plugin-preflight.js";
 import { finishUpdate } from "./update-command-post-update.js";
+import { createUpdateCommandFinalizationFence } from "./update-command-recovery.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
   GatewayServiceUpdateOwnershipError,
@@ -156,6 +169,7 @@ export async function finishAlreadyCurrentUpdate(
       invocationCwd: params.invocationCwd,
     });
     const env = owned?.env ?? context.env;
+    await reconcileUpdateCommandBackups({ opts: params.opts, root: params.root, env });
     let configSnapshot = owned?.configSnapshot ?? context.configSnapshot;
     const plan =
       params.legacyConfigPlan?.snapshot.path === configSnapshot.path
@@ -186,7 +200,7 @@ export async function finishAlreadyCurrentUpdate(
       result.reason = "already-current";
     }
     params.stop();
-    await finishUpdate({
+    const finalization: FinishUpdateParams = {
       ...params,
       packageUpdateNodeRunner,
       serviceRuntimeRefreshRequired: runtime.value.replacedNodeRunner !== undefined,
@@ -200,7 +214,84 @@ export async function finishAlreadyCurrentUpdate(
       ownedManagedUpdateEnv: env,
       configSnapshot,
       preUpdatePluginInstallRecords: owned?.pluginInstallRecords ?? {},
-    });
+    };
+    const assertCurrent = createUpdateCommandFinalizationFence(finalization);
+    let capture: Promise<UpdateRecoveryBackupRef> | undefined;
+    finalization.preparePersistentMutation = () =>
+      (capture ??= (async () => {
+        assertCurrent();
+        const { check, contract } = await inspectUpdateRuntimeCapability({
+          command: [
+            packageUpdateNodeRunner ?? resolveNodeRunner(),
+            path.join(
+              params.root,
+              "dist",
+              runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
+            ),
+          ],
+          root: params.root,
+          env,
+        });
+        assertCurrent();
+        if (
+          check.termination !== "exit" ||
+          check.code !== 0 ||
+          check.cleanup !== "normal" ||
+          contract?.updateRecovery !== "parent-v1"
+        ) {
+          throw new UpdatePreMutationError(
+            "update-recovery-unsupported",
+            "Upgrade the core before running protected plugin maintenance.",
+          );
+        }
+        await preflightUpdateCommandBackup({ opts: params.opts, root: params.root, env });
+        assertCurrent();
+        const before = finalization.preManagedServiceStop!;
+        if (!before.stopped) {
+          await before.windowsTaskAutoStartRecovery?.complete(true);
+          assertCurrent();
+          const stopped = await maybeStopManagedServiceBeforeMutableUpdate({
+            ...inspection,
+            root: params.root,
+            shouldRestart: true,
+            phase: "prepare",
+            expectedService: before,
+            updateRun: params.opts.run,
+            onStopped: (state) => {
+              finalization.preManagedServiceStop = state;
+            },
+          });
+          finalization.preManagedServiceStop = stopped;
+          assertCurrent();
+          if (stopped.blockMessage || (stopped.running && !stopped.stopped)) {
+            throw new Error(stopped.blockMessage ?? "Gateway writers could not be parked.");
+          }
+        }
+        const fingerprint = await createPackageIntegrityReader().tree(
+          await fs.realpath(params.root),
+        );
+        assertCurrent();
+        const backup = await createUpdateCommandBackup({
+          opts: params.opts,
+          root: params.root,
+          env,
+        });
+        assertCurrent();
+        finalization.unchangedCore = { root: params.root, fingerprint };
+        finalization.updateRecoveryBackup = backup;
+        finalization.candidateUpdateRecovery = "parent-v1";
+        finalization.mutationStarted = true;
+        finalization.preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
+        return backup;
+      })().catch((cause: unknown) => {
+        assertCurrent();
+        if (finalization.updateRecoveryBackup || cause instanceof UpdatePreMutationError)
+          throw cause;
+        throw new UpdatePreMutationError("update-capture-failed", formatErrorMessage(cause), {
+          cause,
+        });
+      }));
+    await finishUpdate(finalization);
   }).catch(async (error: unknown) => {
     if (
       error instanceof UpdatePreMutationError ||

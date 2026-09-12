@@ -308,8 +308,9 @@ parent directories are synchronized where supported. Windows does not provide th
 same parent-directory durability guarantee.
 
 Doctor restore reports intentionally disposed originals and pending cleanup
-explicitly. Neither update nor cleanup creates an automatic full-state backup;
-these recovery originals are **not a full pre-upgrade backup**. See
+explicitly. These migration originals are separate from the current updater's
+[transaction-scoped recovery captures](/cli/update/how-updates-run#recovery-captures-and-limits)
+and are **not a full pre-upgrade backup**. See
 [Before updating: create a verified backup](/install/updating#before-updating-create-a-verified-backup)
 for backup coverage and [Doctor recovery](/cli/doctor#session-sqlite-migration)
 for restoring retained originals.

@@ -58,6 +58,7 @@ import {
   migrateLegacyCollectionBackups,
   type LegacyCollectionBackupRoot,
 } from "./doctor-skill-workshop-collection-backups.js";
+import { MANIFEST_PATH, RECOVERY_PROPOSALS_DIR } from "./doctor-skill-workshop-readonly.js";
 import {
   classifyWorkshopRelocation,
   inferOwnerAgentId,
@@ -78,12 +79,6 @@ import {
   prepareWorkshopWorkspaceRelocation,
 } from "./doctor-skill-workshop-workspaces.js";
 
-const WORKSHOP_DIR = "skill-workshop";
-const MANIFEST_PATH = `${WORKSHOP_DIR}/proposals.json`;
-// Preserve incomplete proposal artifacts outside active discovery so Doctor
-// does not retry an impossible import on every run.
-const RECOVERY_DIR = `${WORKSHOP_DIR}/recovery`;
-const RECOVERY_PROPOSALS_DIR = `${RECOVERY_DIR}/proposals`;
 // Legacy rollback JSON can expand control characters sixfold across 1 MiB of
 // SKILL.md plus 64 existing 256 KiB support targets.
 const MAX_ROLLBACK_BYTES = 128 * 1024 * 1024;

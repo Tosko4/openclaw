@@ -23,6 +23,10 @@ import {
 } from "./kysely-sync.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 import {
+  mergeUpdateRecoveryCaptureState,
+  type UpdateRecoveryCaptureState,
+} from "./update-recovery-backup-contract.js";
+import {
   isAbandonedUpdateRun,
   isStaleIdentitylessUpdateRun,
   recordedUpdateRunDrivers,
@@ -551,6 +555,26 @@ export function recordUpdateRunStep(
       if (record.status === "running") {
         upsertStep(record, step);
       }
+    },
+    options,
+  );
+}
+
+/** Exact recovery receipts share the existing run owner, outside diagnostic eviction. */
+export function recordUpdateRunRecoveryCapture(
+  runId: string,
+  patch: Pick<UpdateRecoveryCaptureState, "manifestSha256"> & Partial<UpdateRecoveryCaptureState>,
+  assertCurrent: () => void,
+  options: LedgerOptions = {},
+): UpdateRunRecord {
+  return mutateRun(
+    runId,
+    (record) => {
+      assertCurrent();
+      record.origin.updateRecoveryCapture = mergeUpdateRecoveryCaptureState(
+        record.origin.updateRecoveryCapture,
+        patch,
+      );
     },
     options,
   );
