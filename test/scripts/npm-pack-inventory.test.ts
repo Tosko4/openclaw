@@ -1,5 +1,5 @@
-import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { delimiter, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   collectNpmPackInventory,
@@ -251,16 +251,55 @@ describe("npm pack inventory", () => {
 
   it("fails closed when npm pack times out", () => {
     const { packageRoot, root } = createPackageFixture();
+    const capturePath = join(root, "timed-out-command.json");
     const npm = fakeNpmEnvironment(
       root,
       [
+        "import fs from 'node:fs';",
         "if (process.argv.includes('--version')) { process.stdout.write('11.12.1\\n'); process.exit(0); }",
+        "fs.writeFileSync(process.env.OPENCLAW_TEST_CAPTURE, JSON.stringify({ cwd: process.cwd() }));",
         "setTimeout(() => process.stdout.write(JSON.stringify([{ files: [] }])), 10_000);",
       ].join("\n"),
     );
-
-    expect(() => collectNpmPackInventory(packageRoot, { ...npm, timeoutMs: 1_000 })).toThrow(
-      "npm pack inventory timed out after 1000ms",
-    );
+    npm.sourceEnv.OPENCLAW_TEST_CAPTURE = capturePath;
+    let timeoutError: unknown;
+    expect(() => {
+      try {
+        collectNpmPackInventory(packageRoot, { ...npm, timeoutMs: 1_000 });
+      } catch (error) {
+        timeoutError = error;
+        throw error;
+      }
+    }).toThrow("npm pack inventory timed out after 1000ms");
+    if (process.platform === "win32") {
+      expect(timeoutError).toMatchObject({ code: "ETIMEDOUT", processTreeState: "terminated" });
+    }
+    const { cwd } = JSON.parse(readFileSync(capturePath, "utf8")) as { cwd: string };
+    expect(existsSync(dirname(cwd))).toBe(false);
   });
+
+  it.runIf(process.platform === "win32")(
+    "settles a successful cmd shim's detached descendant before removing its sandbox",
+    () => {
+      const { packageRoot, root } = createPackageFixture();
+      const capturePath = join(root, "detached-command.json");
+      const npm = fakeNpmEnvironment(
+        root,
+        [
+          "import fs from 'node:fs';",
+          "import { spawn } from 'node:child_process';",
+          "if (process.argv.includes('--version')) { process.stdout.write('11.12.1\\n'); process.exit(0); }",
+          "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });",
+          "child.once('spawn', () => { fs.writeFileSync(process.env.OPENCLAW_TEST_CAPTURE, JSON.stringify({ cwd: process.cwd() })); process.stdout.write(JSON.stringify([{ files: [{ path: 'package.json' }] }])); process.exit(0); });",
+        ].join("\n"),
+      );
+      npm.sourceEnv.OPENCLAW_TEST_CAPTURE = capturePath;
+      expect(collectNpmPackInventory(packageRoot, { ...npm, timeoutMs: 2_000 })).toMatchObject({
+        files: ["package.json"],
+        npmVersion: "11.12.1",
+      });
+      const { cwd } = JSON.parse(readFileSync(capturePath, "utf8")) as { cwd: string };
+      expect(existsSync(dirname(cwd))).toBe(false);
+    },
+  );
 });
