@@ -588,6 +588,44 @@ it.for([
   },
 );
 
+it("serves progress for the Workboard dashboard and its individual card sessions", async ({
+  connect,
+}) => {
+  const seed = buildWorkboardMocks(1_800_000_000_000, { id: "operator", label: "Operator" });
+  const { request } = await connect({
+    sessionKey: seed.sessionKey,
+    methodResponses: seed.methodResponses,
+  });
+  const dashboard = (await request("board.get", { sessionKey: seed.sessionKey })).payload;
+  expect(dashboard).toMatchObject({
+    sessionKey: seed.sessionKey,
+    widgets: expect.arrayContaining([
+      expect.objectContaining({ name: "session-progress", pluginKind: "session:progress" }),
+    ]),
+  });
+  const progress = (await request("progressCard.get", { sessionKey: dashboard.sessionKey }))
+    .payload;
+  expect(progress.card).toMatchObject({
+    sessionKey: seed.sessionKey,
+    markdown: "**Product launch** is moving through final checks.",
+    steps: [
+      { step: "Confirm release scope", status: "completed" },
+      { step: "Validate onboarding flow", status: "in_progress" },
+      { step: "Publish support handoff", status: "pending" },
+    ],
+  });
+  const cardSessionKey = "agent:main:workboard-onboarding";
+  expect(
+    (await request("progressCard.get", { sessionKey: cardSessionKey })).payload.card,
+  ).toMatchObject({
+    sessionKey: cardSessionKey,
+    markdown: "Account setup passed. First-task navigation is being checked.",
+  });
+  expect(
+    (await request("progressCard.get", { sessionKey: "agent:main:without-progress" })).payload,
+  ).toEqual({ card: null });
+});
+
 it.for(["chat.history", "chat.startup"])(
   "keeps Workboard session edits when reopening through %s",
   async (method, { connect }) => {

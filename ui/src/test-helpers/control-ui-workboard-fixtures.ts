@@ -593,6 +593,22 @@ export function buildWorkboardMocks(baseTime: number, actor: { id: string; label
       "workboard.cards.move": { card: cards[0] },
       "progressCard.get": {
         cases: [
+          {
+            match: { sessionKey },
+            response: {
+              card: {
+                sessionKey,
+                revision: 2,
+                updatedAt: baseTime,
+                markdown: "**Product launch** is moving through final checks.",
+                steps: [
+                  { step: "Confirm release scope", status: "completed" },
+                  { step: "Validate onboarding flow", status: "in_progress" },
+                  { step: "Publish support handoff", status: "pending" },
+                ],
+              },
+            },
+          },
           ...cardSessions
             .filter((session) => !session.key.includes(":card-states-"))
             .map((session) => ({
