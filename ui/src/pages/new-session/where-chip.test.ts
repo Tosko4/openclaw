@@ -785,8 +785,6 @@ describe("Where chip", () => {
         },
       ],
       cloudProfiles: [],
-      cloudProfileId: "",
-      deviceId: "",
       deviceDisabledReason: "This runtime does not support paired devices",
     });
 
@@ -802,8 +800,6 @@ describe("Where chip", () => {
     const emptyContainer = renderPicker(false, undefined, {
       environments: [],
       cloudProfiles: [],
-      cloudProfileId: "",
-      deviceId: "",
     });
     expect(emptyContainer.querySelector('[data-value="auto-device"]')).toBeNull();
   });

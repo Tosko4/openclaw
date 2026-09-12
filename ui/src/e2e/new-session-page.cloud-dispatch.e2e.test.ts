@@ -444,7 +444,7 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(
             page,
             place.locator(".new-session-page__cloud-configuration"),
-            [retainedCloudProfile, retainedMachine],
+            [retainedCloudProfile, place.locator('[data-value="machine:fast"]')],
           ),
         );
       }
