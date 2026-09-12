@@ -12,8 +12,8 @@
     "../../src/daemon/**/*.test.tsx",
     "../../src/plugin-sdk/**/*.test.ts",
     "../../src/plugin-sdk/**/*.test.tsx",
-    "../../src/skills/**/*.test.ts",
-    "../../src/skills/**/*.test.tsx",
+    "../../src/hooks/**/*.test.ts",
+    "../../src/hooks/**/*.test.tsx",
     "../../src/secrets/**/*.test.ts",
     "../../src/secrets/**/*.test.tsx"
   ]
