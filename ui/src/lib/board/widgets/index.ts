@@ -1,7 +1,10 @@
 import type { GatewayControlUiPluginWidgetKind } from "../../../api/gateway.ts";
 import type { OptionalCustomElement } from "../../../app/lazy-custom-element.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerBoardWidgetsEnglish } from "../../../i18n/locales/en-board-widgets.ts";
 import type { BoardWidget } from "../types.ts";
+
+registerBoardWidgetsEnglish();
 
 type CoreBoardWidgetElement = OptionalCustomElement & {
   kind: string;

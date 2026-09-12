@@ -5,6 +5,7 @@ import { buildBaseHints } from "../../src/config/schema.hints.js";
 import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
 import { registerActivityEnglish } from "../../ui/src/i18n/locales/en-activity.ts";
 import { registerAgentsHomeEnglish } from "../../ui/src/i18n/locales/en-agents-home.ts";
+import { registerBoardWidgetsEnglish } from "../../ui/src/i18n/locales/en-board-widgets.ts";
 import { registerBrowserEnglish } from "../../ui/src/i18n/locales/en-browser.ts";
 import { registerDebugEnglish } from "../../ui/src/i18n/locales/en-debug.ts";
 import { registerDesktopEnglish } from "../../ui/src/i18n/locales/en-desktop.ts";
@@ -39,6 +40,7 @@ const sourceFiles = [
   "en-agents.ts",
   "en-activity.ts",
   "en-agents-home.ts",
+  "en-board-widgets.ts",
   "en-browser.ts",
   "en-debug.ts",
   "en-desktop.ts",
@@ -70,6 +72,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     },
     registerActivityEnglish.catalog,
     registerAgentsHomeEnglish.catalog,
+    registerBoardWidgetsEnglish.catalog,
     registerBrowserEnglish.catalog,
     registerDevicesEnglish.catalog,
     registerLoginEnglish.catalog,

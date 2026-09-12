@@ -1,10 +1,13 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
+import { registerBoardWidgetsEnglish } from "../../i18n/locales/en-board-widgets.ts";
 import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
 import type { BoardGrantDecision } from "../../lib/board/view-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { icons } from "../icons.ts";
 import { renderBoardPendingCapabilities } from "./board-widget-capabilities.ts";
+
+registerBoardWidgetsEnglish();
 
 export const BOARD_SIZE_PRESETS = {
   sm: { w: 3, h: 3 },
