@@ -734,6 +734,7 @@ export function createPackedPluginSdkTypescriptSmokeProject(params: {
           noEmit: true,
           strict: true,
           skipLibCheck: false,
+          types: ["node"],
           target: "ES2022",
         },
         include: ["src/index.ts"],
