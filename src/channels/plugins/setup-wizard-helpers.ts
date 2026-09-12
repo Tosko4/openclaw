@@ -20,6 +20,7 @@ import {
   moveSingleAccountChannelSectionToDefaultAccount,
   patchScopedAccountConfig,
 } from "./setup-helpers.js";
+import type { ChannelSetupPromotionSurface } from "./setup-promotion-helpers.js";
 import type {
   ChannelSetupDmPolicy,
   ChannelSetupWizard,
@@ -28,7 +29,6 @@ import type {
   PromptAccountId,
   PromptAccountIdParams,
 } from "./setup-wizard-types.js";
-import type { ChannelSetupAdapter } from "./types.adapters.js";
 
 const loadProviderAuthInput = createLazyRuntimeModule(
   () => import("../../plugins/provider-auth-ref.js"),
@@ -242,7 +242,7 @@ export function setAccountAllowFromForChannel(params: {
   channel: string;
   accountId: string;
   allowFrom: string[];
-  setupSurface?: ChannelSetupAdapter;
+  setupSurface?: ChannelSetupPromotionSurface;
 }): OpenClawConfig {
   const { cfg, channel, accountId, allowFrom } = params;
   return patchConfigForScopedAccount({
@@ -553,7 +553,7 @@ function patchConfigForScopedAccount(params: {
   accountId: string;
   patch: Record<string, unknown>;
   ensureEnabled: boolean;
-  setupSurface?: ChannelSetupAdapter;
+  setupSurface?: ChannelSetupPromotionSurface;
 }): OpenClawConfig {
   const { cfg, channel, accountId, patch, ensureEnabled, setupSurface } = params;
   const channelConfig = cfg.channels?.[channel] as
@@ -586,7 +586,7 @@ export function patchChannelConfigForAccount(params: {
   channel: AccountScopedChannel;
   accountId: string;
   patch: Record<string, unknown>;
-  setupSurface?: ChannelSetupAdapter;
+  setupSurface?: ChannelSetupPromotionSurface;
 }): OpenClawConfig {
   return patchConfigForScopedAccount({
     ...params,

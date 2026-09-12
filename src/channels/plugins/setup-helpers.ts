@@ -10,7 +10,10 @@ import {
 } from "../../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { writeChannelSection } from "./config-helpers.js";
-import { resolveSingleAccountPromotion } from "./setup-promotion-helpers.js";
+import {
+  resolveSingleAccountPromotion,
+  type ChannelSetupPromotionSurface,
+} from "./setup-promotion-helpers.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelSetupInput } from "./types.core.js";
 
@@ -360,7 +363,7 @@ function moveSingleAccountKeysIntoAccount(params: {
 function resolveSingleAccountPromotionTarget(params: {
   channelKey: string;
   channel: ChannelSectionBase;
-  setupSurface?: ChannelSetupAdapter;
+  setupSurface?: ChannelSetupPromotionSurface;
 }): string {
   const pluginTarget = params.setupSurface?.resolveSingleAccountPromotionTarget?.({
     channel: params.channel,
@@ -394,7 +397,7 @@ function resolveSingleAccountPromotionTarget(params: {
 export function moveSingleAccountChannelSectionToDefaultAccount(params: {
   cfg: OpenClawConfig;
   channelKey: string;
-  setupSurface?: ChannelSetupAdapter;
+  setupSurface?: ChannelSetupPromotionSurface;
 }): OpenClawConfig {
   const base = getChannelSection(params.cfg, params.channelKey);
   if (!base) {

@@ -3,6 +3,7 @@
  *
  * Moves legacy single-account channel config into account-scoped config records.
  */
+import type { ChannelAccountKeyPolicy } from "../../routing/account-lookup.js";
 import { getLoadedChannelPluginForRead } from "./registry-loaded.js";
 import {
   collectSingleAccountPromotionEntries,
@@ -16,6 +17,7 @@ type ChannelSectionBase = {
 };
 
 export type ChannelSetupPromotionSurface = {
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   configPromotion?: "preserve-root";
   singleAccountKeysToMove?: readonly string[];
   namedAccountPromotionKeys?: readonly string[];
