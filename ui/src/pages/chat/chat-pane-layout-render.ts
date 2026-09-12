@@ -162,6 +162,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       state.sessionKey,
       scopedAgentParamsForSession(state, state.sessionKey).agentId,
       state.connectionEpoch,
+      selectedSession,
     );
     const desktopSource =
       discoveredDesktopSource !== undefined
