@@ -26,17 +26,29 @@ describe.runIf("__vitest_browser__" in globalThis)("mounted appearance glyph", (
     });
     const props = { icon: "bot", color: "blue", fallback: "B" };
     const handle = components.mountAppearanceGlyph(container, props);
-    const renderedColor = () => {
-      const glyph = container.querySelector("openclaw-appearance-glyph");
+    const renderedColor = (index = 0) => {
+      const glyph = container.querySelectorAll("openclaw-appearance-glyph")[index];
       const svg = glyph?.shadowRoot?.querySelector("svg");
       return svg ? getComputedStyle(svg).color : null;
     };
 
-    await expect.poll(renderedColor).toBe("rgb(30, 90, 180)");
+    await expect.poll(() => renderedColor()).toBe("rgb(30, 90, 180)");
+    const sibling = components.mountAppearanceGlyph(container, { ...props, color: "#206040" });
+    await expect.poll(() => renderedColor(1)).toBe("rgb(32, 96, 64)");
+    expect(renderedColor()).toBe("rgb(30, 90, 180)");
+
     handle.update({ ...props, color: "#c04080" });
-    await expect.poll(renderedColor).toBe("rgb(192, 64, 128)");
+    await expect.poll(() => renderedColor()).toBe("rgb(192, 64, 128)");
+    expect(renderedColor(1)).toBe("rgb(32, 96, 64)");
     handle.update({ ...props, color: null });
-    await expect.poll(renderedColor).toBe("rgb(110, 115, 120)");
+    await expect.poll(() => renderedColor()).toBe("rgb(110, 115, 120)");
+    expect(renderedColor(1)).toBe("rgb(32, 96, 64)");
+
+    handle.dispose();
+    expect(renderedColor()).toBe("rgb(32, 96, 64)");
+    sibling.dispose();
+    expect(container.childElementCount).toBe(0);
+    expect(getComputedStyle(container).color).toBe("rgb(10, 20, 30)");
     expect(onError).not.toHaveBeenCalled();
   });
 });

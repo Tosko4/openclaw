@@ -86,6 +86,7 @@ export function createWorkboardTestHost() {
         `/${id}${path?.length ? `/${path.join("/")}` : params?.boardId ? `/${params.boardId}` : ""}`,
     },
     components: {
+      resolveAppearanceColor: vi.fn(() => ""),
       mountDialog: () => {
         throw new Error("This test did not install DOM components");
       },

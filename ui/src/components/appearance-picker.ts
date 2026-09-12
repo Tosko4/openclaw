@@ -1,9 +1,6 @@
 import { css, html } from "lit";
 import { property, state } from "lit/decorators.js";
-import {
-  normalizeSessionColorValue,
-  normalizeSessionIconValue,
-} from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import { normalizeSessionIconValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type {
   ControlUiAppearanceGlyphProps,
   ControlUiAppearancePickerProps,
@@ -91,15 +88,6 @@ export class AppearanceGlyph extends OpenClawLitElement {
       height: 100%;
     }
   `;
-
-  get colorCss() {
-    const color = normalizeSessionColorValue(this.props.color ?? "");
-    if (color) {
-      return `var(--session-color-${color})`;
-    }
-    const raw = this.props.color?.trim() ?? "";
-    return /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/iu.test(raw) ? raw : "";
-  }
 
   override render() {
     const icon = this.props.icon?.trim();

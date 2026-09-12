@@ -1,5 +1,4 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-
 /** Semantic host components available to native Control UI plugins. */
 export type ControlUiComponentHandle<T> = {
   update: (props: T) => void;
@@ -80,6 +79,8 @@ export type ControlUiAppearancePickerProps = {
 };
 
 export type ControlUiComponents = {
+  /** Resolve a shared palette or custom hex color; invalid or cleared values return an empty string. */
+  resolveAppearanceColor: (value: string | null | undefined) => string;
   mountAgentAvatar: (
     container: HTMLElement,
     props: ControlUiAgentAvatarProps,

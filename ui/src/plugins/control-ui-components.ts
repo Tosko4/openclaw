@@ -1,3 +1,4 @@
+import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type {
   ControlUiComponentHandle,
   ControlUiComponents,
@@ -6,6 +7,15 @@ import type { RouteId } from "../app-routes.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readGatewayOperatorAccess } from "../app/operator-access.ts";
 import { icons } from "../components/icons.ts";
+
+function resolveAppearanceColor(value: string | null | undefined): string {
+  const color = normalizeSessionColorValue(value ?? "");
+  if (color) {
+    return `var(--session-color-${color})`;
+  }
+  const raw = value?.trim() ?? "";
+  return /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/iu.test(raw) ? raw : "";
+}
 
 export function createControlUiComponents(options: {
   current: () => ApplicationContext<RouteId>;
@@ -89,6 +99,11 @@ export function createControlUiComponents(options: {
   }
 
   return {
+    resolveAppearanceColor(value) {
+      options.current();
+      options.signal.throwIfAborted();
+      return resolveAppearanceColor(value);
+    },
     mountAgentAvatar: (container, props) =>
       mount(
         container,
@@ -140,7 +155,10 @@ export function createControlUiComponents(options: {
         },
         (element, next) => {
           element.props = next;
-          container.style.setProperty("--appearance-color", element.colorCss || "var(--muted)");
+          element.style.setProperty(
+            "--appearance-color",
+            resolveAppearanceColor(next.color) || "var(--muted)",
+          );
         },
       ),
     mountDialog: (container, props) =>
