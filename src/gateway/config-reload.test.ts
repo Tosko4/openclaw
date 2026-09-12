@@ -2999,6 +2999,7 @@ describe("startGatewayConfigReloader", () => {
       async () => makeSnapshot({ config, sourceConfig: config, hash: "unapplied-source" }),
       {
         initialConfig: config,
+        initialAuthoredConfig: {},
         onEffectiveConfigUnchanged: async () => {
           if (rejectSource) {
             throw new GatewayConfigReloadSupersededError();

@@ -79,7 +79,7 @@ describe("plugin runtime refresh admission", () => {
     mockedBuildEmbeddedRunPayloads.mockReturnValue([payload]);
     try {
       const result = await runEmbeddedAgent({
-        ...createOverflowRunParams(state),
+        ...createOverflowRunParams(state, "fixture-provider"),
         prompt: "send the result, reload the plugin, then verify the result",
         agentHarnessId: "openclaw",
         provider: "fixture-provider",
@@ -117,7 +117,7 @@ describe("plugin runtime refresh admission", () => {
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     const { getAgentRunContext } = await import("../../infra/agent-run-registry.js");
     state = await createOpenClawTestState({ label: "plugin-runtime-refresh" });
-    const runParams = createOverflowRunParams(state);
+    const runParams = createOverflowRunParams(state, "fixture-provider");
     const originalPrompt = "edit and reload twice";
     const originalMessage = { role: "user" as const, content: originalPrompt, timestamp: 1 };
     const onUserMessagePersisted = vi.fn();
@@ -125,7 +125,7 @@ describe("plugin runtime refresh admission", () => {
     const base = await mockedAcquireAgentRunPreparedModelRuntime({
       agentId: "main",
       agentDir: state.agentDir(),
-      config: {},
+      config: runParams.config,
       workspaceDir: state.workspaceDir,
     });
     // Distinct registries prove that an old ambient owner cannot supply the next generation.
@@ -262,7 +262,10 @@ describe("plugin runtime refresh admission", () => {
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(
         makeAttemptResult({ assistantTexts: ["separate operator turn"] }),
       );
-      const next = await runEmbeddedAgent({ ...runParams, prompt: "new task" });
+      const next = await runEmbeddedAgent({
+        ...createOverflowRunParams(state),
+        prompt: "new task",
+      });
       expect(next.meta.agentMeta?.terminalReceipt?.successfulToolNames).toEqual([]);
     } finally {
       mockedAcquireAgentRunPreparedModelRuntime.mockReset();
@@ -370,7 +373,7 @@ describe("plugin runtime refresh admission", () => {
     const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "plugin-refresh-failure" });
-    const runParams = createOverflowRunParams(state);
+    const runParams = createOverflowRunParams(state, "fixture-provider");
     const onAgentEvent = vi.fn();
     const completedEffect = vi.fn();
     mockedRunEmbeddedAttempt.mockImplementation(async (params) => {
@@ -656,7 +659,7 @@ describe("plugin runtime refresh streaming delivery", () => {
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "Final verification complete." }]);
     try {
       const result = await runEmbeddedAgent({
-        ...createOverflowRunParams(state),
+        ...createOverflowRunParams(state, "fixture-provider"),
         prompt: "send the result, reload, then continue verification",
         agentHarnessId: "openclaw",
         provider: "fixture-provider",
