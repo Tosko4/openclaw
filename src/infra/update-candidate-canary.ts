@@ -476,9 +476,9 @@ export async function validateUpdateCandidateCanary(params: {
       }
       params.signal?.throwIfAborted();
       let lintWarnings: string[] = [];
-      if (code === 0 && phase === "lint") {
+      if (code === 0 && phase === "health") {
         if (running.outputExceeded()) {
-          throw new Error("Candidate Doctor lint output exceeded the inspection limit");
+          throw new Error("Update health check output exceeded the inspection limit");
         }
         const report = parseUpdateDoctorLintReport(running.stdout());
         lintWarnings = normalizeUpdatePostInstallDoctorWarnings(

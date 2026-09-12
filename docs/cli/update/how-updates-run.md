@@ -77,7 +77,7 @@ Candidate build and rehearsal processes resolve source-linked plugin SDKs from
 the candidate root, even when the serving source launcher passed its own checkout
 root. This keeps candidate assets and validation independent of the old checkout.
 
-Warning-severity Doctor findings do not block candidate or post-plugin readiness.
+Doctor warnings do not block update checks or readiness after plugin updates.
 The updater retains them in the run report shown by `openclaw update status`,
 including when an intentional open channel policy requires no configuration change.
 Error findings and failed check execution still refuse the update.

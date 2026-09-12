@@ -22,8 +22,8 @@ import {
   POST_CORE_UPDATE_RESULT_PATH_ENV,
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
 } from "./update-post-core-context.js";
-import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
 import { summarizeUpdateStepFailure } from "./update-run-record.js";
+import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), snapshot: vi.fn(), signal: vi.fn() }));
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -134,7 +134,7 @@ afterEach(async () => {
 
 describe("update candidate canary", () => {
   it.each([false, true])(
-    "retains posture warnings without admitting blocking lint errors (blocking: %s)",
+    "retains posture warnings without admitting blocking health errors (blocking: %s)",
     async (blocking) => {
       lintReport = {
         ok: !blocking,
@@ -155,14 +155,12 @@ describe("update candidate canary", () => {
         vi.fn(async () => Response.json({ status: "started", ready: true })),
       );
       const result = await validateUpdateCandidateCanary({
-        root,
-        stateDir: root,
-        config: {},
-        env: {},
+        ...validationParams(),
+        timeoutMs: undefined,
       });
       expect(result.status).toBe(blocking ? "error" : "ok");
       if (blocking) {
-        expect(result).toMatchObject({ phase: "lint", reason: "doctor-failed" });
+        expect(result).toMatchObject({ phase: "health", reason: "doctor-failed" });
       } else {
         expect(
           updateRunWarningMessages(result.steps.flatMap(updateRunStepsFromResultStep)),
@@ -324,13 +322,7 @@ describe("update candidate canary", () => {
         "fetch",
         vi.fn(async () => Response.json({ status: "started", ready: true })),
       );
-      const result = await validateUpdateCandidateCanary({
-        root,
-        stateDir: root,
-        config: {},
-        env: {},
-        timeoutMs: 3000,
-      });
+      const result = await validateUpdateCandidateCanary(validationParams());
       expect(result.status).toBe(failsValidation ? "error" : "ok");
       expect(result.doctorConfigWrites).not.toBe(true);
       expect(result.doctorConfigChanges).toEqual(
@@ -364,13 +356,7 @@ describe("update candidate canary", () => {
       "fetch",
       vi.fn(async () => Response.json({ status: "started", ready: true })),
     );
-    const result = await validateUpdateCandidateCanary({
-      root,
-      stateDir: root,
-      config: {},
-      env: {},
-      timeoutMs: 3000,
-    });
+    const result = await validateUpdateCandidateCanary(validationParams());
     expect(result.status).toBe("ok");
     expect(result.steps).toContainEqual(
       expect.objectContaining({
@@ -428,13 +414,7 @@ describe("update candidate canary", () => {
       vi.fn(async () => Response.json({ status: "started", ready: true })),
     );
 
-    const result = await validateUpdateCandidateCanary({
-      root,
-      stateDir: root,
-      config: {},
-      env: {},
-      timeoutMs: 3000,
-    });
+    const result = await validateUpdateCandidateCanary(validationParams());
 
     expect(result.status).toBe(proceeds ? "ok" : "error");
     expect(mocks.spawn.mock.calls.some(([, args]) => args.includes("gateway"))).toBe(proceeds);
@@ -516,13 +496,7 @@ describe("update candidate canary", () => {
         "fetch",
         vi.fn(async () => Response.json({ status: "started", ready: true })),
       );
-      const result = await validateUpdateCandidateCanary({
-        root,
-        stateDir: root,
-        config: {},
-        env: {},
-        timeoutMs: 3000,
-      });
+      const result = await validateUpdateCandidateCanary(validationParams());
       expect(result.status).toBe("ok");
       expect(result.candidateSchemaVersions).toEqual({ state: 2, agent: 3 });
       expect(result).not.toHaveProperty("checkpointContinuation");
@@ -950,13 +924,7 @@ describe("update candidate canary", () => {
 
   it("rejects a zero-exit continuation worker without its compiled schema contract before boot", async () => {
     runtimeContract = null;
-    const result = await validateUpdateCandidateCanary({
-      root,
-      stateDir: root,
-      config: {},
-      env: {},
-      timeoutMs: 3_000,
-    });
+    const result = await validateUpdateCandidateCanary(validationParams());
     expect(result).toMatchObject({ status: "error", phase: "runtime" });
     expect(result.steps.at(-1)).toMatchObject({
       name: "Checking update recovery",
@@ -1004,13 +972,7 @@ describe("update candidate canary", () => {
       });
       return child;
     });
-    const result = await validateUpdateCandidateCanary({
-      root,
-      stateDir: root,
-      config: {},
-      env: {},
-      timeoutMs: 3_000,
-    });
+    const result = await validateUpdateCandidateCanary(validationParams());
     expect(result).toMatchObject({ status: "error", phase: overflow ? "plugins" : "runtime" });
   });
 
@@ -1031,13 +993,7 @@ describe("update candidate canary", () => {
       });
       return child;
     });
-    const result = await validateUpdateCandidateCanary({
-      root,
-      stateDir: root,
-      config: {},
-      env: {},
-      timeoutMs: 3_000,
-    });
+    const result = await validateUpdateCandidateCanary(validationParams());
     expect(result.status).toBe("error");
     for (const line of expected) {
       expect(result.logTail).toContain(line);
