@@ -1,17 +1,15 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { collectStaleRuntimeBuildFindings } from "./doctor-stale-runtime-build.js";
 
 const BUILT = "1623683f478b1e4a2e3d5632585f006ea142e08c";
 const HEAD = "5034f2ab174b5c76b0f2a7703ddb332572916e02";
-const roots: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function makeCheckout(options: { built?: string; head?: string }): Promise<string> {
-  // macOS reports /var while prod resolvers return /private/var; canonicalize first.
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stale-build-")));
-  roots.push(root);
+  const root = tempDirs.make("openclaw-stale-build-");
   if (options.built) {
     await fs.mkdir(path.join(root, "dist"), { recursive: true });
     await fs.writeFile(
@@ -25,15 +23,6 @@ async function makeCheckout(options: { built?: string; head?: string }): Promise
   }
   return root;
 }
-
-afterEach(async () => {
-  while (roots.length > 0) {
-    const root = roots.pop();
-    if (root) {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  }
-});
 
 describe("collectStaleRuntimeBuildFindings", () => {
   it("warns when the built commit differs from the checkout commit", async () => {
