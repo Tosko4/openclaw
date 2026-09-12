@@ -573,6 +573,7 @@ function patchConfigForScopedAccount(params: {
   return patchScopedAccountConfig({
     cfg: seededCfg,
     channelKey: channel,
+    accountKeyPolicy: setupSurface?.accountKeyPolicy,
     accountId,
     patch,
     ensureChannelEnabled: ensureEnabled,

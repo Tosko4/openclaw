@@ -1,5 +1,5 @@
 // Signal plugin module implements setup core behavior.
-import { normalizeAccountId, resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import { parseAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
@@ -27,6 +27,11 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  resolveSignalAccountEntry,
+  resolveSignalAccountKey,
+  signalAccountKeyPolicy,
+} from "./account-selection.js";
 import type { SignalTransportConfig } from "./account-types.js";
 import { resolveDefaultSignalAccountId, resolveSignalAccount } from "./accounts.js";
 import {
@@ -211,7 +216,7 @@ function resolveSignalSetupAccount(params: {
     params.accountId ?? resolveDefaultSignalAccountId(params.cfg),
   );
   const signal = params.cfg.channels?.signal;
-  const account = resolveAccountEntry(signal?.accounts, accountId);
+  const account = resolveSignalAccountEntry(signal?.accounts, accountId);
   return account?.account ?? signal?.account;
 }
 
@@ -312,6 +317,7 @@ export const signalCompletionNote = {
 
 const signalSetupAdapterBase = createPatchedAccountSetupAdapter<SignalSetupInput>({
   channelKey: channel,
+  accountKeyPolicy: signalAccountKeyPolicy,
   validateInput: createSetupInputPresenceValidator<SignalSetupInput>({
     validate: ({ cfg, accountId, input }) => {
       if (
@@ -361,16 +367,17 @@ const signalSetupAdapterBase = createPatchedAccountSetupAdapter<SignalSetupInput
 
 function restorePromotedSignalDefaultAccount(cfg: OpenClawConfig): OpenClawConfig {
   const signal = cfg.channels?.signal;
-  const promoted = signal?.accounts?.[DEFAULT_ACCOUNT_ID];
-  if (!signal?.transport || signal.account || !promoted?.account) {
+  const promotedKey = resolveSignalAccountKey(signal?.accounts, DEFAULT_ACCOUNT_ID);
+  const promoted = promotedKey === undefined ? undefined : signal?.accounts?.[promotedKey];
+  if (!signal?.transport || signal.account || !promoted?.account || promotedKey === undefined) {
     return cfg;
   }
   const { account, transport: _shadowedTransport, ...remainingDefault } = promoted;
   const accounts = { ...signal.accounts };
   if (Object.keys(remainingDefault).length === 0) {
-    delete accounts[DEFAULT_ACCOUNT_ID];
+    delete accounts[promotedKey];
   } else {
-    accounts[DEFAULT_ACCOUNT_ID] = remainingDefault;
+    accounts[promotedKey] = remainingDefault;
   }
   return patchTopLevelChannelConfigSection({ cfg, channel, patch: { account, accounts } });
 }
