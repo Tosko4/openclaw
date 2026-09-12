@@ -215,7 +215,6 @@ export function resetUpdateAvailableStateForTest(): void {
   updateScheduleCache = null;
   void updateCheckLifecycle?.stop();
   updateCheckLifecycle = undefined;
-  gatewayUpdateCampaign.resetForTest();
 }
 
 const UPDATE_CHECK_STATE_KEY = "update.checkState";
