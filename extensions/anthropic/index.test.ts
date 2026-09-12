@@ -90,6 +90,7 @@ describe("anthropic provider replay hooks", () => {
     if (!backend) {
       throw new Error("Expected claude-cli backend");
     }
+    expect(backend.modelProvider).toBe("anthropic");
     expect(backend.bundleMcp).toBe(true);
     expectFields(backend.config, {
       command: "claude",
@@ -734,7 +735,7 @@ describe("anthropic provider replay hooks", () => {
       } as never);
       expect(levelIds(profile)).toStrictEqual(
         checksCliPolicy
-          ? ["minimal", "low", "medium", "high", "xhigh", "adaptive", "max"]
+          ? ["low", "medium", "high", "xhigh", "max"]
           : ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
       );
       expect(requireRecord(profile, `${modelId} thinking profile`).defaultLevel).toBe("high");

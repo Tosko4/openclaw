@@ -3,7 +3,7 @@ import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
@@ -450,11 +450,15 @@ describe("refreshChat", () => {
 
     expect(await raceWithMacrotask(refresh)).toBe("resolved");
     expect(host.chatLoading).toBe(true);
-    expect(host.request).toHaveBeenCalledWith("chat.history", {
-      sessionKey: "main",
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(host.request).toHaveBeenCalledWith(
+      "chat.history",
+      {
+        sessionKey: "main",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(host.request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
     expect(requestUpdate).not.toHaveBeenCalled();
   });
@@ -766,7 +770,9 @@ describe("refreshChat", () => {
     });
 
     expect(await raceWithMacrotask(refreshPageChat(asChatPageHost(host)))).toBe("resolved");
-    expect(host.request).toHaveBeenCalledWith("chat.history", expected);
+    expect(host.request).toHaveBeenCalledWith("chat.history", expected, {
+      signal: expect.any(AbortSignal),
+    });
     expect(host.request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
   });
 
@@ -875,6 +881,7 @@ describe("refreshChat", () => {
     const key = "agent:main:device-session";
     const deviceRow = (status: "available" | "offline") =>
       row(key, {
+        sessionId: "device-session-incarnation",
         updatedAt: 10,
         placement: {
           state: "active",
@@ -893,21 +900,30 @@ describe("refreshChat", () => {
     const staleAvailable = deviceRow("available");
     const startup = createDeferred<unknown>();
     const initialSessions = createSessionsResult([staleAvailable]);
-    const firstPane = makeChatHost({
-      hello: gatewayHelloForMethods(["chat.startup"], []),
-      requestHandlers: {
-        "chat.startup": () => startup.promise,
-        "sessions.list": createSessionsResult([deviceRow("offline")]),
-      },
-      sessionKey: key,
-      sessionsResult: initialSessions,
+    const request = makeRequestMock({
+      "chat.startup": () => startup.promise,
+      "sessions.list": createSessionsResult([deviceRow("offline")]),
     });
-    const secondPane = makeChatHost({
-      client: firstPane.client,
-      hello: firstPane.hello,
-      sessionKey: key,
-      sessions: firstPane.sessions,
-      sessionsResult: initialSessions,
+    const client = clientWithRequest(request);
+    const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
+    sessions.reconcile(staleAvailable, initialSessions.defaults);
+    const first = createTestChatPane({ client, sessions });
+    const second = createTestChatPane({ client, sessions });
+    const firstPane = first.state;
+    const secondPane = second.state;
+    const pending: Promise<unknown>[] = [];
+    const releases = [first, second].map(({ pane, state }) => {
+      state.sessionKey = key;
+      state.hello = gatewayHelloForMethods(["chat.startup"], []);
+      pane.presented = false;
+      pane.applySessionsState(sessions.state);
+      return sessions.subscribe(pane.applySessionsState.bind(pane));
+    });
+    onTestFinished(async () => {
+      releases.forEach((release) => release());
+      sessions.dispose();
+      startup.resolve({ messages: [] });
+      await Promise.allSettled(pending);
     });
     const options = {
       awaitHistory: true,
@@ -915,11 +931,10 @@ describe("refreshChat", () => {
       scheduleScroll: false,
       startup: true,
     } as const;
-    const firstRefresh = refreshPageChat(asChatPageHost(firstPane), options);
+    const firstRefresh = refreshPageChat(firstPane, options);
+    pending.push(firstRefresh);
     await vi.waitFor(() =>
-      expect(
-        firstPane.request.mock.calls.filter(([method]) => method === "chat.startup"),
-      ).toHaveLength(1),
+      expect(request.mock.calls.filter(([method]) => method === "chat.startup")).toHaveLength(1),
     );
     await firstPane.sessions.refresh({ force: true });
     expect(firstPane.sessions.canonicalListRevision).toBe(1);
@@ -927,7 +942,8 @@ describe("refreshChat", () => {
       runner: { kind: "device", status: "offline" },
     });
 
-    const joinedRefresh = refreshPageChat(asChatPageHost(secondPane), options);
+    const joinedRefresh = refreshPageChat(secondPane, options);
+    pending.push(joinedRefresh);
     startup.resolve({
       messages: [{ role: "assistant", content: "Stale startup transcript was consumed." }],
       sessionInfo: staleAvailable,
@@ -937,9 +953,7 @@ describe("refreshChat", () => {
       setImmediate(resolve);
     });
 
-    expect(
-      firstPane.request.mock.calls.filter(([method]) => method === "chat.startup"),
-    ).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "chat.startup")).toHaveLength(1);
     for (const pane of [firstPane, secondPane]) {
       expect(pane.chatMessages.map((message) => extractText(message))).toContain(
         "Stale startup transcript was consumed.",
@@ -947,7 +961,7 @@ describe("refreshChat", () => {
       expect(pane.sessionsResult?.sessions[0]?.placement).toMatchObject({
         runner: { kind: "device", status: "offline" },
       });
-      expect(selectedChatSessionRow(asChatPageHost(pane))?.placement).toMatchObject({
+      expect(selectedChatSessionRow(pane)?.placement).toMatchObject({
         runner: { kind: "device", status: "offline" },
       });
     }
@@ -1142,6 +1156,7 @@ describe("refreshChat", () => {
         expect(state.sessionsResult).toBe(publishedWorkProjection);
         expect(state.sessionsResultAgentId).toBe("work");
       }
+      const primaryDefaults = sessions.state.result?.defaults;
       const historyRow = {
         ...initialWork,
         updatedAt: historyUpdatedAt,
@@ -1157,10 +1172,9 @@ describe("refreshChat", () => {
         messages: [{ role: "assistant", content: "History really applied" }],
         sessionInfo: historyRow,
       });
-      const historyResult = await historyLoad;
+      await historyLoad;
       await refresh;
       const afterResolution = selectedChatSessionRow(state);
-      expect(historyResult).toMatchObject({ sourceCanonicalListRevision: issuedRevision });
       expect(getChatHistoryLoadState(state).phase).toBe("committed");
       expect(state.chatMessages).toEqual([
         { role: "assistant", content: "History really applied" },
@@ -1169,6 +1183,7 @@ describe("refreshChat", () => {
       expect(sessions.canonicalListRevision).toBeGreaterThan(issuedRevision);
       if (moveRoster) {
         expect(sessions.state.result?.sessions[0]).toEqual(mainRow);
+        expect(sessions.state.result?.defaults).toEqual(primaryDefaults);
         expect(
           expectDefined<SessionsListResult>(state.sessionsResult, "work session result").defaults
             .modelSelectionTarget,
@@ -1454,6 +1469,96 @@ describe("handleSendChat", () => {
 
   beforeEach(() => {
     vi.stubGlobal("sessionStorage", createStorageMock());
+  });
+
+  it("preserves another run's inactive tuple when the accepted run finishes before roster updates", async () => {
+    const sessionKey = "agent:main:dashboard:terminal-roster-lag";
+    const previous: GatewaySessionRow = {
+      key: sessionKey,
+      agentId: "main",
+      sessionId: "terminal-roster-lag",
+      kind: "direct",
+      updatedAt: 200,
+      hasActiveRun: false,
+      activeRunIds: [],
+      lastRunId: "previous-run",
+      status: "failed",
+      lastRunError: "Previous run failed",
+      startedAt: 100,
+      endedAt: 200,
+      runtimeMs: 100,
+    };
+    let authoritativeRow = previous;
+    const host = makeChatHost({
+      sessionKey,
+      currentSessionId: previous.sessionId,
+      chatMessage: "Start the next run",
+      requestHandlers: {
+        "sessions.list": () =>
+          sessionListFixture([{ ...authoritativeRow }], authoritativeRow.updatedAt ?? 0),
+        "chat.send": (params: unknown) => ({
+          runId: requireRecord(params, "accepted run").idempotencyKey,
+          status: "started",
+          messageSeq: 1,
+        }),
+      },
+    });
+    const stop = host.sessions.subscribe((snapshot) => {
+      host.sessionsResult = snapshot.result;
+      host.sessionsResultAgentId = snapshot.agentId;
+    });
+    const query = { agentId: "main", ownerId: "viewer" };
+    const stopManaged = host.sessions.subscribeList(query, () => {});
+    onTestFinished(() => {
+      host.connected = false;
+      if (host.chatRunStatusClearTimer) {
+        clearTimeout(host.chatRunStatusClearTimer);
+      }
+      stopManaged();
+      stop();
+      host.sessions.dispose();
+      retireChatMetadataRequests(asChatPageHost(host));
+    });
+    await host.sessions.refresh({ agentId: "main", force: true });
+    await host.sessions.refreshList(query);
+
+    await handleSendChat(host);
+    const runId = expectDefined(host.chatRunId, "accepted run identity");
+    expect(runId).not.toBe(previous.lastRunId);
+    expect(host.sessionsResult?.sessions[0]).toEqual(previous);
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+
+    // The send ACK is independent of the optional roster start notification.
+    handlePageGatewayEvent(asChatPageHost(host), {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey,
+        agentId: "main",
+        runId,
+        state: "final",
+        message: { role: "assistant", content: [{ type: "text", text: "Current run finished" }] },
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.sessionsResult?.sessions[0]).toEqual(previous);
+    expect(host.sessions.state.result?.sessions[0]).toEqual(previous);
+    expect(host.sessions.listSnapshot(query).result?.sessions[0]).toEqual(previous);
+
+    authoritativeRow = {
+      ...previous,
+      updatedAt: 400,
+      lastRunId: runId,
+      status: "done",
+      lastRunError: undefined,
+      startedAt: 300,
+      endedAt: 400,
+    };
+    await host.sessions.refresh({ agentId: "main", force: true });
+    await host.sessions.refreshList(query);
+    expect(host.sessionsResult?.sessions[0]).toMatchObject(authoritativeRow);
+    expect(host.sessions.listSnapshot(query).result?.sessions[0]).toMatchObject(authoritativeRow);
   });
 
   it("uses the canonical main destination for an immediate send", async () => {
@@ -3417,7 +3522,7 @@ describe("handleSendChat", () => {
     const retry = retryQueuedChatMessage(host, "retry-send");
 
     expect(await raceWithMacrotask(retry)).toBe("pending");
-    expect(host.request).not.toHaveBeenCalledWith("chat.history", expect.anything());
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(0);
     expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
     expect(host.chatQueue[0]).toMatchObject({
       sendState: "waiting-model",
@@ -4471,7 +4576,7 @@ describe("handleSendChat", () => {
       message: "steer without waiting for history",
       queueMode: "steer",
     });
-    expect(host.request).not.toHaveBeenCalledWith("chat.history", expect.anything());
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(0);
   });
 
   it("leaves active-run resolution to the Gateway while its effective mode is loading", async () => {
@@ -9890,14 +9995,18 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
     await waitForFast(() => {
-      expect(host.request).toHaveBeenCalledWith("chat.history", {
-        sessionKey: "agent:main",
-        limit: 80,
-        maxBytes: 256 * 1024,
-        inputRunIds: [
-          findRequestPayload(host.request, "chat.send", "rejected send").idempotencyKey,
-        ],
-      });
+      expect(host.request).toHaveBeenCalledWith(
+        "chat.history",
+        {
+          sessionKey: "agent:main",
+          limit: 80,
+          maxBytes: 256 * 1024,
+          inputRunIds: [
+            findRequestPayload(host.request, "chat.send", "rejected send").idempotencyKey,
+          ],
+        },
+        { signal: expect.any(AbortSignal) },
+      );
       expect(host.request).toHaveBeenCalledWith("sessions.branches.list", {
         sessionKey: "agent:main",
       });
@@ -9991,11 +10100,15 @@ describe("handleSendChat", () => {
 
     const clearing = handleSendChat(host);
     await waitForFast(() =>
-      expect(host.request).toHaveBeenCalledWith("chat.history", {
-        sessionKey: sourceSessionKey,
-        limit: 80,
-        maxBytes: 256 * 1024,
-      }),
+      expect(host.request).toHaveBeenCalledWith(
+        "chat.history",
+        {
+          sessionKey: sourceSessionKey,
+          limit: 80,
+          maxBytes: 256 * 1024,
+        },
+        { signal: expect.any(AbortSignal) },
+      ),
     );
     host.sessionKey = replacementSessionKey;
     host.chatDisplayedLeafEntryId = "replacement-leaf";
@@ -10024,11 +10137,15 @@ describe("handleSendChat", () => {
 
     const clearing = handleSendChat(host);
     await waitForFast(() =>
-      expect(host.request).toHaveBeenCalledWith("chat.history", {
-        sessionKey: "agent:main",
-        limit: 80,
-        maxBytes: 256 * 1024,
-      }),
+      expect(host.request).toHaveBeenCalledWith(
+        "chat.history",
+        {
+          sessionKey: "agent:main",
+          limit: 80,
+          maxBytes: 256 * 1024,
+        },
+        { signal: expect.any(AbortSignal) },
+      ),
     );
     host.client = clientWithRequest(makeRequestMock());
     host.connectionEpoch = 2;
@@ -10089,12 +10206,16 @@ describe("handleSendChat", () => {
       key: "global",
       agentId: "work",
     });
-    expect(host.request).toHaveBeenCalledWith("chat.history", {
-      sessionKey: "global",
-      agentId: "work",
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(host.request).toHaveBeenCalledWith(
+      "chat.history",
+      {
+        sessionKey: "global",
+        agentId: "work",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(host.chatMessages).toStrictEqual([]);
     expect(host.chatMessagesBySession?.has("agent:work:main")).toBe(false);
     expect(host.chatMessagesBySession?.has("agent:main:main")).toBe(true);
@@ -10228,11 +10349,15 @@ describe("handleSendChat", () => {
     expect(host.chatQueue).toEqual([]);
     expect(loadChatComposerSnapshot(host, host.sessionKey)?.queue ?? []).toEqual([]);
     expect(host.lastError).toContain("clear request may have completed");
-    expect(replacementRequest).toHaveBeenCalledWith("chat.history", {
-      sessionKey: "agent:main",
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(replacementRequest).toHaveBeenCalledWith(
+      "chat.history",
+      {
+        sessionKey: "agent:main",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
 
     await retryQueuedChatMessage(host, queuedId);
 
@@ -10271,11 +10396,15 @@ describe("handleSendChat", () => {
       host.connectionEpoch = 2;
       reset.resolve({ ok: true });
       await waitForFast(() =>
-        expect(replacementRequest).toHaveBeenCalledWith("chat.history", {
-          sessionKey: sourceSessionKey,
-          limit: 80,
-          maxBytes: 256 * 1024,
-        }),
+        expect(replacementRequest).toHaveBeenCalledWith(
+          "chat.history",
+          {
+            sessionKey: sourceSessionKey,
+            limit: 80,
+            maxBytes: 256 * 1024,
+          },
+          { signal: expect.any(AbortSignal) },
+        ),
       );
       const afterCommit = vi.spyOn(host.renderLifecycle, "afterCommit");
 
@@ -10330,12 +10459,16 @@ describe("handleSendChat", () => {
     expect(host.chatMessages).toEqual([
       { role: "assistant", content: "canonical refreshed history" },
     ]);
-    expect(host.request).toHaveBeenCalledWith("chat.history", {
-      sessionKey: "global",
-      agentId: "work",
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(host.request).toHaveBeenCalledWith(
+      "chat.history",
+      {
+        sessionKey: "global",
+        agentId: "work",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
   });
 

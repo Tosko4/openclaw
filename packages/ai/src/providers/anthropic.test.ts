@@ -2,7 +2,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { AssistantMessage, Context, Model, Tool } from "../types.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
+import {
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
+} from "../utils/system-prompt-cache-boundary.js";
 
 const anthropicMockState = vi.hoisted(() => ({
   configs: [] as unknown[],
@@ -1920,6 +1924,20 @@ describe("Anthropic provider", () => {
     },
   );
 
+  it.each(["low", "medium", "high", "xhigh", "max"] as const)(
+    "preserves pooled Fable %s effort and its routed model id",
+    async (reasoning) => {
+      const id = "Claude Gateway/claude-fable-5-1";
+      const { payload } = await captureSimpleAnthropicPayload(
+        { id, name: "Pooled Fable", provider: "proxy" },
+        { reasoning },
+      );
+      expect(payload.model).toBe(id);
+      expect(payload.thinking).toMatchObject({ type: "adaptive" });
+      expect(payload.output_config).toEqual({ effort: reasoning });
+    },
+  );
+
   const adaptiveThinkingCases: AnthropicAdaptiveThinkingTestCase[] = [
     {
       name: "uses the Claude Opus 5 adaptive-thinking request contract",
@@ -2402,7 +2420,37 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it("anchors the message cache breakpoint on an append-only runtime-context carrier", async () => {
+  it("keeps the relocatable marker out of native Anthropic system blocks", async () => {
+    // Native Anthropic relocates nothing, so the marker must not survive into
+    // the payload while the cache breakpoint still lands on the stable prefix.
+    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
+      {},
+      { stopBeforeNetwork: true },
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Reactions guidance${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}Runtime: session=alpha${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`,
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+    );
+
+    expect(result.stopReason).toBe("error");
+    const system = (capturedPayload as { system?: unknown }).system;
+    const serialized = JSON.stringify(system);
+    expect(serialized).not.toContain("OPENCLAW-RELOCATABLE-BOUNDARY");
+    expect(serialized).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+    expect(system).toEqual([
+      {
+        type: "text",
+        text: "Stable prefix",
+        cache_control: { type: "ephemeral" },
+      },
+      {
+        type: "text",
+        text: "Reactions guidance\nRuntime: session=alpha",
+      },
+    ]);
+  });
+
+  it("anchors the message cache breakpoint before transient runtime context", async () => {
     const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
       {},
       { stopBeforeNetwork: true },
@@ -2412,7 +2460,7 @@ describe("Anthropic provider", () => {
           { role: "user", content: "stable question", timestamp: 0 },
           {
             role: "user",
-            content: "retained current-turn metadata",
+            content: "transient current-turn metadata",
             timestamp: 1,
             runtimeContextCarrier: true,
           },
@@ -2422,14 +2470,14 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     const messages = (capturedPayload as { messages: { content: unknown }[] }).messages;
-    expect(messages[0]?.content).toBe("stable question");
-    expect(messages[1]?.content).toEqual([
+    expect(messages[0]?.content).toEqual([
       {
         type: "text",
-        text: "retained current-turn metadata",
+        text: "stable question",
         cache_control: { type: "ephemeral" },
       },
     ]);
+    expect(messages[1]?.content).toBe("transient current-turn metadata");
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {

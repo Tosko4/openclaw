@@ -347,12 +347,14 @@ export function resolveThinkingDefaultForModel(params: {
   model: string;
   catalog?: ThinkingCatalogEntry[];
   agentRuntime?: string | null;
+  providerPolicySource?: ProviderThinkingPolicySource;
 }): ThinkLevel {
   const profile = resolveThinkingProfile({
     provider: params.provider,
     model: params.model,
     catalog: params.catalog,
     agentRuntime: params.agentRuntime,
+    providerPolicySource: params.providerPolicySource,
   });
   if (profile.defaultLevel) {
     return profile.defaultLevel;
@@ -389,6 +391,9 @@ function resolveSupportedThinkingLevelFromProfile(
 ): ThinkLevel {
   if (profile.levels.some((entry) => entry.id === level)) {
     return level;
+  }
+  if (level === "adaptive" && profile.defaultLevel && profile.defaultLevel !== "off") {
+    return profile.defaultLevel;
   }
   const requestedRank = THINKING_LEVEL_RANKS[level];
   const ranked = profile.levels.toSorted((a, b) => b.rank - a.rank);
