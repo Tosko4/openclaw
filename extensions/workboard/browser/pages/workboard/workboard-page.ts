@@ -251,7 +251,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
               </div>
             `,
             scopeControl:
-              selectableAgents.length > 1 || missingScope
+              selectableAgents.length > 1 || scope
                 ? renderAgentPicker(
                     {
                       options: [

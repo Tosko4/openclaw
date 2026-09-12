@@ -110,31 +110,51 @@ it("loads and refreshes cards through the plugin's authenticated host", async ()
   expect(page.container.textContent).not.toContain("Initial card");
 });
 
-it("keeps a historical scope recoverable after the roster shrinks to one agent", async () => {
-  const page = mountPage({ connected: true });
-  await vi.waitFor(() => expect(page.container.textContent).toContain("Initial card"));
-  page.fixture.host.agents.setScope("writer");
-  page.agents([{ id: "main" }]);
-  await page.fixture.host.agents.refresh();
-  await vi.waitFor(() => expect(page.container.textContent).not.toContain("Initial card"));
-  const picker = expectDefined(
-    page.container.querySelector<HTMLElement & ControlUiAgentPickerProps>(
-      ".workboard-scope [data-test-agent-picker]",
-    ),
-    "historical scope picker",
-  );
-  expect(picker.value).toBe("writer");
-  expect(picker.options).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ value: "writer", label: "writer" }),
-      expect.objectContaining({ value: "", label: "All agents" }),
-    ]),
-  );
-  picker.onSelect("");
-  await vi.waitFor(() => expect(page.container.textContent).toContain("Initial card"));
-  expect(page.fixture.host.agents.scopeId).toBeNull();
-  expect(page.container.querySelector(".workboard-scope")).toBeNull();
-});
+it.each(["main", "writer"])(
+  "keeps scope %s recoverable after the roster shrinks to one agent",
+  async (scope) => {
+    const page = mountPage();
+    page.cards([
+      createWorkboardCard({ id: "main-card", title: "Main agent task", agentId: "main" }),
+      createWorkboardCard({ id: "writer-card", title: "Writer agent task", agentId: "writer" }),
+    ]);
+    page.fixture.connection.connected = true;
+    page.fixture.notify();
+    await vi.waitFor(() =>
+      expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(2),
+    );
+    page.fixture.host.agents.setScope(scope);
+    page.agents([{ id: "main" }]);
+    await page.fixture.host.agents.refresh();
+    await vi.waitFor(() =>
+      expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(1),
+    );
+    expect(page.container.textContent).toContain(
+      scope === "main" ? "Main agent task" : "Writer agent task",
+    );
+    const picker = expectDefined(
+      page.container.querySelector<HTMLElement & ControlUiAgentPickerProps>(
+        ".workboard-agent-filter [data-test-agent-picker]",
+      ),
+      "desktop scope picker",
+    );
+    expect(picker.value).toBe(scope);
+    expect(picker.options).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: scope, label: scope }),
+        expect.objectContaining({ value: "", label: "All agents" }),
+      ]),
+    );
+    picker.onSelect("");
+    await vi.waitFor(() =>
+      expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(2),
+    );
+    expect(page.container.textContent).toContain("Main agent task");
+    expect(page.container.textContent).toContain("Writer agent task");
+    expect(page.fixture.host.agents.scopeId).toBeNull();
+    expect(page.container.querySelector(".workboard-scope")).toBeNull();
+  },
+);
 
 it.each([false, true])(
   "offers global agent scope only for multiple selectable agents: %s",
