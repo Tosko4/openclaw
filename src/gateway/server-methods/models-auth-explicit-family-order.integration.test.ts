@@ -1,18 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:http";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.js";
+import { saveModelProviderApiKey } from "../../commands/models/auth-api-key.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import type { ModelAuthStatusResult } from "./models-auth-status.types.js";
 
-it("models.list, models.authStatus, and agent honor explicit family order with an exact-provider account present", async () => {
+async function runFamilyOrderCase(mode: "explicit" | "retained") {
   const state = await createOpenClawTestState({
-    label: "explicit-family-auth-order",
+    label: `${mode}-family-auth-order`,
     layout: "state-only",
     env: {
       OPENCLAW_SKIP_CHANNELS: "1",
@@ -26,6 +27,8 @@ it("models.list, models.authStatus, and agent honor explicit family order with a
     },
   });
   const familyKey = "family-order-fixture-key";
+  const exactKey = "exact-plan-fixture-key";
+  const acceptedKeys = mode === "retained" ? [familyKey, exactKey] : [familyKey];
   const catalogRequests: Array<{ authorization: string; apiKey: string }> = [];
   const inferenceRequests: Array<{ authorization: string; model: string }> = [];
   const endpointErrors: unknown[] = [];
@@ -34,7 +37,7 @@ it("models.list, models.authStatus, and agent honor explicit family order with a
     if (request.method === "GET" && request.url === "/models") {
       const apiKey = String(request.headers["x-api-key-resolver"] ?? "");
       catalogRequests.push({ authorization, apiKey });
-      if (authorization !== `Bearer ${familyKey}` || apiKey !== familyKey) {
+      if (!acceptedKeys.some((key) => authorization === `Bearer ${key}` && apiKey === key)) {
         response.writeHead(403).end();
         return;
       }
@@ -54,7 +57,7 @@ it("models.list, models.authStatus, and agent honor explicit family order with a
       }
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { model: string };
       inferenceRequests.push({ authorization, model: body.model });
-      if (authorization !== `Bearer ${familyKey}`) {
+      if (!acceptedKeys.some((key) => authorization === `Bearer ${key}`)) {
         response.writeHead(403).end();
         return;
       }
@@ -151,18 +154,26 @@ it("models.list, models.authStatus, and agent honor explicit family order with a
       version: 1,
       profiles: {
         "byteplus:family": { type: "api_key", provider: "byteplus", key: familyKey },
-        "byteplus-plan:saved": {
-          type: "api_key",
-          provider: "byteplus-plan",
-          key: "exact-plan-fixture-key",
-        },
+        ...(mode === "explicit"
+          ? {
+              "byteplus-plan:saved": {
+                type: "api_key" as const,
+                provider: "byteplus-plan",
+                key: exactKey,
+              },
+            }
+          : {}),
       },
-      order: { byteplus: ["byteplus:family"] },
+      ...(mode === "explicit" ? { order: { byteplus: ["byteplus:family"] } } : {}),
+    });
+    const hotReloadRecovery = vi.fn(() => {
+      throw new Error("Saving the exact-provider account unexpectedly required a recovery restart");
     });
     const { client, server } = await startGatewayWithClient({
       cfg,
       configPath: state.configPath,
       token,
+      hotReloadRecovery,
       scopes: ["operator.admin", "operator.read", "operator.write"],
     });
     try {
@@ -194,24 +205,57 @@ it("models.list, models.authStatus, and agent honor explicit family order with a
           selectedProfileId: "byteplus:family",
         }),
       );
-      const accepted = await client.request<{ runId: string; status: string }>("agent", {
-        agentId: "main",
-        sessionKey: "agent:main:explicit-family-order",
-        message: "Reply with EXPLICIT_FAMILY_ORDER_OK only.",
-        deliver: false,
-        idempotencyKey: randomUUID(),
-      });
-      expect(accepted.status).toBe("accepted");
-      await expect(
-        client.request(
+      const turn = async () => {
+        const accepted = await client.request<{ runId: string; status: string }>("agent", {
+          agentId: "main",
+          sessionKey: `agent:main:${mode}-family-order`,
+          message: "Reply with EXPLICIT_FAMILY_ORDER_OK only.",
+          deliver: false,
+          idempotencyKey: randomUUID(),
+        });
+        expect(accepted.status).toBe("accepted");
+        return client.request<{ status: string }>(
           "agent.wait",
           { runId: accepted.runId, timeoutMs: 30_000 },
           { timeoutMs: 35_000 },
-        ),
-      ).resolves.toMatchObject({ status: "ok" });
-      expect(inferenceRequests).toEqual([
-        { authorization: `Bearer ${familyKey}`, model: "plan-model" },
-      ]);
+        );
+      };
+      expect(await turn()).toMatchObject({ status: "ok" });
+      const expectedRequest = { authorization: `Bearer ${familyKey}`, model: "plan-model" };
+      expect(inferenceRequests).toEqual([expectedRequest]);
+
+      if (mode === "retained") {
+        expect(
+          await saveModelProviderApiKey({
+            config: cfg,
+            provider: "byteplus-plan",
+            profileId: "byteplus-plan:saved",
+            apiKey: exactKey,
+            agentDir: state.agentDir(),
+          }),
+        ).toBe("byteplus-plan:saved");
+        await expect(
+          client.request("models.authRefresh", { agentId: "main", operation: "login" }),
+        ).resolves.toEqual({ refreshed: true });
+        const saved = await client.request<{ config: OpenClawConfig }>("config.get", {});
+        expect(saved.config.auth?.order).toBeUndefined();
+        expect(saved.config.models?.providers?.["byteplus-plan"]).toBeUndefined();
+        const serving = await client.request<ModelAuthStatusResult>("models.authStatus", {
+          agentId: "main",
+        });
+        expect.soft(serving.servingAuth?.models).toContainEqual(
+          expect.objectContaining({
+            provider: "byteplus-plan",
+            model: "plan-model",
+            availability: true,
+            selectedProfileId: "byteplus:family",
+          }),
+        );
+        const nextTurn = await turn();
+        expect.soft(nextTurn, JSON.stringify(nextTurn)).toMatchObject({ status: "ok" });
+        expect(inferenceRequests).toEqual([expectedRequest, expectedRequest]);
+      }
+      expect(hotReloadRecovery).not.toHaveBeenCalled();
       expect(endpointErrors).toEqual([]);
     } finally {
       await disconnectGatewayClient(client);
@@ -222,4 +266,12 @@ it("models.list, models.authStatus, and agent honor explicit family order with a
     await new Promise<void>((resolve) => endpoint.close(() => resolve()));
     await state.cleanup();
   }
+}
+
+it("models.list, models.authStatus, and agent honor explicit family order with an exact-provider account present", async () => {
+  await runFamilyOrderCase("explicit");
+});
+
+it("keeps the working family account after saving an exact-provider account between automatic Plan turns", async () => {
+  await runFamilyOrderCase("retained");
 });

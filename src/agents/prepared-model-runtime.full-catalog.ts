@@ -217,12 +217,9 @@ export function preparedProviderCatalogSource(
     Object.fromEntries(Object.entries(entries ?? {}).filter(([id]) => normalize(id) === provider));
   return fingerprintPreparedRuntimeFacts({
     models: { ...config.models, providers: providerEntries(config.models?.providers) },
+    // Account metadata does not change the catalog source. Credential identity
+    // and readiness are checked separately before retaining learned models.
     auth: {
-      profiles: Object.fromEntries(
-        Object.entries(config.auth?.profiles ?? {}).filter(
-          ([, profile]) => normalize(profile.provider) === provider,
-        ),
-      ),
       order: providerEntries(config.auth?.order),
     },
     plugins: {

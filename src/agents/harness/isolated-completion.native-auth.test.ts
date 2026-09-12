@@ -16,10 +16,75 @@ const { createPluginMetadataSnapshot, makeRegistry } =
   await import("../../config/plugin-auto-enable.test-helpers.js");
 
 const { AsyncWorkScope } = await import("../../shared/async-work-scope.js");
+const { createDeferred } = await import("../../../test/helpers/promise.js");
+const authProfileUsage = await import("../auth-profiles/usage.js");
 
 beforeEach(resetIsolatedCompletionTestState);
 
 describe("runIsolatedCompletion native authorization", () => {
+  it("rejects a caller retired while native quota reconciliation is pending", async () => {
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const retired = new Error("The completion owner retired during quota reconciliation.");
+    let current = true;
+    const reconcile = vi
+      .spyOn(authProfileUsage, "reconcileAuthProfileQuotaBlocks")
+      .mockImplementation(async () => {
+        entered.resolve();
+        await release.promise;
+      });
+    const runIsolatedCompletionV2 = vi.fn(async () => ({
+      assistant: isolatedAssistant([{ type: "text", text: "native result" }]),
+    }));
+    registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2 });
+    const completion = runIsolatedCompletion({
+      ...isolatedRequest(),
+      assertCurrent() {
+        if (!current) {
+          throw retired;
+        }
+      },
+    });
+    try {
+      await Promise.race([
+        entered.promise,
+        completion.then(() => {
+          throw new Error("Completion finished before quota reconciliation started.");
+        }),
+      ]);
+      expect(mocks.prepareAgentRuntimeAuth).not.toHaveBeenCalled();
+      expect(runIsolatedCompletionV2).not.toHaveBeenCalled();
+
+      current = false;
+      release.resolve();
+
+      await expect(completion).rejects.toBe(retired);
+      expect(mocks.prepareAgentRuntimeAuth).not.toHaveBeenCalled();
+      expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(runIsolatedCompletionV2).not.toHaveBeenCalled();
+      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([completion]);
+      reconcile.mockRestore();
+    }
+  });
+
+  it("does not fall back to host authorization when native auth has no prepared attempts", async () => {
+    mocks.prepareAgentRuntimeAuth.mockReturnValueOnce({ plan: nativeAuthPlan, attempts: [] });
+    const runIsolatedCompletionV2 = vi.fn(async () => ({
+      assistant: isolatedAssistant([{ type: "text", text: "unexpected host fallback" }]),
+    }));
+    registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2 });
+
+    await expect(runIsolatedCompletion(isolatedRequest())).rejects.toThrow(
+      "No prepared auth attempt succeeded.",
+    );
+    expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(runIsolatedCompletionV2).not.toHaveBeenCalled();
+    expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+  });
+
   it.each(["none", "profile", "dependent-direct"] as const)(
     "rejects a retired native route before dispatch (API sibling: %s)",
     async (apiSibling) => {

@@ -331,8 +331,8 @@ export function resolveAuthProfileOrderWithMetadata(
     store,
     providerAuthKey,
   });
-  // Automatic selection stays with an exact provider's stored accounts. An
-  // authored family order still owns selection, including an empty order.
+  // Automatic selection prefers exact-provider accounts without replacing a
+  // retained working family account. Authored family order still owns selection.
   const preferExactProvider =
     explicitOrder === undefined &&
     storeProfiles.some((profileId) => {
@@ -352,6 +352,7 @@ export function resolveAuthProfileOrderWithMetadata(
     const credential = store.profiles[profileId];
     if (
       preferExactProvider &&
+      profileId !== params.retainedProfile &&
       (!credential || normalizeProviderId(credential.provider) !== providerKey)
     ) {
       return false;
