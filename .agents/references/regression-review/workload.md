@@ -1,16 +1,16 @@
 # R4: Workload assumptions
 
-Use when a change introduces or moves a deadline, probe, scan, snapshot, or admission check.
+Use when a change introduces or moves a deadline, probe, scan, snapshot, admission check, or work under a shared resource.
 
 ## Check
 
-Name the operating condition the algorithm assumes, then exercise the supported condition most likely to violate it: a substantial database, a concurrent writer, or a slow but valid platform response. Trace the caller's budget through the actual adapter and child process. Verify completion or a justified refusal while the owning lease remains valid.
+Name the operating condition the algorithm assumes, then exercise the supported condition most likely to violate it: a substantial database, a concurrent writer, or a slow but valid platform response. Trace the caller's budget and held shared resources through the actual adapter and child process. Verify completion or a justified refusal while the owning lease remains valid. When work moves to a child, also exercise a supported competing operation; a responsive parent can still hold the writer that operation needs.
 
 Measure the operation that determines cost. A small warm fixture cannot justify a full-file inspection deadline. A running Gateway cannot promise unchanging database bytes. A generous caller deadline has no effect when a lower adapter silently replaces it. The correction may require a different inspection strategy rather than more waiting.
 
 ## Valid counterexample
 
-A deadline may protect a measured host limit or terminate a stuck child. Preserve that bound and its reason. The check does not require unbounded waits, suppressing integrity checks, or enlarging timeouts until a test passes.
+A deadline may protect a measured host limit or terminate a stuck child. A shared writer may be required for atomic mutation or cleanup. Preserve those bounds and their reasons; moving read-only validation outside the writer still requires current authority before mutation. The check does not require unbounded waits, suppressing integrity checks, or enlarging timeouts until a test passes.
 
 ## Evidence
 
@@ -20,6 +20,6 @@ A deadline may protect a measured host limit or terminate a stuck child. Preserv
 
 ## Done
 
-Cite the supported workload, measured or source-proven cost, effective deadline through the full call chain, and completion or justified refusal; state any proof gap.
+Cite the supported workload, measured or source-proven cost, effective deadline and held shared resources through the full call chain, and completion or justified refusal; include competing work where applicable and state any proof gap.
 
 [Supporting incidents and limits](evidence.md).

@@ -1,12 +1,12 @@
 # R1: Contract propagation
 
-Use when a cutover changes the facts or artifacts delivered to an existing consumer.
+Use when a change alters the facts or artifacts a consumer receives, including a new consumer of an existing value.
 
 ## Check
 
 Trace an existing supported caller through the changed producer, every adapter, and the final decision. Show that the fact or action the consumer needs still arrives with the same supported meaning. Exercise the actual registered or shipped entry point; importing a helper directly can bypass the broken boundary.
 
-Name the exact fact or artifact the consumer needs, then locate its producer after the cutover. For a route, follow a document request through the server. For a package, load the staged artifact. For a normalizer, follow the transformed value into the next migration or classifier. These are applications of the same producer-to-consumer check, not a mandatory suite for every change.
+Name the exact fact or artifact the consumer needs, then locate its producer after the change. For a route, follow a document request through the server. For a package, load the staged artifact. For a normalizer or decoder, follow the transformed value into the next migration or classifier; earlier checks may have seen a different representation. For a new storage reader, trace the physical target from each supported caller, including aggregate views. These are applications of the same producer-to-consumer check, not a mandatory suite for every change.
 
 ## Valid counterexample
 
@@ -20,6 +20,6 @@ A field or route may be deliberately retired under an accepted contract. Do not 
 
 ## Done
 
-Cite the required fact or artifact, the real consumer, and evidence that it remains available with its supported meaning after the cutover; state any proof gap.
+Cite the required fact or artifact, the real consumer, and evidence that it remains available with its supported meaning after the change; state any proof gap.
 
 [Supporting incidents and limits](evidence.md).
