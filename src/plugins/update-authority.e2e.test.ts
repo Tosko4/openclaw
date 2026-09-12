@@ -161,7 +161,7 @@ describe("plugin update publication authority", () => {
                   generation.targetDir,
                 );
                 expect(sink).toHaveLength(1);
-                return expectDefined(sink[0]);
+                return expectDefined(sink[0], "retained plugin install transaction");
               };
               const oldRun = createUpdateRun({ trigger: "cli" }, { env: state.env });
               await withUpdateCommandExecutor(oldRun.runId, async (oldExecutor) => {
@@ -172,7 +172,10 @@ describe("plugin update publication authority", () => {
                 );
                 const retainedBackups = await readBackups();
                 expect(retainedBackups).toHaveLength(1);
-                const oldBackup = path.join(backupRoot, expectDefined(retainedBackups[0]));
+                const oldBackup = path.join(
+                  backupRoot,
+                  expectDefined(retainedBackups[0], "retained plugin install backup"),
+                );
                 expect(await readProject(oldBackup)).toEqual(seeded);
                 const snapshot = async () => ({
                   live: await readProject(projectRoot),
@@ -195,7 +198,7 @@ describe("plugin update publication authority", () => {
                       // First touch of the retained handle is under a new genuine
                       // updater: ambient ownership must not revive the captured one.
                       const secondAction = firstAction === "commit" ? "rollback" : "commit";
-                      for (const action of [firstAction, secondAction]) {
+                      for (const action of [firstAction, secondAction] as const) {
                         await expect(oldTransaction[action]()).rejects.toThrow(
                           UpdateCommandRecoveryPendingError,
                         );
@@ -208,7 +211,10 @@ describe("plugin update publication authority", () => {
                         (name) => !retainedBackups.includes(name),
                       );
                       expect(freshBackups).toHaveLength(1);
-                      const freshBackup = path.join(backupRoot, expectDefined(freshBackups[0]));
+                      const freshBackup = path.join(
+                        backupRoot,
+                        expectDefined(freshBackups[0], "fresh plugin install backup"),
+                      );
                       expect(await readProject(freshBackup)).toEqual(retained.live);
                       const freshLive = await readProject(projectRoot);
                       expect(freshLive.identities).not.toEqual(retained.live.identities);
