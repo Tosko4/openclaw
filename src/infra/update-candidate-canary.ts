@@ -91,20 +91,15 @@ function readValidationFailure(stdout: string): string | undefined {
     }
   }
   if (Array.isArray(result.findings)) {
-    messages.push(
-      ...result.findings
-        .filter((finding) => isRecord(finding) && finding.severity === "error")
-        .slice(0, 3)
-        .flatMap((finding) =>
-          isRecord(finding) && typeof finding.message === "string"
-            ? [
-                [finding.message, typeof finding.fixHint === "string" ? finding.fixHint : undefined]
-                  .filter(Boolean)
-                  .join(" "),
-              ]
-            : [],
-        ),
+    const errors = result.findings.filter(
+      (finding) => isRecord(finding) && finding.severity === "error",
     );
+    for (const finding of errors.slice(0, 3)) {
+      if (isRecord(finding) && typeof finding.message === "string") {
+        const hint = typeof finding.fixHint === "string" ? finding.fixHint : undefined;
+        messages.push([finding.message, hint].filter(Boolean).join(" "));
+      }
+    }
   }
   const registry = isRecord(result.registry) ? result.registry : undefined;
   for (const diagnostic of [
