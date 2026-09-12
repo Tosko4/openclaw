@@ -17,6 +17,7 @@ import {
   type TopLevelComponents,
 } from "../internal/discord.js";
 import {
+  getDiscordModelPickerDefault,
   getDiscordModelPickerRuntimeChoices,
   supportsDiscordModelPickerRuntimeChoices,
 } from "./model-picker.runtime.js";
@@ -84,7 +85,7 @@ type DiscordModelPickerModelViewParams = {
   command: DiscordModelPickerCommandContext;
   userId: string;
   data: ModelsProviderData;
-  provider: string;
+  provider?: string;
   page?: number;
   providerPage?: number;
   providerBucket?: string;
@@ -120,7 +121,7 @@ function parseCurrentModelRef(raw?: string): DiscordModelPickerCurrentModelRef |
 function formatCurrentModelLine(currentModel?: string): string {
   const parsed = parseCurrentModelRef(currentModel);
   if (!parsed) {
-    return "Current model: default";
+    return "Current model: not set";
   }
   return `Current model: ${parsed.provider}/${parsed.model}`;
 }
@@ -565,11 +566,11 @@ function buildModelRows(params: {
     rows.push(modelNavRow);
   }
 
-  const resolvedDefault = params.data.resolvedDefault;
+  const resolvedDefault = getDiscordModelPickerDefault(params.data);
   const shouldDisableReset =
-    Boolean(parsedCurrentModel) &&
-    parsedCurrentModel?.provider === resolvedDefault.provider &&
-    parsedCurrentModel?.model === resolvedDefault.model;
+    !resolvedDefault ||
+    (parsedCurrentModel?.provider === resolvedDefault.provider &&
+      parsedCurrentModel?.model === resolvedDefault.model);
 
   const hasPendingSelection =
     Boolean(parsedPendingModel) &&
@@ -722,6 +723,9 @@ export function renderDiscordModelPickerProvidersView(
 export function renderDiscordModelPickerModelsView(
   params: DiscordModelPickerModelViewParams,
 ): DiscordModelPickerRenderedView {
+  if (!params.provider) {
+    return renderDiscordModelPickerProvidersView(params);
+  }
   const providerPage = normalizeModelPickerPage(params.providerPage);
   const modelPage = getDiscordModelPickerModelPage({
     data: params.data,
@@ -793,7 +797,10 @@ export function renderDiscordModelPickerModelsView(
   }
   rows.push(...modelRows);
 
-  const defaultModel = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
+  const resolvedDefault = getDiscordModelPickerDefault(params.data);
+  const defaultModelLabel = resolvedDefault
+    ? `${resolvedDefault.provider}/${resolvedDefault.model}`
+    : "No default available";
   const choices = getRuntimeChoices({
     data: params.data,
     provider: modelPage.provider,
@@ -822,7 +829,10 @@ export function renderDiscordModelPickerModelsView(
             ? `Selected: ${params.pendingModel} · ${selectedRuntimeLabel} (press Submit)`
             : "Choose how to run this model, then press Submit.";
 
-  const detailLines = [formatCurrentModelLine(params.currentModel), `Default: ${defaultModel}`];
+  const detailLines = [
+    formatCurrentModelLine(params.currentModel),
+    `Default: ${defaultModelLabel}`,
+  ];
   if (modelPage.totalPages > 1) {
     detailLines.push(
       `${modelPage.provider}: page ${modelPage.page}/${modelPage.totalPages} · ${modelPage.totalItems} models`,
@@ -874,23 +884,29 @@ function createModelRefToken(modelRef: string): string | undefined {
 export function renderDiscordModelPickerRecentsView(
   params: DiscordModelPickerRecentsViewParams,
 ): DiscordModelPickerRenderedView {
-  const defaultModelRef = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
+  const resolvedDefault = getDiscordModelPickerDefault(params.data);
+  const defaultModelRef = resolvedDefault
+    ? `${resolvedDefault.provider}/${resolvedDefault.model}`
+    : undefined;
   const rows: DiscordModelPickerRow[] = [];
 
   const recentModels = [
-    defaultModelRef,
+    ...(defaultModelRef ? [defaultModelRef] : []),
     ...params.quickModels.filter((modelRef) => modelRef !== defaultModelRef),
   ];
   for (const [index, modelRef] of recentModels.entries()) {
     rows.push(
       new Row([
         createModelPickerButton({
-          label: formatRecentsButtonLabel(modelRef, index === 0 ? "(default)" : undefined),
+          label: formatRecentsButtonLabel(
+            modelRef,
+            defaultModelRef && index === 0 ? "(default)" : undefined,
+          ),
           customId: buildDiscordModelPickerCustomId({
             command: params.command,
             action: "submit",
             view: "recents",
-            recentSlot: index + 1,
+            recentSlot: index + (defaultModelRef ? 1 : 2),
             modelToken: createModelRefToken(modelRef),
             provider: params.provider,
             runtime: params.runtime,

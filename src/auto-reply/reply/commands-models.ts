@@ -481,7 +481,8 @@ function buildModelsCommandReply(
   for (const id of pageModels) {
     const key = `${provider}/${id}`;
     const label = modelNames.get(key);
-    const primary = provider === data.resolvedDefault.provider && id === data.resolvedDefault.model;
+    const primary =
+      provider === data.effectiveDefault?.provider && id === data.effectiveDefault?.model;
     lines.push(
       `- ${key}${primary ? " (Default)" : ""}${label && label !== data.modelNames.get(key) ? ` (${label})` : ""}`,
     );

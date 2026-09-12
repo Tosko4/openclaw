@@ -17,6 +17,7 @@ import {
   normalizeProviderId,
   type ModelManifestNormalizationContext,
 } from "./model-ref-shared.js";
+import { isCliProvider } from "./model-selection-cli.js";
 import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
 import {
   createModelVisibilityPolicyWithFallbacks,
@@ -128,8 +129,15 @@ function resolveEffectiveDefaultModel(
     modelApi: primaryEntry?.api,
     modelBaseUrl: primaryEntry?.baseUrl,
   });
-  const nativeCatalog = snapshot.entries.filter((entry) => entry.nativeRuntime === runtime);
-  const nativeRuntime = runtime !== "auto" && runtime !== "openclaw";
+  const nativeRuntime =
+    runtime !== "auto" && runtime !== "openclaw"
+      ? runtime
+      : isCliProvider(primary.provider, params.cfg)
+        ? primary.provider
+        : undefined;
+  const nativeCatalog = nativeRuntime
+    ? snapshot.entries.filter((entry) => entry.nativeRuntime === nativeRuntime)
+    : [];
   // Host inventory cannot establish that a native runtime withdrew a model.
   if (nativeRuntime && nativeCatalog.length === 0) {
     return { ref: primary };

@@ -70,7 +70,7 @@ it.each([
     pinned: true,
   },
 ])(
-  "chat.send and the agent CLI replace $scenario with the same effective default",
+  "chat.send menus, reset, replies and the agent CLI use the effective default after $scenario",
   async ({ missing, withdrawn, pinned }) => {
     const scratch = tempDirs.make("openclaw-missing-primary-");
     const responsePath = path.join(scratch, "response.json");
@@ -199,11 +199,11 @@ it.each([
       ],
       ["agents.defaults.modelPolicy.allow", pinned ? ["openai/fixture-primary"] : ["openai/*"]],
     ];
-    for (const [key, value] of edits) {
+    for (const [configKey, value] of edits) {
       const edit = await runtime.cli([
         "config",
         "set",
-        key,
+        configKey,
         JSON.stringify(value),
         "--strict-json",
         "--replace",
@@ -214,6 +214,7 @@ it.each([
     const runId = randomUUID();
     const hello = createDeferred<void>();
     const final = createDeferred<unknown>();
+    const deliveries = new Map([[runId, final]]);
     const finalResult = final.promise.then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
@@ -229,14 +230,22 @@ it.each([
       onHelloOk: () => hello.resolve(),
       onConnectError: hello.reject,
       onEvent: (event) => {
-        if (event.event !== "chat") return;
+        if (event.event !== "chat") {
+          return;
+        }
         const payload = z
           .object({ runId: z.string(), state: z.string(), message: z.unknown().optional() })
           .parse(event.payload);
-        if (payload.runId !== runId) return;
-        if (payload.state === "final") final.resolve(payload.message);
-        if (payload.state === "error" || payload.state === "aborted")
-          final.reject(new Error(JSON.stringify(event.payload)));
+        const delivery = deliveries.get(payload.runId);
+        if (!delivery) {
+          return;
+        }
+        if (payload.state === "final") {
+          delivery.resolve(payload.message);
+        }
+        if (payload.state === "error" || payload.state === "aborted") {
+          delivery.reject(new Error(JSON.stringify(event.payload)));
+        }
       },
     });
     observer.start();
@@ -254,7 +263,9 @@ it.each([
       status: "ok",
     });
     const finalMessage = await finalResult;
-    if ("error" in finalMessage) throw finalMessage.error;
+    if ("error" in finalMessage) {
+      throw finalMessage.error;
+    }
     const delivered = historySchema.shape.messages.element.parse(finalMessage.value);
     expect((await requestedModels()).slice(1)).toEqual(["fixture-primary"]);
     const history = historySchema.parse(await call("chat.history", { sessionKey: key, limit: 20 }));
@@ -321,6 +332,47 @@ it.each([
     expect(commandOutput.payloads.map((payload) => payload.text)).toEqual([
       `${notice}\n\nDefault response.`,
     ]);
+    const beforeMenuRequests = (await requestedModels()).length;
+    for (const [message, expectedText] of [
+      ["/models list openai all", "- openai/fixture-primary (Default)"],
+      ["/model default -s", "Session model reset to configured default (openai/fixture-primary)"],
+    ] as const) {
+      const commandRunId = randomUUID();
+      const commandFinal = createDeferred<unknown>();
+      const commandResult = commandFinal.promise.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      deliveries.set(commandRunId, commandFinal);
+      await observer.request("chat.send", {
+        sessionKey: key,
+        message,
+        idempotencyKey: commandRunId,
+      });
+      const completed = await commandResult;
+      if ("error" in completed) {
+        throw completed.error;
+      }
+      const commandReply = historySchema.shape.messages.element.parse(completed.value);
+      const commandText =
+        typeof commandReply.content === "string"
+          ? commandReply.content
+          : commandReply.content
+              .filter((block) => block.type === "text")
+              .map((block) => block.text)
+              .join("\n");
+      expect(commandText).toContain(expectedText);
+      expect(commandText).not.toContain(`- openai/${missing} (Default)`);
+    }
+    expect((await requestedModels()).length).toBe(beforeMenuRequests);
+    const resetHistory = historySchema.parse(
+      await call("chat.history", { sessionKey: key, limit: 20 }),
+    );
+    expect(resetHistory.sessionInfo).toEqual({
+      modelProvider: "openai",
+      model: "fixture-primary",
+      modelOverrideSource: "default",
+    });
     if (withdrawn) {
       const unrunKey = "agent:main:unrun";
       await call("sessions.create", { key: unrunKey, agentId: "main" });

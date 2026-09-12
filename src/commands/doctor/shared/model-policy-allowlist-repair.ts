@@ -42,15 +42,13 @@ export async function prepareDoctorModelPolicyAllowlist(params: {
 }): Promise<DoctorConfigMutationResult & { warnings: string[] }> {
   const { config } = params;
   const inspectionConfig = modelPolicyInspectionConfig(config);
-  if (
-    ![undefined, ...listAgentEntries(config).map((agent) => agent.id)].some(
-      (agentId) =>
-        resolveConfiguredModelPolicyAllow({ cfg: inspectionConfig, agentId }).refs.length > 0,
-    )
-  ) {
+  const policyRefs = [undefined, ...listAgentEntries(config).map((agent) => agent.id)].flatMap(
+    (agentId) => resolveConfiguredModelPolicyAllow({ cfg: inspectionConfig, agentId }).refs,
+  );
+  if (policyRefs.length === 0) {
     return { config, changes: [], warnings: [] };
   }
-  const { withPreparedModelCatalogOwner } =
+  const { withPreparedModelCatalogOwner, loadPreparedModelCatalogSnapshot } =
     await import("../../../agents/prepared-model-catalog.js");
   const { createModelCatalogDecisions } =
     await import("../../../agents/model-catalog-decisions.js");
@@ -71,36 +69,6 @@ export async function prepareDoctorModelPolicyAllowlist(params: {
       if (!authStore || !agentId) {
         throw new Error("Model catalog owner omitted its auth store or agent scope");
       }
-      const decisions = createModelCatalogDecisions({
-        cfg: inspectionConfig,
-        agentId,
-        agentDir: owner.agentDir,
-        workspaceDir: owner.workspaceDir,
-        snapshot: owner.modelCatalog,
-        metadataSnapshot: owner.metadataSnapshot,
-        preparedAuthStore: authStore,
-        preparedRuntimeAuthModes: owner.authModes,
-        preparedRuntimeAuthMaterializations: getPreparedModelRuntimeAuthMaterializations(owner),
-        pluginRegistry: owner.pluginRegistry,
-        observationConfig: owner.observationConfig,
-        isCurrent: owner.isCurrent,
-      });
-      const { allowList } = await resolveLogicalVisibleModelCatalog({
-        cfg: inspectionConfig,
-        catalog: owner.modelCatalog.entries,
-        defaultProvider: DEFAULT_PROVIDER,
-        routePolicy: openAIModelCatalogRoutePolicy,
-        routeVariants: owner.modelCatalog.routeVariants,
-        evaluateEntry: async (entry, variants) =>
-          resolveLogicalModelCatalogEntryState({
-            evaluation: decisions.evaluateNative(
-              entry,
-              await decisions.evaluateEntry(entry, variants),
-            ),
-            provider: entry.provider,
-            routePolicy: openAIModelCatalogRoutePolicy,
-          }),
-      });
       const providers = new Set([
         ...owner.modelCatalog.entries.map((row) => row.provider),
         ...Object.keys(config.models?.providers ?? {}),
@@ -123,9 +91,83 @@ export async function prepareDoctorModelPolicyAllowlist(params: {
           providers.delete(provider);
         }
       }
+      const providerDiscoveryProviderIds = [
+        ...new Set([
+          ...owner.modelCatalog.entries.map((row) => row.provider),
+          ...Object.keys(owner.authModes),
+          ...Object.keys(config.models?.providers ?? {}),
+          ...policyRefs.flatMap((value) => {
+            const ref = parseModelCatalogRef(value);
+            return ref ? [ref.provider] : [];
+          }),
+        ]),
+      ].filter((provider) => providers.has(provider));
+      // A fresh Doctor process has no published inventory. Inspect through the catalog's
+      // read-only discovery route instead of treating its passive snapshot as complete.
+      const catalog =
+        config.models?.mode === "replace"
+          ? owner.modelCatalog
+          : await loadPreparedModelCatalogSnapshot({
+              config: inspectionConfig,
+              agentId,
+              agentDir: owner.agentDir,
+              workspaceDir: owner.workspaceDir,
+              readOnly: true,
+              providerDiscoveryProviderIds,
+              scopedLiveProviderDiscovery: true,
+            });
+      if (!owner.isCurrent()) {
+        throw new PreparedModelRuntimePublicationSupersededError(
+          "Model catalog changed while checking the allow list",
+        );
+      }
+      if (
+        catalog.authoritative === false ||
+        catalog.refreshFailed ||
+        catalog.pendingProviders?.length ||
+        catalog.providerOutcomes?.some((outcome) => outcome.status !== "ready")
+      ) {
+        return {
+          config,
+          changes: [],
+          warnings: [
+            "Model allow-list inspection is deferred because provider model discovery did not complete. Check provider connectivity and credentials, then run openclaw doctor again.",
+          ],
+        };
+      }
+      const decisions = createModelCatalogDecisions({
+        cfg: inspectionConfig,
+        agentId,
+        agentDir: owner.agentDir,
+        workspaceDir: owner.workspaceDir,
+        snapshot: catalog,
+        metadataSnapshot: owner.metadataSnapshot,
+        preparedAuthStore: authStore,
+        preparedRuntimeAuthModes: owner.authModes,
+        preparedRuntimeAuthMaterializations: getPreparedModelRuntimeAuthMaterializations(owner),
+        pluginRegistry: owner.pluginRegistry,
+        observationConfig: owner.observationConfig,
+        isCurrent: owner.isCurrent,
+      });
+      const { allowList } = await resolveLogicalVisibleModelCatalog({
+        cfg: inspectionConfig,
+        catalog: catalog.entries,
+        defaultProvider: DEFAULT_PROVIDER,
+        routePolicy: openAIModelCatalogRoutePolicy,
+        routeVariants: catalog.routeVariants,
+        evaluateEntry: async (entry, variants) =>
+          resolveLogicalModelCatalogEntryState({
+            evaluation: decisions.evaluateNative(
+              entry,
+              await decisions.evaluateEntry(entry, variants),
+            ),
+            provider: entry.provider,
+            routePolicy: openAIModelCatalogRoutePolicy,
+          }),
+      });
       const result = inspectModelPolicyAllowlist({
         config,
-        catalog: owner.modelCatalog.entries,
+        catalog: catalog.entries,
         enabledProviders: providers,
         sourceConfig: params.sourceConfig,
         hiddenCount: allowList?.hiddenCount ?? 0,

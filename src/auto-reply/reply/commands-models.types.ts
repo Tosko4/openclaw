@@ -22,6 +22,8 @@ export type ModelsProviderData = {
   pendingProviders?: readonly string[];
   providers: string[];
   resolvedDefault: { provider: string; model: string };
+  /** Captured policy result; absent only in results from older SDK producers. */
+  effectiveDefault?: ModelsProviderData["resolvedDefault"] | null;
   modelNames: Map<string, string>;
   modelMenu?: {
     modelNames: ReadonlyMap<string, string>;

@@ -148,7 +148,7 @@ function getProviderModels(data: ModelsProviderData, provider: string): string[]
 function formatCurrentModelLine(currentModel?: string): string {
   const parsed = splitModelRef(currentModel);
   if (!parsed) {
-    return "Current: default";
+    return "Current: not set";
   }
   return `Current: ${parsed.provider}/${parsed.model}`;
 }
@@ -237,8 +237,14 @@ export function resolveMattermostModelPickerCurrentModel(params: {
   route: { agentId: string; sessionKey: string };
   data: ModelsProviderData;
   readConsistency?: "latest";
-}): string {
-  const fallback = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
+}): string | undefined {
+  const resolvedDefault =
+    params.data.effectiveDefault === undefined
+      ? params.data.resolvedDefault
+      : params.data.effectiveDefault;
+  const fallback = resolvedDefault
+    ? `${resolvedDefault.provider}/${resolvedDefault.model}`
+    : undefined;
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       agentId: params.route.agentId,
@@ -248,6 +254,11 @@ export function resolveMattermostModelPickerCurrentModel(params: {
       sessionKey: params.route.sessionKey,
       ...(params.readConsistency === "latest" ? { readConsistency: "latest" as const } : {}),
     });
+    const defaultProvider =
+      resolvedDefault?.provider ?? sessionEntry?.providerOverride ?? sessionEntry?.modelProvider;
+    if (!defaultProvider) {
+      return fallback;
+    }
     const override = resolveStoredModelOverride({
       sessionEntry,
       loadSessionEntry: (sessionKey) =>
@@ -258,12 +269,12 @@ export function resolveMattermostModelPickerCurrentModel(params: {
         }),
       sessionKey: params.route.sessionKey,
       parentSessionKey: sessionEntry?.parentSessionKey,
-      defaultProvider: params.data.resolvedDefault.provider,
+      defaultProvider,
     });
     if (!override?.model) {
       return fallback;
     }
-    const provider = (override.provider || params.data.resolvedDefault.provider).trim();
+    const provider = (override.provider || defaultProvider).trim();
     return provider ? `${provider}/${override.model}` : fallback;
   } catch {
     return fallback;

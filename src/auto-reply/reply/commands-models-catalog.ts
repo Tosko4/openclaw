@@ -101,6 +101,7 @@ export async function projectPreparedModelsProviderData(
     agentId,
     ...runtimeNormalization,
   });
+  const effectiveDefault = visibilityPolicy.effectiveDefault.ref;
   if (!authStore) {
     throw new Error("Model catalog owner omitted its auth store");
   }
@@ -223,7 +224,7 @@ export async function projectPreparedModelsProviderData(
   const modelNames = new Map<string, string>();
   for (const entry of [...catalog, ...visibleCatalog]) {
     const key = `${normalizeProviderId(entry.provider)}/${entry.id}`;
-    if (key === `${resolvedDefault.provider}/${resolvedDefault.model}`) {
+    if (effectiveDefault && key === `${effectiveDefault.provider}/${effectiveDefault.model}`) {
       modelNames.set(key, `${entry.name} (Default)`);
     } else if (entry.name && entry.name !== entry.id) {
       modelNames.set(key, entry.name);
@@ -279,6 +280,7 @@ export async function projectPreparedModelsProviderData(
     providers,
     ...(allowList ? { allowList } : {}),
     resolvedDefault,
+    effectiveDefault,
     modelNames,
     modelMenu: buildModelsMenu({
       byProvider,
