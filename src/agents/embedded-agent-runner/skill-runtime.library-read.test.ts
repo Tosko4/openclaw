@@ -28,12 +28,19 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "../agent-tools.js";
+import { createAdmittedHostCapabilityTestFixture } from "../harness/host-capability.test-support.js";
 import { createInitialSubagentSession } from "../subagents/spawn/subagent-spawn-session-patch.js";
 import { getTextContent } from "../test-helpers/agent-tools-fs-helpers.js";
 import { prepareEmbeddedSkills } from "./skill-runtime.js";
 
+const hosts: Array<Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>> = [];
+
 const temps = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
+    for (const host of hosts.splice(0)) {
+      host.closeHost();
+      host.closeAdmission();
+    }
     closeOpenClawStateDatabaseForTest();
     closeOpenClawAgentDatabasesForTest();
     vi.unstubAllEnvs();
@@ -41,10 +48,44 @@ const temps = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-describe("manual library resources through embedded normal read", () => {
-  it.each(["warm", "hydrated"])(
-    "reads the explicitly invoked pinned revision whole with a %s snapshot without expanding model visibility",
-    async (reuse) => {
+describe("manual library resources through embedded and host-bound reads", () => {
+  it.each(
+    (["embedded", "codex-host", "copilot-host"] as const).flatMap((toolOwner) =>
+      (["warm", "hydrated"] as const).map((reuse) => ({ toolOwner, reuse })),
+    ),
+  )(
+    "reads the pinned revision whole through $toolOwner with a $reuse snapshot without expanding model visibility",
+    async ({ toolOwner, reuse }) => {
+      const createTools = async (
+        options: NonNullable<Parameters<typeof createOpenClawCodingToolsInternal>[0]>,
+        resources: Parameters<typeof createOpenClawCodingToolsInternal>[1],
+      ) => {
+        if (toolOwner === "embedded") {
+          return createOpenClawCodingToolsInternal(options, resources);
+        }
+        const hostSnapshot = structuredClone(options.skillsSnapshot);
+        const host = await createAdmittedHostCapabilityTestFixture({
+          agentId: "main",
+          runId: `manual-${toolOwner}-${reuse}-${hosts.length}`,
+          config: options.config,
+          workspaceDir: options.workspaceDir,
+          skillsSnapshot: hostSnapshot,
+        });
+        hosts.push(host);
+        // Plugin-visible inputs may change after handoff; the host keeps this turn
+        // on its captured selection rather than adopting a later mutation.
+        if (hostSnapshot) {
+          hostSnapshot.librarySelections = [];
+          hostSnapshot.resolvedSkills = [];
+        }
+        const { skillsSnapshot, ...rest } = options;
+        // Codex supplies the prompt snapshot; Copilot must also work when its
+        // factory options omit it. Neither caller supplies private read resources.
+        return host.hostCapabilities.createToolSurface!({
+          ...rest,
+          ...(toolOwner === "codex-host" ? { skillsSnapshot } : {}),
+        });
+      };
       const root = temps.make("manual-library-read-");
       const workspaceDir = path.join(root, "workspace");
       const stateDir = path.join(root, "state");
@@ -153,7 +194,7 @@ describe("manual library resources through embedded normal read", () => {
         expect(prepared.skillsPrompt).not.toContain(saved.entry.name);
         expect(prepared.codeModeSkills.map((skill) => skill.name)).not.toContain(saved.entry.name);
         expect(prepared.codeModeSkills.map((skill) => skill.name)).toContain("visible");
-        const tools = createOpenClawCodingToolsInternal(
+        const tools = await createTools(
           {
             codeModeSkills: prepared.codeModeSkills,
             skillUsagePaths: prepared.skillUsagePaths,
@@ -250,15 +291,17 @@ describe("manual library resources through embedded normal read", () => {
             includeCodeModeSkills: true,
           });
           try {
-            const filteredRead = createOpenClawCodingToolsInternal(
-              {
-                codeModeSkills: filteredPrepared.codeModeSkills,
-                skillUsagePaths: filteredPrepared.skillUsagePaths,
-                workspaceDir,
-                config,
-                skillsSnapshot: filteredPrepared.skillsSnapshotForRun,
-              },
-              filteredPrepared.skillReadResources,
+            const filteredRead = (
+              await createTools(
+                {
+                  codeModeSkills: filteredPrepared.codeModeSkills,
+                  skillUsagePaths: filteredPrepared.skillUsagePaths,
+                  workspaceDir,
+                  config,
+                  skillsSnapshot: filteredPrepared.skillsSnapshotForRun,
+                },
+                filteredPrepared.skillReadResources,
+              )
             ).find((tool) => tool.name === "read")!;
             await expect(
               filteredRead.execute("filtered", { path: instructionPath }),
@@ -315,15 +358,17 @@ describe("manual library resources through embedded normal read", () => {
           includeCodeModeSkills: true,
         });
         try {
-          const childRead = createOpenClawCodingToolsInternal(
-            {
-              codeModeSkills: childPrepared.codeModeSkills,
-              skillUsagePaths: childPrepared.skillUsagePaths,
-              workspaceDir,
-              config,
-              skillsSnapshot: childPrepared.skillsSnapshotForRun,
-            },
-            childPrepared.skillReadResources,
+          const childRead = (
+            await createTools(
+              {
+                codeModeSkills: childPrepared.codeModeSkills,
+                skillUsagePaths: childPrepared.skillUsagePaths,
+                workspaceDir,
+                config,
+                skillsSnapshot: childPrepared.skillsSnapshotForRun,
+              },
+              childPrepared.skillReadResources,
+            )
           ).find((tool) => tool.name === "read")!;
           expect(
             getTextContent(
@@ -379,6 +424,12 @@ describe("manual library resources through embedded normal read", () => {
           // The existing regular-file reader rejects final symlinks, even within an allowed root.
           await expect(read.execute("contained-link", { path: containedLink })).rejects.toThrow(
             /regular file/i,
+          );
+        }
+        if (toolOwner !== "embedded") {
+          hosts[0]!.closeHost();
+          await expect(read.execute("closed-host-read", { path: instructionPath })).rejects.toThrow(
+            /no longer active/,
           );
         }
       } finally {

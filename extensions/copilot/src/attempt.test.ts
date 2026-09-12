@@ -620,6 +620,7 @@ describe("runCopilotAttempt", () => {
   });
 
   it("reports code-mode engagement through the real tool bridge", async () => {
+    const { createOpenClawCodingTools } = await import("openclaw/plugin-sdk/agent-harness");
     const sdk = makeFakeSdk((session) => {
       session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
     });
@@ -631,6 +632,7 @@ describe("runCopilotAttempt", () => {
       makeParams({
         disableTools: false,
         config: { tools: { codeMode: true } },
+        hostCapabilities: createCopilotTestHostCapabilities(createOpenClawCodingTools),
       } as never),
       { pool: makeFakePool(sdk) },
     );
