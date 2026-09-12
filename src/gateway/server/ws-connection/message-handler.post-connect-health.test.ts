@@ -378,10 +378,10 @@ function attachGatewayHarness(options: {
     connectionWork.beginClose();
     await connectionWork.drain();
   });
-  let finishSocketSend: (() => void) | undefined;
+  let finishSocketSend: ((error?: Error) => void) | undefined;
   const socketSend = vi.fn((_payload: string, cb?: (err?: Error) => void) => {
     if (options.deferSocketSend) {
-      finishSocketSend = () => cb?.();
+      finishSocketSend = (error) => cb?.(error);
       return;
     }
     cb?.();
@@ -509,7 +509,7 @@ function attachGatewayHarness(options: {
   return {
     advanceHandshakePhase,
     clearHandshakeTimer,
-    finishSocketSend: () => finishSocketSend?.(),
+    finishSocketSend: (error?: Error) => finishSocketSend?.(error),
     logWsControl,
     refreshConnectedUserProfile,
     send,
@@ -897,7 +897,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     );
   });
 
-  it("dispatches registered-client frames while hello completion is pending", async () => {
+  it("holds pipelined frames until hello completion", async () => {
     const close = createCloseMock();
     const harness = attachGatewayHarness({
       connId: "conn-registered-hello-pending",
@@ -916,7 +916,9 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         expect(harness.setClient).toHaveBeenCalledOnce();
         expect(harness.socketSend).toHaveBeenCalledOnce();
       });
+      expect(handleGatewayRequest).not.toHaveBeenCalled();
 
+      harness.finishSocketSend();
       await waitForFast(() => {
         expect(handleGatewayRequest).toHaveBeenCalledTimes(MAX_QUEUED_GATEWAY_PREAUTH_FRAMES - 1);
       });
@@ -924,6 +926,24 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     } finally {
       harness.finishSocketSend();
     }
+  });
+
+  it("discards pipelined frames when hello delivery fails", async () => {
+    const close = createCloseMock();
+    const harness = attachGatewayHarness({
+      connId: "conn-failed-hello",
+      connectNonce: "nonce-failed-hello",
+      deferSocketSend: true,
+      close,
+    });
+
+    harness.sendConnect("connect-before-failed-hello", BACKEND_CONNECT_PARAMS);
+    harness.sendRequest("request-before-failed-hello", "status.summary");
+    await waitForFast(() => expect(harness.socketSend).toHaveBeenCalledOnce());
+
+    harness.finishSocketSend(new Error("synthetic hello send failure"));
+    await waitForFast(() => expect(close).toHaveBeenCalled());
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
   });
 
   it("rejects an oversized queued frame before the initial handshake completes", async () => {

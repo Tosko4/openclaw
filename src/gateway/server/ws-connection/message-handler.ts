@@ -358,17 +358,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         };
 
         const phaseContext = {
-          handler: {
-            ...params,
-            setClient: (nextClient) => {
-              if (!params.setClient(nextClient)) {
-                return false;
-              }
-              // Finish registration before replaying work that now has an authenticated owner.
-              queueMicrotask(flushQueuedHandshakeFrames);
-              return true;
-            },
-          },
+          handler: params,
           frame,
           connectParams,
           configSnapshot,
@@ -612,7 +602,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       return;
     }
 
-    // Reserve the first handshake only; flush later frames after hello so normal RPCs stay parallel.
+    // Reserve the first handshake only. Replay later frames only after the full
+    // connect admission (including bootstrap bookkeeping and hello delivery) settles.
     queuedHandshakeFrames = [];
     dispatchIncomingMessage(data, flushQueuedHandshakeFrames);
   };
