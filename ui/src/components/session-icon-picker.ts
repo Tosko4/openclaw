@@ -79,6 +79,16 @@ function renderCustomSessionIconEntry(props: AppearancePickerProps) {
           aria-label=${t("sessionsView.customEmojiTitle")}
           .value=${props.customIconValue}
           @input=${props.onInput}
+          @keydown=${(event: KeyboardEvent) => {
+            if (event.key !== "Enter" || event.isComposing) {
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            if (normalized && !props.disabled) {
+              props.onApply(event);
+            }
+          }}
         />
         <button
           type="button"

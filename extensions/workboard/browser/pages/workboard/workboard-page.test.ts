@@ -917,6 +917,47 @@ it.each(["canWrite", "connected"] as const)(
   },
 );
 
+it("saves explicit appearance clearing without sending legacy null values", async () => {
+  const page = mountPage({ boardId: "planning" });
+  const request = expectDefined(page.request.getMockImplementation(), "request implementation");
+  page.request.mockImplementation(async (method, params) =>
+    method === "workboard.cards.list"
+      ? {
+          cards: [],
+          boards: [
+            {
+              id: "planning",
+              name: "Planning",
+              icon: "rocket",
+              color: "blue",
+              total: 0,
+              active: 0,
+              archived: 0,
+              byStatus: {},
+            },
+          ],
+        }
+      : request(method, params),
+  );
+  page.fixture.connection.connected = true;
+  page.fixture.notify();
+  const form = await openBoardEditor(page);
+  const picker = expectDefined(
+    form.querySelector<HTMLElement & Parameters<ControlUiComponents["mountAppearancePicker"]>[1]>(
+      "[data-test-appearance-picker]",
+    ),
+    "board appearance picker",
+  );
+  picker.onChange({ icon: null, color: null });
+  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  await vi.waitFor(() =>
+    expect(page.request).toHaveBeenCalledWith("workboard.boards.upsert", {
+      id: "planning",
+      clearAppearance: ["icon", "color"],
+    }),
+  );
+});
+
 async function openBoardEditor(page: ReturnType<typeof mountPage>) {
   await vi.waitFor(() => expect(page.workboard.state.loaded).toBe(true));
   expectDefined(

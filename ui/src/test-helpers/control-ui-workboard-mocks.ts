@@ -304,6 +304,19 @@ export function installWorkboardBoardMock(seed: ReturnType<typeof buildWorkboard
   });
   gateway.setRequestHandler("workboard.boards.upsert", ({ params, respond, emit }) => {
     const input = params as Record<string, unknown>;
+    const clearAppearance = input.clearAppearance === undefined ? [] : input.clearAppearance;
+    if (
+      !Array.isArray(clearAppearance) ||
+      clearAppearance.some((field) => field !== "icon" && field !== "color")
+    ) {
+      respond({
+        __mockError: {
+          code: "INVALID_REQUEST",
+          message: "clearAppearance must be an array containing only icon or color.",
+        },
+      });
+      return;
+    }
     const id = typeof input.id === "string" ? input.id.trim().toLowerCase() : "default";
     const board: Record<string, unknown> = {
       ...workboardBoards.get(id),
@@ -311,11 +324,19 @@ export function installWorkboardBoardMock(seed: ReturnType<typeof buildWorkboard
       updatedAt: Date.now(),
     };
     for (const [key, value] of Object.entries(input)) {
-      if ((key === "icon" || key === "color") && value === null) {
-        delete board[key];
-      } else if (key !== "id" && value !== undefined && value !== "") {
+      if (key === "id" || key === "clearAppearance") {
+        continue;
+      }
+      if (key === "icon" || key === "color") {
+        if (typeof value === "string" && value.trim()) {
+          board[key] = value.trim();
+        }
+      } else if (value !== undefined && value !== "") {
         Object.assign(board, { [key]: typeof value === "string" ? value.trim() : value });
       }
+    }
+    for (const field of clearAppearance) {
+      delete board[field];
     }
     workboardBoards.set(id, board);
     respond({ board });

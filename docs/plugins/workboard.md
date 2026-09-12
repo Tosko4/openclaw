@@ -65,6 +65,20 @@ plugin entry:
 openclaw plugins disable workboard
 ```
 
+## Board appearance
+
+Use **Edit board** to change a board's name, icon, and color. **Reset to default**
+clears the icon and color when you save; canceling leaves the saved board unchanged.
+
+For `workboard.boards.upsert`, omitting `icon` or `color`, passing `null`, or passing
+an empty string preserves the existing value, including for older clients. To clear
+appearance explicitly, send `clearAppearance: ["icon", "color"]`, or list only the
+field you want to clear. Listed fields are cleared even if the request also supplies
+a replacement value for them. Other fields retain their ordinary update behavior.
+`clearAppearance` must be an array containing only `"icon"` and `"color"`; an empty
+array changes nothing. Clients using this argument need a Gateway version that
+supports explicit appearance clearing; older Gateways do not implement this reset.
+
 ## Card fields
 
 | Field       | Values                                                                                                        |

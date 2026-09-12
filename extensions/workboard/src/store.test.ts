@@ -946,7 +946,7 @@ describe("WorkboardStore", () => {
     }
   });
 
-  it("preserves omitted board appearance and persists explicit null resets", async () => {
+  it("preserves legacy empty board appearance and persists explicit clears", async () => {
     const dir = tempDirs.make("openclaw-workboard-appearance-");
     const dbPath = path.join(dir, "workboard.sqlite");
     const stores = createWorkboardSqliteStores({ dbPath });
@@ -958,10 +958,22 @@ describe("WorkboardStore", () => {
         icon: "rocket",
         color: "blue",
       });
-      const withoutIcon = await store.upsertBoard({ id: "planning", icon: null });
+      for (const value of [null, "", "   "]) {
+        expect(
+          await store.upsertBoard({ id: "planning", icon: value, color: value }),
+        ).toMatchObject({
+          icon: "rocket",
+          color: "blue",
+        });
+      }
+      const withoutIcon = await store.upsertBoard({
+        id: "planning",
+        icon: "ignored replacement",
+        clearAppearance: ["icon"],
+      });
       expect(withoutIcon.icon).toBeUndefined();
       expect(withoutIcon.color).toBe("blue");
-      const withoutColor = await store.upsertBoard({ id: "planning", color: null });
+      const withoutColor = await store.upsertBoard({ id: "planning", clearAppearance: ["color"] });
       expect(withoutColor.icon).toBeUndefined();
       expect(withoutColor.color).toBeUndefined();
     } finally {
@@ -978,6 +990,25 @@ describe("WorkboardStore", () => {
       reopened.close();
     }
   });
+
+  it.each([null, true, "icon", ["name"], [null]].map((clearAppearance) => ({ clearAppearance })))(
+    "rejects malformed appearance clearing without modifying the board: $clearAppearance",
+    async ({ clearAppearance }) => {
+      const store = new WorkboardStore(createMemoryStore(), {
+        boards: createMemoryStore<PersistedWorkboardBoard>(),
+      });
+      await store.upsertBoard({ id: "planning", icon: "rocket", color: "blue" });
+      await expect(store.upsertBoard({ id: "planning", clearAppearance })).rejects.toThrow(
+        "clearAppearance must be an array",
+      );
+      expect(
+        (await store.listBoards()).boards.find((board) => board.id === "planning"),
+      ).toMatchObject({
+        icon: "rocket",
+        color: "blue",
+      });
+    },
+  );
 
   it.each([
     ["", "non-empty string"],

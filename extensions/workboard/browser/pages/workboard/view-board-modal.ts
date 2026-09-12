@@ -52,13 +52,21 @@ export function renderBoardModal(props: {
     if (!props.client || !props.canWrite || draft.saving || !draft.name.trim()) {
       return;
     }
-    const input: Record<string, string | null> = { id: draft.id };
+    const input: Record<string, string | string[]> = { id: draft.id };
+    const clearAppearance: string[] = [];
     const original = originals.get(draft);
     for (const field of ["name", "icon", "color"] as const) {
       const value = draft[field].trim();
       if (value !== original?.[field]) {
-        input[field] = value || null;
+        if (!value && field !== "name") {
+          clearAppearance.push(field);
+        } else {
+          input[field] = value;
+        }
       }
+    }
+    if (clearAppearance.length > 0) {
+      input.clearAppearance = clearAppearance;
     }
     draft.saving = true;
     draft.error = null;
