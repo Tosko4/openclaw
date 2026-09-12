@@ -100,52 +100,79 @@ function* matchAwsSecretAccessKeys(text: string): Iterable<RedactMatch> {
   if (!AWS_SECRET_ACCESS_KEY_VALUE_RE.test(text)) {
     return;
   }
+  type UrlContext = {
+    start: number;
+    end: number;
+    authorityEnd: number;
+    portStart: number;
+    portValid: boolean;
+    hasAt: boolean;
+    queryOrFragment: boolean;
+    closing: string | undefined;
+    closingEscapeDepth: number;
+  };
+  const closingDelimiters: Readonly<Record<string, string>> = {
+    '"': '"',
+    "'": "'",
+    "`": "`",
+    "<": ">",
+    "(": ")",
+    "[": "]",
+    "{": "}",
+  };
   let runStart = -1;
   let schemeStart = -1;
-  let urlStart = -1;
-  let authorityEnd = -1;
-  let portStart = -1;
-  let portValid = true;
-  let hasAt = false;
-  const runs: Array<{ start: number; end: number; origin: number }> = [];
+  let url: UrlContext | undefined;
+  let backslashes = 0;
+  const runs: Array<{ start: number; end: number; origin: number; url: UrlContext | undefined }> =
+    [];
   for (let index = 0; index <= text.length; index++) {
     const char = text[index] ?? "";
-    const boundary = index === text.length || /\s/.test(char) || "?#\"'<>`|()[]{}".includes(char);
+    const whitespace = index === text.length || /\s/.test(char);
+    const escapeDepth = backslashes;
+    backslashes = char === "\\" ? backslashes + 1 : 0;
     if (char && isAwsValueCharacter(char)) {
       if (runStart === -1) {
         runStart = index;
       }
     } else if (runStart !== -1) {
       if (index - runStart === 40) {
-        runs.push({ start: runStart, end: index, origin: runStart });
+        runs.push({ start: runStart, end: index, origin: runStart, url });
       } else if (index - runStart > 40 && char === "@" && text[index - 41] === "/") {
-        runs.push({ start: index - 40, end: index, origin: runStart });
+        runs.push({ start: index - 40, end: index, origin: runStart, url });
       }
       runStart = -1;
     }
-    if (boundary) {
-      const publicUrl =
-        urlStart !== -1 &&
-        !hasAt &&
-        portValid &&
-        (portStart === -1 || (authorityEnd === -1 ? index : authorityEnd) > portStart + 1);
+    if (whitespace) {
+      if (url) {
+        url.end = Math.min(url.end, index);
+      }
       for (const run of runs) {
+        const context = run.url;
+        const publicUrl =
+          context &&
+          !context.hasAt &&
+          context.portValid &&
+          (context.portStart === -1 ||
+            (context.authorityEnd === -1 ? context.end : context.authorityEnd) >
+              context.portStart + 1);
         const before = text[run.start - 1] ?? "";
         const after = text[run.end] ?? "";
         const slashCredential = run.start !== run.origin;
         // Preserve the existing malformed credential spanning a numeric port and path.
         // Its terminal @ qualifies that whole run, not userinfo in the URL's path.
         const portCredential =
-          portStart !== -1 &&
-          run.start === portStart + 1 &&
-          authorityEnd > run.start &&
-          run.end > authorityEnd &&
+          context &&
+          context.portStart !== -1 &&
+          run.origin === context.portStart + 1 &&
+          context.authorityEnd > run.origin &&
+          run.end > context.authorityEnd &&
           after === "@";
         if (
           (!slashCredential && (before === "_" || isAwsValueCharacter(before))) ||
           after === "_" ||
           text.slice(run.origin - 8, run.origin) === ";base64," ||
-          (publicUrl && !portCredential && run.start >= urlStart)
+          (publicUrl && !portCredential && run.start >= context.start && run.end <= context.end)
         ) {
           continue;
         }
@@ -155,21 +182,32 @@ function* matchAwsSecretAccessKeys(text: string): Iterable<RedactMatch> {
         }
       }
       runs.length = 0;
-      schemeStart = urlStart = authorityEnd = portStart = -1;
-      portValid = true;
-      hasAt = false;
+      schemeStart = -1;
+      url = undefined;
       continue;
     }
-    if (urlStart !== -1 && index >= urlStart) {
-      if (authorityEnd === -1) {
-        hasAt ||= char === "@";
-        if (char === "/") {
-          authorityEnd = index;
-        } else if (char === ":") {
-          portValid &&= portStart === -1;
-          portStart = index;
-        } else if (portStart !== -1 && (char < "0" || char > "9")) {
-          portValid = false;
+    if (url && index >= url.start) {
+      // A quoted/marked value ends independently of punctuation inside raw userinfo.
+      if (char === url.closing && escapeDepth === url.closingEscapeDepth) {
+        url.end = Math.min(url.end, index);
+        url = undefined;
+      } else {
+        if ("?#\"'<>`|()[]{}".includes(char)) {
+          url.end = Math.min(url.end, index);
+        }
+        url.queryOrFragment ||= char === "?" || char === "#";
+        if (url.authorityEnd === -1) {
+          url.hasAt ||= char === "@";
+          if ("/?#".includes(char)) {
+            url.authorityEnd = index;
+          } else if (index < url.end) {
+            if (char === ":") {
+              url.portValid &&= url.portStart === -1;
+              url.portStart = index;
+            } else if (url.portStart !== -1 && (char < "0" || char > "9")) {
+              url.portValid = false;
+            }
+          }
         }
       }
     }
@@ -179,13 +217,28 @@ function* matchAwsSecretAccessKeys(text: string): Iterable<RedactMatch> {
       }
     } else {
       if (
-        urlStart === -1 &&
+        (!url || (index >= url.end && !url.queryOrFragment)) &&
         char === ":" &&
         text.startsWith("//", index + 1) &&
         schemeStart !== -1 &&
         /[A-Za-z]/.test(text[schemeStart]!)
       ) {
-        urlStart = index + 3;
+        const opening = text[schemeStart - 1];
+        let closingEscapeDepth = 0;
+        for (let offset = schemeStart - 2; offset >= 0 && text[offset] === "\\"; offset--) {
+          closingEscapeDepth++;
+        }
+        url = {
+          start: index + 3,
+          end: text.length,
+          authorityEnd: -1,
+          portStart: -1,
+          portValid: true,
+          hasAt: false,
+          queryOrFragment: false,
+          closing: opening ? closingDelimiters[opening] : undefined,
+          closingEscapeDepth,
+        };
       }
       schemeStart = -1;
     }

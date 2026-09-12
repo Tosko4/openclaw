@@ -291,6 +291,8 @@ describe("createSubsystemLogger().isEnabled", () => {
       `s3://user:1234/${"Ab9Q".repeat(8)}Ab9`,
       `payload ${JSON.stringify([url, url])}`,
       `payload ${JSON.stringify({ a: url, b: url })}`,
+      `payload ${JSON.stringify([`${url}?safe=1`, url])}`,
+      `payload ${JSON.stringify(JSON.stringify([`${url}?safe=1`, url]))}`,
     ];
     const file = logPathTracker.nextPath();
     setLoggerOverride({ level: "info", consoleLevel: "silent", file });
