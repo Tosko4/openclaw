@@ -356,6 +356,21 @@ describe("handleModelsCommand", () => {
     },
   );
 
+  it("offers primary provider setup without inventing model choices", async () => {
+    modelProviderAuthMocks.authenticatedProviders.clear();
+    modelCatalogMocks.loadModelCatalog.mockReturnValue([]);
+    const data = await buildPreparedModelsProviderData({
+      agents: { defaults: { model: "anthropic/missing-model" } },
+    });
+
+    expect(data.byProvider.get("anthropic")).toEqual(new Set());
+    expect(data.modelCatalog).toEqual([]);
+    expect(data.modelNames.size).toBe(0);
+    expect(data.modelMenu?.modelNames.size).toBe(0);
+    expect(data.modelMenu?.byProvider.get("anthropic")).toMatchObject({ available: 0 });
+    expect(data.modelMenu?.byProvider.get("anthropic")?.notice).toContain("/login anthropic");
+  });
+
   it.each([
     { reason: "missing-auth", label: "Sign-in needed" },
     { reason: "auth-failed", label: "Sign-in failed" },
@@ -535,7 +550,7 @@ describe("handleModelsCommand", () => {
     } as OpenClawConfig);
 
     expect(data.byProvider.get("custom")).toEqual(new Set(["modern"]));
-    expect(pluginMetadataMocks.getCurrent).toHaveBeenCalledTimes(1);
+    expect(pluginMetadataMocks.getCurrent).not.toHaveBeenCalled();
   });
 
   it("retains only the configured primary outside the provider restriction", async () => {

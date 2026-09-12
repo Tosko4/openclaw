@@ -577,7 +577,7 @@ async function handleTelegramModelCallback(params: {
     }
     const { provider, page } = listSelection;
     const modelSet = byProvider.get(provider);
-    if (!modelSet || modelSet.size === 0) {
+    if (!modelSet) {
       await retryModelAction(() =>
         editMessageWithButtons(
           MODEL_PICKER_CHANGED_MESSAGE,
@@ -600,14 +600,21 @@ async function handleTelegramModelCallback(params: {
       totalPages,
       modelNames: modelData.modelMenu?.modelNames ?? modelData.modelNames,
     });
-    const text = `${formatModelsAvailableHeader({
+    const header = formatModelsAvailableHeader({
       provider,
       total: models.length,
       cfg: runtimeCfg,
       agentDir: resolveAgentDir(runtimeCfg, sessionState.agentId),
       sessionEntry: sessionState.sessionEntry,
       availability,
-    })}\nSelecting a model also applies its configured runtime.`;
+    });
+    const text = [
+      header,
+      modelData.pendingProviders?.includes(provider) ? `${provider}: checking models…` : undefined,
+      models.length > 0 ? "Selecting a model also applies its configured runtime." : undefined,
+    ]
+      .filter(Boolean)
+      .join("\n");
     await retryModelAction(() =>
       editMessageWithButtons(
         withNotice([modelData.refreshWarning, text].filter(Boolean).join("\n\n")),

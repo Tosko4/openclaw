@@ -20,9 +20,15 @@ import {
 } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { isRetiredModelPickerProvider } from "../../agents/model-runtime-aliases.js";
-import { dedupeModelCatalogEntries } from "../../agents/model-selection-shared.js";
+import {
+  dedupeModelCatalogEntries,
+  resolveConfiguredModelPrimaryValue,
+} from "../../agents/model-selection-shared.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../agents/model-selection.js";
-import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
+import {
+  createModelVisibilityPolicy,
+  RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+} from "../../agents/model-visibility-policy.js";
 import {
   openAIModelCatalogRoutePolicy,
   resolveModelCatalogIdentityKey,
@@ -47,7 +53,6 @@ import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import { formatModelsAllowListNotice } from "./commands-models-notice.js";
 import type { CommandHandler } from "./commands-types.js";
-import { resolveRuntimeNormalization } from "./model-runtime-normalization.js";
 
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;
@@ -91,6 +96,7 @@ export type ModelsProviderData = {
 
 type ModelsProviderMenu = { available: number; notice: string };
 type ModelReadiness = Pick<ModelAuthAvailabilityEvaluation, "availability" | "unavailableReason">;
+type ConfiguredModelReadiness = ModelReadiness & { provider: string; model: string };
 
 type PreparedModelsProviderData = ModelsProviderData & {
   modelCatalog: ModelCatalogEntry[];
@@ -200,7 +206,10 @@ async function projectPreparedModelsProviderData(
   options: ModelsBrowseOptions,
   owner: PreparedModelRuntimeSnapshot,
 ): Promise<PreparedModelsProviderData> {
-  const runtimeNormalization = resolveRuntimeNormalization(cfg);
+  const runtimeNormalization = {
+    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    manifestPlugins: owner.metadataSnapshot,
+  };
   const resolvedDefault = resolveDefaultModelForAgent({
     cfg,
     agentId,
@@ -304,6 +313,33 @@ async function projectPreparedModelsProviderData(
     }
   }
 
+  let configuredModelReadiness: ConfiguredModelReadiness | undefined;
+  if (
+    resolveConfiguredModelPrimaryValue({ cfg, agentId, sessionKey: options.sessionKey }) &&
+    isModelsBrowseVisibleProvider(resolvedDefault.provider) &&
+    !catalog.some(
+      (entry) =>
+        normalizeProviderId(entry.provider) === resolvedDefault.provider &&
+        entry.id === resolvedDefault.model,
+    )
+  ) {
+    // A configured ref can need sign-in without being a known or selectable model.
+    const evaluation = await decisions.evaluateEntry({
+      provider: resolvedDefault.provider,
+      id: resolvedDefault.model,
+    });
+    if (evaluation.availability !== true) {
+      configuredModelReadiness = {
+        ...resolvedDefault,
+        availability: evaluation.availability,
+        unavailableReason: evaluation.unavailableReason,
+      };
+      if (!byProvider.has(resolvedDefault.provider)) {
+        byProvider.set(resolvedDefault.provider, new Set());
+      }
+    }
+  }
+
   const providers = [...byProvider.keys()].toSorted();
   const loginProviders = new Set(
     providers.filter(
@@ -376,7 +412,13 @@ async function projectPreparedModelsProviderData(
     ...(allowList ? { allowList } : {}),
     resolvedDefault,
     modelNames,
-    modelMenu: buildModelsMenu({ byProvider, modelNames, modelAvailability, loginProviders }),
+    modelMenu: buildModelsMenu({
+      byProvider,
+      modelNames,
+      modelAvailability,
+      loginProviders,
+      configuredModelReadiness,
+    }),
     refreshWarning: snapshot.refreshFailed
       ? "Some models could not be refreshed. You can still choose from the available models."
       : undefined,
@@ -499,6 +541,7 @@ function buildModelsMenu(data: {
   modelNames: ReadonlyMap<string, string>;
   modelAvailability: ReadonlyMap<string, ModelReadiness>;
   loginProviders: ReadonlySet<string>;
+  configuredModelReadiness?: ConfiguredModelReadiness;
 }): NonNullable<ModelsProviderData["modelMenu"]> {
   const modelNames = new Map(data.modelNames);
   const byProvider = new Map<string, ModelsProviderMenu>();
@@ -507,9 +550,14 @@ function buildModelsMenu(data: {
     let available = 0;
     const loginSupported = data.loginProviders.has(id);
     const loginCommand = formatProviderLoginCommand(id);
-    for (const model of models) {
+    const readiness = new Map<string, ModelReadiness>(
+      [...models].map((model) => [model, data.modelAvailability.get(`${id}/${model}`)!]),
+    );
+    if (data.configuredModelReadiness?.provider === id) {
+      readiness.set(data.configuredModelReadiness.model, data.configuredModelReadiness);
+    }
+    for (const [model, state] of readiness) {
       const key = `${id}/${model}`;
-      const state = data.modelAvailability.get(key)!;
       if (state.availability === true) {
         available += 1;
         continue;
@@ -540,7 +588,11 @@ function buildModelsMenu(data: {
                 ? `Connect with ${loginCommand}, or choose another model.`
                 : CUSTOM_MODEL_SETUP_GUIDANCE;
       }
-      modelNames.set(key, `${label} — ${data.modelNames.get(key) ?? model}`);
+      if (models.has(model)) {
+        modelNames.set(key, `${label} — ${data.modelNames.get(key) ?? model}`);
+      } else {
+        notices.add(`Configured model: ${label} — ${model}.`);
+      }
       notices.add(`${id}: ${label}. ${recovery}`);
     }
     byProvider.set(id, { available, notice: [...notices].join("\n") });
@@ -743,7 +795,7 @@ function buildModelsCommandReply(
 
   if (total === 0) {
     if (checking) {
-      return { text: checking };
+      return { text: [notice, checking].filter(Boolean).join("\n\n") };
     }
     const emptyProviderLabel = resolveProviderLabel({
       provider,
@@ -754,12 +806,14 @@ function buildModelsCommandReply(
       sessionEntry: params.sessionEntry,
     });
     return {
-      text: [
-        `Models (${emptyProviderLabel}) — none`,
-        "",
-        "Browse: /models",
-        "Switch: /model <provider/model>",
-      ].join("\n"),
+      text: withAvailability(
+        [
+          `Models (${emptyProviderLabel}) — none`,
+          "",
+          "Browse: /models",
+          "Switch: /model <provider/model>",
+        ].join("\n"),
+      ),
     };
   }
 

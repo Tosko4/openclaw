@@ -314,7 +314,13 @@ export function renderMattermostProviderPickerView(params: {
   ]);
 
   return {
-    text: [formatCurrentModelLine(params.currentModel), "", "Select a provider:"].join("\n"),
+    text: [
+      formatCurrentModelLine(params.currentModel),
+      "Select a provider:",
+      ...[...(params.data.modelMenu?.byProvider.values() ?? [])].map((provider) => provider.notice),
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
     buttons: rows,
   };
 }
@@ -331,10 +337,18 @@ export function renderMattermostModelsPickerView(params: {
   const current = splitModelRef(params.currentModel);
 
   if (models.length === 0) {
+    const knownProvider = params.data.byProvider.has(provider);
     return {
-      text: [formatCurrentModelLine(params.currentModel), "", `Unknown provider: ${provider}`].join(
-        "\n",
-      ),
+      text: [
+        formatCurrentModelLine(params.currentModel),
+        knownProvider ? `Models (${provider}) - 0 available` : `Unknown provider: ${provider}`,
+        params.data.modelMenu?.byProvider.get(provider)?.notice,
+        params.data.pendingProviders?.includes(provider)
+          ? `${provider}: checking models…`
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
       buttons: [
         [
           buildButton({
