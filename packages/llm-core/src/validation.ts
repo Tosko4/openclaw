@@ -1,5 +1,4 @@
 import { Compile } from "typebox/compile";
-import type { TLocalizedValidationError } from "typebox/error";
 import type { Tool, ToolCall } from "./types.js";
 
 const validatorCache = new WeakMap<object, ReturnType<typeof Compile>>();
@@ -327,7 +326,9 @@ function getValidator(schema: Tool["parameters"]): ReturnType<typeof Compile> {
   return validator;
 }
 
-function formatValidationPath(error: TLocalizedValidationError): string {
+function formatValidationPath(
+  error: ReturnType<ReturnType<typeof Compile>["Errors"]>[number],
+): string {
   if (error.keyword === "required") {
     const requiredProperty = (error.params as { requiredProperties?: string[] })
       .requiredProperties?.[0];

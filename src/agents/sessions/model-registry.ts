@@ -8,7 +8,6 @@ import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
-import type { TLocalizedValidationError } from "typebox/error";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/runtime-source-projection.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -257,7 +256,9 @@ function captureInventoryProvider(
   };
 }
 
-function formatValidationPath(error: TLocalizedValidationError): string {
+function formatValidationPath(
+  error: ReturnType<ReturnType<typeof Compile>["Errors"]>[number],
+): string {
   if (error.keyword === "required") {
     const requiredProperties = (error.params as { requiredProperties?: string[] })
       .requiredProperties;

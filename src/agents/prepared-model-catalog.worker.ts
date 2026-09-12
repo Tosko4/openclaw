@@ -38,7 +38,7 @@ import {
   type PreparedModelCatalogWorkerInput,
   type PreparedModelWorkerRequest,
   type PreparedModelWorkerResult,
-} from "./prepared-model-catalog-worker.js";
+} from "./prepared-model-catalog-worker-contract.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";

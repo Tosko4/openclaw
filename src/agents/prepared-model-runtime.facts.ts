@@ -3,10 +3,8 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { stableStringify } from "@openclaw/normalization-core";
 import type { Result } from "@openclaw/normalization-core/result";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
-import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getPluginMetadataSnapshotCache, retainPluginCache } from "../plugins/plugin-cache.js";
@@ -64,6 +62,7 @@ import {
   prepareConfiguredRuntimeModels,
   prepareRuntimeCapabilityModels,
 } from "./prepared-model-runtime.configured.js";
+import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.fingerprint.js";
 import {
   prepareWorkspacePluginRegistries,
   type PreparedInboundRegistryLoader,
@@ -573,8 +572,6 @@ export function captureModelsJsonContents(agentDir: string): string | null {
     throw error;
   }
 }
-export const fingerprintPreparedRuntimeFacts = (value: unknown): string =>
-  sha256Base64Url(stableStringify(value));
 
 /** Record discovery scope before config projection or auth-owner publication can replace it. */
 export function preparedModelInventoryKey(input: PreparedModelRuntimeInput): string {
