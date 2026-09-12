@@ -136,6 +136,12 @@ suite.define(() => {
           await model.click();
           // A failed background refresh must not add chrome above a usable list.
           await composer.locator('[data-chat-model-option="openai/gpt-5.4"]').waitFor();
+          // CLI discovery starts with agent hydration and can outlive model loading.
+          await composer
+            .locator(
+              '[data-chat-model-target-group="cliAgents"] [data-chat-model-catalog-state="loading"]',
+            )
+            .waitFor({ state: "detached" });
           expect(await composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
           const stage = route === "new" ? "new" : "chat";
           await page.screenshot({

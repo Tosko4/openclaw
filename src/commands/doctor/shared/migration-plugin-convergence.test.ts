@@ -91,6 +91,53 @@ describe("Doctor migration plugin generation", () => {
     mocks.converge.mockReset();
   });
 
+  it.each(["legacy-parent", "read-only", "future"] as const)(
+    "preserves install authority before convergence for %s config",
+    async (mode) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const fixture = await seedLegacyPluginConfig(state);
+        if (mode === "future") {
+          await state.writeConfig({ ...fixture.config, meta: { lastTouchedVersion: "9999.1.0" } });
+        }
+        const before = fs.readFileSync(state.configPath);
+        const records = readPersistedInstalledPluginIndexInstallRecords({ env: state.env });
+        const env = {
+          ...state.env,
+          ...(mode === "legacy-parent"
+            ? {
+                OPENCLAW_UPDATE_IN_PROGRESS: "1",
+                OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "0",
+              }
+            : {}),
+          ...(mode === "read-only" ? { OPENCLAW_CONFIG_READONLY: "1" } : {}),
+        };
+        mocks.converge.mockResolvedValue({ blockingDiagnostic: null, quarantinedPlugins: [] });
+        const outcome = await convergeDoctorMigrationPlugins({ env }).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(
+          records,
+        );
+        expect(fs.readFileSync(state.configPath)).toEqual(before);
+        expect(fs.readFileSync(fixture.legacyStorePath)).toEqual(fixture.legacyBefore);
+        expect(fs.existsSync(fixture.runtimeMarker)).toBe(false);
+        expect(mocks.converge).not.toHaveBeenCalled();
+        if (mode === "legacy-parent") {
+          expect(outcome).toEqual({ value: false });
+        } else {
+          expect(outcome).toMatchObject({
+            error: expect.objectContaining({
+              message: expect.stringContaining(
+                mode === "read-only" ? "immutable" : "older than the config",
+              ),
+            }),
+          });
+        }
+      });
+    },
+  );
+
   it("imports retired package records before repair without consuming legacy migration inputs", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const fixture = await seedLegacyPluginConfig(state);
@@ -215,7 +262,7 @@ describe("Doctor migration plugin generation", () => {
           },
         ],
       });
-      await expect(convergeDoctorMigrationPlugins({ env: state.env })).resolves.toBeUndefined();
+      await expect(convergeDoctorMigrationPlugins({ env: state.env })).resolves.toBe(true);
       expect(fs.existsSync(fixture.runtimeMarker)).toBe(false);
       expect(fs.readFileSync(state.configPath)).toEqual(fixture.configBefore);
     });

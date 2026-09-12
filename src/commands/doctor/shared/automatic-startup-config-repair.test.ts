@@ -155,7 +155,14 @@ describe("automatic startup config repair", () => {
       await fs.mkdir(path.join(root, "state", "openclaw.sqlite"), { recursive: true });
       await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
         const snapshot = invalidSnapshot({
-          config: { session: { idleMinutes: 45 } } as OpenClawConfig,
+          config: {
+            session: { idleMinutes: 45 },
+            meta: { lastTouchedAt: "2026-02-15T00:00:00.000Z" },
+            agents: { list: [{ id: "work", name: "Operator" }] },
+            plugins: {
+              installs: { example: { source: "path", installPath: "/synthetic/plugin" } },
+            },
+          } as OpenClawConfig,
           issuePaths: ["session.idleMinutes"],
         });
         const resolved = resolveStartupConfigSnapshot(snapshot);
@@ -163,6 +170,10 @@ describe("automatic startup config repair", () => {
         expect(resolved?.sourceConfig.session).toEqual({
           reset: { mode: "idle", idleMinutes: 45 },
         });
+        expect(resolved?.sourceConfig).not.toHaveProperty("meta.lastTouchedAt");
+        expect(resolved?.sourceConfig).not.toHaveProperty("plugins.installs");
+        expect(resolved?.sourceConfig.agents?.entries?.work).toEqual({ name: "Operator" });
+        expect(snapshot.sourceConfig).toHaveProperty("plugins.installs.example");
       });
     } finally {
       await fs.rm(root, { recursive: true, force: true });
@@ -199,6 +210,10 @@ describe("automatic startup config repair", () => {
       },
     },
     {
+      name: "malformed retired plugin records",
+      config: { plugins: { installs: { broken: { source: "invalid" } } } },
+    },
+    {
       name: "another invalid key at a retired key's schema parent",
       config: { meta: { lastTouchedAt: "2026-08-01T00:00:00.000Z", unrelatedRetiredKey: true } },
     },
@@ -210,6 +225,9 @@ describe("automatic startup config repair", () => {
     });
 
     expect(planAutomaticConfigRepair(snapshot)).toBeNull();
+    if (config.plugins && "installs" in config.plugins) {
+      expect(resolveStartupConfigSnapshot(snapshot)).toBeUndefined();
+    }
   });
 });
 
@@ -320,7 +338,7 @@ describe("config repair before plugin convergence", () => {
       });
     },
   );
-  it.each(["locators", "include", "invalid", "roster", "keyed-roster"])(
+  it.each(["locators", "include", "invalid", "roster", "keyed-roster", "records", "empty-records"])(
     "retains %s inputs when independent repairs cannot form a valid write",
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -352,6 +370,17 @@ describe("config repair before plugin convergence", () => {
                 cron: { store: state.path("retained-cron.sqlite") },
                 tts: { prefsPath: state.path("retained-tts.json") },
                 memory: { search: { store: { path: state.path("retained-memory.sqlite") } } },
+              }
+            : {}),
+          ...(kind === "records" || kind === "empty-records"
+            ? {
+                plugins: {
+                  enabled: false,
+                  installs:
+                    kind === "empty-records"
+                      ? {}
+                      : { fixture: { source: "path", installPath: state.path("plugin") } },
+                },
               }
             : {}),
           ...(kind === "invalid" ? { gateway: { port: "not-a-port" } } : {}),

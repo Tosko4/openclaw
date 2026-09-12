@@ -41,6 +41,10 @@ Independent config aliases, including PDF limits and exec policy, still normaliz
 through their existing migration owners. This also supports private rehearsals
 started by older updaters. A repair that would require retiring state locators or
 cannot pass normal config validation remains pending with its source unchanged.
+Early alias repair leaves retired plugin install records for the later import owner.
+Writable legacy parents retain their original `meta.lastTouchedVersion` during
+this early pass. A parent that does not advertise config-write support keeps
+both its config and retired install records unchanged.
 Unavailable plugins without migration contracts do not block unrelated repairs.
 The updated process repairs plugins, finishes Doctor, and validates the result
 before reporting completion to the parent. If plugin repair fails, fix the
@@ -62,6 +66,10 @@ complete.
 
   </Accordion>
   <Accordion title="2. Legacy config key migrations">
+    Ordinary Doctor, including `doctor --non-interactive`, automatically normalizes a legacy single-file config when the shared migration transforms produce a fully valid result. This also covers older npm updaters that invoke Doctor without `--fix`. The planner still requires complete plugin validation. Doctor preserves the original in the config backup ring and keeps state migration ordering intact. Includes, externally managed config, newer-written config, and remaining validation errors require the existing explicit repair or operator recovery path. Updaters that explicitly defer plugin repair or advertise a later writable config handoff keep automatic normalization deferred. This does not enable repair maintenance, service changes, or exec-approval migration without `--fix`.
+
+    Older Git updaters can keep an in-memory config snapshot and write it after Doctor exits. When that parent marks the update in progress without advertising support for Doctor config writes, Doctor preserves the config and defers importing retired plugin install records, including with `--fix`. The first fresh Gateway startup then performs the complete migration. Existing canonical plugin install records keep precedence; missing records from the legacy config are imported before that config is rewritten. Startup also handles records restored after the same build previously completed its migration checkpoint.
+
     Gateway startup automatically applies deterministic, prompt-free legacy config migrations when an otherwise invalid single-file config can be fully migrated. It uses the same migration transforms as `openclaw doctor --fix`, validates the complete result including plugin config before writing, and reports the applied changes. The write runs under the startup migration lease and preserves the previous config in the five-slot `openclaw.json.bak` / `.bak.1` through `.bak.4` backup ring.
 
     Startup does not migrate configs using `$include`, configs in Nix mode, or configs last written by a newer OpenClaw version. It also skips automatic config migration while an update is in progress and plugin validation is deferred; the post-update doctor run owns that repair. If any validation or legacy-key issue remains after migration, startup leaves the config unchanged, refuses to start, and prints the `openclaw doctor --fix` hint. An interactive terminal can still offer to run doctor and retry once for configs that need other repairs; headless services stop with the hint.

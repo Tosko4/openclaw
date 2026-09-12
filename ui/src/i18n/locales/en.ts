@@ -1895,6 +1895,8 @@ export const en: TranslationMap & {
       "Unsaved raw config edits — save or discard them before switching to Form.",
     rawDraftBlocksFormEdit:
       "Unsaved raw config edits could not be parsed; resolve them in the Raw editor before changing settings.",
+    rawDraftUnverified:
+      "Cannot verify the raw draft against the saved configuration; reload and retry.",
     invalidConfig: "Your configuration is invalid. Some settings may not work as expected.",
     dismissWarning: "Don't remind again",
     viewPendingChangesRaw: "View pending changes",
@@ -3751,6 +3753,11 @@ export const en: TranslationMap & {
       kindHtml: "HTML",
       kindPlugin: "Plugin",
       kindReport: "Report",
+      kindWebsite: "Website",
+      websiteOpen: "Open website",
+      websiteEmbedHint: "If this site does not load here, open it in a new tab.",
+      websiteSameOrigin:
+        "Open this website in a new tab. Gateway and Control UI pages cannot be embedded in a website widget.",
       pluginLoading: "Loading plugin widget…",
       disabledPlugin: "Widget from disabled plugin {pluginId}",
     },
@@ -5052,6 +5059,8 @@ export const en: TranslationMap & {
       sessionMenuMany: "Actions for {count} sessions",
       toolActivity: "Using {tool}",
       catalogDiscoveryHelp: "{error}. Configure native session discovery in Settings > Plugins.",
+      catalogPaginationFailed: "Session catalog returned a repeated page cursor",
+      catalogPageMissingHost: "Session catalog page did not include the requested host",
     },
     welcome: {
       hintBeforeShortcut: "Type a message below ·",
@@ -5423,7 +5432,6 @@ export const en: TranslationMap & {
         "Use arrow keys or Home and End to choose a marker, Enter or Space to jump, and Escape to return to the conversation. Tab leaves the rail.",
     },
     pendingInputs: {
-      waitingForAgent: "Queued · waiting for the agent",
       waitingForWorkspaceSync: "Received · waiting for workspace sync",
       waitingForWorkerSetup: "Received · waiting for worker setup",
       resuming:

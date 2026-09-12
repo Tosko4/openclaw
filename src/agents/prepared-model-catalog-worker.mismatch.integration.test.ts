@@ -23,7 +23,8 @@ import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.ca
 import { AuthStorage } from "./sessions/auth-storage.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
-const { makeTempDir, retireAfterTest, waitForWorkers } = usePreparedCatalogWorkerFixtures();
+const { makeTempDir, retireAfterTest, waitForWorkers, waitForMarker } =
+  usePreparedCatalogWorkerFixtures();
 
 const DRIFTED_OWNER_FINGERPRINT = "owner-generation-drifted";
 
@@ -184,6 +185,46 @@ describe("prepared model catalog worker generation mismatch", () => {
       expect(spawned).toHaveLength(2);
       expect(fs.existsSync(fixture.marker)).toBe(false);
     });
+  });
+
+  it("keeps the prepared worker generation after request-pool overload", async () => {
+    const fixture = await createMismatchFixture();
+    const worker = createPreparedModelCatalogWorker({
+      ...fixture.workerParams,
+      isCurrent: fixture.isCurrent,
+    });
+    const barrier = `${fixture.marker}.hold`;
+    fs.writeFileSync(barrier, "");
+    const catalog = worker.loadCatalog();
+    void catalog.catch(() => {});
+    const accepted: ReturnType<typeof worker.loadAuth>[] = [];
+    try {
+      await waitForMarker(fixture.marker);
+      for (let index = 0; index < 127; index += 1) {
+        const auth = worker.loadAuth({ providerIds: [PROVIDER_ID] });
+        void auth.catch(() => {});
+        accepted.push(auth);
+      }
+      await expect(worker.loadAuth({ providerIds: [PROVIDER_ID] })).rejects.toMatchObject({
+        name: "WorkerTaskError",
+        code: "overloaded",
+      });
+      fs.rmSync(barrier);
+      const outcomes = await Promise.allSettled([catalog, ...accepted]);
+      expect(outcomes.filter((outcome) => outcome.status === "rejected")).toEqual([]);
+      expect((await catalog).modelCatalog.entries).toContainEqual(
+        expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+      );
+      await expect(worker.loadAuth({ providerIds: [PROVIDER_ID] })).resolves.toMatchObject({
+        authStore: expect.objectContaining({ version: 1 }),
+      });
+      expect((await worker.loadCatalog()).modelCatalog.entries).toContainEqual(
+        expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+      );
+    } finally {
+      fs.rmSync(barrier, { force: true });
+      await Promise.allSettled([catalog, ...accepted]);
+    }
   });
 
   it("catalog worker request fences a transient mismatch and rebuilds a matching worker", async () => {

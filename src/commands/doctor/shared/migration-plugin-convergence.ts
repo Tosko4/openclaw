@@ -1,4 +1,9 @@
 import type { note } from "../../../../packages/terminal-core/src/note.js";
+import { assertConfigWriteAllowedInCurrentMode } from "../../../config/config-write-guard.js";
+import {
+  formatFutureConfigActionBlock,
+  resolveFutureConfigActionBlock,
+} from "../../../config/future-version-guard.js";
 import { createConfigIO } from "../../../config/io.js";
 import { discoverConfigWidePluginManifestRegistry } from "../../../config/io.plugin-metadata.js";
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
@@ -9,19 +14,39 @@ import {
   runStartupUpgradeConvergence,
 } from "../../doctor-config-preflight-plugin-verification.js";
 import { importShippedPluginInstallConfigForDoctor } from "./plugin-registry-migration.js";
+import { shouldSkipLegacyUpdateDoctorConfigWrite } from "./update-phase.js";
 
 /** Repair the migration contract generation without retiring its config inputs. */
 export async function convergeDoctorMigrationPlugins(params: {
   env: NodeJS.ProcessEnv;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   onNote?: typeof note;
-}): Promise<void> {
-  await withPluginLifecycleLease({}, async () => {
+}): Promise<boolean> {
+  // A shipped no-write parent can restore its old records after this child exits.
+  if (shouldSkipLegacyUpdateDoctorConfigWrite(params.env)) {
+    return false;
+  }
+  assertConfigWriteAllowedInCurrentMode({ env: params.env });
+  const readAdmittedSnapshot = async () => {
     const snapshot = await createConfigIO({
       env: params.env,
       observe: false,
       pluginValidation: "core-only",
     }).readConfigFileSnapshot();
+    const future = resolveFutureConfigActionBlock({
+      action: "repair migration plugins",
+      snapshot,
+      env: params.env,
+    });
+    if (future) {
+      throw new Error(formatFutureConfigActionBlock(future));
+    }
+    return snapshot;
+  };
+  await readAdmittedSnapshot();
+  await withPluginLifecycleLease({}, async () => {
+    // Lease acquisition can wait; use current config and guards under its ownership.
+    const snapshot = await readAdmittedSnapshot();
     // Old configs keep the only package locator in plugins.installs. Import
     // records only; the later migration still needs the original source config.
     await importShippedPluginInstallConfigForDoctor(snapshot);
@@ -82,4 +107,5 @@ export async function convergeDoctorMigrationPlugins(params: {
       );
     }
   });
+  return true;
 }

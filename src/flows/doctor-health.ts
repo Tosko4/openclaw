@@ -196,7 +196,7 @@ async function runDoctorHealthFlowWithResult(
       const { createPluginCapabilityConsentPrompter } =
         await import("../wizard/plugin-capability-consent.js");
       const { note } = await import("../../packages/terminal-core/src/note.js");
-      await convergeDoctorMigrationPlugins({
+      const converged = await convergeDoctorMigrationPlugins({
         env: process.env,
         onCapabilityConsent: createPluginCapabilityConsentPrompter({
           note: async (message, title) => note(message, title),
@@ -207,7 +207,7 @@ async function runDoctorHealthFlowWithResult(
             }),
         }),
       });
-      migrationPluginsConverged = true;
+      migrationPluginsConverged = converged ? true : undefined;
     }
 
     // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
