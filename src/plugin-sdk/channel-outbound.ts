@@ -77,6 +77,8 @@ export {
 } from "./channel-lifecycle.core.js";
 export {
   createOutboundPayloadPlan,
+  createStructuredOutboundPayloadPlan,
+  type OutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "../infra/outbound/payloads.js";
 export { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
@@ -218,6 +220,13 @@ export const deliverInboundReplyWithMessageSendContext: ChannelDurableDeliveryMo
   async (...args) => {
     const mod = await import("../channels/turn/durable-delivery.js");
     return await mod.deliverInboundReplyWithMessageSendContextCore(...args);
+  };
+
+/** Delivers a producer's prepared plan without reparsing literal text. */
+export const deliverStructuredInboundReplyWithMessageSendContext: ChannelDurableDeliveryModule["deliverStructuredInboundReplyWithMessageSendContextCore"] =
+  async (...args) => {
+    const mod = await import("../channels/turn/durable-delivery.js");
+    return await mod.deliverStructuredInboundReplyWithMessageSendContextCore(...args);
   };
 
 /** Sends a durable message batch without eager-loading channel message runtime internals. */

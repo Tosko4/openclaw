@@ -158,8 +158,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-lifecycle": 23,
   // +1: shared ingress error factory projected through the deprecated message barrel.
   // +1: shared ingress retention defaults projected through the deprecated message barrel.
-  // +1: WhatsApp ack-policy bridge counted via channel-message's wildcard re-export.
-  // Rendering helpers also flow through this shipped wildcard compatibility barrel.
+  // +1: WhatsApp ack-policy bridge counted through the channel-message legacy facade.
+  // Rendering helpers also remain available through this shipped legacy facade.
   "channel-message": 136,
   // +2: Slack progress-draft render bridge (function + mode type).
   "channel-outbound": 2,
@@ -370,7 +370,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: canonical credential-value functions through the narrow secret-input surface.
       // +1: shared removed-model choice recovery text for channel consumers.
       // +2: shared stored-account key selection and its plugin-owned policy type.
-      4464,
+      // +3: prepared outbound planning, its plan type, and inbound delivery on channel-outbound only.
+      4467,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -506,7 +507,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: prepared model-specific runtime choice reader.
       // +2: canonical env-value reader and managed SecretRef marker constructor.
       // +1: shared stored-account key selection for channel readers and writers.
-      2638,
+      // +2: prepared outbound planning and inbound delivery; deprecated channel-message stays frozen.
+      2640,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -534,7 +536,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: infra-runtime now names its error exports explicitly.
       // -1: infra-runtime excludes the internal system-event receipt API.
       // -1: infra-runtime re-exports number coercion directly from its canonical owner.
-      50,
+      // -1: freeze channel-message to its existing named reexports.
+      49,
       env,
     ),
   };
@@ -780,16 +783,24 @@ export function collectPluginSdkSurfaceReport() {
   const deprecatedBarrelMissingFromInventory = [...deprecatedBarrelEntrypointSet].filter(
     (entrypoint) => !pluginSdkEntrypoints.includes(entrypoint),
   );
-  const deprecatedBarrelWithoutWildcard = [...deprecatedBarrelEntrypointSet].filter(
+  const deprecatedBarrelWithoutReexports = [...deprecatedBarrelEntrypointSet].filter(
     (entrypoint) => {
-      const source = fs.readFileSync(entrypointPath(entrypoint), "utf8");
-      return !/^\s*export\s+(?:type\s+)?\*\s+from\s+["'][^"']+["']/mu.test(source);
+      const source = exportStatsProgram?.getSourceFile(entrypointPath(entrypoint));
+      // Frozen facades retain named reexports without inheriting new APIs through a wildcard.
+      return !source?.statements.some(
+        (statement) =>
+          ts.isExportDeclaration(statement) &&
+          statement.moduleSpecifier !== undefined &&
+          (!statement.exportClause ||
+            ts.isNamespaceExport(statement.exportClause) ||
+            statement.exportClause.elements.length > 0),
+      );
     },
   );
   return {
     allStats,
     deprecatedBarrelMissingFromInventory,
-    deprecatedBarrelWithoutWildcard,
+    deprecatedBarrelWithoutReexports,
     deprecatedMissingFromPublic,
     leakedForbiddenExports,
     localOnlyMissingFromInventory,
@@ -858,9 +869,9 @@ export function evaluatePluginSdkSurfaceReport(
       `deprecated barrel entrypoints missing from inventory: ${report.deprecatedBarrelMissingFromInventory.join(", ")}`,
     );
   }
-  if (report.deprecatedBarrelWithoutWildcard.length > 0) {
+  if (report.deprecatedBarrelWithoutReexports.length > 0) {
     failures.push(
-      `deprecated barrel entrypoints without wildcard exports: ${report.deprecatedBarrelWithoutWildcard.join(", ")}`,
+      `deprecated barrel entrypoints without reexports: ${report.deprecatedBarrelWithoutReexports.join(", ")}`,
     );
   }
   return failures;

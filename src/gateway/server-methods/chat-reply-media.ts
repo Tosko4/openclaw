@@ -82,13 +82,15 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
         mergedAttachments.push(attachment ?? {});
         continue;
       }
-      const normalizedPayload = await normalizeMediaPaths({
-        ...payload,
-        text,
-        mediaUrl,
-        mediaUrls: [mediaUrl],
-        attachments: attachment ? [attachment] : undefined,
-      });
+      const normalizedPayload = await normalizeMediaPaths(
+        copyReplyPayloadMetadata(payload, {
+          ...payload,
+          text,
+          mediaUrl,
+          mediaUrls: [mediaUrl],
+          attachments: attachment ? [attachment] : undefined,
+        }),
+      );
       const normalizedMediaUrls = resolveSendableOutboundReplyParts(normalizedPayload).mediaUrls;
       mediaFailures.push(
         ...(getReplyPayloadMetadata(normalizedPayload)?.assistantMediaFailures ?? []).slice(

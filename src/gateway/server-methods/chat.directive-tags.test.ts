@@ -4826,47 +4826,57 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(JSON.stringify(assistantUpdates[0]?.message)).toContain("Command result with TTS.");
   });
 
-  it("folds block-only non-agent command replies into the final WebChat message", async () => {
-    await createTranscriptFixture("openclaw-chat-send-command-block-final-");
-    mockState.dispatchedReplies = [
-      {
-        kind: "block",
-        payload: {
-          text: [
-            "Trajectory exports can include prompts, model messages, tool schemas, tool results, runtime events, and local paths.",
-            "Trajectory bundle: requested `openclaw sessions export-trajectory` through exec approval. Approve once to create the bundle; do not use allow-all for trajectory exports.",
-          ].join("\n"),
+  it.each([
+    {
+      name: "prose",
+      text: [
+        "Trajectory exports can include prompts, model messages, tool schemas, tool results, runtime events, and local paths.",
+        "Trajectory bundle: requested `openclaw sessions export-trajectory` through exec approval. Approve once to create the bundle; do not use allow-all for trajectory exports.",
+      ].join("\n"),
+      directive: "",
+    },
+    {
+      name: "directive before indented code",
+      text: "    const value = 1;\n    use(value);",
+      directive: "[[reply_to_current]]\n\n",
+    },
+  ])(
+    "folds block-only non-agent command replies into the final WebChat message ($name)",
+    async ({ text, directive }) => {
+      await createTranscriptFixture("openclaw-chat-send-command-block-final-");
+      mockState.dispatchedReplies = [
+        {
+          kind: "block",
+          payload: { text: `${directive}${text}` },
         },
-      },
-    ];
-    const { context, send } = createChatRequestFixture();
+      ];
+      const { context, send } = createChatRequestFixture();
 
-    const payload = await send({
-      idempotencyKey: "idem-command-block",
-      message: "/export-trajectory bundle",
-    });
+      const payload = await send({
+        idempotencyKey: "idem-command-block",
+        message: "/export-trajectory bundle",
+      });
 
-    const text = getMessageContent(payload)
-      .map((block) => (typeof block.text === "string" ? block.text : ""))
-      .filter(Boolean)
-      .join("\n");
-    expect(text).toContain("Trajectory exports can include");
-    expect(text).toContain("through exec approval");
-    expect(text).toContain("Approve once");
-    const broadcast = lastBroadcastPayload(context);
-    expect(broadcast?.runId).toBe("idem-command-block");
-    expect(broadcast?.state).toBe("final");
-    const broadcastText = getMessageContent(broadcast)
-      .map((block) => (typeof block.text === "string" ? block.text : ""))
-      .filter(Boolean)
-      .join("\n");
-    expect(broadcastText).toContain("Trajectory exports can include");
-    expect(broadcastText).toContain("through exec approval");
-    expect(broadcastText).toContain("Approve once");
-    await waitForAssertion(() =>
-      expect(context.chatRunState.runs.has("idem-command-block")).toBe(false),
-    );
-  });
+      expect.soft(extractFirstTextBlock(payload)).toBe(text);
+      const broadcast = lastBroadcastPayload(context);
+      expect(broadcast?.runId).toBe("idem-command-block");
+      expect(broadcast?.state).toBe("final");
+      expect.soft(extractFirstTextBlock(broadcast)).toBe(text);
+      const delta = context.broadcast.mock.calls
+        .map(([event, value]) => (event === "chat" ? asOptionalRecord(value) : undefined))
+        .findLast((value) => value?.state === "delta");
+      expect.soft(delta?.deltaText).toBe(text);
+      const assistantMessages = await readRawActiveAssistantTranscriptMessages();
+      expect(assistantMessages).toHaveLength(1);
+      expect.soft(assistantMessages[0]?.content).toEqual([{ type: "text", text }]);
+      if (directive) {
+        expect.soft(assistantMessages[0]?.openclawDelivery).toEqual({ replyToCurrent: true });
+      }
+      await waitForAssertion(() =>
+        expect(context.chatRunState.runs.has("idem-command-block")).toBe(false),
+      );
+    },
+  );
 
   it("keeps slash-command block text when the final payload only adds media", async () => {
     const transcriptDir = await createTranscriptFixture(
