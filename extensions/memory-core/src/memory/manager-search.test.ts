@@ -1142,19 +1142,24 @@ describe("searchVector sqlite-vec KNN", () => {
       id: string;
       model: string;
       vector: number[];
+      path?: string;
+      source?: "memory" | "sessions";
+      startLine?: number;
+      endLine?: number;
+      text?: string;
     },
   ): void {
     db.prepare(
       "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ).run(
       params.id,
-      `memory/${params.id}.md`,
-      "memory",
-      1,
-      1,
+      params.path ?? `memory/${params.id}.md`,
+      params.source ?? "memory",
+      params.startLine ?? 1,
+      params.endLine ?? 1,
       params.id,
       params.model,
-      `chunk ${params.id}`,
+      params.text ?? `chunk ${params.id}`,
       JSON.stringify(params.vector),
       1,
     );
@@ -1238,6 +1243,76 @@ describe("searchVector sqlite-vec KNN", () => {
         expect(previous.score).toBeGreaterThan(current.score);
         previous = current;
       }
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserves tied citations and UTF-16 snippets across batches when a later result wins", async () => {
+    const db = createFallbackDb();
+    const first = {
+      id: "first",
+      path: "memory/notes.md",
+      source: "memory" as const,
+      startLine: 11,
+      endLine: 13,
+      snippet: `${"a".repeat(698)}\uD83D\uDE80`,
+      score: 0.6,
+    };
+    const second = {
+      id: "second",
+      path: "sessions/history.md",
+      source: "sessions" as const,
+      startLine: 21,
+      endLine: 24,
+      snippet: "second passage",
+      score: 0.6,
+    };
+    try {
+      for (const result of [first, second]) {
+        insertFallbackChunk(db, {
+          ...result,
+          model: "target-model",
+          vector: [3, 4],
+          text: result === first ? `${result.snippet}tail` : result.snippet,
+        });
+      }
+      for (let i = 0; i < 254; i += 1) {
+        insertFallbackChunk(db, {
+          id: `filler-${i}`,
+          model: "target-model",
+          vector: [0, 1],
+        });
+      }
+      insertFallbackChunk(db, {
+        id: "late-tie",
+        model: "target-model",
+        vector: [3, 4],
+      });
+      expect(await searchVectorFixture(db, { limit: 2, snippetMaxChars: 700 })).toEqual([
+        first,
+        second,
+      ]);
+
+      const winnerPrefix = "b".repeat(699);
+      insertFallbackChunk(db, {
+        id: "late-winner",
+        model: "target-model",
+        vector: [1, 0],
+        text: `${winnerPrefix}\uD83D\uDE80tail`,
+      });
+      expect(await searchVectorFixture(db, { limit: 2, snippetMaxChars: 700 })).toEqual([
+        {
+          id: "late-winner",
+          path: "memory/late-winner.md",
+          source: "memory",
+          startLine: 1,
+          endLine: 1,
+          snippet: winnerPrefix,
+          score: 1,
+        },
+        first,
+      ]);
     } finally {
       db.close();
     }

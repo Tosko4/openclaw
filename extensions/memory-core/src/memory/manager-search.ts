@@ -454,6 +454,13 @@ async function searchChunksByEmbedding(params: {
     for (const row of batch) {
       const score = cosineSimilarity(params.queryVec, parseEmbedding(row.embedding));
       if (Number.isFinite(score)) {
+        const hasRoom = topResults.length < params.limit;
+        if (!hasRoom) {
+          const lowest = topResults.at(-1);
+          if (!(lowest && score > lowest.score)) {
+            continue;
+          }
+        }
         const result: SearchRowResult = {
           id: row.id,
           path: row.path,
@@ -463,7 +470,7 @@ async function searchChunksByEmbedding(params: {
           snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
           source: row.source,
         };
-        if (topResults.length < params.limit) {
+        if (hasRoom) {
           topResults.push(result);
           if (topResults.length === params.limit) {
             topResults.sort((a, b) => b.score - a.score);
