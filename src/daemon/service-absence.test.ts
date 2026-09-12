@@ -12,6 +12,60 @@ afterEach(() => {
 });
 
 describe("readGatewayServiceState absence", () => {
+  it("does not require a user bus to inspect a running system service", async () => {
+    mockProcessPlatform("linux");
+    const missing = () => Object.assign(new Error("missing"), { code: "ENOENT" });
+    vi.spyOn(fs, "readFile").mockRejectedValue(missing());
+    vi.spyOn(fs, "access").mockImplementation(async (file) => {
+      if (file !== "/etc/systemd/system/openclaw-gateway.service") {
+        throw missing();
+      }
+    });
+    vi.spyOn(fs, "readdir").mockResolvedValue([]);
+    vi.spyOn(await import("./exec-file.js"), "execFileUtf8").mockImplementation(
+      async (command) => ({
+        code: command === "busctl" ? 1 : 0,
+        termination: "exit",
+        stdout: command === "busctl" ? "" : "LoadState=loaded\nActiveState=active\nMainPID=42\n",
+        stderr: command === "busctl" ? "Failed to connect to bus: No such file or directory" : "",
+      }),
+    );
+    const state = await readGatewayServiceState(resolveGatewayService(), {
+      env: { HOME: "/openclaw-service-proof", DBUS_SESSION_BUS_ADDRESS: "unix:path=/proof/bus" },
+    });
+    expect(state.runtime).toMatchObject({ status: "running", pid: 42 });
+    expect(state.inspectionReason).toBeUndefined();
+  });
+
+  it.each([
+    ["user bus", "systemd-user-bus-unavailable"],
+    ["busctl", "systemd-busctl-unavailable"],
+  ])(
+    "reports missing %s instead of recommending an impossible fresh install",
+    async (missingPiece, reason) => {
+      mockProcessPlatform("linux");
+      const missing = () => Object.assign(new Error("missing"), { code: "ENOENT" });
+      vi.spyOn(fs, "readFile").mockRejectedValue(missing());
+      vi.spyOn(fs, "access").mockRejectedValue(missing());
+      vi.spyOn(fs, "readdir").mockResolvedValue([]);
+      const run = vi.spyOn(await import("./exec-file.js"), "execFileUtf8");
+      run.mockImplementation(async (command) => ({
+        code: command === "busctl" ? 1 : 0,
+        termination: command === "busctl" && missingPiece === "busctl" ? "error" : "exit",
+        errorCode: command === "busctl" && missingPiece === "busctl" ? "ENOENT" : undefined,
+        stdout:
+          command === "busctl" ? "" : "LoadState=not-found\nActiveState=inactive\nSubState=dead\n",
+        stderr: command === "busctl" ? "Failed to connect to bus: No such file or directory" : "",
+      }));
+      const state = await readGatewayServiceState(resolveGatewayService(), {
+        env: { HOME: "/openclaw-service-proof", DBUS_SESSION_BUS_ADDRESS: "unix:path=/proof/bus" },
+      });
+      expect(state.inspectionReason).toBe(reason);
+      expect(state.runtime?.missingUnit).not.toBe(true);
+      expect(state.runtime?.status).toBe("unknown");
+    },
+  );
+
   it.each(["current", "revoked", "expired"])(
     "preserves the admitted binding and deadline through an absent projection (%s)",
     async (condition) => {

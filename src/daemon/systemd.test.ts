@@ -1179,7 +1179,10 @@ describe("readSystemdServiceRuntime", () => {
         expect(args[1]).toBe("show");
         cb(null, output, "");
       });
-    return await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME });
+    return await readSystemdServiceRuntime(
+      { HOME: TEST_MANAGED_HOME },
+      { commandInspection: { kind: "present" } },
+    );
   }
 
   it("parses active state details", async () => {
@@ -1212,43 +1215,32 @@ describe("readSystemdServiceRuntime", () => {
     expect(runtime).toMatchObject({ status: "unknown", state, subState });
   });
 
-  it.each([
-    { loadState: "not-found", activeState: "inactive", missing: true, status: "stopped" },
-    { loadState: "loaded", activeState: "inactive", missing: false, status: "stopped" },
-    { loadState: "not-found", activeState: "active", missing: false, status: "running" },
-  ])(
-    "records native unit absence from a successful show ($loadState/$activeState)",
-    async ({ loadState, activeState, missing, status }) => {
-      const runtime = await readRuntimeFromShowOutput(
-        `LoadState=${loadState}\nActiveState=${activeState}\nSubState=${status === "running" ? "running" : "dead"}\nMainPID=0`,
+  it.each(["absent", "unavailable"] as const)(
+    "uses the recorded %s definition verdict without a competing show classification",
+    async (kind) => {
+      execFileMock.mockReset().mockImplementationOnce(systemctlUserSuccess("status"));
+      const runtime = await readSystemdServiceRuntime(
+        { HOME: TEST_MANAGED_HOME },
+        {
+          commandInspection:
+            kind === "absent"
+              ? { kind }
+              : { kind, error: new Error("definition-inspection-secret-canary") },
+        },
       );
-      expect(runtime.status).toBe(status);
-      expect(runtime.missingUnit === true).toBe(missing);
-    },
-  );
-
-  it.each(["exit", "timeout", "signal"] as const)(
-    "reports a missing unit only after a completed show command (%s)",
-    async (termination) => {
-      const detail = "Unit openclaw-gateway.service could not be found.";
-      const accessSpy = vi
-        .spyOn(fs, "access")
-        .mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
-      execFileMock
-        .mockImplementationOnce(systemctlUserSuccess("status"))
-        .mockImplementationOnce((_cmd, _args, _opts, cb) => {
-          cb(createExecFileError(detail, { termination }), "", detail);
+      if (kind === "absent") {
+        expect(runtime).toEqual({ status: "stopped", missingUnit: true });
+      } else {
+        expect(runtime).toMatchObject({
+          status: "unknown",
+          inspectionFailure: {
+            detail: "SERVICE_DEFINITION_UNKNOWN: Service definition cannot be safely inspected.",
+          },
         });
-
-      try {
-        await expect(readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME })).resolves.toEqual(
-          termination === "exit"
-            ? { status: "stopped", missingUnit: true }
-            : { status: "unknown", missingUnit: false, detail },
-        );
-      } finally {
-        accessSpy.mockRestore();
+        expect(JSON.stringify(runtime)).not.toContain("secret-canary");
+        expect(runtime.missingUnit).not.toBe(true);
       }
+      expect(execFileMock).toHaveBeenCalledOnce();
     },
   );
 
@@ -1260,7 +1252,12 @@ describe("readSystemdServiceRuntime", () => {
         cb(createExecFileError(detail, { stderr: detail }), "", detail);
       });
 
-    await expect(readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME })).resolves.toEqual({
+    await expect(
+      readSystemdServiceRuntime(
+        { HOME: TEST_MANAGED_HOME },
+        { commandInspection: { kind: "present" } },
+      ),
+    ).resolves.toEqual({
       status: "unknown",
       detail: "Permission denied while reading systemd state",
       missingUnit: false,
@@ -1286,15 +1283,18 @@ describe("readSystemdServiceRuntime", () => {
       });
 
       try {
-        await expect(readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME })).resolves.toMatchObject(
-          {
-            status: result === "error" ? "unknown" : "stopped",
-            ...(result === "error"
-              ? { detail: "Unit openclaw-gateway.service could not be found." }
-              : {}),
-            missingUnit: false,
-          },
-        );
+        await expect(
+          readSystemdServiceRuntime(
+            { HOME: TEST_MANAGED_HOME },
+            { commandInspection: { kind: "present" } },
+          ),
+        ).resolves.toMatchObject({
+          status: result === "error" ? "unknown" : "stopped",
+          ...(result === "error"
+            ? { detail: "Unit openclaw-gateway.service could not be found." }
+            : {}),
+          missingUnit: false,
+        });
       } finally {
         accessSpy.mockRestore();
       }
@@ -1393,7 +1393,10 @@ describe("readSystemdServiceRuntime", () => {
           "Id,LoadState,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
         ),
       );
-    const runtime = await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME });
+    const runtime = await readSystemdServiceRuntime(
+      { HOME: TEST_MANAGED_HOME },
+      { commandInspection: { kind: "present" } },
+    );
     expect(runtime).toEqual({
       status: "running",
       state: "active",
@@ -1415,7 +1418,10 @@ describe("readSystemdServiceRuntime", () => {
   it("passes a kill-backed timeout to systemctl when a read deadline is set", async () => {
     execFileMock.mockReset();
     execFileMock.mockImplementation(execFileResult(null, "", ""));
-    await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME }, { timeoutMs: 1234 });
+    await readSystemdServiceRuntime(
+      { HOME: TEST_MANAGED_HOME },
+      { timeoutMs: 1234, commandInspection: { kind: "present" } },
+    );
     expect(execFileMock).toHaveBeenCalled();
     for (const call of execFileMock.mock.calls) {
       const opts = call[2] as { timeout?: number; killSignal?: string };
@@ -1427,7 +1433,10 @@ describe("readSystemdServiceRuntime", () => {
   it("leaves systemctl unbounded when no read deadline is set", async () => {
     execFileMock.mockReset();
     execFileMock.mockImplementation(execFileResult(null, "", ""));
-    await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME });
+    await readSystemdServiceRuntime(
+      { HOME: TEST_MANAGED_HOME },
+      { commandInspection: { kind: "present" } },
+    );
     expect(execFileMock).toHaveBeenCalled();
     for (const call of execFileMock.mock.calls) {
       const opts = call[2] as { timeout?: number; killSignal?: string };
@@ -1456,7 +1465,10 @@ describe("readSystemdServiceRuntime", () => {
           "",
         ),
       );
-    const runtime = await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME });
+    const runtime = await readSystemdServiceRuntime(
+      { HOME: TEST_MANAGED_HOME },
+      { commandInspection: { kind: "present" } },
+    );
     // ActiveState=failed collapses to the generic "stopped" status, so the raw
     // state + restart counters are what let callers detect the crash-loop give-up.
     expect(runtime.status).toBe("stopped");
@@ -1743,7 +1755,7 @@ describe("readSystemdServiceExecStart", () => {
     );
     await expect(
       readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME }, { requireEffective: true }),
-    ).rejects.toThrow("unreadable-service-secret-canary");
+    ).rejects.toThrow(`${TEST_SERVICE_HOME}/.config/systemd/user/${GATEWAY_SERVICE}`);
   });
 
   it.each([false, true])(

@@ -1,5 +1,6 @@
 /** Deadline- and custody-bound effective command queries for the systemd reader. */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { ServiceInspectionError } from "./service-inspection-error.js";
 import type { GatewayServiceEnv, GatewayServiceReadOptions } from "./service-types.js";
 import { decodeLegacyBusctlOutput } from "./systemd-busctl-legacy.js";
 import { bindSystemdManagerOwner, execBusctlUser, systemdInspectionError } from "./systemd-exec.js";
@@ -79,6 +80,9 @@ export async function createSystemdCommandQuery(
         assertCurrent,
       );
       assertCurrent?.();
+    }
+    if (result.termination === "error" && result.errorCode === "ENOENT") {
+      throw new ServiceInspectionError("systemd-busctl-unavailable");
     }
     if (legacyOutput && (result.termination !== "exit" || performance.now() >= callDeadline)) {
       throw systemdInspectionError(result, unavailable().message);

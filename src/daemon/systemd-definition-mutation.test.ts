@@ -785,7 +785,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
           ? "unsafe-permissions"
           : "inspection-failed";
     expect(capability).toMatchObject({ kind: "unknown", reason });
-    expect(JSON.stringify(capability)).not.toContain(root);
+    expect(capability).toMatchObject({ path: extra });
     expect(JSON.stringify(capability)).not.toContain("secret-canary");
     await expect(stage()).rejects.toThrow(`SERVICE_DEFINITION_UNKNOWN: [${reason}]`);
     expect(await fs.readFile(target, "utf8")).toContain("protected-secret-canary");
@@ -840,9 +840,11 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     });
 
     const capability = await readSystemdDefinitionMutationCapability(env);
-    expect(capability).toMatchObject({ kind: "sealed" });
+    expect(capability).toMatchObject({ kind: "sealed", path: protectedPath });
     expect(JSON.stringify(capability)).not.toContain("secret-canary");
-    await expect(stage()).rejects.toThrow("SERVICE_DEFINITION_SEALED");
+    const staged = stage();
+    await expect(staged).rejects.toThrow("SERVICE_DEFINITION_SEALED");
+    await expect(staged).rejects.toThrow(JSON.stringify(protectedPath));
     expect(await fs.readFile(protectedPath)).toEqual(original);
   });
 
@@ -862,6 +864,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       kind: "unknown",
       reason: "symlink",
       artifact: "service-file",
+      path: file,
     });
     await expect(stage()).rejects.toThrow("SERVICE_DEFINITION_UNKNOWN: [symlink]");
     expect(await fs.readlink(file)).toBe(target);

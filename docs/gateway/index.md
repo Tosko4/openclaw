@@ -242,6 +242,14 @@ sudo loginctl enable-linger $(whoami)
 
 On a headless server without a desktop session, also make sure `XDG_RUNTIME_DIR` is set (`export XDG_RUNTIME_DIR=/run/user/$(id -u)`) before retrying `systemctl --user` commands.
 
+Service definition inspection also needs the user session bus. `systemctl --user`
+can reach systemd's private socket even when that bus is missing. If installation
+or status reports an unavailable user bus, install `dbus-user-session` on
+Debian/Ubuntu, run `systemctl --user start dbus.socket`, and verify
+`busctl --user list` from the service account before retrying installation.
+An absent unit is safe to install; an unreadable existing definition must be
+repaired by its owner first.
+
 Manual user-unit example when you need a custom install path:
 
 ```ini

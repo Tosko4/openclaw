@@ -8,7 +8,7 @@ import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { resolveGatewaySystemdServiceName } from "./constants.js";
 import { normalizeWindowsPathSeparators } from "./output.js";
 import { resolveDaemonHomeDir } from "./paths.js";
-import { ServiceInspectionError } from "./service-inspection-error.js";
+import { ServiceDefinitionInspectionError } from "./service-inspection-error.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceCommandSnapshot,
@@ -354,13 +354,10 @@ export async function readSystemdServiceExecStart(
   try {
     const content = await fs.readFile(unitPath, "utf8").catch((error: unknown) => {
       if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
+        throw new ServiceDefinitionInspectionError(unitPath);
       }
       return null;
     });
-    if (content === null && !opts?.requireEffective) {
-      return null;
-    }
     let execStart = "";
     let workingDirectory = "";
     let inlineEnvironment: Record<string, string> = {};
@@ -409,15 +406,18 @@ export async function readSystemdServiceExecStart(
       unitPath,
     });
     const localDefinition = content === null ? null : managedDefinition;
-    const managerRead = readSystemdManagerCommand(env, localDefinition, unsetEnvironment, opts);
-    const manager = opts?.requireEffective
-      ? await managerRead
-      : await managerRead.catch((error: unknown) => {
-          if (error instanceof ServiceInspectionError) {
-            opts?.onInspectionFailure?.(error.reason);
-          }
-          return null;
-        });
+    const manager = await readSystemdManagerCommand(env, localDefinition, unsetEnvironment, opts)
+      .then((command) => {
+        opts?.onCommandInspection?.({ kind: command || localDefinition ? "present" : "absent" });
+        return command;
+      })
+      .catch((error: unknown) => {
+        if (opts?.requireEffective) {
+          throw error;
+        }
+        opts?.onCommandInspection?.({ kind: "unavailable", error });
+        return null;
+      });
     if (manager || opts?.requireEffective || !managedDefinition.programArguments.length) {
       return manager;
     }
@@ -428,6 +428,7 @@ export async function readSystemdServiceExecStart(
       sourcePath: unitPath,
     };
   } catch (error) {
+    opts?.onCommandInspection?.({ kind: "unavailable", error });
     if (opts?.requireEffective) {
       throw error;
     }

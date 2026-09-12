@@ -358,7 +358,7 @@ describe("readGatewayServiceState", () => {
           expect(result.blockMessage).toContain("Refusing to mutate code");
           expect(result.serviceUpdateVerdict).toMatchObject({ kind: "unavailable" });
         } else {
-          expect(result.blockMessage).toContain("Refusing to mutate code");
+          expect(result.blockMessage).toContain("busctl executable is unavailable");
           expect(result.serviceUpdateVerdict?.kind).not.toBe("absent");
         }
         expect(result.serviceMutationAllowed).toBe(false);
@@ -494,6 +494,7 @@ describe("readGatewayServiceState", () => {
     expect(readCommand).toHaveBeenCalledWith(process.env, {
       timeoutMs: undefined,
       requireEffective: true,
+      onCommandInspection: expect.any(Function),
     });
   });
 
@@ -511,7 +512,7 @@ describe("readGatewayServiceState", () => {
 
     expect(readCommand).toHaveBeenCalledWith(process.env, {
       timeoutMs: 100,
-      onInspectionFailure: expect.any(Function),
+      onCommandInspection: expect.any(Function),
     });
     expect(state.running).toBe(false);
     expect(state.runtime).toEqual({
