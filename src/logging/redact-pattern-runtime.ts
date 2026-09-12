@@ -9,7 +9,7 @@ export function parseRedactPatternSource(raw: string): [source: string, flags: s
   return [source, flags.includes("g") ? flags : `${flags}g`];
 }
 
-function readRedactMatch(args: unknown[]) {
+export function readRedactMatch(args: unknown[]) {
   const hasNamedGroups =
     args.length > 0 && typeof args[args.length - 1] === "object" && args[args.length - 1] !== null;
   const inputIndex = hasNamedGroups ? args.length - 2 : args.length - 1;
@@ -39,6 +39,8 @@ type RedactMatcher = {
 export type ResolvedRedactPattern = RegExp | RedactMatcher;
 export type RedactPattern = string | ResolvedRedactPattern;
 
+const globalPatterns = new WeakMap<RegExp, RegExp>();
+
 export function* iterateRedactMatches(
   text: string,
   pattern: ResolvedRedactPattern,
@@ -47,8 +49,34 @@ export function* iterateRedactMatches(
     yield* pattern.exec(text);
     return;
   }
-  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
-  for (const match of text.matchAll(new RegExp(pattern.source, flags))) {
+  let regex = pattern;
+  if (!pattern.global) {
+    const cached = globalPatterns.get(pattern);
+    regex = cached ?? new RegExp(pattern.source, `${pattern.flags}g`);
+    if (!cached) {
+      globalPatterns.set(pattern, regex);
+    }
+  }
+  const unicode = regex.unicode || regex.flags.includes("v");
+  let cursor = 0;
+  while (cursor <= text.length) {
+    const previousIndex = regex.lastIndex;
+    let match: RegExpExecArray | null;
+    // A yielded match can re-enter this scanner with the same compiled expression.
+    try {
+      regex.lastIndex = cursor;
+      match = regex.exec(text);
+    } finally {
+      regex.lastIndex = previousIndex;
+    }
+    if (!match) {
+      return;
+    }
+    cursor = match.index + match[0].length;
+    if (!match[0]) {
+      const codePoint = text.codePointAt(cursor);
+      cursor += unicode && codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
+    }
     yield {
       match: match[0],
       groups: match.slice(1).map((group) => group ?? ""),

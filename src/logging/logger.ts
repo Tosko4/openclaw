@@ -30,6 +30,7 @@ import {
   resolveDefaultRollingLogFile,
 } from "./log-file-path.js";
 import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
+import { buildFileLogMessage, type FileLogMessagePart } from "./logger-file-message.js";
 import { fileLogTransport } from "./logger-file-transport.js";
 import { defaultLoggerHostnameResolver, loggerHostnameState } from "./logger-hostname-state.js";
 import { setLoggerFileTargetResolver } from "./logger-settings-internal.js";
@@ -80,7 +81,6 @@ export function applyLoggingConfig(config: OpenClawConfig["logging"] | undefined
 const MAX_DIAGNOSTIC_LOG_ATTRIBUTE_COUNT = 32;
 const MAX_DIAGNOSTIC_LOG_ATTRIBUTE_VALUE_CHARS = 2 * 1024;
 const MAX_DIAGNOSTIC_LOG_NAME_CHARS = 120;
-const MAX_FILE_LOG_MESSAGE_CHARS = 4 * 1024;
 const MAX_FILE_LOG_CONTEXT_VALUE_CHARS = 512;
 const DIAGNOSTIC_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
 
@@ -246,34 +246,6 @@ function readFirstContextString(
     }
   }
   return undefined;
-}
-
-function stringifyFileLogMessagePart(value: unknown, json: boolean): string | undefined {
-  if (json) {
-    return JSON.stringify(value);
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value);
-  }
-  if (isPlainLogRecordObject(value) && typeof value.message === "string") {
-    return value.message;
-  }
-  return undefined;
-}
-
-type FileLogMessagePart = { key: string; json: boolean; messageText: boolean };
-
-function buildFileLogMessage(
-  record: Record<string, unknown>,
-  parts: readonly FileLogMessagePart[],
-): string | undefined {
-  const text = parts
-    .map(({ key, json }) => stringifyFileLogMessagePart(record[key], json))
-    .filter((part): part is string => Boolean(part && part.trim()));
-  return text.length > 0 ? clampFileLogText(text.join(" "), MAX_FILE_LOG_MESSAGE_CHARS) : undefined;
 }
 
 function resolveLogHostname(): string {
@@ -637,7 +609,7 @@ function buildLogger(): TsLogger<LogObj> {
             ...fields,
           },
           new Set(messageParts.filter((part) => part.messageText).map((part) => part.key)),
-          (masked) => buildFileLogMessage(masked, messageParts),
+          (materialized) => buildFileLogMessage(materialized, messageParts),
         );
         const line = JSON.stringify(record);
         fileLogTransport.enqueue({

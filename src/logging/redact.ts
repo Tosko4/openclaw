@@ -12,14 +12,16 @@ import { readLoggingConfig } from "./config.js";
 import { modelVisibleToolTextRedactionState } from "./redact-internal-state.js";
 import { isFullContextToolPayloadRedaction } from "./redact-internal.js";
 import {
-  applyRedactionEdits,
   redactJsonRecord,
   type RedactionEdit,
+  type RedactionField,
+  type RedactionMessage,
   type RedactionTarget,
 } from "./redact-json.js";
 import {
   iterateRedactMatches,
   parseRedactPatternSource,
+  readRedactMatch,
   redactPemBlock,
   replaceRedactPattern,
   type RedactMatch,
@@ -94,7 +96,8 @@ const STRUCTURED_SECRET_FIELD_RE = new RegExp(
   String.raw`^(?:api[-_]?key|apiKey|api[-_]?token|apiToken|bearer[-_]?token|bearerToken|token|secret|password|passwd|${AWS_SECRET_ACCESS_KEY_FIELD_KEYS}|credential|${SECRET_HEADER_FIELD_KEYS}|private[-_]?key|privateKey|access[-_]?token|accessToken|refresh[-_]?token|refreshToken|id[-_]?token|idToken|auth[-_]?token|authToken|client[-_]?secret|clientSecret|app[-_]?secret|appSecret|secret[-_]?value|secretValue|raw[-_]?secret|rawSecret|secret[-_]?input|secretInput|key|key[-_]?material|keyMaterial|jwt|session|signature|set[-_]?cookie|${PAYMENT_CREDENTIAL_QUERY_KEYS}|${PAYMENT_CREDENTIAL_JSON_KEYS})$`,
   "i",
 );
-const STRUCTURED_INTERNAL_SOURCE_PATH_VALUE_RE = /^\$WORKSPACE_DIR\/[A-Za-z0-9._/-]+\.jsonl$/u;
+const STRUCTURED_INTERNAL_SOURCE_PATH_VALUE_RE =
+  /^\$WORKSPACE_DIR\/(?:[A-Za-z0-9._/-]|\*{3})+\.jsonl$/u;
 const STRUCTURED_APP_PASSWORD_FIELD_RE =
   /^(?:apple|icloud|app[-_]?specific[-_]?password|appSpecificPassword|application[-_]?password|text|content|message|error|errorMessage|detail|details|reason)$/i;
 const APP_SPECIFIC_PASSWORD_RE = /\b([a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4})\b/g;
@@ -499,16 +502,16 @@ function isShellReferenceToKey(key: string, value: string): boolean {
   return braced?.[1] === key;
 }
 
-function maskSecretFieldValue(key: string, value: string): string {
+function maskSecretFieldValue(key: string, value: string, fullMask = false): string {
   const expansion = value.match(/^\$\{([A-Z_][A-Z0-9_]*):[-=?+][^{}]+\}(?![\s\S])/);
   if (expansion && expansion[1] === key) {
     return `${value.slice(0, value.indexOf(":") + 2)}***}`;
   }
-  return maskToken(value);
+  return fullMask ? "***" : maskToken(value);
 }
 
 function readEnvAssignmentKey(match: string): string | undefined {
-  return match.match(/\b([A-Z_][A-Z0-9_]*)\b\s*[=:]/)?.[1];
+  return match.match(/\b([A-Z_][A-Z0-9_]*)\b["']?\s*[=:]/)?.[1];
 }
 
 function shouldPreserveShellReferenceMatch(match: string, token: string): boolean {
@@ -520,8 +523,34 @@ function isEmptyOrMaskedShellParameterExpansionTail(token: string): boolean {
   return /^[-=?+](?:\*\*\*)?\}$/.test(token);
 }
 
+const captureBackreferences = new WeakMap<RegExp, Map<number, boolean>>();
+const indexedCapturePatterns = new WeakMap<RegExp, RegExp>();
+
 function hasBackreferenceToGroup(pattern: RegExp, groupNumber: number): boolean {
-  return new RegExp(String.raw`\\${groupNumber}(?!\d)`).test(pattern.source);
+  let groups = captureBackreferences.get(pattern);
+  if (!groups) {
+    groups = new Map();
+    captureBackreferences.set(pattern, groups);
+  }
+  const cached = groups.get(groupNumber);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const reference = `\\${groupNumber}`;
+  let found = false;
+  for (
+    let offset = pattern.source.indexOf(reference);
+    offset !== -1;
+    offset = pattern.source.indexOf(reference, offset + reference.length)
+  ) {
+    const next = pattern.source.charCodeAt(offset + reference.length);
+    if (!(next >= 48 && next <= 57)) {
+      found = true;
+      break;
+    }
+  }
+  groups.set(groupNumber, found);
+  return found;
 }
 
 type SecretCaptureSelection = {
@@ -555,12 +584,21 @@ function getIndexedCaptureStart(
     return null;
   }
   try {
-    const flags = pattern.flags.includes("d") ? pattern.flags : `${pattern.flags}d`;
-    const indexedPattern = new RegExp(pattern.source, flags);
-    indexedPattern.lastIndex = matchOffset;
-    const indexedMatch = indexedPattern.exec(input) as
-      | (RegExpExecArray & { indices?: Array<[number, number] | undefined> })
-      | null;
+    let indexedPattern = indexedCapturePatterns.get(pattern);
+    if (!indexedPattern) {
+      indexedPattern = pattern.hasIndices
+        ? pattern
+        : new RegExp(pattern.source, `${pattern.flags}d`);
+      indexedCapturePatterns.set(pattern, indexedPattern);
+    }
+    const previousIndex = indexedPattern.lastIndex;
+    let indexedMatch: RegExpExecArray | null;
+    try {
+      indexedPattern.lastIndex = matchOffset;
+      indexedMatch = indexedPattern.exec(input);
+    } finally {
+      indexedPattern.lastIndex = previousIndex;
+    }
     const captureIndices = indexedMatch?.indices?.[captureIndex + 1];
     if (!indexedMatch || indexedMatch.index !== matchOffset || indexedMatch[0] !== match) {
       return null;
@@ -609,7 +647,12 @@ function getRedactionEdit(
     const target = project
       ? project(offset, offset + match.length)
       : { start: offset, end: offset + match.length, value: match };
-    return target && { ...target, replacement: redactPemBlock(target.value, "…redacted…") };
+    return (
+      target && {
+        ...target,
+        replacement: project ? "***" : redactPemBlock(target.value, "…redacted…"),
+      }
+    );
   }
   const selected = selectSecretCapture(match, groups);
   const tokenIndex =
@@ -643,6 +686,12 @@ function getRedactionEdit(
     return undefined;
   }
   const isShellReferencePattern = shellReferencePreservingPatterns.has(pattern);
+  if (project && isShellReferencePattern && target.key && target.fieldValue) {
+    const replacement = maskSecretFieldValue(target.key, target.fieldValue, true);
+    if (replacement.startsWith("${")) {
+      return { start: 0, end: target.fieldValue.length, replacement };
+    }
+  }
   // Preserve shell variable references (e.g. `MY_TOKEN=$MY_TOKEN`) for assignment patterns
   // registered as shell-reference-preserving, so non-secret expansions that merely echo the
   // assignment key are not masked.
@@ -658,8 +707,9 @@ function getRedactionEdit(
   // retained hint instead of being exposed by delimiter-aware masking.
   // Source goes through both the guard and SQLite. Full assignment masks keep
   // those copies identical; diagnostic hints otherwise shrink on the second pass.
-  const masked =
-    preserveSourceAssignment && sourceAssignmentPatterns.has(pattern)
+  const masked = project
+    ? "***"
+    : preserveSourceAssignment && sourceAssignmentPatterns.has(pattern)
       ? maskSecretValue(token)
       : isShellReferencePattern
         ? maskToken(token)
@@ -695,9 +745,10 @@ export function redactText(
   let pattern: ResolvedRedactPattern;
   const replace = (match: RedactMatch) =>
     redactMatch(match, pattern, options?.preserveSourceAssignment);
+  const replaceRegex = (...args: unknown[]) => replace(readRedactMatch(args));
   // Each replacement finishes synchronously before this invocation advances its pattern.
   for (pattern of patterns) {
-    next = replaceRedactPattern(next, pattern, replace);
+    next = replaceRedactPattern(next, pattern, replace, replaceRegex);
   }
   return next;
 }
@@ -937,14 +988,28 @@ function preservesStructuredReference(key: string, value: string): boolean {
   );
 }
 
+function shouldRedactStructuredStringField(
+  key: string,
+  value: string,
+  path: readonly string[],
+  objectPath: boolean,
+): boolean {
+  return (
+    shouldRedactStructuredAuthorizationCode(
+      key.toLowerCase(),
+      path,
+      objectPath ? value : undefined,
+    ) ||
+    (isSensitiveFieldKey(key) && !preservesStructuredReference(key, value))
+  );
+}
+
 function redactSensitiveFieldValueWithOptions(
   key: string,
   value: string,
   options: RedactOptions,
   path: readonly string[] = [key],
   objectPath = true,
-  messagePart = false,
-  recordString = false,
 ): string {
   if (isPublicShareIdPath(path)) {
     return maskToken(redactRegisteredSecretValues(value, maskToken));
@@ -954,26 +1019,20 @@ function redactSensitiveFieldValueWithOptions(
     sensitiveKey && options.sensitiveFieldPatterns
       ? { ...options, patterns: options.sensitiveFieldPatterns }
       : options;
-  const resolved = resolveRedactOptions(fieldOptions);
-  if (resolved.mode === "off") {
+  if (normalizeMode(fieldOptions.mode) === "off") {
     return redactRegisteredSecretValues(value, maskToken);
   }
-  const normalizedKey = key.toLowerCase();
-  const preservesReference = preservesStructuredReference(key, value);
-  const masksWholeValue =
-    shouldRedactStructuredAuthorizationCode(normalizedKey, path, objectPath ? value : undefined) ||
-    (sensitiveKey && !preservesReference);
+  const masksWholeValue = shouldRedactStructuredStringField(key, value, path, objectPath);
   const exactRedacted = redactRegisteredSecretValues(
     masksWholeValue ? maskSecretFieldValue(key, value) : value,
     maskToken,
   );
-  const redacted = recordString
-    ? redactBuiltInText(exactRedacted)
-    : !usesBuiltInRedactPatterns(fieldOptions.patterns) ||
-        couldMatchDefaultRedactPatterns(exactRedacted)
-      ? redactText(exactRedacted, resolved.patterns)
+  const redacted =
+    !usesBuiltInRedactPatterns(fieldOptions.patterns) ||
+    couldMatchDefaultRedactPatterns(exactRedacted)
+      ? redactText(exactRedacted, resolveRedactOptions(fieldOptions).patterns)
       : exactRedacted;
-  return messagePart || redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key)
+  return redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key)
     ? redactAppSpecificPasswords(redacted)
     : redacted;
 }
@@ -1031,20 +1090,9 @@ function redactStructuredSecretValue(
   options: RedactOptions,
   path: readonly string[] = key ? [key] : [],
   objectPath = true,
-  redactKeys = false,
-  messageKeys?: ReadonlySet<string>,
-  messagePart = false,
 ): unknown {
   if (typeof value === "string") {
-    return redactSensitiveFieldValueWithOptions(
-      key,
-      value,
-      options,
-      path,
-      objectPath,
-      messagePart,
-      redactKeys,
-    );
+    return redactSensitiveFieldValueWithOptions(key, value, options, path, objectPath);
   }
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
     return shouldRedactStructuredPrimitiveField(key, path) ? "***" : value;
@@ -1059,43 +1107,11 @@ function redactStructuredSecretValue(
     seen.add(value);
     // Define own data properties so JSON field names cannot change the output prototype.
     const out = Array.isArray(value)
-      ? value.map((entry) =>
-          redactStructuredSecretValue(
-            key,
-            entry,
-            seen,
-            options,
-            path,
-            false,
-            redactKeys,
-            messageKeys,
-            messagePart,
-          ),
-        )
+      ? value.map((entry) => redactStructuredSecretValue(key, entry, seen, options, path, false))
       : Object.fromEntries(
           Object.entries(value).map(([name, child]) => [
-            redactKeys
-              ? redactSensitiveFieldValueWithOptions(
-                  "",
-                  name,
-                  options,
-                  [],
-                  false,
-                  messagePart,
-                  true,
-                )
-              : name,
-            redactStructuredSecretValue(
-              name,
-              child,
-              seen,
-              options,
-              [...path, name],
-              objectPath,
-              redactKeys,
-              messageKeys,
-              messagePart || (path.length === 0 && messageKeys?.has(name) === true),
-            ),
+            name,
+            redactStructuredSecretValue(name, child, seen, options, [...path, name], objectPath),
           ]),
         );
     seen.delete(value);
@@ -1104,25 +1120,11 @@ function redactStructuredSecretValue(
   return value;
 }
 
-function redactSecretsWithOptions<T>(
-  value: T,
-  options: RedactOptions,
-  redactKeys = false,
-  messageKeys?: ReadonlySet<string>,
-): T {
+function redactSecretsWithOptions<T>(value: T, options: RedactOptions): T {
   return (
     typeof value === "string"
       ? redactSensitiveText(value, options)
-      : redactStructuredSecretValue(
-          "",
-          value,
-          new WeakSet<object>(),
-          options,
-          [],
-          true,
-          redactKeys,
-          messageKeys,
-        )
+      : redactStructuredSecretValue("", value, new WeakSet<object>(), options, [], true)
   ) as T;
 }
 
@@ -1130,88 +1132,102 @@ export function redactSecrets<T>(value: T): T {
   return redactSecretsWithOptions(value, resolveToolPayloadRedaction());
 }
 
-function changedTextRange(before: string, after: string): RedactionEdit[] {
-  if (before === after) {
-    return [];
+function getBuiltInRecordEdits(field: RedactionField, mode: RedactSensitiveMode): RedactionEdit[] {
+  const { key, value, path, objectPath } = field;
+  if (!field.string) {
+    return mode !== "off" && value !== "null" && shouldRedactStructuredPrimitiveField(key, path)
+      ? [{ start: 0, end: value.length, replacement: "***" }]
+      : [];
   }
-  const original = Array.from(before);
-  const replacement = Array.from(after);
-  let prefix = 0;
-  while (
-    prefix < original.length &&
-    prefix < replacement.length &&
-    original[prefix] === replacement[prefix]
+  const edits: RedactionEdit[] = [];
+  redactRegisteredSecretValues(value, (secret, start) => {
+    edits.push({ start, end: start + secret.length, replacement: "***" });
+    return secret;
+  });
+  if (mode === "off") {
+    return edits;
+  }
+  if (
+    isPublicShareIdPath(path) ||
+    shouldRedactStructuredStringField(key, value, path, objectPath)
   ) {
-    prefix += 1;
+    edits.push({
+      start: 0,
+      end: value.length,
+      replacement: maskSecretFieldValue(key, value, true),
+    });
+    return edits;
   }
-  let suffix = 0;
-  while (
-    suffix < original.length - prefix &&
-    suffix < replacement.length - prefix &&
-    original[original.length - suffix - 1] === replacement[replacement.length - suffix - 1]
-  ) {
-    suffix += 1;
+  const bitmap = computeSensitiveRedactionBitmap(value, { mode, patterns: [] });
+  for (let start = 0; start < bitmap.length; start += 1) {
+    if (!bitmap[start]) {
+      continue;
+    }
+    let end = start + 1;
+    while (bitmap[end]) {
+      end += 1;
+    }
+    edits.push({ start, end, replacement: "***" });
+    start = end - 1;
   }
-  return [
-    {
-      start: original.slice(0, prefix).join("").length,
-      end: original.slice(0, original.length - suffix).join("").length,
-      replacement: replacement.slice(prefix, replacement.length - suffix).join(""),
-    },
-  ];
+  return edits;
 }
 
-/** Converts native values once; key protection precedes JSON-aware configured matching. */
+function getAppPasswordRecordEdits(field: RedactionField, changed: boolean): RedactionEdit[] {
+  const edits: RedactionEdit[] = [];
+  const { key, value, messagePart } = field;
+  if (messagePart || changed || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key)) {
+    for (const match of value.matchAll(APP_SPECIFIC_PASSWORD_RE)) {
+      if (looksLikeAppSpecificPassword(match[0])) {
+        edits.push({ start: match.index, end: match.index + match[0].length, replacement: "***" });
+      }
+    }
+  }
+  return edits;
+}
+
+/** Converts native values once and applies configured and structural protection before output. */
 export function redactLogRecordForTransport(
-  record: Record<string, unknown>,
+  record: Record<string, unknown> | string,
   messageKeys?: ReadonlySet<string>,
-  deriveMessage?: (record: Record<string, unknown>) => string | undefined,
+  deriveMessage?: (record: Record<string, unknown>) => RedactionMessage | undefined,
+  resolved: ResolvedRedactOptions = resolveRedactOptions(),
 ): Record<string, unknown> {
   const ancestors: object[] = [];
-  const json = JSON.stringify(record, function (this: object, _key, value: unknown) {
-    if (typeof value === "bigint") {
-      return String(value);
-    }
-    if (value !== null && typeof value === "object") {
-      while (ancestors.length > 0 && ancestors.at(-1) !== this) {
-        ancestors.pop();
-      }
-      if (ancestors.includes(value)) {
-        return "[Circular]";
-      }
-      ancestors.push(value);
-    }
-    return value;
-  });
-  const options = resolveConfigRedaction();
-  const structured: Record<string, unknown> = redactSecretsWithOptions(
-    JSON.parse(json),
-    options,
-    true,
-    messageKeys,
-  );
-  const message = deriveMessage?.(structured);
+  const json =
+    typeof record === "string"
+      ? record
+      : JSON.stringify(record, function (this: object, _key, value: unknown) {
+          if (typeof value === "bigint") {
+            return String(value);
+          }
+          if (value !== null && typeof value === "object") {
+            while (ancestors.length > 0 && ancestors.at(-1) !== this) {
+              ancestors.pop();
+            }
+            if (ancestors.includes(value)) {
+              return "[Circular]";
+            }
+            ancestors.push(value);
+          }
+          return value;
+        });
+  const materialized: Record<string, unknown> = JSON.parse(json);
+  const message = deriveMessage?.(materialized);
   if (message) {
-    structured.message = message;
+    materialized.message = message.text;
   }
-  const masked: Record<string, unknown> = JSON.parse(
+  return JSON.parse(
     redactJsonRecord(
-      JSON.stringify(structured),
-      resolveRedactOptions(options).patterns,
+      message ? JSON.stringify(materialized) : json,
+      resolved.patterns,
       (match, pattern, project) => getRedactionEdit(match, pattern, undefined, project),
-      preservesStructuredReference,
-      redactAppSpecificPasswords,
+      getAppPasswordRecordEdits,
+      (field) => getBuiltInRecordEdits(field, resolved.mode),
+      messageKeys,
+      message,
     ),
   );
-  if (message && typeof masked.message === "string") {
-    const derived = deriveMessage?.(masked) ?? "";
-    // Combine configured display masks with masks inherited from the displayed arguments.
-    masked.message = applyRedactionEdits(message, [
-      ...changedTextRange(message, masked.message),
-      ...changedTextRange(message, derived),
-    ]);
-  }
-  return masked;
 }
 
 export function redactModelVisibleSecrets<T>(value: T): T {
@@ -1222,7 +1238,7 @@ export function getDefaultRedactPatterns(): string[] {
   return [...DEFAULT_REDACT_STRING_PATTERNS];
 }
 
-// Stored JSONL already passed its write-time masking owner. Raw journal text still needs
+// Stored JSON uses the write-time owner with current policy; raw journal text needs
 // joined matching for multiline patterns such as PEM blocks.
 export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOptions): string[] {
   if (lines.length === 0 || resolved.mode === "off") {
@@ -1238,9 +1254,13 @@ export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOp
     }
   };
   for (const line of lines) {
-    if (safeParseJsonRecord(line)) {
+    const record = safeParseJsonRecord(line);
+    if (record) {
       flushRaw();
-      result.push(line);
+      const masked = JSON.stringify(
+        redactLogRecordForTransport(line, undefined, undefined, resolved),
+      );
+      result.push(masked === JSON.stringify(record) ? line : masked);
     } else {
       raw.push(line);
     }
