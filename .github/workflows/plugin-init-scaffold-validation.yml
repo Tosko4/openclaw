@@ -23,7 +23,6 @@ jobs:
     env:
       PROOF_WORKFLOW_SHA: ${{ github.workflow_sha }}
       NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
-      NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/signal-sdk-empty-npmrc
       NPM_CONFIG_IGNORE_SCRIPTS: "true"
     steps:
       - name: Initialize evidence
@@ -31,7 +30,8 @@ jobs:
           CELL: ${{ matrix.cell }}
         run: |
           mkdir -p "$RUNNER_TEMP/signal-sdk-proof/$CELL"
-          touch "$NPM_CONFIG_USERCONFIG"
+          touch "$RUNNER_TEMP/signal-sdk-empty-npmrc"
+          printf 'NPM_CONFIG_USERCONFIG=%s\n' "$RUNNER_TEMP/signal-sdk-empty-npmrc" >> "$GITHUB_ENV"
           printf '%s\n' 'Independent package declaration proof; not release qualification.' > "$RUNNER_TEMP/signal-sdk-proof/$CELL/purpose.txt"
 
       - name: Checkout fixed consumer owner
