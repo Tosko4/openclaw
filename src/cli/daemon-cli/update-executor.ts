@@ -1,14 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  GATEWAY_UPDATE_EXECUTOR_CONTRACT,
-  withGatewayServiceUpdateAuthority,
-} from "../../daemon/service-update-authority.js";
+import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
   withDelegatedUpdateCommandExecutor,
   type UpdateCommandChildGrant,
 } from "../update-cli/update-command-executor.js";
+import { writeGatewayServiceUpdateCapability } from "./update-capability.js";
 
 type NativeUpdateAction = "install" | "restart" | "stop";
 
@@ -24,13 +22,7 @@ export async function runGatewayServiceUpdateCommand(
     return;
   }
   if (mode === "check") {
-    process.stdout.write(
-      JSON.stringify({
-        updateExecutor: GATEWAY_UPDATE_EXECUTOR_CONTRACT,
-        targetRootBinding: true,
-        retainedOwnerBinding: true,
-      }),
-    );
+    writeGatewayServiceUpdateCapability();
     return;
   }
   if (mode !== "run") {
@@ -61,11 +53,7 @@ export async function runGatewayServiceUpdateCommand(
       !isRecord(input.executor.originalParent) ||
       !isRecord(input.executor.databaseIdentity) ||
       typeof input.executor.originalChildKey !== "string" ||
-      !isRecord(input.executor.spawner) ||
-      ((Object.hasOwn(input.executor, "retainedParent") ||
-        Object.hasOwn(input.executor, "retainedChildKey")) &&
-        (!isRecord(input.executor.retainedParent) ||
-          typeof input.executor.retainedChildKey !== "string"))
+      !isRecord(input.executor.spawner)
     ) {
       throw new Error("Invalid native update executor input.");
     }
