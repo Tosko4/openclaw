@@ -31,6 +31,7 @@ import {
   writePostCorePluginUpdateResultFile,
   writePostCoreUpdateFailureFile,
 } from "./update-command-post-core.js";
+import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 
 type ResumePostCoreUpdateParams = {
   root: string;
@@ -80,6 +81,12 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
 
   process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION =
     (await readPackageVersion(params.root)) ?? VERSION;
+
+  // Migration discovery and the first fresh Doctor also consume source artifacts.
+  // Complete publication under ownership, then release it before Doctor reacquires.
+  await withPluginLifecycleLease({}, async (lease) => {
+    await completeSourceUpdateRuntime({ root: params.root, timeoutMs: params.timeoutMs, lease });
+  });
 
   // Shipped parents cannot migrate with the new plugin generation, and may
   // terminate this child immediately after its result file appears.

@@ -164,6 +164,14 @@ vi.mock("./update-command-plugins.js", () => ({
   }),
 }));
 
+// Process fixtures cover runtime generation with real lifecycle ownership.
+vi.mock("./update-command-runtime.js", () => ({
+  completeSourceUpdateRuntime: vi.fn(async () => {
+    record("runtime-completion");
+    return { changed: false };
+  }),
+}));
+
 vi.mock("./update-command-post-core.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-post-core.js")>()),
   readPostCorePluginInstallRecordsFile: vi.fn(async () => {
@@ -191,6 +199,7 @@ import {
   writePostCoreUpdateFailureFile,
 } from "./update-command-post-core.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
+import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 
 function expectLifecycleBoundary(preLeaseEvent: string): void {
   const preLeaseIndex = mocks.events.indexOf(`${preLeaseEvent}:false`);
@@ -204,6 +213,23 @@ function expectLifecycleBoundary(preLeaseEvent: string): void {
     expect(mocks.events).toContain(event);
   }
   expect(mocks.events.indexOf("plugin-update:true")).toBeGreaterThan(authoritativeReadIndex);
+}
+
+function expectRuntimeBeforeMigration(): void {
+  const completion = mocks.events.indexOf("runtime-completion:true");
+  expect(completion).toBeGreaterThan(mocks.events.indexOf("lease-enter:false"));
+  expect(mocks.events.filter((event) => event.startsWith("runtime-completion:"))).toEqual([
+    "runtime-completion:true",
+  ]);
+  expect(mocks.events.indexOf("lease-exit:false")).toBeGreaterThan(completion);
+  expect(mocks.events.indexOf("migration-plugins:false")).toBeGreaterThan(
+    mocks.events.indexOf("lease-exit:false"),
+  );
+  expect(mocks.events.indexOf("fresh-doctor:false")).toBeGreaterThan(
+    mocks.events.indexOf("migration-plugins:false"),
+  );
+  expect(mocks.events.indexOf("prepare-config:true")).toBeGreaterThan(completion);
+  expect(mocks.events).not.toContain("fresh-doctor:true");
 }
 
 describe("update plugin lifecycle lease boundaries", () => {
@@ -430,6 +456,7 @@ describe("update plugin lifecycle lease boundaries", () => {
       });
 
       expectLifecycleBoundary("handoff-records");
+      expectRuntimeBeforeMigration();
       expect(mocks.events.indexOf("migration-plugins:false")).toBeLessThan(
         mocks.events.indexOf("fresh-doctor:false"),
       );
@@ -454,15 +481,17 @@ describe("update plugin lifecycle lease boundaries", () => {
     },
   );
 
-  it.each(["convergence", "doctor"] as const)(
+  it.each(["runtime", "convergence", "doctor"] as const)(
     "publishes only failure when initial %s refuses resumed migration",
     async (phase) => {
       vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", "/fixture/plugins.json");
       const failure = new Error("configured plugin cannot converge");
       vi.mocked(
-        phase === "convergence"
-          ? convergeUpdateDoctorMigrationPlugins
-          : runUpdateFinalizationDoctorInFreshProcess,
+        phase === "runtime"
+          ? completeSourceUpdateRuntime
+          : phase === "convergence"
+            ? convergeUpdateDoctorMigrationPlugins
+            : runUpdateFinalizationDoctorInFreshProcess,
       ).mockRejectedValueOnce(failure);
 
       await expect(
@@ -474,6 +503,10 @@ describe("update plugin lifecycle lease boundaries", () => {
         }),
       ).rejects.toBe(failure);
 
+      if (phase === "runtime") {
+        expect(convergeUpdateDoctorMigrationPlugins).not.toHaveBeenCalled();
+        expect(runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
+      }
       expect(updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
       expect(completePostCorePluginUpdate).not.toHaveBeenCalled();
       expect(mocks.readConfig).not.toHaveBeenCalled();
@@ -568,6 +601,7 @@ describe("update plugin lifecycle lease boundaries", () => {
       "/fixture/plugins.json",
       invalid,
     );
+    expectRuntimeBeforeMigration();
     expect(mocks.events.at(-1)).toBe("publish-result:false");
   });
 

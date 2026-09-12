@@ -717,7 +717,8 @@ const { openOpenClawStateDatabase, closeOpenClawStateDatabaseForTest } =
   await import("../state/openclaw-state-db.js");
 // Real recovery dependencies need the initialized runtime and child-process mocks.
 const { runUpdateFailureTriage } = await import("../infra/update-triage.js");
-const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
+const { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } =
+  await import("../infra/openclaw-root.js");
 const { resolveGatewayInstallEntrypoint } = await import("../daemon/gateway-entrypoint.js");
 const {
   mutateConfigFileWithRetry,
@@ -894,6 +895,24 @@ describe("update-cli", () => {
     });
     mockCurrentProcessFreshDoctor({ packageRoot: pkgRoot });
     return pkgRoot;
+  };
+
+  // Version 1.0.0 command fixtures model a legacy Git target, not this live checkout.
+  const mockLegacyGitInstallAtCaseDir = async (prefix: string) => {
+    const root = createCaseDir(prefix);
+    await writeOpenClawPackageFixture(root, "1.0.0", {
+      git: true,
+      entrySource: "export {};\n",
+    });
+    const canonicalRoot = await fs.realpath(root);
+    mockFileBackedPathExists();
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(canonicalRoot);
+    vi.mocked(resolveOpenClawPackageRootSync).mockReturnValue(canonicalRoot);
+    vi.mocked(resolveUpdateInstallKind).mockImplementation(async (target) => {
+      expect(target).toBe(canonicalRoot);
+      return "git";
+    });
+    return canonicalRoot;
   };
 
   const primeNpmChannelTag = (tag: string, version: string | null): void => {
@@ -2371,6 +2390,7 @@ describe("update-cli", () => {
   it.each([false, true])("admits non-TTY updates with an active session (yes=%s)", async (yes) => {
     setTty(false);
     setStdoutTty(false);
+    const root = await mockLegacyGitInstallAtCaseDir("openclaw-active-session-legacy-git");
     const { beginSessionWorkAdmission, getActiveSessionWorkAdmissionCount } =
       await import("../sessions/session-lifecycle-admission.js");
     const admission = await beginSessionWorkAdmission({
@@ -2381,15 +2401,24 @@ describe("update-cli", () => {
     try {
       mockRunningManagedGateway([
         process.execPath,
-        path.join(process.cwd(), "dist", "index.js"),
+        path.join(root, "dist", "index.js"),
         "gateway",
         "run",
       ]);
-      vi.mocked(runGatewayUpdate).mockImplementation(async () => {
+      vi.mocked(runGatewayUpdate).mockImplementation(async (options) => {
         expect(getActiveSessionWorkAdmissionCount()).toBe(1);
-        return makeOkUpdateResult();
+        // Admit the original executor before returning a successful core result.
+        await options?.inspectGitTarget?.({});
+        await options?.validateCandidate?.(root);
+        await options?.beforeGitMutation?.({});
+        return makeOkUpdateResult({ root });
       });
-      await invokeUpdateCli(yes ? { yes: true } : {});
+      await invokeUpdateCli(yes ? { yes: true } : {}).catch((cause: unknown) => {
+        throw new Error(
+          [getErrorOutput(), getLogOutput(), JSON.stringify(lastWriteJsonCall())].join("\n"),
+          { cause },
+        );
+      });
       expect(runGatewayUpdate).toHaveBeenCalledOnce();
       expect(confirm).not.toHaveBeenCalled();
       expect(select).not.toHaveBeenCalled();
@@ -2636,7 +2665,7 @@ describe("update-cli", () => {
       const root =
         kind === "package"
           ? await mockPackageInstallAtCaseDir("openclaw-sealed-code-update")
-          : process.cwd();
+          : await mockLegacyGitInstallAtCaseDir("openclaw-sealed-legacy-git");
       const entrypoint =
         kind === "package"
           ? await writeOpenClawPackageFixture(root, "1.0.0", {
@@ -4098,6 +4127,9 @@ describe("update-cli", () => {
     "keeps downgrade consent separate from --yes (explicit=%s)",
     async (acceptCapabilities) => {
       const downgradedRoot = createCaseDir("openclaw-downgraded-consent-root");
+      vi.mocked(resolveUpdateInstallKind).mockImplementation(async (root) =>
+        root === downgradedRoot ? "package" : "git",
+      );
       setupUpdatedRootRefresh({
         targetVersion: "2026.4.10",
         gatewayUpdateImpl: async () =>
@@ -4137,6 +4169,9 @@ describe("update-cli", () => {
 
   it("pins the compatibility host version to the downgraded target during current-process post-core plugin convergence (#87914)", async () => {
     const downgradedRoot = createCaseDir("openclaw-downgraded-compat-root");
+    vi.mocked(resolveUpdateInstallKind).mockImplementation(async (root) =>
+      root === downgradedRoot ? "package" : "git",
+    );
     setupUpdatedRootRefresh({
       targetVersion: "2026.4.10",
       gatewayUpdateImpl: async () =>
@@ -6957,6 +6992,22 @@ describe("update-cli", () => {
   ] as const)(
     "$name",
     async ({ installKind, options, storedChannel, expectedChannel, expectedPersistedChannel }) => {
+      let gitRoutingRoot: string | undefined;
+      if (installKind === "git" && expectedChannel !== undefined) {
+        const root = createCaseDir("openclaw-routing-legacy-git");
+        await writeOpenClawPackageFixture(root, "1.0.0", {
+          git: true,
+          entrySource: "export {};\n",
+        });
+        mockFileBackedPathExists();
+        gitRoutingRoot = await fs.realpath(root);
+        vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(gitRoutingRoot);
+        vi.mocked(resolveOpenClawPackageRootSync).mockReturnValue(gitRoutingRoot);
+        vi.mocked(resolveUpdateInstallKind).mockImplementation(async (target) => {
+          expect(target).toBe(gitRoutingRoot);
+          return "git";
+        });
+      }
       if (installKind === "package" && expectedChannel === undefined) {
         await mockPackageInstallAtCaseDir();
       }
@@ -6966,7 +7017,9 @@ describe("update-cli", () => {
         vi.mocked(resolveUpdateInstallIdentity).mockResolvedValue({ installKind: "git" });
       }
       if (installKind === "git" || expectedChannel !== undefined) {
-        vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult({ mode: "git" }));
+        vi.mocked(runGatewayUpdate).mockResolvedValue(
+          makeOkUpdateResult({ mode: "git", root: gitRoutingRoot }),
+        );
       }
       if (storedChannel) {
         vi.mocked(readConfigFileSnapshot).mockResolvedValue({
@@ -6989,6 +7042,12 @@ describe("update-cli", () => {
           entrySource: "export {};\n",
         });
         const canonicalGitRoot = await fs.realpath(gitRoot);
+        vi.mocked(resolveUpdateInstallKind).mockImplementation(async (root) =>
+          root === canonicalGitRoot ? "git" : "package",
+        );
+        vi.mocked(resolveUpdateInstallIdentity).mockImplementation(async ({ root }) => ({
+          installKind: root === canonicalGitRoot ? "git" : "package",
+        }));
         mockFileBackedPathExists();
         mockNpmGlobalCommands(nodeModules, undefined, canonicalGitRoot);
         mockGitUpdateAfterMutation(
