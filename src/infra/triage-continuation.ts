@@ -10,6 +10,7 @@ import {
   stripGatewayServiceMarkerEnv,
 } from "../cli/update-cli/update-command-service-env.js";
 import type { TriageFailureContext, TriageContinuationContext } from "../commands/triage-prompt.js";
+import { updateFailureSchema } from "../commands/triage-update.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { buildCliRespawnPlan } from "../entry.respawn.js";
@@ -50,6 +51,10 @@ const operatorSchema = z.strictObject({
   kind: z.literal("operator"),
   installationRoot: z.string().min(1).max(4096),
   gateway: z.literal("preserve"),
+  // Same bounded diagnostic data as the prompt; never an execution grant.
+  updateFailure: updateFailureSchema
+    .refine((value) => Buffer.byteLength(JSON.stringify(value), "utf8") <= 4 * 1024)
+    .optional(),
 });
 const contextSchema = z.union([
   z.strictObject({ failure: failureSchema }),

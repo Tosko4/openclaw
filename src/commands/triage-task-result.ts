@@ -8,7 +8,7 @@ import type { continueTriageInFreshProcess } from "../infra/triage-continuation.
 import type { UpdateRepairResult } from "../infra/update-repair-protocol.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { finalizeTaskRunByRunId } from "../tasks/detached-task-runtime.js";
-import { listTaskRecords, reloadTaskRegistryFromStore } from "../tasks/task-registry.js";
+import { listTaskRecords, reloadTaskRegistryFromStore } from "../tasks/runtime-internal.js";
 import { getTaskRegistryStore } from "../tasks/task-registry.store.js";
 import { readTriageTaskDetail } from "../tasks/triage-task.js";
 import type { StartupTriageResult } from "./triage-startup.js";
