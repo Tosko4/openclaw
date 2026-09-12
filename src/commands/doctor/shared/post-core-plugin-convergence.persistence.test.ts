@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -23,7 +24,10 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { repairMissingConfiguredPluginInstalls } from "./missing-configured-plugin-install.js";
 import { runPostCorePluginConvergence } from "./post-core-plugin-convergence.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+});
 
 describe("post-core plugin persistence cancellation", () => {
   it.each(["managed", "registered"] as const)(
@@ -76,9 +80,9 @@ describe("post-core plugin persistence cancellation", () => {
             rowAtRevocation = readPersistedInstalledPluginIndexRowSync({ env: state.env });
             controller.abort(new Error("plugin lease revoked while updater remains current"));
           };
-          const unlink = fs.promises.unlink.bind(fs.promises);
-          const unlinkSpy = vi.spyOn(fs.promises, "unlink").mockImplementation(async (file) => {
-            await unlink(file);
+          const unlink = fs.unlinkSync.bind(fs);
+          const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
+            unlink(file);
             if (layout === "managed" && file === linkPath) {
               revoke();
             }
@@ -91,7 +95,8 @@ describe("post-core plugin persistence cancellation", () => {
             }
             return result;
           });
-          const symlinkSpy = vi.spyOn(fs.promises, "symlink");
+          const symlinkSpy = vi.spyOn(fs, "symlinkSync");
+          syncBuiltinESMExports();
           const params = {
             cfg,
             env: state.env,
@@ -127,6 +132,7 @@ describe("post-core plugin persistence cancellation", () => {
             unlinkSpy.mockRestore();
             lstatSpy.mockRestore();
             symlinkSpy.mockRestore();
+            syncBuiltinESMExports();
           }
 
           const fresh = await runPostCorePluginConvergence(params);
@@ -354,8 +360,8 @@ describe("post-core plugin persistence cancellation", () => {
           observe("mkdir", args[0]);
           return mkdir(...args);
         });
-        const unlink = fs.promises.unlink.bind(fs.promises);
-        vi.spyOn(fs.promises, "unlink").mockImplementation((...args) => {
+        const unlink = fs.unlinkSync.bind(fs);
+        vi.spyOn(fs, "unlinkSync").mockImplementation((...args) => {
           observe("unlink", args[0]);
           return unlink(...args);
         });
@@ -364,11 +370,12 @@ describe("post-core plugin persistence cancellation", () => {
           observe("rm", args[0]);
           return rm(...args);
         });
-        const symlink = fs.promises.symlink.bind(fs.promises);
-        vi.spyOn(fs.promises, "symlink").mockImplementation((...args) => {
+        const symlink = fs.symlinkSync.bind(fs);
+        vi.spyOn(fs, "symlinkSync").mockImplementation((...args) => {
           observe("symlink", args[1]);
           return symlink(...args);
         });
+        syncBuiltinESMExports();
         await runPostCorePluginConvergence({
           cfg: { plugins: { enabled: false } },
           env: state.env,
@@ -432,15 +439,7 @@ describe("post-core plugin persistence cancellation", () => {
         }
         const controller = new AbortController();
         const refusal = new Error("initiating operation revoked after host-link probe");
-        if (effect === "symlink") {
-          const unlink = fs.promises.unlink.bind(fs.promises);
-          vi.spyOn(fs.promises, "unlink").mockImplementation(async (file) => {
-            await unlink(file);
-            if (file === linkPath) {
-              controller.abort(refusal);
-            }
-          });
-        } else {
+        if (effect !== "symlink") {
           const lstat = fs.promises.lstat.bind(fs.promises);
           vi.spyOn(fs.promises, "lstat").mockImplementation(async (...args) => {
             try {
@@ -451,6 +450,15 @@ describe("post-core plugin persistence cancellation", () => {
               }
             }
           });
+        } else {
+          const unlink = fs.unlinkSync.bind(fs);
+          vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
+            unlink(target);
+            if (target === linkPath) {
+              controller.abort(refusal);
+            }
+          });
+          syncBuiltinESMExports();
         }
         const baselineInstallRecords: Record<string, PluginInstallRecord> =
           layout === "managed"

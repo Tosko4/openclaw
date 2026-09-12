@@ -7,10 +7,14 @@ import {
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveBundledPluginSources } from "./bundled-sources.js";
+import {
+  resolveBundledPluginSources,
+  resolveSourceCheckoutBundledPluginIds,
+} from "./bundled-sources.js";
 import { capturePluginCapabilityConsentHandlerErrors } from "./capability-consent.js";
 import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { formatSourceBundledPluginNotice } from "./dev-source-root.js";
 import {
   isUnavailablePluginSource,
   NpmChannelResolutionError,
@@ -75,7 +79,7 @@ import {
   shouldSkipUnchangedNpmInstall,
   type PluginUpdateOutcome,
   type PluginUpdateSummary,
-  type UpdateNpmInstalledPluginsOptions,
+  type UpdateInstalledPluginsParams,
 } from "./update-source.js";
 import {
   createPluginUpdateTransactionState,
@@ -86,7 +90,7 @@ import {
 import { reconcileUnchangedUpdate } from "./update-unchanged.js";
 
 export async function updateNpmInstalledPlugins(
-  params: UpdateNpmInstalledPluginsOptions,
+  params: UpdateInstalledPluginsParams,
 ): Promise<PluginUpdateSummary> {
   if (params.dryRun) {
     return await runInstalledPluginUpdate(params);
@@ -97,7 +101,7 @@ export async function updateNpmInstalledPlugins(
 }
 
 async function runInstalledPluginUpdate(
-  params: UpdateNpmInstalledPluginsOptions,
+  params: UpdateInstalledPluginsParams,
   assertCurrent?: () => void,
 ): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
@@ -109,6 +113,11 @@ async function runInstalledPluginUpdate(
     ? normalizePluginsConfig(params.config.plugins)
     : undefined;
   const bundled = resolveBundledPluginSources({});
+  const sourceBundledIds = resolveSourceCheckoutBundledPluginIds({
+    config: params.config,
+    installRecords: installs,
+    bundledSources: bundled,
+  });
   const outcomes: PluginUpdateOutcome[] = [];
   const transactionState = createPluginUpdateTransactionState(params);
   let next = params.config;
@@ -152,6 +161,13 @@ async function runInstalledPluginUpdate(
     const record = Object.hasOwn(installs, pluginId) ? installs[pluginId] : undefined;
     if (!record) {
       recordSkippedOutcome(pluginId, `No install record for "${pluginId}".`);
+      continue;
+    }
+
+    if (sourceBundledIds.has(pluginId)) {
+      const message = formatSourceBundledPluginNotice(pluginId);
+      outcomes.push({ pluginId, status: "unchanged", code: "source-bundled-plugin", message });
+      logger.warn?.(message);
       continue;
     }
 

@@ -24,7 +24,7 @@ import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-leas
 import type { BundledProviderPolicySurface } from "../../../plugins/provider-policy-surface.js";
 import { createColdPluginFixture } from "../../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { seedInstalledPluginIndex } from "../../../plugins/test-helpers/installed-plugin-index.js";
-import { closeOpenClawStateDatabaseByPath } from "../../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { expectObjectFields } from "../../../test-utils/mock-call-assertions.js";
 import { VERSION } from "../../../version.js";
@@ -194,9 +194,13 @@ vi.mock("../../../plugins/capability-consent.js", async (importOriginal) => ({
   prepareManagedPluginArtifactConsentHandler,
 }));
 
-function mockCurrentBundledPlugin(pluginId: string, packageName: string): void {
+function mockCurrentBundledPlugin(
+  pluginId: string,
+  packageName: string,
+  rootDir = `/tmp/bundled/${pluginId}`,
+): void {
   mocks.loadInstalledPluginIndex.mockReturnValue({
-    plugins: [{ pluginId, origin: "bundled", packageName }],
+    plugins: [{ pluginId, origin: "bundled", packageName, rootDir }],
     diagnostics: [],
     installRecords: {},
   });
@@ -2112,6 +2116,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("removes stale managed install records when the configured plugin is bundled", async () => {
+    const sourceRoot = tempDirs.make("openclaw-bundled-record-retirement-");
+    fs.writeFileSync(path.join(sourceRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
+    fs.mkdirSync(path.join(sourceRoot, "src"));
+    fs.mkdirSync(path.join(sourceRoot, "extensions"));
+    const bundledRoot = path.join(sourceRoot, "dist", "extensions", "bundleddemo");
+    fs.mkdirSync(bundledRoot, { recursive: true });
+    const env = { ...testEnv, OPENCLAW_DEV_SOURCE_ROOT: sourceRoot };
     const records = {
       bundleddemo: {
         source: "npm",
@@ -2147,7 +2158,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         },
       ],
     });
-    mockCurrentBundledPlugin("bundleddemo", "@openclaw/bundleddemo");
+    mockCurrentBundledPlugin("bundleddemo", "@openclaw/bundleddemo", bundledRoot);
 
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
@@ -2162,7 +2173,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           bundleddemo: { enabled: true, homeserver: "https://bundleddemo.example.org" },
         },
       },
-      env: testEnv,
+      env,
     });
 
     expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
@@ -2170,7 +2181,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
     expect(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledWith(
       {},
-      expectedIndexWriteOptions(expect.any(Object), testEnv),
+      expectedIndexWriteOptions(expect.any(Object), env),
     );
     expect(result).toEqual({
       changes: ['Removed stale managed install record for bundled plugin "bundleddemo".'],

@@ -94,7 +94,7 @@ export type PluginUpdateIntegrityDriftParams = {
   dryRun: boolean;
 };
 
-export type UpdateNpmInstalledPluginsOptions = {
+export type UpdateInstalledPluginsParams = {
   config: OpenClawConfig;
   logger?: PluginUpdateLogger;
   pluginIds?: string[];

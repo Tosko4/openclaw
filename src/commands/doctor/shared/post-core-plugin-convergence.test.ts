@@ -128,6 +128,7 @@ describe("runPostCorePluginConvergence", () => {
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
       onWarning: expect.any(Function),
+      beforePersistentEffect: expect.any(Function),
     });
     expect(
       expectDefined(
@@ -155,12 +156,12 @@ describe("runPostCorePluginConvergence", () => {
       let siblingSettled = false;
       mocks.listManagedPluginNpmRoots.mockResolvedValue(["first-root", "second-root"]);
       mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mockImplementation(
-        async (params: { npmRoot: string; beforePersistentEffect?: () => void }) => {
+        async (params: { npmRoot: string; beforePersistentApply?: () => void }) => {
           if (params.npmRoot === "first-root") {
             await secondStarted.promise;
             refuse = kind === "authority";
             try {
-              params.beforePersistentEffect?.();
+              params.beforePersistentApply?.();
               throw refusal;
             } finally {
               firstStarted.resolve();
@@ -169,7 +170,7 @@ describe("runPostCorePluginConvergence", () => {
           secondStarted.resolve();
           try {
             await releaseSibling.promise;
-            params.beforePersistentEffect?.();
+            params.beforePersistentApply?.();
             laterWrite();
             return { checked: 1, attempted: 1, repaired: 1, skipped: 0 };
           } finally {
@@ -264,6 +265,7 @@ describe("runPostCorePluginConvergence", () => {
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
       onWarning: expect.any(Function),
+      beforePersistentEffect: expect.any(Function),
     });
   });
 
@@ -281,6 +283,7 @@ describe("runPostCorePluginConvergence", () => {
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
       onWarning: expect.any(Function),
+      beforePersistentEffect: expect.any(Function),
     });
   });
 
@@ -351,11 +354,13 @@ describe("runPostCorePluginConvergence", () => {
       npmRoot: "/tmp/openclaw-state/npm",
       logger: {},
       onPackageReadError: expect.any(Function),
+      beforePersistentApply: expect.any(Function),
     });
     expect(mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot).toHaveBeenNthCalledWith(2, {
       npmRoot: "/tmp/openclaw-state/npm/projects/codex",
       logger: {},
       onPackageReadError: expect.any(Function),
+      beforePersistentApply: expect.any(Function),
     });
     expect(result.changes).toEqual([
       "Repaired OpenClaw host peer link(s) for 1 managed npm plugin package(s).",
@@ -452,6 +457,7 @@ describe("runPostCorePluginConvergence", () => {
       },
       baselineRecords: baseline,
       onWarning: expect.any(Function),
+      beforePersistentEffect: expect.any(Function),
     });
   });
 
@@ -503,6 +509,7 @@ describe("runPostCorePluginConvergence", () => {
         brave: baseline.brave,
       },
       onWarning: expect.any(Function),
+      beforePersistentEffect: expect.any(Function),
     });
     expect(result.changes).toEqual([
       'Removed stale local bundled plugin install record "discord".',
@@ -951,7 +958,7 @@ describe("runPostCorePluginConvergence", () => {
   });
 
   it("hands repair's post-mutation records straight to the smoke check (no second disk read)", async () => {
-    const records = { brave: { source: "npm" as const, installPath: "/p/brave" } };
+    const records = { external: { source: "npm" as const, installPath: "/p/external" } };
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: ["Repaired"],
       warnings: [],
@@ -959,7 +966,7 @@ describe("runPostCorePluginConvergence", () => {
     });
     await runPostCorePluginConvergence({
       cfg: {
-        plugins: { entries: { brave: { enabled: true } } },
+        plugins: { entries: { external: { enabled: true } } },
       } as unknown as OpenClawConfig,
       env: {},
     });
@@ -1067,6 +1074,7 @@ describe("filterRecordsToActive", () => {
       },
     };
     const filtered = filterRecordsToActive({
+      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
       cfg: {
         plugins: {
           enabled: true,

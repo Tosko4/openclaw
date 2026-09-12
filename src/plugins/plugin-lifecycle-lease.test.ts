@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { OpenClawStateLeaseError, withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
@@ -18,6 +19,7 @@ import {
 } from "./plugin-cache.js";
 import { PluginInstance } from "./plugin-instance.js";
 import {
+  runOutsidePluginLifecycleLease,
   withPluginLifecycleLease,
   type PluginLifecycleLeaseContext,
 } from "./plugin-lifecycle-lease.js";
@@ -466,6 +468,62 @@ describe("plugin lifecycle lease", () => {
         const persisted = await readPersistedInstalledPluginIndex({ env: state.env });
         expect(Object.keys(persisted?.installRecords ?? {}).toSorted()).toEqual(["alpha", "beta"]);
       });
+    });
+  });
+
+  it("gives a delayed observer fresh physical lease ancestry after its writer closes", async () => {
+    await withOpenClawTestState({ label: "plugin-lifecycle-observer" }, async (state) => {
+      const resumeObserver = createDeferred();
+      let observer: Promise<void> | undefined;
+      try {
+        await withPluginLifecycleLease({ env: state.env }, async (previous) => {
+          observer = resumeObserver.promise.then(() =>
+            runOutsidePluginLifecycleLease(() =>
+              withPluginLifecycleLease({ env: state.env, waitMs: 0 }, async (current) => {
+                expect(current).not.toBe(previous);
+                expect(current.signal).not.toBe(previous.signal);
+                expect(() => previous.assertOwned()).toThrow(OpenClawStateLeaseError);
+                current.assertOwned();
+                await withOpenClawStateLease(
+                  {
+                    scope: "core:test-plugin-observer",
+                    key: "capture",
+                    database: { scope: "shared", options: { env: state.env } },
+                    leaseMs: 10_000,
+                    waitMs: 0,
+                  },
+                  async (nested) => {
+                    if (!nested.withDatabaseFileExclusion) {
+                      throw new Error("Expected the canonical file-exclusion capability");
+                    }
+                    const capturedSize = await nested.withDatabaseFileExclusion(
+                      async (assertCurrent) => {
+                        const bytes = await fs.readFile(current.databasePath);
+                        assertCurrent();
+                        current.assertOwned();
+                        nested.assertOwned();
+                        return bytes.byteLength;
+                      },
+                    );
+                    expect(capturedSize).toBeGreaterThan(0);
+                  },
+                );
+                current.assertOwned();
+                expect(() => previous.assertOwned()).toThrow(OpenClawStateLeaseError);
+              }),
+            ),
+          );
+          void observer.catch(() => {});
+        });
+        resumeObserver.resolve();
+        if (!observer) {
+          throw new Error("Expected the writer to schedule its observer");
+        }
+        await observer;
+      } finally {
+        resumeObserver.resolve();
+        await observer?.catch(() => {});
+      }
     });
   });
 
