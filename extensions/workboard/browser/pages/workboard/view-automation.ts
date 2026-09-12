@@ -3,10 +3,11 @@ import type { WorkboardMetadata } from "@openclaw/workboard-contract";
 import { html, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
-import { workboardHost } from "../../host.ts";
+import { workboardHost, workboardLocale } from "../../host.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
+import { automationNextRunTime } from "./view-card-time.ts";
 import { formatUpdatedTime, type BoardAutomationState } from "./view-helpers.ts";
 
 export async function loadBoardAutomation(
@@ -27,8 +28,22 @@ function automationSchedule(job: CronJob): string {
     return `${schedule.expr}${schedule.tz ? ` · ${schedule.tz}` : ""}`;
   }
   if (schedule.kind === "every") {
+    const unit =
+      schedule.everyMs % 86_400_000 === 0
+        ? "day"
+        : schedule.everyMs % 3_600_000 === 0
+          ? "hour"
+          : schedule.everyMs % 60_000 === 0
+            ? "minute"
+            : "second";
+    const unitMs =
+      unit === "day" ? 86_400_000 : unit === "hour" ? 3_600_000 : unit === "minute" ? 60_000 : 1000;
     return t("workboard.automationEvery", {
-      duration: formatDurationCompact(schedule.everyMs) ?? String(schedule.everyMs),
+      duration: new Intl.NumberFormat(workboardLocale(), {
+        style: "unit",
+        unit,
+        unitDisplay: "long",
+      }).format(schedule.everyMs / unitMs),
     });
   }
   if (schedule.kind === "at") {
@@ -58,12 +73,6 @@ export function renderBoardAutomationHeading(automation: BoardAutomationState | 
             : undefined,
       ].filter(Boolean)
     : [];
-  const ageMinutes = job ? Math.floor(Math.max(0, Date.now() - job.updatedAtMs) / 60_000) : 0;
-  const updated = ageMinutes
-    ? t("workboard.automationUpdatedAgo", {
-        time: formatDurationCompact(ageMinutes * 60_000) ?? "",
-      })
-    : t("workboard.automationUpdatedNow");
   return html`
     <div
       class="workboard-heading__automation"
@@ -99,9 +108,22 @@ export function renderBoardAutomationHeading(automation: BoardAutomationState | 
       }
       ${
         job
-          ? html`<span class="workboard-heading__automation-updated"
-              >${job.enabled ? updated : t("workboard.automationPaused")}</span
-            >`
+          ? html`
+              <span class="workboard-heading__automation-schedule">
+                ${automationSchedule(job)}
+                ${
+                  !job.enabled
+                    ? html` · ${t("workboard.automationPaused")}`
+                    : job.state.nextRunAtMs
+                      ? html` · <time
+                          datetime=${new Date(job.state.nextRunAtMs).toISOString()}
+                          title=${formatUpdatedTime(job.state.nextRunAtMs)}
+                          >${automationNextRunTime(job.state.nextRunAtMs, Date.now())}</time
+                        >`
+                      : nothing
+                }
+              </span>
+            `
           : nothing
       }
     </div>
