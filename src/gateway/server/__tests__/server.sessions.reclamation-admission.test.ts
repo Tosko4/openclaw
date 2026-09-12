@@ -9,6 +9,7 @@ import {
 import { resolveSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
@@ -110,7 +111,8 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   reclamation.gate = undefined;
   reclamation.exits = [];
   reclamation.exitCodes = [];
@@ -159,6 +161,7 @@ function holdReclamationValidation() {
     async close() {
       release();
       await Promise.allSettled(pending);
+      await closeOpenClawAgentDatabasesAsync();
       await Promise.all(reclamation.exits);
     },
   };
@@ -228,6 +231,8 @@ test("sessions.delete admits unrelated same-store patches during Worker validati
     expect(loadSessionEntry({ sessionKey: targetKey, storePath })).toBeUndefined();
     expect(Atomics.load(gate, 2)).toBeGreaterThan(0);
     expect(Atomics.load(gate, 3)).toBeGreaterThan(0);
+    expect(reclamation.exitCodes).toEqual([]);
+    await closeOpenClawAgentDatabasesAsync();
     expect(reclamation.exitCodes).toEqual([0]);
   } finally {
     await validation.close();
