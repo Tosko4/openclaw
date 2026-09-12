@@ -5366,6 +5366,11 @@ describe("update-cli", () => {
     "reports a completed missing-payload repair instead of the later bulk skip (json=%s)",
     async (json) => {
       mockNoopPostUpdatePluginConvergence();
+      const root = createCaseDir("openclaw-repaired-plugin-root");
+      const entryPath = await writeOpenClawPackageFixture(root, "1.0.0", {
+        entrySource: "// updated install Doctor entrypoint fixture\n",
+      });
+      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
       const installPath = createCaseDir("openclaw-repaired-plugin-summary");
       fsSync.mkdirSync(installPath, { recursive: true });
       const records = {
@@ -5419,6 +5424,22 @@ describe("update-cli", () => {
 
       await runPostCoreCommand({ yes: true, json, restart: false });
 
+      expect(resolveGatewayInstallEntrypoint).toHaveBeenCalledWith(root);
+      expect(runExec).toHaveBeenCalledWith(
+        expect.any(String),
+        [
+          entryPath,
+          "doctor",
+          "--repair",
+          "--non-interactive",
+          "--no-workspace-suggestions",
+          "--yes",
+        ],
+        expect.objectContaining({
+          cwd: root,
+          env: expect.objectContaining({ OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" }),
+        }),
+      );
       expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
       if (json) {
         const result = lastWriteJsonCall() as UpdateRunResult | undefined;
@@ -5429,6 +5450,23 @@ describe("update-cli", () => {
         expect(getLogOutput()).toContain("Plugin updates: 1 updated, 0 unchanged.");
         expect(getLogOutput()).not.toContain("1 skipped");
       }
+    },
+  );
+
+  it.each([false, true])(
+    "refuses post-core repair without an updated Doctor entrypoint (json=%s)",
+    async (json) => {
+      const root = createCaseDir("openclaw-missing-doctor-entrypoint");
+      await writeOpenClawPackageFixture(root, "1.0.0");
+      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+      mockFileBackedPathExists();
+
+      await expect(runPostCoreCommand({ yes: true, json, restart: false })).rejects.toThrow(
+        "Updated OpenClaw entrypoint not found for post-plugin doctor",
+      );
+      expect(resolveGatewayInstallEntrypoint).toHaveBeenCalledWith(root);
+      expect(runExec).not.toHaveBeenCalled();
+      expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     },
   );
 
