@@ -55,7 +55,7 @@ describe("sidebar session layout settings", () => {
     layout = setSidebarOpen(layout, false);
 
     const persisted = updateSidebarSessionLayout({}, "main", layout).main;
-    expect(persisted).toEqual({ ...layout, dock: "right" });
+    expect(persisted).toEqual({ ...layout, dock: "right", dashboardPresentationOverride: null });
     expect(persisted?.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
       "workspace",
       "terminal",

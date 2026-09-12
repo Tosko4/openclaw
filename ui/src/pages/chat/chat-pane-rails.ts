@@ -1,9 +1,16 @@
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { openTaskDetailId } from "./components/chat-detail-slot.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
-import { closeSlot, isSidebarSlotVisible, openSlot, type SidebarSlotId } from "./sidebar-layout.ts";
+import {
+  closeSlot,
+  isSidebarSlotVisible,
+  openSlot,
+  openDashboardPresentation,
+  type SidebarSlotId,
+} from "./sidebar-layout.ts";
 
 type ChatPaneSidebarLayout = Parameters<typeof isSidebarSlotVisible>[0];
 type ChatPaneGatewaySnapshot = Parameters<typeof isDesktopPanelAvailable>[0];
@@ -29,7 +36,16 @@ export function createChatPaneRails(params: {
   const { state, sidebarLayout } = params;
   const isPanelVisible = (slot: SidebarSlotId) => isSidebarSlotVisible(sidebarLayout, slot);
   const openPanelSlot = (slot: SidebarSlotId) => {
-    params.updateSidebarLayout(openSlot(sidebarLayout, slot));
+    params.updateSidebarLayout(
+      slot === "dashboard"
+        ? openDashboardPresentation(
+            sidebarLayout,
+            sidebarLayout.dashboardPresentationOverride ??
+              selectedChatSessionRow(state)?.boardPresentation ??
+              "split",
+          )
+        : openSlot(sidebarLayout, slot),
+    );
     if (slot === "companion") {
       params.setObserverVisibility(true);
     }

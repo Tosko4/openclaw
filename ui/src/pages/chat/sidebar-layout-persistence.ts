@@ -25,14 +25,42 @@ export function updateSidebarSessionLayout(
   current: SidebarSessionLayouts | undefined,
   sessionKey: string,
   layout: SidebarLayout,
+  options?: { geometryOnly?: boolean },
 ): SidebarSessionLayouts {
   const key = sessionKey.trim();
   const layouts = normalizeSidebarSessionLayouts(current);
   if (!key) {
     return layouts;
   }
+  const previous = layouts[key];
+  const normalized = normalizeSidebarLayout(layout);
+  // Width/dock changes must not save a route/tool’s one-off presentation over
+  // an existing preference, particularly an unmarked legacy layout.
+  const next =
+    options?.geometryOnly && previous
+      ? {
+          ...previous,
+          dock: normalized.dock,
+          columns: previous.columns.map((column) => {
+            const geometry = normalized.columns.find((candidate) => candidate.id === column.id);
+            return geometry
+              ? { ...column, width: geometry.width, height: geometry.height }
+              : column;
+          }),
+        }
+      : normalized;
   delete layouts[key];
-  layouts[key] = normalizeSidebarLayout(layout);
+  layouts[key] = normalizeSidebarLayout({
+    ...next,
+    // Existing unmarked layouts have unknown provenance. Preserve them, rather
+    // than guessing whether a legacy expansion was automatic or intentional.
+    dashboardPresentationOverride:
+      next.dashboardPresentationOverride !== undefined
+        ? next.dashboardPresentationOverride
+        : previous
+          ? previous.dashboardPresentationOverride
+          : null,
+  });
   return Object.fromEntries(Object.entries(layouts).slice(-MAX_SIDEBAR_SESSION_LAYOUTS));
 }
 

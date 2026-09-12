@@ -414,6 +414,7 @@ export function buildGatewaySessionRow(params: {
     channelAvatarUrl,
     category: entry?.category,
     boardFace: entry?.boardFace,
+    boardPresentation: entry?.boardPresentation,
     ...sessionClassificationForRow(cfg, key, sessionAgentId, entry),
     displayName,
     derivedTitle,

@@ -31,6 +31,7 @@ import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { safeMediaAttachmentHref } from "./components/chat-attachment-href.ts";
 import {
   handleChatDraftChange,
@@ -61,6 +62,7 @@ import {
   fitSidebarLayout,
   normalizeSidebarLayout,
   openSlot,
+  sidebarDashboardPresentation,
 } from "./sidebar-layout.ts";
 import type { RunOutputUsage } from "./tool-stream-contract.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
@@ -387,8 +389,17 @@ export function createPageState(
     }
     renderLifecycle.invalidate();
   };
-  state.updateSidebarLayout = (layout) => {
+  state.updateSidebarLayout = (layout, options) => {
     const normalized = normalizeSidebarLayout(layout);
+    if (options?.dashboardPresentation === "personal") {
+      const presentation = sidebarDashboardPresentation(normalized);
+      if (presentation) {
+        const row = selectedChatSessionRow(state);
+        // Unknown metadata cannot establish that the user chose the shared default.
+        normalized.dashboardPresentationOverride =
+          row && presentation === (row.boardPresentation ?? "split") ? null : presentation;
+      }
+    }
     // Every close route commits here; tab switches retain the pending selection.
     if (
       (state.sidebarContent?.kind === "loading" || state.sidebarContent?.kind === "unavailable") &&
@@ -397,11 +408,16 @@ export function createPageState(
       state.sidebarContent = null;
     }
     state.sidebarLayout = normalized;
+    if (options?.persist === false) {
+      renderLifecycle.invalidate();
+      return;
+    }
     state.settings = patchSettings({
       sidebarSessionLayouts: updateSidebarSessionLayout(
         loadSettings().sidebarSessionLayouts,
         canonicalUiSessionKeyForPersistence(state, state.sessionKey),
         normalized,
+        { geometryOnly: options?.geometryOnly },
       ),
     });
     renderLifecycle.invalidate();
