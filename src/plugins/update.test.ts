@@ -4718,6 +4718,7 @@ describe("updateNpmInstalledPlugins", () => {
       version: "1.2.4",
       clawhub: {
         source: "clawhub",
+        version: "1.2.3",
         clawhubUrl: "https://clawhub.ai",
         clawhubPackage: "demo",
         clawhubFamily: "code-plugin",
