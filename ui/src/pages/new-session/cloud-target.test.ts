@@ -2,7 +2,11 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderSessionMenuItem, renderCloudProfileMenuItems } from "./cloud-target.ts";
+import {
+  renderSessionMenuItem,
+  renderCloudProfileMenuItems,
+  renderCloudConfiguration,
+} from "./cloud-target.ts";
 
 describe("cloud target menu", () => {
   it("renders explicit remediation commands on separate lines", () => {
@@ -153,11 +157,10 @@ describe("cloud target menu", () => {
   ])("renders a single machine as fixed provider configuration", ({ machine, expected }) => {
     const container = document.createElement("div");
     render(
-      renderCloudProfileMenuItems({
-        profiles: [{ id: "aws", providerId: "aws", operatingSystems: [], machines: [machine] }],
-        selectedId: "aws",
-        compact: true,
-        onSelect: vi.fn(),
+      renderCloudConfiguration({
+        profile: { id: "aws", providerId: "aws" },
+        operatingSystems: [],
+        machines: [machine],
         selectedOs: "",
         selectedMachine: machine.id,
         submitting: false,
@@ -207,56 +210,40 @@ describe("cloud target menu", () => {
     const onSelectMachine = vi.fn();
     const onSelectOs = vi.fn();
     const params = {
-      profiles: [
-        {
-          id: "aws",
-          providerId: "aws",
-          operatingSystems: [
-            { id: "linux", label: "Linux" },
-            { id: "macos", label: "macOS" },
-          ],
-          machines: [
-            { id: "small", label: "Small" },
-            { id: "large", label: "Large" },
-          ],
-        },
+      profile: { id: "aws", providerId: "aws" },
+      operatingSystems: [
+        { id: "linux", label: "Linux" },
+        { id: "macos", label: "macOS" },
       ],
-      selectedId: "aws",
-      compact: true,
-      onSelect: vi.fn(),
+      machines: [
+        { id: "small", label: "Small" },
+        { id: "large", label: "Large" },
+      ],
       selectedOs: "linux",
       selectedMachine: "small",
       submitting: false,
       onSelectMachine,
       onSelectOs,
     };
-    render(renderCloudProfileMenuItems(params), container);
+    render(renderCloudConfiguration(params), container);
     container.querySelector<HTMLButtonElement>('[data-value="machine:large"]')!.click();
     container.querySelector<HTMLButtonElement>('[data-value="os:macos"]')!.click();
     expect(onSelectMachine).toHaveBeenCalledExactlyOnceWith("large");
     expect(onSelectOs).toHaveBeenCalledExactlyOnceWith("macos");
-    render(renderCloudProfileMenuItems({ ...params, submitting: true }), container);
+    render(renderCloudConfiguration({ ...params, submitting: true }), container);
     expect([...container.querySelectorAll("button")].every((button) => button.disabled)).toBe(true);
   });
 
   it("omits unavailable OS choices even when they are the current selection", () => {
     const container = document.createElement("div");
     render(
-      renderCloudProfileMenuItems({
-        profiles: [
-          {
-            id: "aws",
-            providerId: "aws",
-            operatingSystems: [
-              { id: "linux", label: "Linux" },
-              { id: "windows", label: "Windows", disabledReason: "Install WSL2" },
-            ],
-            machines: [],
-          },
+      renderCloudConfiguration({
+        profile: { id: "aws", providerId: "aws" },
+        operatingSystems: [
+          { id: "linux", label: "Linux" },
+          { id: "windows", label: "Windows", disabledReason: "Install WSL2" },
         ],
-        selectedId: "aws",
-        compact: true,
-        onSelect: vi.fn(),
+        machines: [],
         selectedOs: "windows",
         selectedMachine: "",
         submitting: false,
@@ -270,9 +257,7 @@ describe("cloud target menu", () => {
     expect(fixedOs?.tagName).toBe("SPAN");
     expect(fixedOs?.hasAttribute("aria-pressed")).toBe(false);
     expect(container.querySelector('[data-value="os:windows"]')).toBeNull();
-    expect(
-      container.querySelector('.new-session-page__cloud-configuration [aria-pressed="true"]'),
-    ).toBeNull();
+    expect(container.querySelector('[aria-pressed="true"]')).toBeNull();
   });
 
   it("disables cloud profiles with the runtime preflight reason", () => {

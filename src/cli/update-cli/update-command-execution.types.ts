@@ -32,7 +32,6 @@ export type MutableUpdateExecutionParams = {
   packageUpdateNodeRunner?: string;
   managedServiceNodeRunner?: string;
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
-  managedServiceRoot?: string;
   invocationCwd?: string;
   legacyConfigPlan?: LegacyConfigUpdatePlan;
   recoveryState: UpdateCommandRecoveryState;

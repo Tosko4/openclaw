@@ -21,17 +21,13 @@ export async function inspectUpdateDatabaseContexts(params: {
   invocationCwd?: string;
   legacyConfigPlan?: LegacyConfigUpdatePlan;
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
-  /** Actual service owner during a forward rebind; not a package-root redirect. */
-  managedServiceRoot?: string;
   expectedServices?: ReadonlyMap<string, PreManagedServiceStop>;
 }) {
   let service: PreManagedServiceStop | undefined;
   const services = new Map<string, PreManagedServiceStop>();
-  const serviceRoots = params.managedServiceRoot ? [params.managedServiceRoot] : params.roots;
-  for (const root of new Set(serviceRoots)) {
+  for (const root of new Set(params.roots)) {
     const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
       root,
-      handoffRoot: params.managedServiceRoot ? params.roots[0] : undefined,
       updateInstallKind: params.updateInstallKind,
       shouldRestart: params.shouldRestart,
       jsonMode: params.jsonMode,
@@ -60,16 +56,6 @@ export async function inspectUpdateDatabaseContexts(params: {
         "Gateway service installation ownership is unresolved. Run `openclaw gateway status --deep` and retry before changing package or Git files.",
       );
     }
-    if (
-      params.managedServiceRoot &&
-      (inspected.serviceUpdateVerdict?.kind !== "owned" ||
-        !inspected.serviceUpdateVerdict.refreshDefinition)
-    ) {
-      throw new UpdatePreMutationError(
-        "managed-service-preflight",
-        "The Gateway cannot be rebound from its current installation: its owned service definition must be writable before this update can align it with the CLI.",
-      );
-    }
     services.set(root, inspected);
     if (inspected.serviceUpdateVerdict?.kind === "owned") {
       service = inspected;
@@ -82,7 +68,7 @@ export async function inspectUpdateDatabaseContexts(params: {
     invocationCwd: params.invocationCwd,
     legacyConfigPlan: params.legacyConfigPlan,
   });
-  if ((params.managedServiceRootRedirect || params.managedServiceRoot) && !managed) {
+  if (params.managedServiceRootRedirect && !managed) {
     throw new UpdatePreMutationError(
       "managed-service-preflight",
       "The managed Gateway service changed before database admission. Retry so its package root and state can be inspected together.",

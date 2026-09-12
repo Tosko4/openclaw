@@ -1,6 +1,7 @@
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
+import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { readPackageVersion, resolveNodeRunner, UpdatePreMutationError } from "./shared.js";
@@ -15,7 +16,6 @@ import {
   captureOwnedManagedUpdateContext,
   revalidateUpdateDatabaseContext,
 } from "./update-command-managed-context.js";
-import { createPackageRuntimeRecovery } from "./update-command-node-runtime.js";
 import { preflightConfiguredNpmPluginTargets } from "./update-command-plugin-preflight.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
@@ -50,7 +50,6 @@ export async function finishAlreadyCurrentUpdate(
     | "ownedManagedUpdateEnv"
   > & {
     managedServiceRootRedirect: ManagedServiceRootRedirect | null;
-    managedServiceRoot?: string;
     legacyConfigPlan?: LegacyConfigUpdatePlan;
     runtimeTarget?: { version: string; nodeEngine: string | null };
     stop: () => void;
@@ -77,20 +76,13 @@ export async function finishAlreadyCurrentUpdate(
       timeoutMs: params.updateStepTimeoutMs,
       invocationCwd: params.invocationCwd,
       managedServiceRootRedirect: params.managedServiceRootRedirect,
-      managedServiceRoot: params.managedServiceRoot,
     };
     const admission = await inspectUpdateDatabaseContexts(inspection);
     const service = admission.service;
-    const canRefreshRuntime =
-      params.shouldRestart &&
-      service?.serviceUpdateVerdict?.kind === "owned" &&
-      service.serviceUpdateVerdict.refreshDefinition;
     const runtime = await resolvePackageRuntimePreflight({
       target: params.runtimeTarget,
       installedRoot: params.root,
-      nodeRunner: params.managedServiceRoot
-        ? resolveNodeRunner()
-        : (service?.serviceNodeRunner ?? params.packageUpdateNodeRunner),
+      nodeRunner: service?.serviceNodeRunner ?? params.packageUpdateNodeRunner,
       fallbackNodeRunner:
         params.shouldRestart &&
         service?.running &&
@@ -99,37 +91,35 @@ export async function finishAlreadyCurrentUpdate(
           ? resolveNodeRunner()
           : undefined,
       timeoutMs: params.updateStepTimeoutMs,
-      runtimeRecovery:
-        !service?.serviceNodeRunner || canRefreshRuntime
-          ? createPackageRuntimeRecovery({
-              root: params.root,
-              opts: params.opts,
-              timeoutMs: params.updateStepTimeoutMs,
-            })
-          : undefined,
     });
     if (!runtime.ok) {
       throw new UpdatePreMutationError("node-runtime-preflight", runtime.error);
     }
     const packageUpdateNodeRunner = runtime.value.nodeRunner;
     const context = admission.contexts.at(-1)!;
-    await preflightConfiguredNpmPluginTargets({
+    const pluginWarnings = await preflightConfiguredNpmPluginTargets({
       config: context.configSnapshot.sourceConfig,
       env: context.env,
       targetVersion: result.after.version,
       channel: params.channel,
       timeoutMs: params.updateStepTimeoutMs,
     });
+    for (const warning of pluginWarnings) {
+      if (params.opts.json) {
+        defaultRuntime.error(warning.message);
+      } else {
+        defaultRuntime.log(warning.message);
+      }
+    }
     await inspectUpdateDatabaseContexts({ ...inspection, expectedServices: admission.services });
     await Promise.all(admission.contexts.map(revalidateUpdateDatabaseContext));
     let stopState;
     try {
       stopState = await maybeStopManagedServiceBeforeMutableUpdate({
         ...inspection,
-        root: params.managedServiceRoot ?? params.root,
-        handoffRoot: params.managedServiceRoot ? params.root : undefined,
+        root: params.root,
         phase: "inspect",
-        expectedService: admission.services.get(params.managedServiceRoot ?? params.root),
+        expectedService: admission.services.get(params.root),
         updateRun: params.opts.run,
         handoffFromGateway: (state) =>
           handoffUpdateFromGateway({
@@ -207,9 +197,7 @@ export async function finishAlreadyCurrentUpdate(
     await finishUpdate({
       ...params,
       packageUpdateNodeRunner,
-      serviceRuntimeRefreshRequired: Boolean(
-        params.managedServiceRoot || runtime.value.replacedNodeRunner,
-      ),
+      serviceRuntimeRefreshRequired: runtime.value.replacedNodeRunner !== undefined,
       result,
       storedChannel,
       coreAlreadyCurrent: true,

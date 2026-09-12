@@ -7,7 +7,6 @@ import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import {
-  requiresRetainedUpdateCommandOwner,
   withUpdateCommandExecutorChild,
   type UpdateCommandChildGrant,
 } from "./update-command-executor.js";
@@ -51,7 +50,6 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
 }): Promise<boolean> {
   params.signal?.throwIfAborted();
   params.executor.assertCurrent();
-  const requiresRetainedOwner = requiresRetainedUpdateCommandOwner(params.executor);
   const entrypoint = await resolveGatewayInstallEntrypoint(params.root);
   params.executor.assertCurrent();
   if (!entrypoint) {
@@ -69,6 +67,7 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
           "install",
           "--update-executor",
           "check",
+          "--json",
         ],
         {
           input: "",
@@ -99,8 +98,7 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
     !check.outputLimitExceeded &&
     !check.outputErrorStream &&
     capability?.updateExecutor === GATEWAY_UPDATE_EXECUTOR_CONTRACT &&
-    capability.targetRootBinding === true &&
-    (!requiresRetainedOwner || capability.retainedOwnerBinding === true)
+    capability.targetRootBinding === true
   );
 }
 

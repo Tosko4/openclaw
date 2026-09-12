@@ -112,7 +112,6 @@ export function printUpdateDryRun(params: {
   packageAlreadyCurrent: boolean;
   fallbackToLatest: boolean;
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
-  managedServiceRoot?: string;
   explicitTag: string | null;
   packageSchemaPreflight: OpenClawDatabaseSchemaPreflight;
   preflightNotes?: readonly string[];
@@ -151,11 +150,6 @@ export function printUpdateDryRun(params: {
   }
   if (params.fallbackToLatest) {
     notes.push("Beta channel resolves to latest for this run (fallback).");
-  }
-  if (params.managedServiceRoot) {
-    actions.push(
-      `Rebind the managed Gateway from ${params.managedServiceRoot} to ${params.root} after verification.`,
-    );
   }
   if (params.managedServiceRootRedirect) {
     notes.push(

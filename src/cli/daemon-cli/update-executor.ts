@@ -25,11 +25,7 @@ export async function runGatewayServiceUpdateCommand(
   }
   if (mode === "check") {
     process.stdout.write(
-      JSON.stringify({
-        updateExecutor: GATEWAY_UPDATE_EXECUTOR_CONTRACT,
-        targetRootBinding: true,
-        retainedOwnerBinding: true,
-      }),
+      JSON.stringify({ updateExecutor: GATEWAY_UPDATE_EXECUTOR_CONTRACT, targetRootBinding: true }),
     );
     return;
   }
@@ -61,11 +57,7 @@ export async function runGatewayServiceUpdateCommand(
       !isRecord(input.executor.originalParent) ||
       !isRecord(input.executor.databaseIdentity) ||
       typeof input.executor.originalChildKey !== "string" ||
-      !isRecord(input.executor.spawner) ||
-      ((Object.hasOwn(input.executor, "retainedParent") ||
-        Object.hasOwn(input.executor, "retainedChildKey")) &&
-        (!isRecord(input.executor.retainedParent) ||
-          typeof input.executor.retainedChildKey !== "string"))
+      !isRecord(input.executor.spawner)
     ) {
       throw new Error("Invalid native update executor input.");
     }

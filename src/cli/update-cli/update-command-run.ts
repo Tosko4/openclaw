@@ -524,14 +524,10 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   });
   const servicePlan =
     installKind === "package"
-      ? await resolveManagedServicePackageUpdatePlan({
-          root: discoveredRoot,
-          rebind: shouldRestart,
-        })
+      ? await resolveManagedServicePackageUpdatePlan({ root: discoveredRoot })
       : undefined;
-  const managedServiceRoot = servicePlan?.serviceRoot ?? servicePlan?.rootRedirect?.root;
-  if (managedServiceRoot) {
-    assertUpdatePackageActivationAdmission(managedServiceRoot, {
+  if (servicePlan?.rootRedirect) {
+    assertUpdatePackageActivationAdmission(servicePlan.rootRedirect.root, {
       continuation: postCoreUpdateResume ? opts.run?.executorFence : undefined,
     });
   }

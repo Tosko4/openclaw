@@ -126,11 +126,7 @@ describe("addGatewayServiceCommands", () => {
         startupEnv.restore();
       }
       expect(output.mock.calls.map(([chunk]) => String(chunk)).join("")).toBe(
-        JSON.stringify({
-          updateExecutor: "root-spawner-v1",
-          targetRootBinding: true,
-          retainedOwnerBinding: true,
-        }),
+        JSON.stringify({ updateExecutor: "root-spawner-v1", targetRootBinding: true }),
       );
       expect(ensureConfigReady).not.toHaveBeenCalled();
       expect(runDaemonInstall).not.toHaveBeenCalled();

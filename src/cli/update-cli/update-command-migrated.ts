@@ -19,7 +19,6 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { CLI_NAME } from "../cli-name.js";
 import { resolveNodeRunner } from "./shared.js";
 import {
-  requiresRetainedUpdateCommandOwner,
   withUpdateCommandExecutorChild,
   type UpdateCommandChildGrant,
 } from "./update-command-executor.js";
@@ -147,7 +146,6 @@ export async function continueMigratedUpdateInFreshProcess(
     };
     if (run.executorFence) {
       assertCurrent();
-      const requiresRetainedOwner = requiresRetainedUpdateCommandOwner(run.executorFence);
       // Compatibility only, never authority. An older installed worker ignores
       // new JSON fields, so refuse before exposing any continuation input.
       const check = await runUtf8CommandWithTimeout([...workerCommand, "--check"], {
@@ -175,8 +173,7 @@ export async function continueMigratedUpdateInFreshProcess(
         check.code !== 0 ||
         check.cleanup !== "normal" ||
         !isRecord(contract) ||
-        contract.executorDelegation !== "pid-start-v1" ||
-        (requiresRetainedOwner && contract.retainedOwnerBinding !== true)
+        contract.executorDelegation !== "pid-start-v1"
       ) {
         throw new UpdateCommandRecoveryPendingError(
           "Candidate runtime does not support live executor delegation; recovery remains pending.",

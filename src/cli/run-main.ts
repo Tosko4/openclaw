@@ -1588,9 +1588,7 @@ async function runCliWithPreparedOutputMode(
           import("../runtime.js"),
         ]),
       );
-      const program = await startupTrace.measure("build-program", () =>
-        buildProgram({ runtimeRecoveryEnv: options.runtimeRecoveryEnv }),
-      );
+      const program = await startupTrace.measure("build-program", () => buildProgram());
       await options.harnessCleanup?.pluginResources?.waitForRegistrations();
 
       // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.

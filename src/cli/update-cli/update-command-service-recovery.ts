@@ -20,17 +20,11 @@ import {
   recoverInstalledLaunchAgentAfterUpdate,
   type PostUpdateLaunchAgentRecoveryResult,
 } from "./update-command-launch-agent-recovery.js";
-import {
-  originalServiceAuthority,
-  assertOriginalServiceStateCompatible,
-  revalidateOriginalManagedServiceRuntime,
-} from "./update-command-original-service.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 import {
   isPackageManagerUpdateMode,
   runUpdatedInstallGatewayCommand,
 } from "./update-command-service-command.js";
-import type { OriginalManagedServiceRuntime } from "./update-command-service-context-types.js";
 import {
   revalidateManagedGatewayServiceAfterUpdate,
   type PreManagedServiceStop,
@@ -55,6 +49,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   timeoutMs?: number;
   expectedVersion?: string;
   expectedBuildId?: string;
+  requirePluginHealth?: boolean;
   env?: NodeJS.ProcessEnv;
   deps?: PostUpdateGatewayHealthRecoveryDeps;
 }): Promise<{
@@ -122,6 +117,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     timeoutMs: params.timeoutMs,
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
+    requirePluginHealth: params.requirePluginHealth,
     env: params.env,
     supervisorKeepsAlive: true,
     settle: { probes: 12 },
@@ -176,7 +172,6 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
   updateRun?: UpdateCommandOptions["run"];
   preManagedServiceStop: PreManagedServiceStop | undefined;
   recovery?: UpdateRunResult["recovery"];
-  originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   jsonMode: boolean;
   nodeRunner?: string;
   timeoutMs?: number;
@@ -196,12 +191,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
   if (!before?.stopped || !before.serviceEnv) {
     return undefined;
   }
-  const original = params.originalManagedServiceRuntime;
-  const packageRecovery =
-    params.recovery?.serviceRestartSafe === true && params.recovery.version
-      ? params.recovery
-      : undefined;
-  if (!original && !packageRecovery) {
+  if (params.recovery?.serviceRestartSafe !== true || !params.recovery.version) {
     defaultRuntime.error(
       "Managed gateway remains stopped: update safety is unverified. Run `openclaw doctor` and inspect the update failure before restarting.",
     );
@@ -215,22 +205,11 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
         "Stopped service ownership is unknown; restart it manually after inspection.",
       );
     }
-    const assertOriginal = original ? originalServiceAuthority(run) : assertCurrent;
-    const checkOriginal = async () => {
-      assertCurrent();
-      assertOriginal();
-      if (original) {
-        await assertOriginalServiceStateCompatible(original, assertOriginal);
-        await revalidateOriginalManagedServiceRuntime(original, assertOriginal, params.timeoutMs);
-      }
-      assertCurrent();
-    };
-    await checkOriginal();
     const service = resolveGatewayService();
     let expectedService: Pick<
       PreManagedServiceStop,
       "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
-    > = original?.service ?? before;
+    > = before;
     const readCurrentService = async () => {
       assertCurrent();
       const state = await readGatewayServiceState(service, {
@@ -243,7 +222,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       assertCurrent();
       const inspection = await revalidateManagedGatewayServiceAfterUpdate({
         state,
-        root: original?.root ?? verdict.root,
+        root: verdict.root,
         preManagedServiceStop: expectedService,
       });
       assertCurrent();
@@ -266,18 +245,13 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     // Context resolution awaits config reads. Revalidate before the one activation;
     // the installed CLI owns its config dialect and preserves the service definition.
     const current = await readCurrentService();
-    await checkOriginal();
-    if (original) {
-      await before.windowsTaskAutoStartRecovery?.restore(true, checkOriginal, assertOriginal);
-      await checkOriginal();
-    }
     await runUpdatedInstallGatewayCommand(
       {
-        result: { root: original?.root ?? verdict.root },
+        result: { root: verdict.root },
         opts: { json: params.jsonMode, run },
         invocationEnv: before.serviceEnv,
         serviceEnv: current.env,
-        nodeRunner: original?.nodeRunner ?? params.nodeRunner,
+        nodeRunner: params.nodeRunner,
         timeoutMs: params.timeoutMs,
         invocationCwd: params.invocationCwd,
         assertCurrent,
@@ -291,8 +265,8 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       port,
       env: current.env,
       timeoutMs: params.timeoutMs,
-      expectedVersion: original?.version ?? packageRecovery?.version,
-      expectedBuildId: original?.buildId ?? packageRecovery?.buildId,
+      expectedVersion: params.recovery.version,
+      expectedBuildId: params.recovery.buildId,
       requireRunningService: true,
       settle: { probes: 12 },
     });
@@ -301,19 +275,6 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       throw new Error(renderRestartDiagnostics(health).join("\n"));
     }
     await readCurrentService();
-    await checkOriginal();
-    if (original) {
-      try {
-        // Settle A's native restoration independently of B's failed activation.
-        await before.windowsTaskAutoStartRecovery?.complete(true);
-        assertCurrent();
-      } catch (cause) {
-        throw new UpdateCommandRecoveryPendingError(
-          "Original service autostart settlement failed.",
-          { cause },
-        );
-      }
-    }
     if (!params.jsonMode) {
       defaultRuntime.log(
         theme.muted(
@@ -332,75 +293,4 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     );
     return "failed";
   }
-}
-
-export async function compensateOriginalManagedService(
-  params: {
-    result: UpdateRunResult;
-    opts: UpdateCommandOptions;
-    preManagedServiceStop?: PreManagedServiceStop;
-    originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
-    allowGatewayRestart?: boolean;
-    timeoutMs: number;
-    invocationCwd?: string;
-  },
-  assertCurrent: () => void,
-): Promise<{
-  result: UpdateRunResult;
-  rolledBack: false;
-  originalServiceRecovery: "healthy" | "failed";
-}> {
-  const original = params.originalManagedServiceRuntime;
-  if (!original) {
-    throw new Error("Original service observation is missing.");
-  }
-  const { result, opts, preManagedServiceStop: before } = params;
-  const run = opts.run;
-  // A is unchanged service code, not B's previous generation. Never reverse B
-  // or its current state merely to compensate the stop of compatible A.
-  const service =
-    params.allowGatewayRestart === false
-      ? undefined
-      : await maybeRestartServiceAfterFailedMutableUpdate({
-          updateRun: run,
-          preManagedServiceStop: before,
-          originalManagedServiceRuntime: original,
-          jsonMode: Boolean(opts.json),
-          timeoutMs: params.timeoutMs,
-          invocationCwd: params.invocationCwd,
-        });
-  assertCurrent();
-  return {
-    result: {
-      ...result,
-      recovery: {
-        ...result.recovery,
-        serviceRestartSafe: false,
-        reason:
-          result.recovery?.serviceRestartSafe === false
-            ? result.recovery.reason
-            : "runtime-verification-failed",
-      },
-      steps: [
-        ...result.steps,
-        {
-          name: "original managed service compensation",
-          command: "openclaw gateway restart --preserve-definition",
-          cwd: original.root,
-          durationMs: 0,
-          exitCode: service === "healthy" ? 0 : 1,
-          ...(service === "healthy"
-            ? {
-                stdoutTail: `Original managed service ${original.version} is healthy. Requested package activation was not verified; package and state were retained.`,
-              }
-            : {
-                stderrTail:
-                  "Original managed service compensation was not verified; package and current state were retained.",
-              }),
-        },
-      ],
-    },
-    rolledBack: false,
-    originalServiceRecovery: service === "healthy" ? "healthy" : "failed",
-  };
 }
