@@ -209,6 +209,7 @@ export type PreparedModelCatalogInventory = {
   catalog: ModelCatalogSnapshot;
   key: string;
   pluginFingerprint: string;
+  nativeSource: string;
   providerSources: ReadonlyMap<string, string>;
   providerCredentials: ReadonlyMap<string, string>;
   discoveryOrigins: readonly { provider: string; profileId?: string }[];

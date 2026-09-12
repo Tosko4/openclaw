@@ -131,7 +131,7 @@ export function prepareModelCatalogPublication(
   auth: PreparedModelCatalogAuth,
   normalizeProvider: (provider: string) => string,
 ): Pick<PreparedModelCatalogInventory, "catalog" | "discoveryOrigins"> {
-  // Native observations belong to this runtime generation, not retained provider inventory.
+  // Provider discovery publishes provider rows; the inventory owner merges native observations.
   const catalog: ModelCatalogSnapshot = {
     ...discovered,
     entries: dedupeByKey(
@@ -168,7 +168,7 @@ export function prepareModelCatalogPublication(
         discoveryOrigins.some((origin) => origin.provider === provider) ||
         (!previousOrigins?.length &&
           ![...(previous?.entries ?? []), ...(previous?.routeVariants ?? [])].some(
-            (entry) => normalizeProvider(entry.provider) === provider,
+            (entry) => !entry.nativeRuntime && normalizeProvider(entry.provider) === provider,
           )) ||
         (!previousOrigins?.length &&
           previous?.providerOutcomes?.some(

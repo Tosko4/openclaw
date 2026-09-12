@@ -18,7 +18,8 @@ it.each([false, true])(
         OPENCLAW_SKIP_CRON: "1",
         OPENCLAW_SKIP_CANVAS_HOST: "1",
         OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: withProviderCredentials ? "1" : undefined,
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
       },
     });
     const provider = "native-lifecycle-fixture";
@@ -27,6 +28,7 @@ it.each([false, true])(
     let nativeModelId = "native-account-only";
     let emptyNativeCatalog = false;
     let failedNativeCatalog = false;
+    let failedProviderCatalog = !withProviderCredentials;
     let noteNativeRequested!: () => void;
     const nativeRequested = new Promise<void>((resolve) => {
       noteNativeRequested = resolve;
@@ -41,7 +43,7 @@ it.each([false, true])(
       releaseOther = resolve;
     });
     let releaseNative!: () => void;
-    const nativeReleased = new Promise<void>((resolve) => {
+    let nativeReleased = new Promise<void>((resolve) => {
       releaseNative = resolve;
     });
     const endpoint = createServer((request, response) => {
@@ -73,6 +75,11 @@ it.each([false, true])(
                       name: "Configured native model",
                       nativeRuntime: harness,
                     },
+                    {
+                      provider,
+                      id: "harness-host-row",
+                      name: "Harness host model",
+                    },
                     ...(withProviderCredentials
                       ? [
                           {
@@ -101,6 +108,10 @@ it.each([false, true])(
           ),
         );
       } else if (request.url === "/provider/models" || request.url === "/other/models") {
+        if (failedProviderCatalog && request.url === "/provider/models") {
+          response.writeHead(503).end();
+          return;
+        }
         const reply = () =>
           response.end(
             JSON.stringify([{ id: "provider-account", name: "Provider account model" }]),
@@ -137,14 +148,35 @@ it.each([false, true])(
         throw new Error("Native endpoint has no TCP address");
       }
       const baseUrl = `http://127.0.0.1:${address.port}`;
-      await state.writeJson("native-plugin/openclaw.plugin.json", {
+      const pluginRoot = withProviderCredentials ? "native-plugin" : "bundled/native-plugin";
+      await state.writeJson(`${pluginRoot}/openclaw.plugin.json`, {
         id: provider,
         providers: [provider, "unrelated-native-fixture"],
         cliBackends: [harness],
+        modelCatalog: {
+          discovery: { [provider]: "refreshable" },
+          providers: {
+            [provider]: {
+              baseUrl,
+              api: "openai-completions",
+              models: [
+                {
+                  id: "unconfigured-starter",
+                  name: "Provider starter",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 32768,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
         configSchema: { type: "object", additionalProperties: false },
       });
       const pluginPath = await state.writeText(
-        "native-plugin/index.cjs",
+        `${pluginRoot}/index.js`,
         `module.exports = {
       id: ${JSON.stringify(provider)}, register(api) {
         const observed = new WeakSet();
@@ -163,10 +195,16 @@ it.each([false, true])(
         for (const providerId of [${JSON.stringify(provider)}, "unrelated-native-fixture"]) api.registerProvider({
           id: providerId, label: "Native fixture", auth: [],
           formatApiKey: credential => credential.access,
+          staticCatalog: ${withProviderCredentials ? "false" : "true"} && providerId === ${JSON.stringify(provider)} ? {
+            order: "simple", async run() {
+              return { provider: require("./openclaw.plugin.json").modelCatalog.providers[providerId] };
+            },
+          } : undefined,
           catalog: { order: "profile", async run(ctx) {
             const auth = ctx.resolveProviderAuth(providerId);
-            if (!auth.discoveryApiKey) return null;
+            if (!auth.discoveryApiKey && ${withProviderCredentials ? "true" : "false"}) return null;
             const response = await fetch(${JSON.stringify(baseUrl)} + (providerId === ${JSON.stringify(provider)} ? "/provider/models" : "/other/models"));
+            if (!response.ok) return { providers: {}, outcomes: [{ provider: providerId, status: "unavailable" }] };
             return { provider: { baseUrl: ${JSON.stringify(baseUrl)}, api: "openai-completions",
               models: (await response.json()).map(row => ({ ...row, reasoning: false, input: ["text"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32768, maxTokens: 4096 })) } };
@@ -175,6 +213,10 @@ it.each([false, true])(
       }
     };`,
       );
+      if (!withProviderCredentials) {
+        state.envVars.OPENCLAW_BUNDLED_PLUGINS_DIR = state.statePath("bundled");
+        state.applyEnv();
+      }
       const token = "native-lifecycle-gateway-token";
       const cfg = {
         agents: {
@@ -209,7 +251,7 @@ it.each([false, true])(
         },
         plugins: {
           allow: [provider],
-          load: { paths: [pluginPath] },
+          ...(withProviderCredentials ? { load: { paths: [pluginPath] } } : {}),
           slots: { memory: "none" },
           entries: { [provider]: { enabled: true } },
         },
@@ -260,6 +302,60 @@ it.each([false, true])(
             { timeout: 15_000 },
           )
           .toBe(true);
+        expect((await list()).models).toContainEqual(
+          expect.objectContaining({ provider, id: "harness-host-row" }),
+        );
+        if (!withProviderCredentials) {
+          expect(requests).toEqual(["/native/models"]);
+          const unavailable = await client.request<ModelsListResult>("models.list", {
+            agentId: "main",
+            view: "all",
+            refresh: true,
+          });
+          expect(unavailable.refreshFailed).toBe(true);
+          expect
+            .soft(unavailable.models)
+            .toContainEqual(expect.objectContaining({ provider, id: "unconfigured-starter" }));
+          expect(unavailable.models).toContainEqual(
+            expect.objectContaining({ provider, id: nativeModelId }),
+          );
+          console.log("NATIVE_FIRST_PROVIDER_FAILURE", JSON.stringify({ requests, unavailable }));
+          failedProviderCatalog = false;
+          await client.request("models.list", { agentId: "main", view: "all", refresh: true });
+          expect((await list()).models).toContainEqual(
+            expect.objectContaining({ provider, id: "provider-account" }),
+          );
+          const beforeOpaqueReload = requests.length;
+          nativeReleased = new Promise<void>((resolve) => {
+            releaseNative = resolve;
+          });
+          await client.request("models.authRefresh", { agentId: "main", operation: "logout" });
+          await expect
+            .poll(
+              () =>
+                requests.slice(beforeOpaqueReload).filter((path) => path === "/native/models")
+                  .length,
+              { timeout: 15_000 },
+            )
+            .toBe(1);
+          const beforeOpaqueReads = requests.length;
+          const opaquePending = await Promise.all([list(), list()]);
+          expect(requests).toHaveLength(beforeOpaqueReads);
+          for (const result of opaquePending) {
+            expect(result.pendingProviders).toContain(provider);
+            expect
+              .soft(result.models)
+              .not.toContainEqual(expect.objectContaining({ provider, id: nativeModelId }));
+            expect(result.models).toContainEqual(
+              expect.objectContaining({ provider, id: "provider-account" }),
+            );
+          }
+          console.log("NATIVE_OPAQUE_ACCOUNT_PENDING", JSON.stringify({ requests, opaquePending }));
+          releaseNative();
+          await expect
+            .poll(async () => (await list()).pendingProviders ?? [], { timeout: 15_000 })
+            .not.toContain(provider);
+        }
         if (withProviderCredentials) {
           const beforeUnrelated = requests.length;
           holdOther = true;
@@ -417,6 +513,9 @@ it.each([false, true])(
             )
             .toBe(true);
           const beforeRenewal = requests.length;
+          nativeReleased = new Promise<void>((resolve) => {
+            releaseNative = resolve;
+          });
           await saveAccount("native-renewed");
           await client.request("models.authRefresh", { agentId: "main", operation: "update" });
           expect((await list()).models.some((row) => row.id === "provider-account")).toBe(true);
@@ -427,6 +526,33 @@ it.each([false, true])(
               { timeout: 15_000 },
             )
             .toBe(1);
+          const beforeRenewalReads = requests.length;
+          const renewalReadStarted = performance.now();
+          const renewalPending = await Promise.all([list(), list()]);
+          const renewalReadMs = performance.now() - renewalReadStarted;
+          expect(renewalReadMs).toBeLessThan(1_000);
+          expect(requests).toHaveLength(beforeRenewalReads);
+          for (const result of renewalPending) {
+            expect(result.pendingProviders).toContain(provider);
+            expect
+              .soft(result.models)
+              .toContainEqual(expect.objectContaining({ provider, id: "native-new-release" }));
+            expect(result.models).not.toContainEqual(
+              expect.objectContaining({ provider, id: "harness-host-row" }),
+            );
+          }
+          console.log(
+            "NATIVE_RENEWAL_PENDING",
+            JSON.stringify({
+              renewalReadMs,
+              requests: requests.slice(beforeRenewal),
+              renewalPending,
+            }),
+          );
+          releaseNative();
+          await expect
+            .poll(async () => (await list()).pendingProviders ?? [], { timeout: 15_000 })
+            .not.toContain(provider);
           await expect
             .poll(
               async () => (await list()).models.find((row) => row.id === nativeModelId)?.available,

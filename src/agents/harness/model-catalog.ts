@@ -118,6 +118,8 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   defaultProvider: string;
   defaultModel?: string;
   snapshot: ModelCatalogSnapshot;
+  /** Current route and donor facts stay separate from retained raw inventory. */
+  preparedSnapshot?: ModelCatalogSnapshot;
   pluginRegistry?: PluginRegistry | null;
   isCurrent?: () => boolean;
   observationConfig?: OpenClawConfig;
@@ -144,7 +146,8 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     return params.snapshot;
   }
   const refKey = resolveModelCatalogIdentityKey({ provider: ref.provider, id: ref.model });
-  const routeEntry = [...params.snapshot.entries, ...(params.snapshot.staticEntries ?? [])].find(
+  const prepared = params.preparedSnapshot ?? params.snapshot;
+  const routeEntry = [...prepared.entries, ...(prepared.staticEntries ?? [])].find(
     (entry) => resolveModelCatalogIdentityKey(entry) === refKey,
   );
   const runtime = resolveAgentHarnessPolicy({
@@ -205,7 +208,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
       ? listedRows.filter((entry) => includesProvider(entry.provider))
       : listedRows;
     params.onDiscoveryCompleted?.(scopedRows);
-    const rows = enrichHarnessRows(scopedRows, params.snapshot);
+    const rows = enrichHarnessRows(scopedRows, prepared);
     const configuredKeys = new Set([
       ...configuredModelRefs.map(({ provider, model }) =>
         resolveModelCatalogIdentityKey({ provider, id: model }),
@@ -240,6 +243,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
 export function augmentPreparedModelCatalogWithAgentHarness(params: {
   input: PreparedModelRuntimeInput;
   snapshot: ModelCatalogSnapshot;
+  preparedSnapshot?: ModelCatalogSnapshot;
   pluginRegistry?: PluginRegistry;
   isCurrent?: () => boolean;
   includesProvider?: (provider: string) => boolean;
@@ -259,6 +263,7 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: resolveAgentEffectiveModelPrimary(params.input.config, agentId),
     snapshot: params.snapshot,
+    preparedSnapshot: params.preparedSnapshot,
     pluginRegistry: params.pluginRegistry,
     isCurrent: params.isCurrent,
     observationConfig: params.input.config,
