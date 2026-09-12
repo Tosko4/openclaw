@@ -1,10 +1,16 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { assertSupportedStateSchemaVersion } from "../state/openclaw-state-db-schema-version.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import {
+  captureManagedUpdateLeaseDatabaseIdentity,
+  createManagedHandoffLeaseDatabase,
+} from "./update-managed-service-handoff-database.js";
 import { prepareUnattendedUpdateRepair } from "./update-repair-agent.js";
 
 describe("candidate repair runtime ownership", () => {
@@ -32,26 +38,24 @@ describe("candidate repair runtime ownership", () => {
 import assert from "node:assert/strict";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-let start;
 process.on("message", message => {
   if (message.type === "start") {
-    start = message;
+    const start = message;
     assert.equal(start.context.phase, "validating");
+    assert.ok(start.turn);
+    assert.ok(start.executor);
     assert.equal(process.cwd(), start.target.installRoot);
     assert.notEqual(process.env.OPENCLAW_STATE_DIR, start.target.stateDir);
     assert.notEqual(process.env.HOME, start.target.environment.HOME);
-    process.send({ type: "validate", id: 1 });
-  } else if (message.type === "validation-result") {
     const db = new DatabaseSync(path.join(start.target.stateDir, "state", "openclaw.sqlite"), { readOnly: true });
     assert.equal(db.prepare("PRAGMA user_version").get().user_version, ${OPENCLAW_STATE_SCHEMA_VERSION + 1});
     db.close();
-    process.send({ type: "result", result: {
-      status: "unrepaired", attempts: [], finalValidation: message.validation,
-      reason: "Candidate runtime read the migrated copy."
+    process.send({ type: "turn-result", result: {
+      status: "unavailable", reason: "Update runtime read the migrated copy."
     } }, () => process.disconnect());
   }
 });
-process.send({ type: "ready", candidateRehearsal: true });
+process.send({ type: "ready", repairTurns: true, executorDelegation: "pid-start-v1" });
 `,
         );
         const originalConfig = await fs.readFile(state.configPath);
@@ -67,49 +71,40 @@ process.send({ type: "ready", candidateRehearsal: true });
           }
           return { ok: false, score: 0, summary: "Candidate lint failed after migration." };
         });
-        const result = await prepareUnattendedUpdateRepair({
-          admissionEnv: state.env,
-          target: {
-            stateDir: copiedState,
-            configPath: copiedConfig,
-            workspaceDir: state.workspaceDir,
-            installRoot: candidateRoot,
-            environment: { ...state.env, HOME: state.path("copied-home") },
-          },
-          context: { error: "Candidate lint failed", phase: "validating" },
-          budget: { wallClockMs: 10_000 },
-          validate,
-        });
+        const control = state.path("executor-control");
+        await fs.mkdir(control, { mode: 0o700 });
+        const authorityPath = path.join(control, "managed-update-handoffs.sqlite");
+        const identity = createManagedHandoffLeaseDatabase(authorityPath)(true, () =>
+          captureManagedUpdateLeaseDatabaseIdentity(authorityPath),
+        );
+        const runId = randomUUID();
+        const result = await withUpdateCommandExecutor(
+          runId,
+          async (executor) =>
+            await prepareUnattendedUpdateRepair({
+              runId,
+              executorFence: await executor.enter(state.workspaceDir),
+              admissionEnv: state.env,
+              target: {
+                stateDir: copiedState,
+                configPath: copiedConfig,
+                workspaceDir: state.workspaceDir,
+                installRoot: candidateRoot,
+                environment: { ...state.env, HOME: state.path("copied-home") },
+              },
+              context: { error: "Update health check failed", phase: "validating" },
+              budget: { wallClockMs: 10_000 },
+              validate,
+            }),
+          { existingAuthority: { ...identity, installKey: state.workspaceDir } },
+        );
         expect(result).toMatchObject({
-          status: "unrepaired",
-          reason: "Candidate runtime read the migrated copy.",
+          status: "unavailable",
+          reason: "Update runtime read the migrated copy.",
         });
         expect(validate).toHaveBeenCalledOnce();
         expect(await fs.readFile(state.configPath)).toEqual(originalConfig);
       },
     );
-  });
-
-  it("records an unsupported released worker before requesting validation", async () => {
-    await withOpenClawTestState({ prefix: "repair-old-worker-", layout: "home" }, async (state) => {
-      const workerDir = path.join(state.workspaceDir, "dist", "infra");
-      await fs.mkdir(workerDir, { recursive: true });
-      await fs.writeFile(
-        path.join(workerDir, "update-repair.worker.js"),
-        'process.on("message", () => process.send({ type: "validate", id: 1 })); process.send({ type: "ready" });',
-      );
-      const validate = vi.fn();
-      const result = await prepareUnattendedUpdateRepair({
-        target: { ...state, installRoot: state.workspaceDir },
-        context: { error: "Candidate validation failed.", phase: "validating" },
-        budget: { wallClockMs: 10_000 },
-        validate,
-      });
-      expect(result).toMatchObject({
-        status: "unavailable",
-        reason: expect.stringContaining("cannot repair isolated rehearsal state"),
-      });
-      expect(validate).not.toHaveBeenCalled();
-    });
   });
 });

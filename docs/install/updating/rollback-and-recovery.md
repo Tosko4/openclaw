@@ -257,7 +257,7 @@ The updater enters the optional `repairing` phase when Doctor health checks,
 config validation, plugin resolution, or startup checks fail. It repairs the
 staged update and reruns the failed check while the old Gateway keeps serving.
 Only a passing validation allows activation; otherwise the update fails and
-discards the candidate without stopping the service.
+discards the staged update without stopping the service.
 Before activation, repair shares one disposable rehearsal state/config snapshot
 across its turns and validation, then independently validates surviving candidate
 changes before activation. Successful repair can proceed when Doctor migrations
@@ -314,15 +314,29 @@ or staged update root (`fs.workspaceOnly: true`), preserving safe-bin and tool
 allowlists and refusing explicit exec or repair-tool denies with `exec-denied-by-policy`
 and an `openclaw triage` external handoff.
 
-The original installation's live update record and requester policy remain the
-authority for repair; copied state never grants permission to continue.
+Each automatic repair turn runs in a separate process from the staged or installed
+update. The updater keeps both installation roots reserved until the repair process
+exits. On macOS and Linux, it also confirms that the entire process group has exited;
+Windows uses the existing process-job cleanup. Only then does the updater validate
+the result or perform a service restart. If the updater exits first, another
+update cannot acquire either installation while the repair process remains alive.
+Every repair tool effect checks the delegated executor's current authority after
+asynchronous preparation; an earlier lease or update record does not authorize it.
+
+Automatic repair requires a target runtime that supports delegated turns. Older
+versions that cannot honor the executor grant are refused before a repair starts;
+use `openclaw triage` for those failures. The worker still accepts the complete-loop
+input from released v2026.9.4 updaters when they update to this version.
+
+The original installation's live update record and requester policy also remain
+required for repair; copied state never grants permission to continue.
 Chat-requested updates recheck the requester's command ownership before repair
 effects and service activation. If configuration or plugin loading fails, the
 update stops and records the load error. Fix that error before retrying; only a
 successful policy check can report that the requester is no longer an owner.
 
 The default limits are three turns, ten minutes total, five minutes per turn,
-and 40 tool calls per turn. The updater supplies a validation check before the
+and 40 tool calls across all turns. The updater supplies a validation check before the
 first turn and after each attempt. Repair stops when validation succeeds, a
 budget is reached, or a turn fails to improve the result; a regression is
 reported as unrepaired. The model's `REPAIR_RESULT` summary does not replace
