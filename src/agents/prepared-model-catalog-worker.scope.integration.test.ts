@@ -31,15 +31,16 @@ import {
 } from "./prepared-model-catalog-worker.test-support.js";
 import { invalidatePreparedModelRuntimeOwnersForAuthMutation } from "./prepared-model-runtime-auth-publication.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
+import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
 import {
   getPreparedModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
-import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
 import { prepareModelRuntimeOwner } from "./prepared-model-runtime.owner.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
-const { makeTempDir, retireAfterTest, waitForMarker } = usePreparedCatalogWorkerFixtures();
+const { makeTempDir, retireAfterTest, waitForMarker, waitForWorkers } =
+  usePreparedCatalogWorkerFixtures();
 
 async function createStartupBindingSnapshot() {
   const fixture = createCatalogFixture(makeTempDir, 0, {
