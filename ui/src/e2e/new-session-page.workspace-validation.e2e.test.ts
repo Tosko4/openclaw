@@ -378,14 +378,23 @@ suite.define(() => {
       await page.locator(".new-session-page__message").fill("do not run directly");
       const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
+      const afterShow = where.evaluate(
+        (element) =>
+          new Promise<void>((resolve) => {
+            element.addEventListener("wa-after-show", () => resolve(), { once: true });
+          }),
+      );
       await whereTrigger.click();
-      const cloud = where.getByRole("button", {
-        name: "aws · Couldn't verify Git for this folder. Choose it again to retry.",
-        exact: true,
-      });
+      await afterShow;
+      const cloud = where.getByRole("button", { name: "aws", exact: true });
       expect(await cloud.isDisabled()).toBe(true);
+      await cloud.hover();
+      const reason = cloud
+        .locator("xpath=ancestor::openclaw-tooltip[1]")
+        .locator('[slot="content"]');
+      await reason.waitFor();
       await expect
-        .poll(() => tooltipTitleText(cloud))
+        .poll(async () => (await reason.textContent())?.trim())
         .toBe("Couldn't verify Git for this folder. Choose it again to retry.");
       await page.keyboard.press("Escape");
       await checkoutTrigger.click();

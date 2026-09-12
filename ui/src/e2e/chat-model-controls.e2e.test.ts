@@ -255,26 +255,32 @@ suite.define(() => {
         await expect.poll(() => more.isVisible()).toBe(false);
         await expect.poll(() => account.isVisible()).toBe(true);
         await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
-        const refreshRequests = await gateway.getRequests("users.listModelAccounts");
-        if (input === "keyboard") {
-          await gateway.deferNext("users.listModelAccounts", {});
-        }
+        const cachedRequests = await gateway.getRequests("users.listModelAccounts");
         await trigger.press("Enter");
         await expect.poll(() => more.isVisible()).toBe(true);
+        // Reopening a loaded inventory must not trigger a refresh.
+        expect(await gateway.getRequests("users.listModelAccounts")).toHaveLength(
+          cachedRequests.length,
+        );
         if (input === "keyboard") {
-          await gateway.waitForRequest("users.listModelAccounts", {
-            after: refreshRequests.length,
+          await gateway.deferNext("users.listModelAccounts", { cursor: "accounts-page-2" });
+          await more.focus();
+          await page.keyboard.press("Enter");
+          const loadingPage = await gateway.waitForRequest("users.listModelAccounts", {
+            after: cachedRequests.length,
           });
+          expect(loadingPage.params).toEqual({ cursor: "accounts-page-2" });
           const loading = picker.locator('[data-chat-account-option="loading"]');
           await expect.poll(() => loading.isVisible()).toBe(true);
           await more.focus();
           await gateway.resolveDeferred("users.listModelAccounts", {
             profileId: "test-person",
-            accounts: [personal],
-            nextCursor: "accounts-page-2",
+            accounts: [],
+            nextCursor: "accounts-page-3",
             links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
           });
           await expect.poll(() => loading.isVisible()).toBe(false);
+          expect(await more.evaluate((element) => element === document.activeElement)).toBe(true);
         }
         expect(
           await picker
@@ -282,9 +288,10 @@ suite.define(() => {
             .getAttribute("aria-selected"),
         ).toBe("true");
         const inventoryRequests = await gateway.getRequests("users.listModelAccounts");
-        await gateway.deferNext("users.listModelAccounts", { cursor: "accounts-page-2" });
+        const nextCursor = input === "keyboard" ? "accounts-page-3" : "accounts-page-2";
+        await gateway.deferNext("users.listModelAccounts", { cursor: nextCursor });
         if (input === "keyboard") {
-          // Refresh must preserve the action focused before Loading disappeared.
+          // Pagination must preserve the action focused before Loading disappeared.
           await page.keyboard.press("Enter");
           expect(page.url()).toContain("/chat/");
         } else {
@@ -293,7 +300,7 @@ suite.define(() => {
         const nextPage = await gateway.waitForRequest("users.listModelAccounts", {
           after: inventoryRequests.length,
         });
-        expect(nextPage.params).toEqual({ cursor: "accounts-page-2" });
+        expect(nextPage.params).toEqual({ cursor: nextCursor });
         await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
         await gateway.resolveDeferred("users.listModelAccounts", {
           profileId: "test-person",

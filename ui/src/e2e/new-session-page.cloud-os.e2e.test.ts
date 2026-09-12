@@ -77,13 +77,17 @@ suite.define(() => {
         await picker.locator('[data-value="cloud:aws"]').hover();
         await linux.waitFor();
         expect(await linux.isEnabled()).toBe(true);
-        expect(await linux.getAttribute("aria-pressed")).toBe("true");
+        expect(await linux.evaluate((element) => element.tagName)).toBe("SPAN");
+        expect(await linux.textContent()).toBe("Linux");
+        expect(await picker.locator('[data-value="cloud:aws"]').getAttribute("aria-pressed")).toBe(
+          "true",
+        );
         for (const os of ["macos", "windows"]) {
           const option = picker.locator(`[data-value="os:${os}"]`);
           expect(await option.count()).toBe(0);
         }
         await capturePicker("02-after-unavailable-operating-systems.png");
-        await linux.click();
+        // The only available OS is fixed provider configuration, not a toggle.
         await page.keyboard.press("Escape");
         await page.locator(".new-session-page__message").fill("Continue on Linux");
         await page.getByRole("button", { name: "Start session" }).click();

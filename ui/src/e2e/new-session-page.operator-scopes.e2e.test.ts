@@ -95,7 +95,9 @@ suite.define(() => {
       const where = page.locator("wa-popover.new-session-page__where-popover");
       await where.getByRole("button", { name: /Writer runner/u }).waitFor();
       expect(await where.locator('[data-value="cloud:aws"]').count()).toBe(0);
-      expect(await where.locator('[data-value="connect-machine"]').count()).toBe(0);
+      expect(
+        await where.getByRole("button", { name: "Connect a device", exact: true }).count(),
+      ).toBe(0);
       await page.keyboard.press("Escape");
       await effort.click();
       const fastMode = page.locator("[data-chat-speed-toggle]");
@@ -186,7 +188,7 @@ suite.define(() => {
       const where = page.locator("wa-popover.new-session-page__where-popover");
       await where.locator('[data-value="device:writer-runner"]').waitFor();
       await where.locator('[data-value="cloud:aws"]').waitFor();
-      await where.locator('[data-value="connect-machine"]').waitFor();
+      await where.getByRole("button", { name: "Connect a device", exact: true }).waitFor();
     } finally {
       await context.close();
     }
