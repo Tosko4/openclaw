@@ -308,7 +308,7 @@ describe("tsdown config", () => {
     const entries = selected.entry as Record<string, string>;
     // Include the parent store: shared chunks must not pull its lifecycle writes
     // into the one-shot materialize/publish worker's static closure.
-    const bundles = await build({
+    const { bundles } = await build({
       ...selected,
       config: false,
       entry: Object.fromEntries(
