@@ -10842,7 +10842,10 @@ describe("update-cli", () => {
     const canonicalGitRoot = await fs.realpath(gitRoot);
     mockFileBackedPathExists();
     mockNpmGlobalCommands(nodeModules, undefined, canonicalGitRoot);
-    mockRunningManagedGateway(["node", serviceEntrypoint, "gateway", "run"]);
+    mockRunningManagedGateway([process.execPath, serviceEntrypoint, "gateway", "run"]);
+    // Readiness must identify retained A before stopping it, including its build.
+    readPackageVersion.mockResolvedValue("2026.4.21");
+    mockGatewayHealth("2026.4.21", "retained-git-A", "fixture-original-build");
     mockGitUpdateAfterMutation(
       makeOkUpdateResult({
         mode: "git",
@@ -10852,7 +10855,9 @@ describe("update-cli", () => {
     );
 
     await withEnvAsync({ OPENCLAW_GIT_DIR: gitRoot }, async () => {
-      await updateCommand({ channel: "dev", yes: true });
+      await updateCommand({ channel: "dev", yes: true }).catch((cause: unknown) => {
+        throw new Error(getErrorOutput() + getLogOutput(), { cause });
+      });
     });
 
     expect(serviceStop).toHaveBeenCalledTimes(1);
@@ -11943,12 +11948,13 @@ describe("update-cli", () => {
   });
 
   it.each([
-    { busyPackage: false, alreadyCurrent: false },
-    { busyPackage: true, alreadyCurrent: false },
-    { busyPackage: false, alreadyCurrent: true },
+    { busyPackage: false, alreadyCurrent: false, wrongOriginal: false },
+    { busyPackage: true, alreadyCurrent: false, wrongOriginal: false },
+    { busyPackage: false, alreadyCurrent: true, wrongOriginal: false },
+    { busyPackage: false, alreadyCurrent: false, wrongOriginal: true },
   ])(
-    "updates the invoking package and rebinds its owned Gateway after a Node-prefix switch (busy B=$busyPackage, current B=$alreadyCurrent)",
-    async ({ busyPackage, alreadyCurrent }) => {
+    "updates the invoking package and rebinds its owned Gateway after a Node-prefix switch (busy B=$busyPackage, current B=$alreadyCurrent, wrong A=$wrongOriginal)",
+    async ({ busyPackage, alreadyCurrent, wrongOriginal }) => {
       const invokingVersion = alreadyCurrent ? "2026.5.20" : "2026.5.18";
       const oldInstall = await setupServicePackageAtPrefix({
         prefix: tempDirs.make("openclaw-node-a-"),
@@ -11964,6 +11970,8 @@ describe("update-cli", () => {
         );
         return manifest.version;
       });
+      // A must be observed independently before B is activated.
+      mockGatewayHealth(wrongOriginal ? "0.0.0" : "2026.5.18", "retained-node-A");
       primeServiceCommand([oldInstall.serviceNode, oldInstall.entrypoint, "gateway"]);
       serviceLoaded.mockResolvedValue(true);
       serviceReadRuntime.mockResolvedValue({
@@ -12033,6 +12041,17 @@ describe("update-cli", () => {
         }
         return await rename(from, to);
       });
+      if (wrongOriginal) {
+        await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
+        expect(getLogOutput() + getErrorOutput()).toContain("original-service-unverified");
+        expect(serviceStop).not.toHaveBeenCalled();
+        expect(publicationChecks).toEqual([]);
+        expect(freshRestartCalls()).toEqual([]);
+        expect(
+          JSON.parse(await fs.readFile(path.join(newInstall.root, "package.json"), "utf8")).version,
+        ).toBe(invokingVersion);
+        return;
+      }
       await updateCommand({ yes: true }).catch((cause: unknown) => {
         throw new Error(getErrorOutput() + getLogOutput(), { cause });
       });
