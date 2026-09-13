@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { AgentsListResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import {
   createGatewayStoreTestStore,
   GATEWAY_STORE_TEST_HELLO,
@@ -12,9 +11,10 @@ import {
 } from "../../app/gateway-store.test-support.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
+import { peekModelCatalog } from "../../lib/model-catalog-store.ts";
 import { page, type ModelProvidersRouteData } from "./route.ts";
 
-const modelMethods = ["models.authStatus", "models.list", "config.get"];
+const modelMethods = ["models.authStatus", "models.list"];
 const roster = {
   defaultId: "main",
   mainKey: "main",
@@ -31,8 +31,6 @@ function responseFor(method: string): unknown {
       return { ts: 1, providers: [{ provider: "openai", status: "ok", profiles: [] }] };
     case "models.list":
       return { models: [{ id: "fixture", provider: "openai", name: "Fixture" }] };
-    case "config.get":
-      return { config: {}, hash: "fixture" };
     default:
       return {};
   }
@@ -53,10 +51,10 @@ function createModelsRouter(selectedId: string | null = "main") {
     gateway: store.gateway,
     agents,
     agentSelection: selection,
-  }) as ApplicationContext;
+  }) satisfies Parameters<NonNullable<typeof page.loader>>[0];
   const router = createRouter<
     "model-providers" | "other",
-    ApplicationContext,
+    typeof context,
     null,
     ModelProvidersRouteData
   >({
@@ -67,6 +65,7 @@ function createModelsRouter(selectedId: string | null = "main") {
   });
   cleanups.push(() => {
     router.stop();
+    selection.dispose();
     agents.dispose();
     store.gateway.stop();
   });
@@ -138,11 +137,13 @@ describe("Models route admission", () => {
         agentId: selection.state.selectedId,
         data: {
           authStatus: responseFor("models.authStatus"),
-          models: [{ id: "fixture", provider: "openai", name: "Fixture" }],
           error: null,
           updatedAt: expect.any(Number),
         },
       });
+      expect(
+        peekModelCatalog(gateway.snapshot.client!, { agentId: selection.state.selectedId! }),
+      ).toEqual(responseFor("models.list"));
     },
   );
 

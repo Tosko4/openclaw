@@ -16,8 +16,8 @@ import {
   withAgentDatabaseMaintenanceLease,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import {
-  closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -34,6 +34,7 @@ import {
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "./session-transcript-reconcile.worker.js";
+import { transcriptMessage } from "./transcript-message.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -243,11 +244,10 @@ describe("session transcript reconcile worker lifecycle", () => {
       for (const target of [scope, secondScope]) {
         await persistSessionTranscriptTurn(target, {
           messages: [
-            {
-              eventId: `${target.sessionId}-seed`,
-              parentId: null,
-              message: { role: "user", content: target.sessionId },
-            },
+            transcriptMessage(`${target.sessionId}-seed`, null, {
+              role: "user",
+              content: target.sessionId,
+            }),
           ],
           touchSessionEntry: false,
         });

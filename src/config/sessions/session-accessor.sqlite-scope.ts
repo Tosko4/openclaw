@@ -59,6 +59,7 @@ type SessionSqliteDatabase = Pick<
   | "session_progress_cards"
   | "session_suggestions"
   | "session_transcript_archives"
+  | "session_transcript_cold_archives"
   | "session_transcript_active_events"
   | "session_transcript_index_state"
   | "session_windows"
@@ -292,6 +293,7 @@ export function resolveSqliteScope(
     SessionAccessScope,
     "agentId" | "defaultAgentId" | "env" | "sessionKey" | "storePath"
   >,
+  targetCache?: SessionSqliteTargetResolutionCache,
 ): ResolvedSqliteScope {
   const parsedAgentId = parseAgentSessionKey(scope.sessionKey)?.agentId;
   const scopedAgentId = scope.agentId ? normalizeAgentId(scope.agentId) : parsedAgentId;
@@ -303,11 +305,15 @@ export function resolveSqliteScope(
     : scope.storePath;
   const effectiveAgentId = incognitoAgentId ?? scopedAgentId;
   const storeTarget = effectiveStorePath
-    ? resolveSqliteTargetFromSessionStorePath(effectiveStorePath, {
-        agentId: effectiveAgentId,
-        defaultAgentId: scope.defaultAgentId,
-        ...(scope.env ? { env: scope.env } : {}),
-      })
+    ? resolveCachedSqliteStoreTarget(
+        {
+          agentId: effectiveAgentId,
+          defaultAgentId: scope.defaultAgentId,
+          env: scope.env,
+          storePath: effectiveStorePath,
+        },
+        targetCache,
+      )
     : undefined;
   const agentId = resolveSqliteAgentId({
     scopedAgentId: effectiveAgentId,

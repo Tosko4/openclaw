@@ -161,6 +161,14 @@ vi.mock("./update-command-plugins.js", () => ({
   }),
 }));
 
+// Process fixtures cover runtime generation with real lifecycle ownership.
+vi.mock("./update-command-runtime.js", () => ({
+  completeSourceUpdateRuntime: vi.fn(async () => {
+    record("runtime-completion");
+    return { changed: false };
+  }),
+}));
+
 vi.mock("./update-command-post-core.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-post-core.js")>()),
   continuePostCoreUpdateInFreshProcess: vi.fn(),
@@ -236,7 +244,11 @@ describe("update plugin lifecycle lease boundaries", () => {
       if (!needsTargetRuntime) {
         vi.mocked(updatePluginsAfterCoreUpdate).mockImplementationOnce(async () => {
           record("plugin-update");
-          return { ...successfulPluginUpdate, changed: false };
+          return {
+            ...successfulPluginUpdate,
+            assessment: { kind: "no-payload-repair" as const },
+            changed: false,
+          };
         });
       }
       vi.mocked(continuePostCoreUpdateInFreshProcess).mockImplementation(async () => {
@@ -288,6 +300,60 @@ describe("update plugin lifecycle lease boundaries", () => {
       );
     },
   );
+
+  it("keeps the plugin and error class when convergence fails", async () => {
+    vi.mocked(updatePluginsAfterCoreUpdate).mockResolvedValueOnce({
+      ...successfulPluginUpdate,
+      status: "error",
+      assessment: { kind: "unsafe", reason: "convergence-failed" },
+      changed: false,
+      npm: {
+        changed: false,
+        outcomes: [
+          {
+            pluginId: "example",
+            status: "error",
+            code: "incompatible_plugin_api",
+            message: "Plugin requires a newer host API.",
+          },
+        ],
+      },
+    });
+    const { resultWithPostUpdate } = await convergeUpdatePlugins({
+      coreAlreadyCurrent: true,
+      result: {
+        status: "skipped",
+        mode: "npm",
+        reason: "already-current",
+        steps: [],
+        durationMs: 1,
+      },
+      root: "/fixture/openclaw",
+      installKindChanged: false,
+      configSnapshot: validConfigSnapshot,
+      requestedChannel: null,
+      storedChannel: null,
+      channel: "stable",
+      downgradeRisk: false,
+      opts: {},
+      preUpdatePluginInstallRecords: {},
+      startedAt: 1,
+      updateStepTimeoutMs: 1000,
+    });
+    expect(resultWithPostUpdate.steps).toContainEqual(
+      expect.objectContaining({
+        exitCode: 1,
+        failureFacts: [
+          {
+            check: "plugin-update",
+            code: "incompatible_plugin_api",
+            pluginId: "example",
+            message: "Plugin requires a newer host API.",
+          },
+        ],
+      }),
+    );
+  });
 
   it.each(["copied", "live"] as const)(
     "preserves the %s invocation environment through a failed phase",
@@ -352,6 +418,12 @@ describe("update plugin lifecycle lease boundaries", () => {
     });
 
     expectLifecycleBoundary("handoff-records");
+    expect(mocks.events.indexOf("runtime-completion:true")).toBeGreaterThan(
+      mocks.events.indexOf("lease-enter:false"),
+    );
+    expect(mocks.events.indexOf("runtime-completion:true")).toBeLessThan(
+      mocks.events.indexOf("prepare-config:true"),
+    );
     expect(mocks.events).not.toContain("fresh-doctor:false");
     expect(mocks.events).not.toContain("fresh-doctor:true");
     expect(mocks.events).not.toContain("config-snapshot:false");

@@ -43,7 +43,7 @@ import {
   type TurnEndEvent,
   type TurnStartEvent,
 } from "./extensions/index.js";
-import type { BashExecutionMessage, CustomMessage } from "./messages.js";
+import type { CustomMessage } from "./messages.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import type { ModelRegistry } from "./model-registry.js";
 import type { PromptTemplate } from "./prompt-templates.js";
@@ -53,6 +53,7 @@ import {
 } from "./queued-user-message-retirement.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import type { SessionManager } from "./session-manager.js";
+import { prepareSessionToolResult } from "./session-tool-result-redaction.js";
 import type { SettingsManager } from "./settings-manager.js";
 import type { SourceInfo } from "./source-info.js";
 import { reportSteeringMessagePersistenceFailure } from "./steering-message-identity.js";
@@ -75,8 +76,6 @@ export abstract class AgentSessionBase {
   readonly agent: Agent;
   readonly sessionManager: SessionManager;
   readonly settingsManager: SettingsManager;
-
-  protected scopedModelEntries: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 
   // Event subscription state
   protected unsubscribeAgent?: () => void;
@@ -102,10 +101,6 @@ export abstract class AgentSessionBase {
   // Retry state
   protected retryAbortController: AbortController | undefined = undefined;
   protected retryCount = 0;
-
-  // Bash execution state
-  protected bashAbortController: AbortController | undefined = undefined;
-  protected pendingBashMessages: BashExecutionMessage[] = [];
 
   // Extension system
   protected currentExtensionRunner!: ExtensionRunner;
@@ -149,7 +144,6 @@ export abstract class AgentSessionBase {
     this.agent = config.agent;
     this.sessionManager = config.sessionManager;
     this.settingsManager = config.settingsManager;
-    this.scopedModelEntries = config.scopedModels ?? [];
     this.sessionResourceLoader = config.resourceLoader;
     this.customTools = config.customTools ?? [];
     this.cwd = config.cwd;
@@ -368,6 +362,8 @@ export abstract class AgentSessionBase {
       await this.runWithSessionWriteSettlement(
         async () => await this.handleAgentEventUnlocked(event),
       );
+      // Supported callbacks can change the current result or register another secret.
+      prepareSessionToolResult(this.sessionManager, event);
       return;
     }
     await this.handleAgentEventUnlocked(event);
@@ -387,7 +383,9 @@ export abstract class AgentSessionBase {
     const sourceSlots =
       event.type === "message_end" ? takeCodeModeResponseSource(event.message) : undefined;
     // Emit to extensions first
-    const messageChanged = await this.emitExtensionEvent(event);
+    let messageChanged = await this.emitExtensionEvent(event);
+    // Extensions can replace the final result. Protect listeners before publishing it.
+    messageChanged = prepareSessionToolResult(this.sessionManager, event) || messageChanged;
     const publishAfterPersistence = event.type === "message_end" && event.message.role === "user";
 
     // Notify all listeners
@@ -400,6 +398,8 @@ export abstract class AgentSessionBase {
     } else if (!publishAfterPersistence) {
       this.emit(event);
     }
+    // Persist the same prepared bytes after synchronous listener changes.
+    messageChanged = prepareSessionToolResult(this.sessionManager, event) || messageChanged;
 
     // Handle session persistence
     if (event.type === "message_end") {
@@ -612,7 +612,6 @@ export abstract class AgentSessionBase {
       () => this.abortRetry(),
       () => this.abortCompaction(),
       () => this.abortBranchSummary(),
-      () => this.abortBash(),
       () => this.agent.abort(),
     ];
     for (const abortOperation of abortOperations) {
@@ -780,16 +779,6 @@ export abstract class AgentSessionBase {
     return this.sessionManager.getSessionName();
   }
 
-  /** Scoped models for cycling (from --models flag) */
-  get scopedModels(): ReadonlyArray<{ model: Model; thinkingLevel?: ThinkingLevel }> {
-    return this.scopedModelEntries;
-  }
-
-  /** Update scoped models for cycling */
-  setScopedModels(scopedModels: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>): void {
-    this.scopedModelEntries = scopedModels;
-  }
-
   /** File-based prompt templates */
   get promptTemplates(): ReadonlyArray<PromptTemplate> {
     return this.sessionResourceLoader.getPrompts().prompts;
@@ -886,6 +875,4 @@ export abstract class AgentSessionBase {
   abstract abortRetry(): void;
   abstract abortCompaction(): void;
   abstract abortBranchSummary(): void;
-  abstract abortBash(): void;
-  protected abstract flushPendingBashMessages(): void;
 }

@@ -50,6 +50,7 @@ import { isPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.
 import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.js";
 import { resolveAutomaticUtilityModelRef } from "../../agents/utility-model.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
+import { createThinkingCatalogResolver } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -124,6 +125,7 @@ function createPublicModelsListProjector(params: {
   preserveUnknownAvailability?: boolean;
   apiKeyCapabilities?: ApiKeyProviderCapabilities;
 }) {
+  const catalogResolver = createThinkingCatalogResolver(params.thinkingCatalog);
   // Route rows retain identity across reads; keep display/thinking work outside the hot overlay.
   const prepared = new WeakMap<ModelCatalogEntry, ModelsListEntryWithCapabilities>();
   return (
@@ -160,6 +162,7 @@ function createPublicModelsListProjector(params: {
               model: entry.id,
               agentRuntime: selectedRuntime?.id ?? "openclaw",
               modelCatalog: params.thinkingCatalog,
+              catalogResolver,
               configuredReasoning: publicEntry.configuredReasoning ?? publicEntry.reasoning,
               thinkingPolicyProvider: publicEntry.thinkingPolicyProvider,
             });
@@ -303,6 +306,7 @@ export async function prepareModelsListResult(
     await loadDeferredCatalog(source.context, initialAgentId, {
       readOnly: false,
       refreshFullCatalog: true,
+      ...(params.params.provider ? { providerDiscoveryProviderIds: [params.params.provider] } : {}),
     });
   }
   const ownerSnapshot =
@@ -340,7 +344,10 @@ export async function prepareModelsListResult(
   const preparedPluginRegistry = preparedProjectionOwner?.pluginRegistry;
   const preparedOwnerIsCurrent = preparedProjectionOwner?.isCurrent;
   // Native readiness belongs to the prepared generation, even across config publication.
-  const isCurrent = () => currentConfig() === requestConfig && preparedOwnerIsCurrent?.() === true;
+  const isCurrent = () =>
+    currentConfig() === requestConfig &&
+    preparedOwnerIsCurrent?.() === true &&
+    scope?.isCurrent?.() !== false;
   if (!metadataSnapshot || !preparedAuthStore) {
     throw new Error("Gateway model catalog owner omitted prepared metadata or auth state");
   }
@@ -356,7 +363,7 @@ export async function prepareModelsListResult(
     pluginRegistry: preparedPluginRegistry,
     isCurrent,
     observationConfig: preparedProjectionOwner?.observationConfig,
-    refreshNative: refresh && params.preloadedOnly !== true,
+    refreshNative: refresh && source.kind !== "gateway" && params.preloadedOnly !== true,
     ...(source.kind === "gateway"
       ? {
           onError: (error: unknown) =>
@@ -432,9 +439,28 @@ export async function prepareModelsListResult(
     !providerFilter || normalizeProvider(entry.provider) === providerFilter;
   const { routeVariants, providerOutcomes } = projector.snapshot;
   const publicProviderOutcomes = projectProviderCatalogOutcomes(providerOutcomes);
+  const visibilityPolicy = createModelVisibilityPolicy({
+    cfg,
+    catalog,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel,
+    agentId,
+    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    manifestPlugins: metadataSnapshot,
+  });
+  const pendingProviders = projector.snapshot.pendingProviders?.filter(
+    (provider) =>
+      (!providerFilter || normalizeProvider(provider) === providerFilter) &&
+      (view === "all" ||
+        view === "provider-config" ||
+        visibilityPolicy.allowAny ||
+        [...visibilityPolicy.allowedKeys].some((key) => key.startsWith(`${provider}/`))),
+  );
   draft?.assertCurrent();
   const outcomeProjection = {
-    ...(params.params.includeDefaultModels
+    ...(pendingProviders?.length ? { pendingProviders } : {}),
+    ...((params.params.includeDefaultModels ??
+    (view === "configured" && !params.params.sessionKey && !params.params.authProfileId))
       ? {
           defaultModels: {
             automaticUtilityModel:
@@ -535,15 +561,6 @@ export async function prepareModelsListResult(
       }),
     };
   }
-  const visibilityPolicy = createModelVisibilityPolicy({
-    cfg,
-    catalog,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel,
-    agentId,
-    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-    manifestPlugins: metadataSnapshot,
-  });
   const { evaluateEntry } = projector;
   const evaluations = new Map<string, ModelAuthAvailabilityEvaluation>();
   const readCatalog = await prepareLogicalVisibleModelCatalog({

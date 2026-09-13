@@ -13,16 +13,17 @@ print_file_list_with_limit() {
   local file_path="$2"
   local limit="${3:-12}"
 
-  if [ ! -s "$file_path" ]; then
+  local count
+  count=$(wc -l < "$file_path" | tr -d ' ') || return 1
+  [[ "$count" =~ ^[0-9]+$ ]] || return 1
+  if [ "$count" -eq 0 ]; then
     return 0
   fi
 
-  local count
-  count=$(wc -l < "$file_path" | tr -d ' ')
-  echo "$label ($count):"
-  sed -n "1,${limit}p" "$file_path" | sed 's/^/  - /'
+  echo "$label ($count):" || return 1
+  sed -n "1,${limit}p" "$file_path" | sed 's/^/  - /' || return 1
   if [ "$count" -gt "$limit" ]; then
-    echo "  ... +$((count - limit)) more"
+    echo "  ... +$((count - limit)) more" || return 1
   fi
 }
 
@@ -122,69 +123,72 @@ require_clawsweeper_review() {
   validate_clawsweeper_review_comments "$pr" "$head_sha"
 }
 
-mainline_drift_requires_sync() {
+# Return 0 for relevant drift, 1 for unrelated drift, and 2 for failed evaluation.
+# The caller uses a conditional, so every fallible evidence operation is checked.
+mainline_drift_requires_sync() (
+  set -o pipefail
   local mainline_base="$1"
   local prepared_head_sha="$2"
 
   if ! GIT_NO_LAZY_FETCH=1 git cat-file -e "${mainline_base}^{commit}" 2>/dev/null; then
-    echo "Mainline drift relevance: mainline base $mainline_base is missing locally; require sync."
-    return 0
+    echo "Mainline drift relevance: unable to read mainline base $mainline_base locally." >&2
+    return 2
   fi
   if ! GIT_NO_LAZY_FETCH=1 git cat-file -e "${prepared_head_sha}^{commit}" 2>/dev/null; then
-    echo "Mainline drift relevance: prepared head $prepared_head_sha is missing locally; require sync."
-    return 0
+    echo "Mainline drift relevance: unable to read prepared head $prepared_head_sha locally." >&2
+    return 2
   fi
 
-  local delta_file
-  local prepared_files_file
-  local overlap_file
-  local critical_file
-  delta_file=$(mktemp)
-  prepared_files_file=$(mktemp)
-  overlap_file=$(mktemp)
-  critical_file=$(mktemp)
+  local scratch
+  scratch=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-drift.XXXXXX") || return 2
+  trap 'rm -rf -- "$scratch" || exit 2' EXIT
+  local delta_file="$scratch/mainline"
+  local prepared_files_file="$scratch/prepared"
+  local overlap_file="$scratch/overlap"
+  local critical_file="$scratch/critical"
 
   # Compare only mainline commits since the prepared lineage base. The remote
   # GraphQL commit has a different parent but its verified tree shares this
   # lineage, so its PR files must not look like incoming mainline drift.
-  git diff --name-only "${mainline_base}..${PR_MAIN_SHA}" | sed '/^$/d' | sort -u > "$delta_file"
-  git diff --name-only "${mainline_base}..${prepared_head_sha}" | sed '/^$/d' | sort -u > "$prepared_files_file"
-  comm -12 "$delta_file" "$prepared_files_file" > "$overlap_file" || true
+  git diff --name-only "${mainline_base}..${PR_MAIN_SHA}" | sed '/^$/d' | sort -u > "$delta_file" || return 2
+  git diff --name-only "${mainline_base}..${prepared_head_sha}" | sed '/^$/d' | sort -u > "$prepared_files_file" || return 2
+  comm -12 "$delta_file" "$prepared_files_file" > "$overlap_file" || return 2
+  : > "$critical_file" || return 2
 
-  local path
+  local path read_count=0
   while IFS= read -r path; do
+    read_count=$((read_count + 1))
     [ -n "$path" ] || continue
     if is_mainline_drift_critical_path_for_merge "$path"; then
-      printf '%s\n' "$path" >> "$critical_file"
+      printf '%s\n' "$path" >> "$critical_file" || return 2
     fi
-  done < "$delta_file"
+  done < "$delta_file" || return 2
 
   local delta_count
   local overlap_count
   local critical_count
-  delta_count=$(wc -l < "$delta_file" | tr -d ' ')
-  overlap_count=$(wc -l < "$overlap_file" | tr -d ' ')
-  critical_count=$(wc -l < "$critical_file" | tr -d ' ')
+  delta_count=$(wc -l < "$delta_file" | tr -d ' ') || return 2
+  overlap_count=$(wc -l < "$overlap_file" | tr -d ' ') || return 2
+  critical_count=$(wc -l < "$critical_file" | tr -d ' ') || return 2
+  [[ "$delta_count" =~ ^[0-9]+$ && "$overlap_count" =~ ^[0-9]+$ && "$critical_count" =~ ^[0-9]+$ ]] || return 2
+  [ "$read_count" -eq "$delta_count" ] || return 2
 
   if [ "$delta_count" -eq 0 ]; then
-    echo "Mainline drift relevance: no mainline changes since the prepared base."
-    rm -f "$delta_file" "$prepared_files_file" "$overlap_file" "$critical_file"
+    echo "Mainline drift relevance: no mainline changes since the prepared base." || return 2
     return 1
   fi
 
   if [ "$overlap_count" -gt 0 ] || [ "$critical_count" -gt 0 ]; then
-    echo "Mainline drift relevance: sync required before merge."
-    print_file_list_with_limit "Mainline files overlapping prepared files" "$overlap_file"
-    print_file_list_with_limit "Mainline files touching merge-critical infrastructure" "$critical_file"
-    rm -f "$delta_file" "$prepared_files_file" "$overlap_file" "$critical_file"
+    print_file_list_with_limit "Mainline files overlapping prepared files" "$overlap_file" || return 2
+    print_file_list_with_limit "Mainline files touching merge-critical infrastructure" "$critical_file" || return 2
+    echo "Mainline drift relevance: sync required before merge." || return 2
     return 0
   fi
 
-  echo "Mainline drift relevance: no overlap with prepared files and no critical infra drift."
-  print_file_list_with_limit "Mainline-only drift files" "$delta_file"
-  rm -f "$delta_file" "$prepared_files_file" "$overlap_file" "$critical_file"
+  print_file_list_with_limit "Mainline-only drift files" "$delta_file" || return 2
+  echo "Mainline drift relevance: no overlap with prepared files and no critical infra drift." || return 2
   return 1
-}
+)
 
 merge_verify() {
   local pr="$1" replacement_head="${2:-}"
@@ -329,6 +333,11 @@ merge_verify() {
       fi
       echo "Merge verify: WARNING — mainline drift is relevant to this PR; proceeding (OPENCLAW_PR_STRICT_DRIFT=1 restores the hard gate)."
     else
+      local drift_status=$?
+      if [ "$drift_status" -ne 1 ]; then
+        echo "Merge verify failed: unable to evaluate mainline drift; no merge was attempted." >&2
+        return 1
+      fi
       echo "Merge verify: continuing without prep-head sync because behind-main drift is unrelated."
     fi
   fi
@@ -349,18 +358,21 @@ prepare_squash_merge_body() {
     --no-show-signature --no-notes --no-color --no-decorate --encoding=UTF-8 \
     --format='%(trailers:key=Co-authored-by,only,unfold)' "$PR_MAIN_SHA..$source_head") || return 1
   # A merge commit can reflect whoever refreshed the branch, not a contributor.
-  # Preview credit must be backed by a published non-merge commit or explicit trailer.
+  # Preview credit needs a tree-changing non-merge commit, PR authorship, or explicit trailer.
   author_commits=$(git log --no-merges --reverse --no-show-signature --no-notes \
-    --no-color --no-decorate --format='%H' "$PR_MAIN_SHA..$PREP_HEAD_SHA") || return 1
+    --no-color --no-decorate --format='%H %T %P' "$PR_MAIN_SHA..$PREP_HEAD_SHA") || return 1
 
   local repo_nwo preview
   repo_nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner) || return 1
   # A git identity alone cannot establish a human contributor. Resolve the
   # published commits through GitHub, which leaves unlinked authors null.
-  authors=$(printf '%s\n' "$author_commits" | while IFS= read -r oid; do
+  authors=$(printf '%s\n' "$author_commits" | while IFS=' ' read -r oid tree parent; do
     [ -n "$oid" ] || continue
+    parent_tree=""
+    [ -z "$parent" ] || parent_tree=$(git rev-parse "$parent^{tree}") || exit 1
     gh api "repos/$repo_nwo/commits/$oid" --jq \
-      '{name:.commit.author.name,email:.commit.author.email,user:(.author | if . == null then null else {login,type} end)}' || exit 1
+      '{name:.commit.author.name,email:.commit.author.email,user:(.author | if . == null then null else {login,type} end)}' |
+      jq --arg tree "$tree" --arg parentTree "$parent_tree" '. + {changesTree: ($tree != $parentTree)}' || exit 1
   done) || return 1
   authors=$(printf '%s\n' "$authors" | jq -s .) || return 1
   preview=$(gh_plain api graphql \

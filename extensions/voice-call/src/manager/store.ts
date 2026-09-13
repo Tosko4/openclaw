@@ -21,15 +21,16 @@ export const MAX_CALL_RECORD_EVENTS = 1000;
 /** Extra metadata entries retained so pruning can safely trim oldest rows. */
 export const CALL_RECORD_EVENT_META_MAX_ENTRIES = MAX_CALL_RECORD_EVENTS + 100;
 /** Maximum chunks allowed for one persisted call record event. */
-export const MAX_CHUNKS_PER_CALL_RECORD_EVENT = 48;
+const MAX_CHUNKS_PER_CALL_RECORD_EVENT = 48;
 export const CALL_RECORD_CHUNK_MAX_ENTRIES =
   MAX_CALL_RECORD_EVENTS * MAX_CHUNKS_PER_CALL_RECORD_EVENT + MAX_CHUNKS_PER_CALL_RECORD_EVENT;
 /** Raw UTF-8 bytes stored per call record chunk before base64 encoding. */
-export const RAW_CALL_RECORD_CHUNK_BYTES = 47 * 1024;
+const RAW_CALL_RECORD_CHUNK_BYTES = 47 * 1024;
+const CALL_RECORD_READ_BATCH_KEYS = 128;
 let callRecordEventSequence = 0;
 
 /** Metadata row for a chunked call record event. */
-type CallRecordEventMeta = {
+export type CallRecordEventMeta = {
   chunkCount: number;
   byteLength: number;
   persistedAt?: number;
@@ -37,7 +38,7 @@ type CallRecordEventMeta = {
 };
 
 /** One base64 chunk for a serialized call record event. */
-type CallRecordEventChunk = {
+export type CallRecordEventChunk = {
   index: number;
   dataBase64: string;
 };
@@ -55,6 +56,10 @@ type CallRecordStateStores = {
   events: PluginStateKeyedStore<CallRecordEventMeta>;
   chunks: PluginStateKeyedStore<CallRecordEventChunk>;
 };
+
+type CallRecordChunkResults = Awaited<
+  ReturnType<NonNullable<CallRecordStateStores["chunks"]["lookupMany"]>>
+>;
 
 /** Return the pre-SQLite JSONL call log path for migration/compat checks. */
 export function resolveVoiceCallLegacyCallLogPath(storePath: string): string {
@@ -98,7 +103,7 @@ function tryCreateCallRecordStateStores(storePath: string): CallRecordStateStore
 }
 
 /** Build the stable storage key for one chunk of an event. */
-function buildChunkKey(eventKey: string, index: number): string {
+export function buildChunkKey(eventKey: string, index: number): string {
   return `${eventKey}:chunk:${String(index).padStart(4, "0")}`;
 }
 
@@ -173,7 +178,7 @@ function countCallRecordChunks(call: CallRecord): number {
 }
 
 /** Truncate oversized call records to fit the bounded plugin state chunk budget. */
-export function prepareVoiceCallRecordForStorage(call: CallRecord): CallRecord {
+function prepareVoiceCallRecordForStorage(call: CallRecord): CallRecord {
   let boundedCall = call;
   if (call.processedEventIds.length > MAX_CALL_REPLAY_KEYS) {
     boundedCall = {
@@ -219,14 +224,8 @@ export function prepareVoiceCallRecordForStorage(call: CallRecord): CallRecord {
   return boundedCall;
 }
 
-/** Register a serialized call record event and its chunks, then prune old events. */
-async function registerCallRecordEvent(
-  stores: CallRecordStateStores,
-  eventKey: string,
-  call: CallRecord,
-  order: { persistedAt: number; sequence: number },
-): Promise<void> {
-  // Capture the snapshot before chunk writes yield to later call mutations.
+/** Encode one bounded record; chunks are produced only when requested by the writer. */
+export function encodeCallRecordEvent(call: CallRecord) {
   const serialized = JSON.stringify(prepareVoiceCallRecordForStorage(call));
   const buffer = Buffer.from(serialized, "utf8");
   const chunkCount = Math.max(1, Math.ceil(buffer.byteLength / RAW_CALL_RECORD_CHUNK_BYTES));
@@ -235,19 +234,32 @@ async function registerCallRecordEvent(
       `voice-call record exceeds SQLite chunk limit (${chunkCount}/${MAX_CHUNKS_PER_CALL_RECORD_EVENT})`,
     );
   }
-  for (let index = 0; index < chunkCount; index += 1) {
-    const chunk = buffer.subarray(
-      index * RAW_CALL_RECORD_CHUNK_BYTES,
-      (index + 1) * RAW_CALL_RECORD_CHUNK_BYTES,
-    );
-    await stores.chunks.register(buildChunkKey(eventKey, index), {
-      index,
-      dataBase64: chunk.toString("base64"),
-    });
+  return {
+    meta: { chunkCount, byteLength: buffer.byteLength },
+    chunk(index: number): CallRecordEventChunk {
+      const chunk = buffer.subarray(
+        index * RAW_CALL_RECORD_CHUNK_BYTES,
+        (index + 1) * RAW_CALL_RECORD_CHUNK_BYTES,
+      );
+      return { index, dataBase64: chunk.toString("base64") };
+    },
+  };
+}
+
+/** Register a serialized call record event and its chunks, then prune old events. */
+async function registerCallRecordEvent(
+  stores: CallRecordStateStores,
+  eventKey: string,
+  call: CallRecord,
+  order: { persistedAt: number; sequence: number },
+): Promise<void> {
+  // Capture the snapshot before chunk writes yield to later call mutations.
+  const encoded = encodeCallRecordEvent(call);
+  for (let index = 0; index < encoded.meta.chunkCount; index += 1) {
+    await stores.chunks.register(buildChunkKey(eventKey, index), encoded.chunk(index));
   }
   await stores.events.register(eventKey, {
-    chunkCount,
-    byteLength: buffer.byteLength,
+    ...encoded.meta,
     persistedAt: order.persistedAt,
     sequence: order.sequence,
   });
@@ -271,6 +283,9 @@ async function deleteCallRecordEventRows(
 
 /** Keep only the newest bounded call record events. */
 async function pruneCallRecordEvents(stores: CallRecordStateStores): Promise<void> {
+  if (stores.events.count && (await stores.events.count()) <= MAX_CALL_RECORD_EVENTS) {
+    return;
+  }
   const rows = await stores.events.entries();
   if (rows.length <= MAX_CALL_RECORD_EVENTS) {
     return;
@@ -281,23 +296,24 @@ async function pruneCallRecordEvents(stores: CallRecordStateStores): Promise<voi
   }
 }
 
+function isValidCallRecordChunkCount(chunkCount: number): boolean {
+  return (
+    Number.isSafeInteger(chunkCount) &&
+    chunkCount >= 1 &&
+    chunkCount <= MAX_CHUNKS_PER_CALL_RECORD_EVENT
+  );
+}
+
 /** Read and reassemble one chunked call record event. */
 async function readCallRecordEvent(
   stores: CallRecordStateStores,
   eventKey: string,
   meta: CallRecordEventMeta,
+  records?: CallRecordChunkResults,
 ): Promise<CallRecord | null> {
-  if (
-    !Number.isSafeInteger(meta.chunkCount) ||
-    meta.chunkCount < 1 ||
-    meta.chunkCount > MAX_CHUNKS_PER_CALL_RECORD_EVENT
-  ) {
+  if (!isValidCallRecordChunkCount(meta.chunkCount)) {
     return null;
   }
-  // Preserve compatibility with published hosts exposing point reads only.
-  const records = await stores.chunks.lookupMany?.(
-    Array.from({ length: meta.chunkCount }, (_, index) => buildChunkKey(eventKey, index)),
-  );
   const chunks: Buffer[] = [];
   for (let index = 0; index < meta.chunkCount; index += 1) {
     const result = records?.[index];
@@ -322,8 +338,39 @@ async function readCallRecordEvents(stores: CallRecordStateStores): Promise<Call
     (a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key),
   );
   const sqliteCalls: PersistedCallRecord[] = [];
-  for (const entry of entries) {
-    const call = await readCallRecordEvent(stores, entry.key, entry.value);
+  let batchEnd = 0;
+  let chunkOffset = 0;
+  let chunkRecords: CallRecordChunkResults | undefined;
+  for (const [entryIndex, entry] of entries.entries()) {
+    if (entryIndex >= batchEnd && stores.chunks.lookupMany) {
+      const keys: string[] = [];
+      for (let next = entryIndex; ; next++) {
+        const row = entries[next];
+        if (!row) {
+          break;
+        }
+        const chunkCount = row.value?.chunkCount;
+        // Stop before malformed metadata so it cannot overtake an earlier chunk error.
+        if (
+          !isValidCallRecordChunkCount(chunkCount) ||
+          keys.length + chunkCount > CALL_RECORD_READ_BATCH_KEYS
+        ) {
+          break;
+        }
+        for (let index = 0; index < chunkCount; index++) {
+          keys.push(buildChunkKey(row.key, index));
+        }
+        batchEnd = next + 1;
+      }
+      chunkRecords = keys.length > 0 ? await stores.chunks.lookupMany(keys) : undefined;
+      chunkOffset = 0;
+    }
+    // Published hosts without lookupMany keep their point-read path.
+    const records = chunkRecords?.slice(chunkOffset, chunkOffset + entry.value.chunkCount);
+    const call = await readCallRecordEvent(stores, entry.key, entry.value, records);
+    if (chunkRecords) {
+      chunkOffset += entry.value.chunkCount;
+    }
     if (call) {
       sqliteCalls.push({
         call,

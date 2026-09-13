@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
@@ -24,7 +25,7 @@ import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import {
   persistedMessageEntryId,
-  readPendingSendFailure,
+  readPendingSendStatus,
   type AssistantMessageExpansionState,
 } from "../chat-thread.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
@@ -264,9 +265,9 @@ export function renderActivityGroup(
               >`
             : nothing
         }
+        ${activityExpanded ? nothing : renderToolFailures(cards)}
         <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>
-      ${activityExpanded ? nothing : renderToolFailures(cards)}
       <div class="chat-activity-group__body" id=${activityBodyId} ?hidden=${!activityExpanded}>
         ${
           activityExpanded
@@ -303,6 +304,20 @@ export function resolveMessageGroupSenderLabel(
   opts: Pick<RenderMessageGroupOptions, "assistantName" | "userId" | "userName" | "userAvatar">,
 ): string {
   const normalizedRole = normalizeRoleForGrouping(group.role);
+  if (normalizedRole === "custom") {
+    const isError = group.messages.every(({ message }) => {
+      const customType = asNullableRecord(message)?.customType;
+      return (
+        customType === "run-failed-before-reply" || customType === "cloud-workspace-recovery-failed"
+      );
+    });
+    if (isError) {
+      return t("chat.messages.errorSender");
+    }
+    return group.messages.every(({ message }) => workspaceResultConflictFromTranscript(message))
+      ? t("chat.workspaceConflict.eventSender")
+      : t("common.system");
+  }
   const assistantName = opts.assistantName ?? "Assistant";
   const resolvedUserName = resolveLocalUserName({
     name: opts.userName ?? null,
@@ -319,11 +334,7 @@ export function resolveMessageGroupSenderLabel(
       ? (userLabel ?? assistantName)
       : normalizedRole === "tool"
         ? t("chat.messages.toolSender")
-        : group.messages.every((item) =>
-              Boolean(workspaceResultConflictFromTranscript(item.message)),
-            )
-          ? t("chat.workspaceConflict.eventSender")
-          : normalizedRole;
+        : normalizedRole;
 }
 
 function isActivityMessageGroup(group: MessageGroup): boolean {
@@ -426,7 +437,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       : normalizedRole === "user" && group.sender
         ? resolveIdentityHue(group.sender)
         : null;
-  const sendFailure = readPendingSendFailure(group.messages.at(-1)?.message);
+  const sendStatus = readPendingSendStatus(group.messages.at(-1)?.message);
   const replyToLabel =
     normalizedRole === "assistant" ? formatSenderLabel(group.replyToSender) : null;
   const replyToTitle = replyToLabel ? t("chat.messages.replyingTo", { name: replyToLabel }) : null;
@@ -443,9 +454,13 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         ? renderForwardedAvatar(group.senderSession?.agentId, opts)
         : renderChatAvatar(
             group.role,
-            { name: assistantName, avatar: opts.assistantAvatar ?? null },
+            {
+              agentId: opts.agentId,
+              name: assistantName,
+              avatar: opts.assistantAvatar ?? null,
+              textAvatar: opts.assistantTextAvatar,
+            },
             { name: opts.userName ?? null, avatar: opts.userAvatar ?? null },
-            opts.resourceBasePath,
             group.sender,
           )
       : nothing;
@@ -530,7 +545,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                 normalizedRole === "user" && (isPeerGroup || avatarPlacement !== "footer")
                   ? "chat-group-footer--persistent-identity"
                   : ""
-              }${sendFailure ? " chat-group-footer--send-failure" : ""}"
+              }${sendStatus ? " chat-group-footer--send-status" : ""}"
             >
               <div class="chat-group-footer__meta">
                 ${isPeerGroup ? nothing : userFooterActions}
@@ -551,7 +566,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                         "chat-sender-name",
                       )
                 }
-                ${renderChatSendStatus(sendFailure, opts)}
+                ${renderChatSendStatus(sendStatus, opts)}
                 ${renderMessageMeta(group.timestamp, meta)}
               </div>
               ${

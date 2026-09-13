@@ -13,7 +13,11 @@ import {
   isPluginCommandExecutionActiveHere,
   waitForPluginCommandExecutions,
 } from "./command-execution-lock.js";
-import type { PluginHostCleanupResult } from "./host-hook-cleanup.types.js";
+import type {
+  PluginHostCleanupResult,
+  PluginHostRegistryRetirement,
+  PluginHostRetirementOptions,
+} from "./host-hook-cleanup.types.js";
 import {
   clearPluginHostRuntimeState,
   dispatchPluginAgentEventSubscriptions,
@@ -41,7 +45,7 @@ export { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js"
 const log = createSubsystemLogger("plugins/runtime");
 const retirements = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginRegistryRetirements"),
-  () => new WeakMap<PluginRegistry, () => Promise<PluginHostCleanupResult>>(),
+  () => new WeakMap<PluginRegistry, PluginHostRegistryRetirement>(),
 );
 type PluginRegistrySnapshot = ReturnType<typeof captureActivePluginRegistrySnapshot>;
 type RegistryOwnerClose = {
@@ -67,6 +71,8 @@ const state = resolveGlobalSingleton<RegistryState>(PLUGIN_REGISTRY_STATE, () =>
   importedPluginIds: new Set<string>(),
 }));
 
+const registryVersions = (state.registryVersions ??= new WeakMap());
+
 function registryHasPluginHostCleanupWork(registry: PluginRegistry): boolean {
   return (
     registry.plugins.some((plugin) => plugin.status === "loaded" || plugin.status === "error") ||
@@ -87,6 +93,13 @@ function isRegistryLive(registry: PluginRegistry): boolean {
 const loadPluginHostCleanupRuntime = createLazyRuntimeModule(
   () => import("./host-hook-cleanup.js"),
 );
+
+// Completed observations must not retain the retiring or successor registry's scope.
+function completedPluginRegistryRetirement(
+  result: PluginHostCleanupResult,
+): PluginHostRegistryRetirement {
+  return async () => ({ ...result, failures: [...result.failures] });
+}
 
 /** Candidate retirement releases resources without changing committed session state. */
 export function disposePluginRegistryInstances(
@@ -131,12 +144,18 @@ export function disposePluginRegistryInstances(
         }),
     );
     // Cache initialization, not one caller's self-retirement acknowledgment.
-    wait = async () => (await (await initialized)?.()) ?? { cleanupCount: 0, failures: [] };
+    wait = async (observation) =>
+      (await (await initialized)?.(observation)) ?? { cleanupCount: 0, failures: [] };
     retirements.set(registry, wait);
     // Epoch abort observers can reenter retirement and must receive this same completion.
     quiescePluginRegistry(registry);
     void pluginInstanceInvocation
       .exit(wait)
+      .then((result) => {
+        if (retirements.get(registry) === wait) {
+          retirements.set(registry, completedPluginRegistryRetirement(result));
+        }
+      })
       .catch((error: unknown) => log.warn(`plugin host registry cleanup failed: ${String(error)}`));
   }
   return wait();
@@ -205,9 +224,10 @@ function retirePluginRegistryIfUnused(
 /** Lifecycle callers observe the same teardown that publication started. */
 export async function waitForPluginRegistryRetirement(
   registry: PluginRegistry,
+  options?: PluginHostRetirementOptions,
 ): Promise<PluginHostCleanupResult> {
   return (
-    (await retirements.get(getPluginRegistryResourceOwner(registry))?.()) ?? {
+    (await retirements.get(getPluginRegistryResourceOwner(registry))?.(options)) ?? {
       cleanupCount: 0,
       failures: [],
     }
@@ -328,6 +348,9 @@ function installActivePluginRegistry(
       : undefined;
   state.activeRegistry = registry;
   const installedVersion = ++state.activeVersion;
+  if (registry) {
+    registryVersions.set(registry, installedVersion);
+  }
   state.key = params.key;
   state.workspaceDir = params.workspaceDir;
   state.runtimeSubagentMode = params.runtimeSubagentMode;
@@ -493,6 +516,7 @@ export function requireActivePluginRegistry(): PluginRegistry {
   state.activeRegistry = createEmptyPluginRegistry();
   markPluginRegistryActive(state.activeRegistry);
   state.activeVersion += 1;
+  registryVersions.set(state.activeRegistry, state.activeVersion);
   settlePreparedMessageToolCatalog(state.activeRegistry, state.activeVersion);
   syncPluginAgentEventBridge();
   return state.activeRegistry;

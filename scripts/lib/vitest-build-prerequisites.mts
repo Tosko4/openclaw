@@ -108,6 +108,18 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "src/plugins",
   },
+  ...[
+    "test/plugins/codex-model-catalog.gateway.test.ts",
+    "src/gateway/server-methods/models-list.freshness.integration.test.ts",
+  ].map((file) => ({
+    file,
+    configs: [
+      "test/vitest/vitest.gateway-methods.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime" as const,
+    dir: "",
+  })),
   ...["src/config/config-startup-corpus.test.ts", "src/config/state-startup-corpus.test.ts"].map(
     (file) => ({
       file,
@@ -178,6 +190,15 @@ const runtimeConsumers = [
   {
     file: "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
     configs: ["test/vitest/vitest.tooling.config.ts"],
+    mode: "runtime",
+    dir: "",
+  },
+  {
+    file: "src/gateway/server.chat-cli-auth.test.ts",
+    configs: [
+      "test/vitest/vitest.gateway-server-isolated.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
     mode: "runtime",
     dir: "",
   },

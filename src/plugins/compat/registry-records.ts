@@ -12,6 +12,30 @@ export const PLUGIN_COMPAT_RECORDS = [
   ...DEPRECATION_MARKING_COMPAT_RECORDS,
   MEDIA_LEGACY_PROJECTION_COMPAT_RECORD,
   {
+    code: "plugin-tasks-sync-reads",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-09-12",
+    deprecated: "2026-09-12",
+    warningStarts: "2026-09-12",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await the 14 read methods on api.runtime.tasks.async.runs, flows, and managedFlows, plus createManaged, tryCreateManaged, setWaiting, resume, finish, fail, and requestCancel on api.runtime.tasks.async.managedFlows. Reconcile outcome-unknown errors before retrying creation. Retain synchronous methods until supported external-plugin migration and explicit breaking-release approval; native cancellation and runTask remain on the existing surface.",
+    docsPath: "/plugins/sdk-runtime/background-work",
+    surfaces: [
+      "api.runtime.tasks.runs get/list/findLatest/resolve",
+      "api.runtime.tasks.flows get/list/findLatest/resolve/getTaskSummary",
+      "api.runtime.tasks.managedFlows get/list/findLatest/resolve/getTaskSummary",
+      "api.runtime.tasks.managedFlows createManaged/tryCreateManaged/setWaiting/resume/finish/fail/requestCancel",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    ],
+    tests: ["src/infra/sqlite-worker-task-runtime.test.ts", "extensions/webhooks/index.test.ts"],
+    releaseNote:
+      "Plugins can opt into worker-backed task and flow reads plus managed-flow writes through tasks.async while synchronous methods remain available for external compatibility. Cold registry and configuration preparation remains synchronous.",
+  },
+  {
     code: "plugin-state-sync-keyed-store",
     status: "deprecated",
     owner: "sdk",

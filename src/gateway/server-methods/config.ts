@@ -22,9 +22,11 @@ import {
   readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
 } from "../../config/io.js";
+import { ConfigWritePostCommitError } from "../../config/io.write-errors.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { applyMergePatch, createMergePatch } from "../../config/merge-patch.js";
 import { normalizeSubmittedConfigModelRefs } from "../../config/model-input-normalization.js";
+import { isBuiltInModelProviderOverlayId } from "../../config/model-provider-overlay-ids.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import {
   collectBaseArrayPaths,
@@ -41,9 +43,9 @@ import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "../../config/validation.js";
-import { isBuiltInModelProviderOverlayId } from "../../config/zod-schema.core.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPlainObject } from "../../infra/plain-object.js";
+import { redactToolDetail } from "../../logging/redact.js";
 import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -781,6 +783,23 @@ async function commitGatewayConfigWriteOrRespond(
   try {
     return await commitGatewayConfigWrite(params);
   } catch (error) {
+    if (error instanceof ConfigWritePostCommitError) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, redactToolDetail(formatErrorMessage(error)), {
+          details: {
+            publication: error.publication,
+            rollbackStatus: error.rollbackStatus,
+            configPath: error.configPath,
+            ...(error.recoveryBackupPath !== undefined
+              ? { recoveryBackupPath: error.recoveryBackupPath }
+              : {}),
+          },
+        }),
+      );
+      return null;
+    }
     if (!(error instanceof ConfigMutationConflictError)) {
       throw error;
     }
@@ -949,8 +968,7 @@ export const configHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         path: writeResult.path,
-        // Additive ack hash: matches the hash config.get would report for the
-        // persisted bytes, so writers can adopt it without a reload.
+        // Writers adopt the committed revision without a reload.
         ...(writeResult.hash
           ? { hash: context.configRevisionProjector.projectRawHash(writeResult.hash) }
           : {}),
