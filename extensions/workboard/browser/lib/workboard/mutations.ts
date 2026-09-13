@@ -352,12 +352,13 @@ export async function deleteWorkboardCard(params: {
     const referenceUpdates = new Map(
       (result.referenceUpdates ?? []).map((receipt) => [receipt.id, receipt]),
     );
-    const remaining = removeCardAndReferences(state.cards, params.cardId).map((card) => {
+    const remaining = removeCardAndReferences(state.cards, params.cardId);
+    for (const [index, card] of remaining.entries()) {
       const receipt = referenceUpdates.get(card.id);
-      return receipt && card.updatedAt === receipt.previousUpdatedAt
-        ? { ...card, updatedAt: receipt.updatedAt }
-        : card;
-    });
+      if (receipt && card.updatedAt === receipt.previousUpdatedAt) {
+        remaining[index] = { ...card, updatedAt: receipt.updatedAt };
+      }
+    }
     setWorkboardCards(state, remaining);
     return result;
   } catch (error) {
