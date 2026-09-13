@@ -199,6 +199,35 @@ describe("plugin session summary freshness", () => {
     await vi.waitFor(() => expect(element.textContent).toContain("Reply received while hidden"));
   });
 
+  it("does not resume progress requests after removal with an update queued", async () => {
+    const { element, requests, current } = setup();
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    requests[0]!.resolve(history("Initial reply"));
+    await vi.waitFor(() => expect(element.textContent).toContain("Initial reply"));
+    await element.updateComplete;
+    const progressRequests = () =>
+      current().request.mock.calls.filter(([method]) => method === "progressCard.get");
+    expect(progressRequests()).toHaveLength(1);
+
+    element.requestUpdate();
+    element.remove();
+    await element.updateComplete;
+    current().opts.onEvent?.(
+      createGatewayEvent("progressCard.changed", { sessionKey: "agent:main:one", revision: 2 }),
+    );
+    await element.updateComplete;
+    expect(progressRequests()).toHaveLength(1);
+    expect(requests).toHaveLength(1);
+
+    document.body.append(element);
+    element.requestUpdate();
+    await element.updateComplete;
+    await vi.waitFor(() => expect(progressRequests()).toHaveLength(2));
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    requests[1]!.resolve(history("Reconnected reply"));
+    await vi.waitFor(() => expect(element.textContent).toContain("Reconnected reply"));
+  });
+
   it("rejects an old session response and reloads after reconnect without a parent render", async () => {
     const { element, requests, emit, current } = setup();
     await vi.waitFor(() => expect(requests).toHaveLength(1));
