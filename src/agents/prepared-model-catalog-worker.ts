@@ -21,6 +21,7 @@ import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { copyRuntimeAuthProfileUsageObserver } from "./auth-profiles/usage-observer.js";
 import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
@@ -399,6 +400,7 @@ export function createPreparedModelCatalogWorker(
       // validateResult fences this reply before the pool can resolve it.
       throw mismatch(message);
     }
+    copyRuntimeAuthProfileUsageObserver(params.agentFacts.authStore, message.authStore);
     return message;
   };
 

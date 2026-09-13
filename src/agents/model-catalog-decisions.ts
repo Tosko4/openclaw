@@ -15,6 +15,7 @@ import { resolveExternalCliAuthScopeFromConfig } from "./auth-profiles/external-
 import { materializePersonalAuthProfile } from "./auth-profiles/personal-profiles.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { prepareRuntimeAuthProfileUsageObserver } from "./auth-profiles/usage-observer.js";
 import { listCliRuntimeModelBackendBindings } from "./cli-backends.js";
 import { resolveAgentHarnessAvailabilityDecision } from "./harness/availability.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
@@ -194,7 +195,8 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     params.workspaceDir ??
     resolveAgentWorkspaceDir(params.cfg, params.agentId) ??
     resolveDefaultAgentWorkspaceDir();
-  let authStore = params.preparedAuthStore;
+  const authObserver = prepareRuntimeAuthProfileUsageObserver(params.preparedAuthStore);
+  let authStore = authObserver.authStore;
   const preferredProfilesByProvider = new Map<string, string>();
   const personalProviders = new Set<string>();
   // A persisted session pin wins over the current viewer's links. Only these
@@ -332,7 +334,9 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
             }
     : evaluateStoredEntry;
   const isCurrent = () =>
-    Date.now() < authValidUntil && (params.isCurrent?.() ?? params.observationConfig === undefined);
+    Date.now() < authValidUntil &&
+    (params.isCurrent?.() ?? params.observationConfig === undefined) &&
+    authObserver.isCurrent();
   return {
     evaluateEntry,
     evaluateNative,

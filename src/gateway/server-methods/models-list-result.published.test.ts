@@ -1,5 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles/runtime-snapshots.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import {
+  bindRuntimeAuthProfileUsageObserver,
+  captureRuntimeAuthProfileUsageObserver,
+} from "../../agents/auth-profiles/usage-observer.js";
+import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   readPreparedCatalog,
@@ -68,27 +75,102 @@ describe("models.list published inventory", () => {
   });
 
   it.each(["default", "configured", "provider-config", "all"] as const)(
-    "reads the %s view without discovery",
+    "reads recovered auth in the %s view without discovery",
     async (view) => {
-      await withPublishedCatalog(async (context) => {
-        const published = expectDefined(
-          await readPreparedCatalog(context, "main"),
-          "Published catalog fixture must supply its owner",
-        );
-        const loadDeferred = vi.fn(async () => {
-          throw new Error("Ordinary inventory attempted discovery");
-        });
-        registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
-          loadDeferred,
-          readPrepared: async () => published,
-        });
-        await buildModelsListResult({
-          source: { kind: "gateway", context },
-          agentId: "main",
-          params: { view },
-        });
-        expect(loadDeferred).not.toHaveBeenCalled();
-      });
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "published-catalog-recovery-",
+          env: { ANTHROPIC_API_KEY: undefined },
+        },
+        async (state) => {
+          const profileId = "anthropic:catalog";
+          const blocked: AuthProfileStore = {
+            version: 1,
+            profiles: {
+              [profileId]: {
+                type: "api_key",
+                provider: "anthropic",
+                key: "synthetic-catalog-key",
+              },
+            },
+            usageStats: { [profileId]: { blockedUntil: Date.now() + 86_400_000 } },
+          };
+          await state.writeAuthProfiles(blocked);
+          setRuntimeAuthProfileStoreSnapshot(blocked, state.agentDir());
+          const observe = captureRuntimeAuthProfileUsageObserver({
+            agentDir: state.agentDir(),
+            env: state.env,
+          });
+          const model: ModelDefinitionConfig = {
+            id: "published-model",
+            name: "Published model",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            maxTokens: 1024,
+          };
+          const context = createModelsListTestContext({
+            agentDir: state.agentDir(),
+            workspaceDir: state.workspaceDir,
+            catalogComplete: true,
+            preparedAuthModes: { anthropic: "api_key" },
+            catalog: [
+              {
+                id: model.id,
+                name: model.name,
+                provider: "anthropic",
+                api: "anthropic-messages",
+              },
+            ],
+            cfg: {
+              models: {
+                providers: {
+                  anthropic: {
+                    baseUrl: "https://api.anthropic.com",
+                    api: "anthropic-messages",
+                    models: [model],
+                  },
+                },
+              },
+              agents: {
+                defaults: {
+                  model: { primary: "anthropic/published-model" },
+                  modelPolicy: { allow: ["anthropic/*"] },
+                  models: { "anthropic/published-model": { agentRuntime: { id: "openclaw" } } },
+                },
+              },
+            },
+          });
+          const published = expectDefined(
+            await readPreparedCatalog(context, "main"),
+            "Published catalog fixture must supply its owner",
+          );
+          bindRuntimeAuthProfileUsageObserver(published.authStore, observe);
+          setRuntimeAuthProfileStoreSnapshot(
+            { ...blocked, usageStats: { [profileId]: { errorCount: 0 } } },
+            state.agentDir(),
+          );
+          const loadDeferred = vi.fn(async () => {
+            throw new Error("Ordinary inventory attempted discovery");
+          });
+          registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
+            loadDeferred,
+            readPrepared: async () => published,
+          });
+          const result = await buildModelsListResult({
+            source: { kind: "gateway", context },
+            agentId: "main",
+            params: { view },
+          });
+          expect(result.models).toEqual([
+            expect.objectContaining({ id: "published-model", available: true }),
+          ]);
+          expect(result.models[0]).not.toHaveProperty("unavailableReason");
+          expect(result.models[0]).not.toHaveProperty("unavailableUntil");
+          expect(loadDeferred).not.toHaveBeenCalled();
+        },
+      );
     },
   );
 

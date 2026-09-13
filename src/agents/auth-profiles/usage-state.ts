@@ -7,6 +7,25 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
+/** Availability observers ignore usage counters and successful-request bookkeeping. */
+export function fingerprintAuthProfileAvailabilityState(
+  stats: ProfileUsageStats | undefined,
+): string {
+  return JSON.stringify([
+    stats?.blockedUntil,
+    stats?.blockedReason,
+    stats?.blockedSource,
+    stats?.blockedModel,
+    stats?.blockedScope,
+    stats?.cooldownUntil,
+    stats?.cooldownReason,
+    stats?.cooldownClassification,
+    stats?.cooldownModel,
+    stats?.disabledUntil,
+    stats?.disabledReason,
+  ]);
+}
+
 /** Clears failure windows while preserving unrelated usage history. */
 export function resetAuthProfileFailureState(
   existing: ProfileUsageStats,

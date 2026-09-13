@@ -4,11 +4,15 @@ import {
   getRuntimeAuthProfileStoreSnapshotRevision,
   type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
+import { copyRuntimeAuthProfileUsageObserver } from "../../agents/auth-profiles/usage-observer.js";
 import {
   getPublishedPreparedModelCatalogOwnerSnapshot,
   type GetPublishedPreparedModelCatalogOwnerParams,
 } from "../../agents/prepared-model-catalog.js";
-import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-runtime-auth.js";
+import {
+  getPreparedModelFullCatalogAuth,
+  getPreparedModelRuntimeAuthStore,
+} from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
@@ -142,14 +146,19 @@ function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedGenerati
       if (fullModelCatalog && !fullCatalogAuth) {
         throw new Error("prepared full model catalog omitted its auth generation");
       }
+      const authStore = fullCatalogAuth?.authStore ??
+        deps.getPreparedAuthStore(owner.agentDir, owner.inheritedAuthDir) ?? {
+          version: 1,
+          profiles: {},
+        };
+      if (!fullCatalogAuth) {
+        // The runtime getter clones its store; keep the prepared owner's observation scope.
+        copyRuntimeAuthProfileUsageObserver(getPreparedModelRuntimeAuthStore(owner), authStore);
+      }
       return {
         agentId,
         owner,
-        authStore: fullCatalogAuth?.authStore ??
-          deps.getPreparedAuthStore(owner.agentDir, owner.inheritedAuthDir) ?? {
-            version: 1,
-            profiles: {},
-          },
+        authStore,
         authModes: fullCatalogAuth?.authModes ?? owner.authModes,
         authStoreRevision: `${deps.getAuthStoreRevision(owner.agentDir)}:${deps.getAuthStoreRevision(owner.inheritedAuthDir)}`,
         modelCatalog: fullModelCatalog ?? owner.modelCatalog,

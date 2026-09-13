@@ -141,6 +141,10 @@ catalog discovery. Configured subscription modes remain attached to direct
 credentials, and successful OAuth preparation supplies the resolved current token
 to its catalog consumer rather than the captured store's older token.
 
+For stored profiles, cached discovery does not freeze quota and cooldown status.
+Gateway model availability reflects health updates for the same credential without
+rescanning model inventory or interrupting an in-progress turn.
+
 Environment-backed profiles keep usable values from the discovery environment,
 including cold command and worker paths. When that material is missing, only the
 selected profile's activated snapshot may supply it; otherwise discovery reports

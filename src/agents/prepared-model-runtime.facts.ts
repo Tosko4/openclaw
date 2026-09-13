@@ -32,6 +32,10 @@ import {
 } from "./agent-model-discovery.js";
 import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
 import { getPreparedRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
+import {
+  bindRuntimeAuthProfileUsageObserver,
+  captureRuntimeAuthProfileUsageObserver,
+} from "./auth-profiles/usage-observer.js";
 import { buildInlineProviderModels } from "./embedded-agent-runner/model.inline-provider.js";
 import {
   createBundledStaticCatalogModelResolver,
@@ -96,6 +100,7 @@ function prepareAgentFacts(
   input: PreparedModelRuntimeInput,
   catalogMode: PreparedModelRuntimeCatalogMode,
   ambientCredentials: Readonly<AgentCredentialMap>,
+  usageObserver: ReturnType<typeof captureRuntimeAuthProfileUsageObserver>,
   additionalProviderIds: readonly string[] = [],
   includeCredentialProviders = catalogMode === "live",
 ): PreparedModelRuntimeAgentBaseFacts {
@@ -113,6 +118,7 @@ function prepareAgentFacts(
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     ...(input.env ? { env } : {}),
   });
+  bindRuntimeAuthProfileUsageObserver(authFacts.store, usageObserver);
   const credentials = authFacts.credentials;
   const templateAuthStorage = authFacts.authStorage;
   const rawConfiguredModelRefs = collectPreparedModelRuntimeConfiguredRefs(
@@ -185,6 +191,10 @@ export async function prepareWorkspaceBuildGroup(
     throw new Error("prepared model runtime workspace group is empty");
   }
   const env = input.env ?? process.env;
+  const authInputs = inputs.map((candidate) => ({
+    candidate,
+    usageObserver: captureRuntimeAuthProfileUsageObserver(candidate),
+  }));
   const reportStage = (stage: string) =>
     options.onStage?.(`${stage}; agent ${input.agentId ?? "standalone"}`);
   reportStage("workspace plugins");
@@ -378,12 +388,13 @@ export async function prepareWorkspaceBuildGroup(
     const ambientCredentialsMs = performance.now() - ambientCredentialsStartedAt;
     const agentFactsStartedAt = performance.now();
     reportStage("agent facts");
-    const agentBaseFacts = inputs.map((candidate) =>
+    const agentBaseFacts = authInputs.map(({ candidate, usageObserver }) =>
       withAgentRosterFactsBatch(candidate.config, () =>
         prepareAgentFacts(
           candidate,
           catalogMode,
           ambientCredentials,
+          usageObserver,
           options.providerDiscoveryProviderIds,
           options.includeCredentialProviders,
         ),
