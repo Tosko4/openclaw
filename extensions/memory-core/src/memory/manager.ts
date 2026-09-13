@@ -224,7 +224,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     acquireLocalService?: MemoryCoreAcquireLocalService;
     maintenanceSource?: MemoryIndexManager;
   }) {
-    super();
+    super(params.maintenanceSource?.automaticRebuildNotice);
     this.managerRegistry = params.managerRegistry;
     const source = params.maintenanceSource;
     const effectiveSettings =
@@ -355,21 +355,20 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     if (this.syncing) {
       return await this.syncing;
     }
-    await this.syncOutcomes.track(
-      async () =>
-        await runMemorySearchMaintenance({
-          reason: params.reason,
-          takeDirtyGeneration: () => this.takeReindexRetryStateForMaintenance(),
-          restoreDirtyGeneration: (generation) => this.restoreReindexRetryState(generation),
-          acquireManager: async () =>
-            await MemoryIndexManager.get({
-              cfg: this.cfg,
-              agentId: this.agentId,
-              purpose: "maintenance",
-              acquireLocalService: this.acquireLocalService,
-              maintenanceSource: this,
-            }),
-        }),
+    await this.syncOutcomes.track(() =>
+      runMemorySearchMaintenance({
+        reason: params.reason,
+        takeDirtyGeneration: () => this.takeSearchMaintenanceRequest(),
+        restoreDirtyGeneration: (generation) => this.restoreReindexRetryState(generation),
+        acquireManager: () =>
+          MemoryIndexManager.get({
+            cfg: this.cfg,
+            agentId: this.agentId,
+            purpose: "maintenance",
+            acquireLocalService: this.acquireLocalService,
+            maintenanceSource: this,
+          }),
+      }),
     );
   }
 

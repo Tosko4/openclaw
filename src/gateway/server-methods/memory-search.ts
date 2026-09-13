@@ -1,4 +1,3 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
@@ -10,6 +9,7 @@ import type {
 } from "../../memory-host-sdk/host/types.js";
 import { resolveMemorySearchStaleness } from "../../memory-host-sdk/host/types.js";
 import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -154,15 +154,12 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    let rebuildNotice: Record<string, unknown> | null = null;
-    let rebuildSequence: unknown;
-    const readRebuildWarning = () =>
-      rebuildNotice?.sequence !== rebuildSequence && typeof rebuildNotice?.warning === "string"
-        ? rebuildNotice.warning
-        : undefined;
+    let readRebuildWarning: () => string | undefined = () => undefined;
     try {
-      rebuildNotice = asNullableRecord(manager.status().custom?.automaticRebuildNotice);
-      rebuildSequence = rebuildNotice?.sequence;
+      const { captureMemoryRebuildNotice } = loadBundledPluginPublicArtifactModuleSync<{
+        captureMemoryRebuildNotice: (status: MemoryProviderStatus) => () => string | undefined;
+      }>({ dirName: "memory-core", artifactBasename: "search-api.js" });
+      readRebuildWarning = captureMemoryRebuildNotice(manager.status());
       const results = await manager.search(query, searchOptions);
       const status = manager.status();
       const staleness = resolveMemorySearchStaleness(status, agentId);

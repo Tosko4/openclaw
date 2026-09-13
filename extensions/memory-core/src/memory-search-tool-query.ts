@@ -24,7 +24,10 @@ export function buildPausedMemoryIndexUnavailableResult(
   diagnostic: MemoryIndexIdentityDiagnostic,
   params: {
     agentId: string;
-    status: Pick<MemoryProviderStatus, "provider" | "requestedProvider" | "lastSyncError">;
+    status: Pick<
+      MemoryProviderStatus,
+      "provider" | "requestedProvider" | "lastSyncError" | "custom"
+    >;
   },
 ) {
   const { error, warning, action } = resolveMemoryIndexSearchDiagnostic(

@@ -1,12 +1,13 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MEMORY_CHUNKING_VERSION } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readMemoryDatabaseRevision } from "./memory/manager-db.js";
 import { createManagerIndexFixture } from "./memory/manager-index.test-support.js";
 import { MEMORY_INDEX_PROVENANCE_VERSION } from "./memory/manager-reindex-state.js";
 import { createMemorySearchTool, testing } from "./tools.js";
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./memory/index.js");
+const { MemoryIndexManager } = await import("./memory/manager.js");
 const versions = [
   { versionKey: "provenanceVersion", currentVersion: MEMORY_INDEX_PROVENANCE_VERSION },
   { versionKey: "chunkingVersion", currentVersion: MEMORY_CHUNKING_VERSION },
@@ -138,6 +139,111 @@ describe("memory_search index versions", () => {
     expect(fixture.provider.embedBatchCalls).toBe(embedded + 1);
   });
 
+  it("discloses search rebuilding an older empty index after a file gains content", async () => {
+    const file = path.join(fixture.paths.memory, "2026-01-12.md");
+    await fs.writeFile(file, "");
+    const { cfg, db, embedded } = await seedIndex({ provenanceVersion: 0 });
+    expect(db.prepare("SELECT count(*) AS count FROM memory_index_chunks").get()?.count).toBe(0);
+    await fs.writeFile(file, "Alpha memory added after the old empty index.");
+    const tool = createMemorySearchTool({ config: cfg, agentId: "main" })!;
+    const result = await tool.execute("empty-index-upgrade", { query: "alpha", corpus: "memory" });
+    expect(result.details).toMatchObject({
+      results: [expect.objectContaining({ path: "memory/2026-01-12.md" })],
+      warning: expect.stringContaining("provider cost"),
+    });
+    expect(fixture.provider.embedBatchCalls).toBe(embedded + 1);
+  });
+
+  it("discloses a full retry handed to detached maintenance before embedding finishes", async () => {
+    const cfg = fixture.createConfig({
+      provider: "openai",
+      fallback: "none",
+      vectorEnabled: false,
+    });
+    cfg.memory = { ...cfg.memory, search: { ...cfg.memory?.search, cache: { enabled: false } } };
+    const embeddings = await import("./memory/embeddings.js");
+    const createProvider = embeddings.createEmbeddingProvider;
+    let failSync = false;
+    let holdSync = false;
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const acquire = createDeferred<void>();
+    const getManager = MemoryIndexManager.get.bind(MemoryIndexManager);
+    const get = vi.spyOn(MemoryIndexManager, "get").mockImplementation(async (params) => {
+      if (params.purpose === "maintenance") {
+        await acquire.promise;
+      }
+      return await getManager(params);
+    });
+    const create = vi
+      .spyOn(embeddings, "createEmbeddingProvider")
+      .mockImplementation(async (...args) => {
+        const result = await createProvider(...args);
+        const provider = result.provider;
+        if (!provider) {
+          throw new Error("fixture provider missing");
+        }
+        return {
+          ...result,
+          provider: {
+            ...provider,
+            embedBatch: async (inputs) => {
+              if (failSync) {
+                throw Object.assign(new Error("HTTP 400: synthetic reindex failure"), {
+                  status: 400,
+                });
+              }
+              if (holdSync) {
+                entered.resolve();
+                await release.promise;
+              }
+              return await provider.embedBatch(inputs);
+            },
+          },
+        };
+      });
+    try {
+      const manager = await fixture.getFreshManager(cfg);
+      await manager.sync({ reason: "cli", force: true });
+      failSync = true;
+      await expect(manager.sync({ reason: "cli", force: true })).rejects.toThrow("HTTP 400");
+      failSync = false;
+      holdSync = true;
+      const embedded = fixture.provider.embedBatchCalls;
+      const tool = createMemorySearchTool({ config: cfg, agentId: "main" })!;
+      const result = await tool.execute("detached-rebuild", { query: "alpha", corpus: "memory" });
+      expect(result.details).toMatchObject({
+        results: [expect.objectContaining({ path: "memory/2026-01-12.md" })],
+        warning: expect.stringContaining("provider cost"),
+      });
+      // The next search starts after the request notice but before the detached writer admits it.
+      const queryEntered = createDeferred<void>();
+      fixture.provider.beforeEmbedQuery = async () => {
+        queryEntered.resolve();
+        await entered.promise;
+      };
+      const concurrent = tool.execute("detached-admission", { query: "alpha", corpus: "memory" });
+      await queryEntered.promise;
+      acquire.resolve();
+      const concurrentResult = await concurrent;
+      expect(concurrentResult.details).toHaveProperty(
+        "warning",
+        expect.stringContaining("provider cost"),
+      );
+      expect(fixture.provider.embedBatchCalls).toBe(embedded);
+      release.resolve();
+      await manager.close();
+      expect(fixture.provider.embedBatchCalls).toBe(embedded + 1);
+    } finally {
+      acquire.resolve();
+      release.resolve();
+      fixture.provider.beforeEmbedQuery = null;
+      await closeAllMemorySearchManagers();
+      get.mockRestore();
+      create.mockRestore();
+    }
+  });
+
   it("keeps the rebuild cost warning when a search deadline expires during embedding", async () => {
     const { cfg } = await seedIndex({ provenanceVersion: 0 }, "batch-test");
     const entered = createDeferred<void>();
@@ -161,3 +267,5 @@ describe("memory_search index versions", () => {
     }
   });
 });
+import fs from "node:fs/promises";
+import path from "node:path";

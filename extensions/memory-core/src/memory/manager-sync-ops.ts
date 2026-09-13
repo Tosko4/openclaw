@@ -80,11 +80,25 @@ export type MemorySemanticProviderGeneration = Extract<
 const log = createSubsystemLogger("memory");
 
 export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
-  protected readonly automaticRebuildNotice = { sequence: 0, warning: "" };
+  protected readonly automaticRebuildNotice: { sequence: number; warning: string };
+
+  protected constructor(notice?: { sequence: number; warning: string }) {
+    super();
+    this.automaticRebuildNotice = notice ?? { sequence: 0, warning: "" };
+  }
 
   protected recordAutomaticRebuild(): void {
     this.automaticRebuildNotice.sequence += 1;
     this.automaticRebuildNotice.warning = `Automatic memory index repair was requested. To rebuild manually, run: ${formatMemoryIndexRebuildGuidance({ requestedProvider: this.settings.provider }, this.agentId)}`;
+  }
+
+  protected takeSearchMaintenanceRequest() {
+    const generation = this.takeReindexRetryStateForMaintenance();
+    // The request must be visible before detached acquisition or embedding finishes.
+    if (generation.memoryFullRetryDirty || generation.sessionsFullRetryDirty) {
+      this.recordAutomaticRebuild();
+    }
+    return generation;
   }
 
   protected abstract readonly createProvider: MemoryManagerProviderFactory;
@@ -329,7 +343,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       }
       try {
         if (needsFullReindex) {
-          if (params?.reason !== "cli" && hasIndexedChunks) {
+          if (params?.reason !== "cli") {
             this.recordAutomaticRebuild();
           }
           await this.runInPlaceReindex({
