@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
+import * as tar from "tar";
 import { describe, expect, it } from "vitest";
 import {
   closeOpenClawStateDatabase,
@@ -51,11 +52,17 @@ function runBackupCli(params: {
 
 describe("backup create CLI", () => {
   it.each([true, false])(
-    "backup create retains declared owners under state write load (includeWorkspace=%s)",
+    "backup create retains workspace-discovered owners under state write load (includeWorkspace=%s)",
     async (includeWorkspace) => {
       await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const pluginRoot = state.statePath("extensions", "backup-fixture");
+        const pluginRoot = path.join(
+          state.workspaceDir,
+          ".openclaw",
+          "extensions",
+          "backup-fixture",
+        );
         await fs.mkdir(pluginRoot, { recursive: true });
+        await fs.writeFile(path.join(state.workspaceDir, "workspace-only-marker.txt"), "workspace");
         await fs.writeFile(
           path.join(pluginRoot, "package.json"),
           JSON.stringify({
@@ -79,7 +86,7 @@ describe("backup create CLI", () => {
           }),
         );
         await state.writeConfig({
-          agents: { entries: { main: {} } },
+          agents: { entries: { main: { workspace: state.workspaceDir } } },
           plugins: { allow: ["backup-fixture"], entries: { "backup-fixture": { enabled: true } } },
         });
         const root = openOpenClawStateDatabase();
@@ -118,9 +125,10 @@ describe("backup create CLI", () => {
             writer.once("message", () => resolve());
             writer.once("error", reject);
           });
+          const outputPath = state.path("backup.tar.gz");
           const result = await runBackupCli({
             env: { ...process.env, ...state.env },
-            outputPath: state.path("backup.tar.gz"),
+            outputPath,
             includeWorkspace,
           });
           expect(result.code, result.stderr).toBe(0);
@@ -128,6 +136,17 @@ describe("backup create CLI", () => {
           expect(archive.agentRoots).toEqual([expect.objectContaining({ agentId: "main" })]);
           expect(archive.verified).toBe(true);
           expect(archive.warnings ?? []).toEqual([]);
+          const entries: string[] = [];
+          await tar.t({
+            file: outputPath,
+            onReadEntry: (entry) => {
+              entries.push(entry.path);
+            },
+          });
+          expect(entries.some((entry) => entry.endsWith("/plugin-data/records.sqlite"))).toBe(true);
+          expect(entries.some((entry) => entry.endsWith("/workspace-only-marker.txt"))).toBe(
+            includeWorkspace,
+          );
         } finally {
           writer.postMessage("stop", []);
           expect(await finished).toBe(0);
