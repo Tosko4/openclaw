@@ -236,6 +236,29 @@ struct GatewayConnectionBrowserSessionTests {
 @Suite(.serialized)
 struct MacGatewayBrowserSessionStoreTests {
     @Test @MainActor
+    func `cancelled admission leaves an existing sign in current`() async throws {
+        try await self.withIsolatedStore { store in
+            let url = try #require(URL(string: "wss://cancelled-admission-\(UUID().uuidString).example.test/"))
+            let current = try await store.beginBrowserSignIn(url: url)
+            let gate = GatewayConnectionSuspensionGate()
+            let pending = Task {
+                await gate.suspend()
+                return try await store.beginBrowserSignIn(url: url)
+            }
+            await gate.waitUntilStarted()
+            pending.cancel()
+            await gate.open()
+            var admitted: MacGatewayProfileStore.BrowserSignInAttempt?
+            var cancelled = false
+            do { admitted = try await pending.value } catch { cancelled = error is CancellationError }
+            #expect(cancelled)
+            #expect(current.isCurrent)
+            if let admitted { await store.cancelBrowserSignIn(admitted) }
+            await store.cancelBrowserSignIn(current)
+        }
+    }
+
+    @Test @MainActor
     func `failed same-account renewal refreshes the surviving browser credentials`() async throws {
         try await self.withIsolatedStore { store in
             let host = "failed-renewal-\(UUID().uuidString.lowercased()).example.test"
