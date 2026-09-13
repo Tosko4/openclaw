@@ -68,12 +68,6 @@ export const TSGO_CORE_TEST_SHARDS = [
     config: "test/tsconfig/tsconfig.test.packages.json",
     sparseRoots: ["packages", "src", "ui/src"],
   },
-  // Append partitions so existing round-robin stripe assignments stay stable.
-  {
-    name: "agents-subagents",
-    group: "src",
-    config: "test/tsconfig/tsconfig.core.test.agents-subagents.json",
-  },
 ] as const;
 
 export const TSGO_CORE_GRAPHS = [
