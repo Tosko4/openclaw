@@ -242,9 +242,13 @@ sudo loginctl enable-linger $(whoami)
 
 On a headless server without a desktop session, also make sure `XDG_RUNTIME_DIR` is set (`export XDG_RUNTIME_DIR=/run/user/$(id -u)`) before retrying `systemctl --user` commands.
 
-Service inspection uses the private user-manager socket when available. Broker
-queries prefer `$XDG_RUNTIME_DIR/bus` over a stale shell session-bus address.
-If neither transport reaches the manager, check `XDG_RUNTIME_DIR`, log in once
+Service inspection preserves an explicit `DBUS_SESSION_BUS_ADDRESS` that reaches
+the user manager. Otherwise it tries `$XDG_RUNTIME_DIR/bus`, then the private
+manager socket for inspection. Install, status, and update admission reuse the
+selected route; `gateway status --deep` shows it. Update admission rechecks routes
+that timed out during earlier discovery. A socket's existence alone does
+not replace a working custom bus. If no route reaches the manager, check
+`XDG_RUNTIME_DIR`, log in once
 or enable lingering, and verify `systemctl --user status`. On Debian/Ubuntu,
 `dbus-user-session` provides the user bus; start it with
 `systemctl --user start dbus.socket` if needed. An absent unit is safe to install;

@@ -1,18 +1,12 @@
 /** Deadline- and custody-bound effective command queries for the systemd reader. */
-import fs from "node:fs";
-import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { ServiceInspectionError } from "./service-inspection-error.js";
 import type { GatewayServiceEnv, GatewayServiceReadOptions } from "./service-types.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import { decodeLegacyBusctlOutput } from "./systemd-busctl-legacy.js";
-import {
-  bindSystemdManagerOwner,
-  execBusctlUser,
-  resolveSystemdUserEnvironment,
-  systemdInspectionError,
-} from "./systemd-exec.js";
+import { bindSystemdManagerOwner, execBusctlUser, systemdInspectionError } from "./systemd-exec.js";
 import { openSystemdUserManager } from "./systemd-peer-native.js";
+import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
 
 export async function createSystemdCommandQuery(
   env: GatewayServiceEnv,
@@ -33,23 +27,22 @@ export async function createSystemdCommandQuery(
   ) {
     throw unavailable();
   }
-  const route = resolveSystemdUserEnvironment(env);
-  const uid = process.geteuid?.();
-  const runtime = route.XDG_RUNTIME_DIR?.trim() || `/run/user/${uid}`;
-  const privatePath = path.posix.join(runtime, "systemd/private");
+  const transport = peer
+    ? undefined
+    : await resolveSystemdUserTransport(
+        env,
+        deadlineAt,
+        inspection?.assertReadCurrent ?? inspection?.assertCurrent,
+        opts?.requireLoaded ? "admission" : "inspection",
+      );
+  if (transport?.kind === "private" && opts?.requireLoaded) {
+    throw new ServiceInspectionError("systemd-user-bus-unavailable");
+  }
   const managerPeer =
-    !peer &&
-    !opts?.requireLoaded &&
-    process.platform === "linux" &&
-    uid &&
-    path.posix.isAbsolute(privatePath) &&
-    fs.existsSync(privatePath)
-      ? await openSystemdUserManager(
-          `unix:path=${encodeURIComponent(privatePath).replaceAll("%2F", "/")}`,
-          deadlineAt,
-        ).catch(() => {
+    !opts?.requireLoaded && transport?.kind === "private"
+      ? await openSystemdUserManager(transport.address, deadlineAt).catch(() => {
           assertGatewayServiceUpdateCurrent();
-          return undefined;
+          throw new ServiceInspectionError("systemd-user-bus-unavailable");
         })
       : undefined;
   let remainingCalls = inspection ? 6 : 3;

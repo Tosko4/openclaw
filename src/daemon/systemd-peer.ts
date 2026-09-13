@@ -2,17 +2,16 @@
 import path from "node:path";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import type { GatewayServiceEnv, SystemdServiceReadBinding } from "./service-types.js";
-import { resolveSystemdUserEnvironment } from "./systemd-exec.js";
 import { openSystemdBroker, openSystemdPrivatePeer } from "./systemd-peer-native.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
+import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
 
 const MANAGER = "org.freedesktop.systemd1";
 const BUS = "org.freedesktop.DBus";
 const unavailable = () => new Error("Original systemd manager binding is unavailable or changed.");
 
-// This optional local-PID admission must never execute a transport helper,
-// resolve a remote hostname or enter another PID namespace. Legacy adapters
-// retain their authored transport support when this narrow admission declines.
+// Native peer credentials apply only to the selected local Unix transport.
+// Other selected transports remain with their existing adapters.
 function isLocalUnixAddress(address: string): boolean {
   try {
     return address.split(";").every((entry) => {
@@ -56,15 +55,11 @@ export async function admitSystemdServiceReadBinding(
 ): Promise<SystemdServiceReadBinding | undefined> {
   // Capture ambient selectors once; neither subsequent env mutation nor the
   // legacy machine fallback may change the broker authenticated here.
-  const route = resolveSystemdUserEnvironment(env);
+  const route = { ...process.env, ...env };
   const uid = process.geteuid?.();
   // Do not alter root/sudo, remote, or system-manager selection. Existing native
   // adapters remain responsible when no same-account private peer is available.
   if (process.platform !== "linux" || uid === undefined || uid === 0 || route.SUDO_USER) {
-    return undefined;
-  }
-  const runtime = route.XDG_RUNTIME_DIR?.trim() || `/run/user/${uid}`;
-  if (!path.isAbsolute(runtime)) {
     return undefined;
   }
   const unit = `${resolveSystemdServiceName(env)}.service`;
@@ -86,13 +81,17 @@ export async function admitSystemdServiceReadBinding(
   };
   let peer: Awaited<ReturnType<typeof openSystemdPrivatePeer>> | undefined;
   try {
-    const brokerAddress =
-      route.DBUS_SESSION_BUS_ADDRESS?.trim() ||
-      `unix:path=${encodeURIComponent(path.join(runtime, "bus")).replaceAll("%2F", "/")}`;
-    if (!isLocalUnixAddress(brokerAddress)) {
+    const transport = await resolveSystemdUserTransport(route, deadline, undefined, "admission");
+    if (
+      !transport ||
+      transport.kind === "private" ||
+      transport.kind === "machine" ||
+      !path.isAbsolute(transport.runtimeDir) ||
+      !isLocalUnixAddress(transport.address)
+    ) {
       return undefined;
     }
-    broker = await openSystemdBroker(brokerAddress, deadline);
+    broker = await openSystemdBroker(transport.address, deadline);
     const destination = await query("GetNameOwner", MANAGER, "s");
     if (typeof destination !== "string" || !/^:[0-9]+\.[0-9]+$/.test(destination)) {
       throw unavailable();
@@ -110,7 +109,7 @@ export async function admitSystemdServiceReadBinding(
     }
     // Percent escaping is D-Bus address syntax, not a shell expansion. Preserve
     // authored runtime roots; never probe a different canonical manager.
-    const socket = path.join(runtime, "systemd/private");
+    const socket = path.join(transport.runtimeDir, "systemd/private");
     const address = `unix:path=${encodeURIComponent(socket).replaceAll("%2F", "/")}`;
     peer = await openSystemdPrivatePeer(address, { uid, pid, startTime }, deadline);
     if (

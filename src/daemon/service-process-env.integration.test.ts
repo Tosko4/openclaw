@@ -49,6 +49,7 @@ describe.skipIf(process.platform === "win32")("native control environment bounda
           await fs.writeFile(
             path.join(home, command),
             `#!${process.execPath}
+if (process.argv.includes("Version")) { console.log('s "252.39"'); process.exit(0); }
 console.log(JSON.stringify({
   XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
   DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS,
@@ -61,6 +62,7 @@ console.log(JSON.stringify({
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { execSystemctlUser, execBusctlUser } from ${JSON.stringify(new URL("./systemd-exec.ts", import.meta.url).href)};
+Object.defineProperty(process, "platform", { value: "linux" });
 const callerDirectory = ${JSON.stringify(callerDirectory)};
 process.chdir(callerDirectory);
 fs.chmodSync(callerDirectory, 0o600);
@@ -68,7 +70,9 @@ try {
   for (const execute of [execSystemctlUser, execBusctlUser]) {
     const result = await execute(process.env, ["status"], 5000);
     assert.equal(result.code, 0, JSON.stringify(result));
-    assert.deepEqual(JSON.parse(result.stdout), ${JSON.stringify(native)});
+    assert.deepEqual(JSON.parse(result.stdout), execute === execSystemctlUser
+      ? { DBUS_SESSION_BUS_ADDRESS: ${JSON.stringify(native.DBUS_SESSION_BUS_ADDRESS)} }
+      : ${JSON.stringify(native)});
   }
 } finally {
   fs.chmodSync(callerDirectory, 0o700);
@@ -113,10 +117,13 @@ fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({
   canary: Object.hasOwn(process.env, "BOUNDARY_PARENT_ONLY"),
   native: process.env.PATH === ${JSON.stringify(home)} && process.env.USER === "target" && process.env.DBUS_SESSION_BUS_ADDRESS === ${JSON.stringify(bus)},
 }) + "\\n");
-if (${JSON.stringify(fallback ? "No medium found" : "")} && !args.includes("--machine")) {
-  console.error("Failed to connect to bus: " + ${JSON.stringify(fallback ? "No medium found" : "")}); process.exit(1);
+if (args.includes("Version")) {
+  const available = ${JSON.stringify(fallback)} ? args.includes("--machine") : process.env.DBUS_SESSION_BUS_ADDRESS === ${JSON.stringify(bus)};
+  if (!available) { console.error("Failed to connect to bus: No medium found"); process.exit(1); }
+  console.log('s "252.39"');
+} else {
+  console.log("running");
 }
-console.log("running");
 `,
             { mode: 0o700 },
           );
@@ -125,6 +132,7 @@ console.log("running");
 import assert from "node:assert/strict";
 import { execSystemctlUser, execBusctlUser } from ${JSON.stringify(new URL("./systemd-exec.ts", import.meta.url).href)};
 process.geteuid = () => 1000;
+Object.defineProperty(process, "platform", { value: "linux" });
 const source = { ...process.env, XDG_RUNTIME_DIR: ${JSON.stringify(source.XDG_RUNTIME_DIR)}, DBUS_SESSION_BUS_ADDRESS: ${JSON.stringify(source.DBUS_SESSION_BUS_ADDRESS)} };
 for (const execute of [execSystemctlUser, execBusctlUser]) {
   const result = await execute(source, ["status"], 5000);
@@ -137,20 +145,34 @@ for (const execute of [execSystemctlUser, execBusctlUser]) {
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line));
-        const expectedArgs = [
-          ["--user", "status"],
-          ...(fallback ? [["--machine", "target@", "--user", "status"]] : []),
+        const versionArgs = [
+          "--auto-start=no",
+          "get-property",
+          "org.freedesktop.systemd1",
+          "/org/freedesktop/systemd1",
+          "org.freedesktop.systemd1.Manager",
+          "Version",
         ];
-        expect(calls).toEqual(
-          ["systemctl", "busctl"].flatMap((command) =>
-            expectedArgs.map((args) => ({
-              command,
-              args,
-              canary: false,
-              native: true,
-            })),
-          ),
-        );
+        const scope = fallback ? ["--machine", "target@", "--user"] : ["--user"];
+        expect(calls).toEqual([
+          ...(session === "stale"
+            ? [
+                {
+                  command: "busctl",
+                  args: ["--user", ...versionArgs],
+                  canary: false,
+                  native: false,
+                },
+              ]
+            : []),
+          { command: "busctl", args: [...scope, ...versionArgs], canary: false, native: true },
+          ...["systemctl", "busctl"].map((command) => ({
+            command,
+            args: [...scope, "status"],
+            canary: false,
+            native: true,
+          })),
+        ]);
       });
     },
   );

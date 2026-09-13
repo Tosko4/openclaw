@@ -6,9 +6,11 @@ import {
   ServiceInspectionError,
   type ServiceInspectionReason,
 } from "./service-inspection-error.js";
+import type { SystemdUserTransport } from "./systemd-user-transport.js";
 
 /** systemd supervision fields used to spot unhealthy or given-up gateway service state. */
 type GatewayServiceSystemdRuntime = {
+  transport?: SystemdUserTransport;
   unit?: string;
   /** Native D-Bus credential of the observed user-manager connection, not the CLI UID. */
   managerUid?: number;

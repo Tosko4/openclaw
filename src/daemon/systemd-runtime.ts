@@ -33,6 +33,7 @@ import {
 import { readLoadedSystemdServiceRuntime } from "./systemd-loaded-runtime.js";
 import { findInstalledSystemdGatewayScope } from "./systemd-scope.js";
 import { readSystemdServiceExecStart, resolveSystemdServiceName } from "./systemd-service-files.js";
+import { readSystemdUserTransport } from "./systemd-user-transport.js";
 
 type SystemdServiceInfo = {
   loadState?: string;
@@ -192,7 +193,12 @@ export async function readSystemdServiceRuntime(
       }
     }
     if (!installed && inspection.kind === "absent") {
-      return { status: "stopped", missingUnit: true };
+      const transport = await readSystemdUserTransport(env);
+      return {
+        status: "stopped",
+        missingUnit: true,
+        ...(transport ? { systemd: { transport } } : {}),
+      };
     }
   }
   const unitName = installed?.unitName ?? `${resolveSystemdServiceName(env)}.service`;
@@ -241,6 +247,7 @@ export async function readSystemdServiceRuntime(
     lastExitStatus: parsed.execMainStatus,
     lastExitReason: parsed.execMainCode,
     systemd: {
+      transport: installed?.scope === "system" ? undefined : await readSystemdUserTransport(env),
       unit: parsed.unit ?? unitName,
       killMode: parsed.killMode,
       tasksCurrent: parsed.tasksCurrent,

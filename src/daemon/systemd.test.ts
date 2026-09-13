@@ -28,6 +28,7 @@ type ExecFileMock = (
 ) => unknown;
 
 const execFileMock = vi.hoisted(() => vi.fn<ExecFileMock>());
+const versionFixture = vi.hoisted(() => ({ useScenarioResponse: false }));
 const existsSyncMock = vi.hoisted(() => vi.fn<typeof import("node:fs").existsSync>(() => false));
 const assertNoSystemSystemdOwnershipMock = vi.hoisted(() =>
   vi.fn<(unitName: string, timeoutMs?: number) => Promise<void>>(async () => {}),
@@ -70,7 +71,24 @@ vi.mock("./exec-file.js", () => {
       command: string,
       args: string[],
       options: Omit<ExecFileOptionsWithStringEncoding, "encoding"> = {},
-    ) => {
+    ): Promise<ExecResult> => {
+      if (args.includes("Version")) {
+        expect(command).toBe("busctl");
+        expect(args).toEqual([
+          ...(args[0] === "--machine"
+            ? ["--machine", `${options.env?.USER}@`, "--user"]
+            : ["--user"]),
+          "--auto-start=no",
+          "get-property",
+          "org.freedesktop.systemd1",
+          "/org/freedesktop/systemd1",
+          "org.freedesktop.systemd1.Manager",
+          "Version",
+        ]);
+        if (!versionFixture.useScenarioResponse) {
+          return { code: 0, termination: "exit", stdout: 's "252.39"', stderr: "" };
+        }
+      }
       let settled: ExecResult | undefined;
 
       execFileMock(command, args, { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
@@ -95,6 +113,7 @@ import { splitArgsPreservingQuotes } from "./arg-split.js";
 import * as systemdExec from "./systemd-exec.js";
 import { resolveSystemdUnitPath } from "./systemd-service-files.js";
 import { parseSystemdEnvAssignments, parseSystemdExecStart } from "./systemd-unit.js";
+import { hasSudoToRootSystemdUserManagerMismatch } from "./systemd-user-transport.js";
 import {
   findInstalledSystemdGatewayScope,
   findSystemdGatewayInstallation,
@@ -284,6 +303,41 @@ function mockNodeInstallNoMediumFailure(machineUser?: string): void {
   }
 }
 
+let machineFixtureId = 0;
+function mockMachineManager(user: string): NodeJS.ProcessEnv {
+  versionFixture.useScenarioResponse = true;
+  const runtime = `/fixture/systemd-machine-${++machineFixtureId}`;
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  vi.spyOn(process, "geteuid").mockReturnValue(process.getuid?.() ?? 1000);
+  const readFile = fs.readFile.bind(fs);
+  vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+    if (typeof args[0] === "string" && args[0].startsWith("/proc/self/fdinfo/")) {
+      return "mnt_id: 1\n";
+    }
+    if (args[0] === "/proc/self/mountinfo") {
+      return "1 0 0:1 / / rw - tmpfs tmpfs rw\n";
+    }
+    return await readFile(...args);
+  });
+  execFileMock.mockReset().mockImplementation((_command, args, _options, done) => {
+    if (args.includes("Version") && !args.includes("--machine")) {
+      done(
+        createExecFileError("Failed to connect to bus: No medium found"),
+        "",
+        "Failed to connect to bus: No medium found",
+      );
+      return;
+    }
+    expect(args.slice(0, 3)).toEqual(["--machine", `${user}@`, "--user"]);
+    done(null, args.includes("Version") ? 's "252.39"' : "", "");
+  });
+  return {
+    USER: user,
+    XDG_RUNTIME_DIR: runtime,
+    DBUS_SESSION_BUS_ADDRESS: `unix:path=${runtime}/bus`,
+  };
+}
+
 function mockEffectiveUid(uid: number) {
   vi.spyOn(process, "geteuid").mockReturnValue(uid);
 }
@@ -372,9 +426,18 @@ const assertRestartSuccess = async (env: NodeJS.ProcessEnv) => {
   expect(requireFirstWrite(write)).toContain("Restarted systemd service");
 };
 
+let testFixtureId = 0;
 beforeEach(() => {
+  const runtime = `/fixture/systemd-test-${++testFixtureId}`;
+  vi.stubEnv("XDG_RUNTIME_DIR", runtime);
+  vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", `unix:path=${runtime}/bus`);
+  versionFixture.useScenarioResponse = false;
   existsSyncMock.mockReset();
   existsSyncMock.mockReturnValue(false);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("systemd availability", () => {
@@ -395,24 +458,49 @@ describe("systemd availability", () => {
   ])(
     "uses runtime $socket despite session address $sessionAddress",
     async ({ socket, runtime, sessionAddress }) => {
-      mockEffectiveUid(1000);
-      existsSyncMock.mockImplementation((file) => file === `/run/user/1000/${socket}`);
+      versionFixture.useScenarioResponse = true;
+      const uid = socket === "bus" ? 1000 : 1002;
+      const runtimeDir = `/run/user/${uid}`;
+      mockEffectiveUid(uid);
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      existsSyncMock.mockImplementation((file) => file === `${runtimeDir}/${socket}`);
+      vi.spyOn(
+        await import("./systemd-peer-native.js"),
+        "openSystemdUserManager",
+      ).mockResolvedValue({
+        query: async (args) => {
+          expect(args.at(-1)).toBe("Version");
+          return ["252.39"];
+        },
+        close: async () => {},
+        verify: () => {},
+      });
       execFileMock.mockImplementation((_cmd, args, opts, cb) => {
+        if (args.includes("Version")) {
+          expect(args).toContain("--auto-start=no");
+          if (
+            socket === "bus" &&
+            opts.env?.DBUS_SESSION_BUS_ADDRESS === `unix:path=${runtimeDir}/bus`
+          ) {
+            cb(null, 's "252.39"', "");
+          } else {
+            cb(createExecFileError("Failed to connect to bus"), "", "Failed to connect to bus");
+          }
+          return;
+        }
         assertUserSystemctlArgs(args, "status");
         if (!opts.env) {
           throw new Error("expected systemctl env");
         }
-        expect(opts.env.XDG_RUNTIME_DIR).toBe("/run/user/1000");
-        expect(opts.env.DBUS_SESSION_BUS_ADDRESS).toBe(
-          socket === "bus" ? "unix:path=/run/user/1000/bus" : sessionAddress,
-        );
+        expect(opts.env.XDG_RUNTIME_DIR).toBe(socket === "bus" ? undefined : runtimeDir);
+        expect(opts.env.DBUS_SESSION_BUS_ADDRESS).toBe(`unix:path=${runtimeDir}/${socket}`);
         cb(null, "", "");
       });
 
       await expect(
         isSystemdUserServiceAvailable({
           USER: "debian",
-          XDG_RUNTIME_DIR: runtime,
+          XDG_RUNTIME_DIR: runtime === undefined ? undefined : runtimeDir,
           DBUS_SESSION_BUS_ADDRESS: sessionAddress,
         }),
       ).resolves.toBe(true);
@@ -445,21 +533,13 @@ describe("systemd availability", () => {
   });
 
   it("falls back to machine user scope when --user bus is unavailable", async () => {
-    execFileMock
-      .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        expect(args).toEqual(["--user", "status"]);
-        const err = createExecFileError("Failed to connect to user scope bus via local transport", {
-          stderr:
-            "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined",
-        });
-        cb(err, "", "");
-      })
-      .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        expect(args).toEqual(["--machine", "debian@", "--user", "status"]);
-        cb(null, "", "");
-      });
-
-    await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(true);
+    const env = mockMachineManager("debian");
+    await expect(isSystemdUserServiceAvailable(env)).resolves.toBe(true);
+    expect(execFileMock.mock.calls.map(([, args]) => args.at(-1))).toEqual([
+      "Version",
+      "Version",
+      "status",
+    ]);
   });
 
   it("does not fall back to machine scope when --user fails with permission denied", async () => {
@@ -526,7 +606,7 @@ describe("systemd availability", () => {
 
     const env = { SUDO_USER: "debian", USER: "root", LOGNAME: "root" };
     expect(resolveSystemdUserServiceAccount(env)).toBe("debian");
-    expect(systemdExec.hasSudoToRootSystemdUserManagerMismatch(env)).toBe(true);
+    expect(hasSudoToRootSystemdUserManagerMismatch(env)).toBe(true);
   });
 
   it("keeps root user scope when stale SUDO_USER is paired with root bus environment", async () => {
@@ -565,7 +645,7 @@ describe("systemd availability", () => {
       DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
     };
     expect(resolveSystemdUserServiceAccount(env)).toBe("root");
-    expect(systemdExec.hasSudoToRootSystemdUserManagerMismatch(env)).toBe(false);
+    expect(hasSudoToRootSystemdUserManagerMismatch(env)).toBe(false);
   });
 
   it("does not let stale SUDO_USER override a sudo-u target user scope", async () => {
@@ -737,24 +817,28 @@ describe("isSystemdServiceEnabled", () => {
 
   it("throws when systemctl is-enabled fails for non-state errors", async () => {
     vi.spyOn(fs, "access").mockResolvedValue(undefined);
-    execFileMock
-      .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
-        const err = new Error("Failed to connect to bus") as Error & { code?: number };
-        err.code = 1;
-        cb(err, "", "Failed to connect to bus");
-      })
-      .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        expect(args[0]).toBe("--machine");
-        expect(args[1]).toMatch(/^[^@]+@$/);
-        expect(args.slice(2)).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
-        const err = new Error("permission denied") as Error & { code?: number };
-        err.code = 1;
-        cb(err, "", "permission denied");
-      });
-    await expect(
-      isSystemdServiceEnabled({ env: { HOME: "/tmp/openclaw-test-home" } }),
-    ).rejects.toThrow("systemctl is-enabled unavailable: permission denied");
+    const env = { HOME: "/tmp/openclaw-test-home", ...mockMachineManager("debian") };
+    const probe = execFileMock.getMockImplementation();
+    if (!probe) {
+      throw new Error("missing manager fixture");
+    }
+    execFileMock.mockImplementation((command, args, options, done) => {
+      if (args.includes("Version")) {
+        probe(command, args, options, done);
+        return;
+      }
+      expect(args).toEqual([
+        "--machine",
+        "debian@",
+        "--user",
+        "is-enabled",
+        "openclaw-gateway.service",
+      ]);
+      done(createExecFileError("permission denied"), "", "permission denied");
+    });
+    await expect(isSystemdServiceEnabled({ env })).rejects.toThrow(
+      "systemctl is-enabled unavailable: permission denied",
+    );
   });
 
   it("returns false when systemctl is-enabled exits with code 4 (not-found)", async () => {
@@ -3779,10 +3863,9 @@ describe("systemd service install and uninstall", () => {
     },
   );
 
-  it("falls back to machine user scope when install activation hits a no-medium user bus failure", async () => {
+  it("retains the discovered machine user scope throughout install activation", async () => {
     await withNodeSystemdFixture(async ({ env }) => {
-      const installEnv = { ...env, USER: "debian" };
-      mockNodeInstallNoMediumFailure("debian");
+      const installEnv = { ...env, ...mockMachineManager("debian") };
 
       await installSystemdService(
         nodeSystemdServiceFixture(installEnv, {
@@ -3792,15 +3875,15 @@ describe("systemd service install and uninstall", () => {
         }),
       );
 
-      expect(execFileMock).toHaveBeenCalledTimes(5);
+      expect(
+        execFileMock.mock.calls.map(([, args]) => (args.includes("Version") ? "Version" : args[3])),
+      ).toEqual(["Version", "Version", "status", "daemon-reload", "enable", "restart"]);
     });
   });
 
-  it("uses the sudo-u target user for install activation machine-scope retry", async () => {
+  it("uses the sudo-u target user for discovered machine-scope install activation", async () => {
     await withNodeSystemdFixture(async ({ env }) => {
-      mockEffectiveUid(process.getuid?.() ?? 1000);
-      const installEnv = { ...env, USER: "openclaw", SUDO_USER: "admin" };
-      mockNodeInstallNoMediumFailure("openclaw");
+      const installEnv = { ...env, ...mockMachineManager("openclaw"), SUDO_USER: "admin" };
 
       await installSystemdService(
         nodeSystemdServiceFixture(installEnv, {
@@ -3810,7 +3893,9 @@ describe("systemd service install and uninstall", () => {
         }),
       );
 
-      expect(execFileMock).toHaveBeenCalledTimes(5);
+      expect(
+        execFileMock.mock.calls.map(([, args]) => (args.includes("Version") ? "Version" : args[3])),
+      ).toEqual(["Version", "Version", "status", "daemon-reload", "enable", "restart"]);
     });
   });
 
@@ -4574,38 +4659,10 @@ describe("systemd service control", () => {
   });
 
   it("falls back to machine user scope for restart when user bus env is missing", async () => {
-    execFileMock
-      .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        assertUserSystemctlArgs(args, "status");
-        const err = createExecFileError("Failed to connect to user scope bus", {
-          stderr:
-            "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined",
-        });
-        cb(err, "", "");
-      })
-      .mockImplementationOnce(systemctlMachineUserSuccess("debian", "status"))
-      .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        assertUserSystemctlArgs(args, "reset-failed", GATEWAY_SERVICE);
-        const err = createExecFileError("Failed to connect to user scope bus", {
-          stderr: "Failed to connect to user scope bus",
-        });
-        cb(err, "", "");
-      })
-      .mockImplementationOnce(
-        systemctlMachineUserSuccess("debian", "reset-failed", GATEWAY_SERVICE),
-      )
-      .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        assertUserSystemctlArgs(args, "restart", GATEWAY_SERVICE);
-        const err = createExecFileError("Failed to connect to user scope bus", {
-          stderr: "Failed to connect to user scope bus",
-        });
-        cb(err, "", "");
-      })
-      .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        assertMachineRestartArgs(args);
-        cb(null, "", "");
-      });
-    await assertRestartSuccess({ USER: "debian" });
+    await assertRestartSuccess(mockMachineManager("debian"));
+    expect(
+      execFileMock.mock.calls.map(([, args]) => (args.includes("Version") ? "Version" : args[3])),
+    ).toEqual(["Version", "Version", "status", "reset-failed", "restart"]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

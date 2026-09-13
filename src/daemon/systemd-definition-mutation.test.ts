@@ -4,16 +4,19 @@ import path from "node:path";
 import { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { execFileUtf8 } from "./exec-file.js";
 import {
   buildSystemdManagerPropertyOutput,
   buildSystemdUnitPropertyOutput,
 } from "./service.test-helpers.js";
+import { systemdManagerVersionProbe } from "./systemd-user-bus.test-support.js";
 
 const assertNoSystemOwnership = vi.hoisted(() =>
   vi.fn<typeof import("./systemd-system.js").assertNoSystemSystemdOwnership>(),
 );
 const busctl = vi.hoisted(() => vi.fn<typeof import("./systemd-exec.js").execBusctlUser>());
 
+vi.mock("./exec-file.js", () => ({ execFileUtf8: vi.fn() }));
 vi.mock("./systemd-system.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./systemd-system.js")>()),
   assertNoSystemSystemdOwnership: assertNoSystemOwnership,
@@ -48,6 +51,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
 
   beforeEach(async () => {
     assertNoSystemOwnership.mockReset().mockResolvedValue(undefined);
+    vi.mocked(execFileUtf8).mockReset().mockImplementation(systemdManagerVersionProbe);
     busctl.mockReset().mockImplementation(async (serviceEnv) => ({
       code: 1,
       termination: "exit",
@@ -58,6 +62,8 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     stateDir = path.join(root, "state");
     env = {
       HOME: path.join(root, "home"),
+      XDG_RUNTIME_DIR: path.join(root, "runtime"),
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=${root}/bus`,
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_SYSTEMD_UNIT: "openclaw-owned",
     };

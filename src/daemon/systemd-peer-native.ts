@@ -93,7 +93,7 @@ export async function openSystemdBroker(address: string, deadline: number) {
 /** Ordinary local reads authenticate the connected manager without a session broker. */
 export async function openSystemdUserManager(address: string, deadline: number) {
   const uid = process.geteuid?.();
-  if (process.platform !== "linux" || uid === undefined || uid === 0) {
+  if (process.platform !== "linux" || uid === undefined) {
     throw unavailable();
   }
   return await openSystemdConnection(address, deadline, undefined, uid);
