@@ -751,7 +751,7 @@ defineDiscordVoiceTests(
             },
             realtimeSessionMock,
           );
-          await Promise.resolve();
+          await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledOnce());
 
           if (transition === "terminal close") {
             bridgeParams.onClose?.("error");
