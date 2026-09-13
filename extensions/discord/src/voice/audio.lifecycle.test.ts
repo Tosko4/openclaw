@@ -165,7 +165,9 @@ it("yields between encoding batches and pauses until the player consumes packets
   try {
     stream.end(Buffer.alloc(pcmBytes));
     expect(await firstYield).toBeLessThan(packetCount);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(stream.readableLength).toBeLessThanOrEqual(stream.readableHighWaterMark);
     expect(encodedPackets).toBeLessThanOrEqual(stream.readableHighWaterMark);
 
@@ -203,7 +205,9 @@ it("cancels yielded encoding and settles the pending write without emitting rema
     stream.destroy();
     await closed;
     await expect(writeDone).resolves.toBeInstanceOf(Error);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(encode).toHaveBeenCalledTimes(encodedBeforeCancel);
     expect(free).toHaveBeenCalledOnce();
   } finally {

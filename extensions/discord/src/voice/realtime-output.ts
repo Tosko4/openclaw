@@ -107,10 +107,10 @@ export class DiscordRealtimeOutput {
     const audioMs = (sinkBytes - previous.sinkAudioBytes) / DISCORD_RAW_PCM_BYTES_PER_MS;
     const startMs = previous.audioMs;
     if (item) {
-      const previous = this.audioSpans.at(-1);
+      const previousSpan = this.audioSpans.at(-1);
       const endMs = startMs + audioMs;
-      if (previous?.item === item && previous.endMs === startMs) {
-        previous.endMs = endMs;
+      if (previousSpan?.item === item && previousSpan.endMs === startMs) {
+        previousSpan.endMs = endMs;
       } else {
         this.audioSpans.push({ item, startMs, endMs });
       }

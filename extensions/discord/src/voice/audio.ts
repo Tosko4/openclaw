@@ -179,6 +179,7 @@ class DiscordOpusEncodeStream extends Transform {
 
   override _read(size: number): void {
     this.#readBlocked = false;
+    // oxlint-disable-next-line eslint/no-underscore-dangle -- Node's Transform owns this hook name.
     super._read(size);
     this.#schedule();
   }

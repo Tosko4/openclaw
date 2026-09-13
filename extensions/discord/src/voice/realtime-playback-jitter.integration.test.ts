@@ -52,10 +52,13 @@ it("absorbs an 80 ms delivery reorder gap without inserting playback silence", a
         }
       }, arrival);
     }
-    for (let elapsed = 0; elapsed < 3_000 && !complete; elapsed += 1) {
+    for (let elapsed = 0; elapsed < 3_000; elapsed += 1) {
       await vi.advanceTimersByTimeAsync(1);
       // The real encoder yields with setImmediate; let it run between packet-clock ticks.
       await nextEventLoopTurn();
+      if (complete) {
+        break;
+      }
     }
     expect(complete).toBe(true);
     expect(consumedMs).toBe(2_000);
