@@ -164,6 +164,7 @@ type OwnershipProbe = {
 function probeOwnership(
   options: {
     prebuilt?: boolean;
+    prebuiltGeneration?: string;
     filters?: string[];
     cli?: string[];
     project?: string[];
@@ -188,6 +189,14 @@ function probeOwnership(
     export default function admission(project) {
       fs.appendFileSync(${JSON.stringify(admissionsFile)}, JSON.stringify(project.name) + "\\n");
       if (${JSON.stringify(options.failure)} === "admission") throw new Error("fixture admission failed");
+      const generation = ${JSON.stringify(options.prebuiltGeneration)};
+      if (generation !== undefined) project.vitest.getRootProject().provide("controlUiE2ePrebuiltGeneration", generation);
+    }
+    export async function startBuiltControlUiE2eServer(outDir) {
+      const record = (closed) => fs.appendFileSync(${JSON.stringify(eventsFile)}, JSON.stringify({ outDir, closed }) + "\\n");
+      record(false);
+      if (${JSON.stringify(options.failure)} === "build") throw new Error("fixture preview failed");
+      return { baseUrl: "http://127.0.0.1:12345/", close: async () => record(true) };
     }
     export async function startBundledControlUiE2eServer(outDir) {
       fs.writeFileSync(outDir + "/bundle.html", "fixture");
@@ -676,6 +685,49 @@ describe("Control UI E2E resource ownership", () => {
     expect(result.admissions).toHaveLength(3);
     expect(new Set(result.admissions).size).toBe(3);
     expect(result.leases).toEqual([{ outDir: expect.any(String), closed: true, removed: true }]);
+  });
+
+  it("leases the admitted prebuilt UI once across native project initialization without rebuilding or deleting it", () => {
+    const result = probeOwnership({
+      prebuilt: true,
+      prebuiltGeneration: "b".repeat(64),
+      initialize: [[builtGatewayFile], [mcpFile], [qaLabFiles[0]], [qaLabFiles[1]]],
+    });
+    expect(result.setupError).toBeUndefined();
+    expect(result.steps).toEqual([
+      { builds: 0, closes: 0 },
+      { builds: 0, closes: 0 },
+      { builds: 1, closes: 0 },
+      { builds: 1, closes: 0 },
+    ]);
+    expect(result.leases).toEqual([
+      { outDir: path.join(repoRoot, "dist", "control-ui"), closed: true, removed: false },
+    ]);
+  });
+
+  it("closes an admitted prebuilt preview after publication failure without deleting the output", () => {
+    const result = probeOwnership({
+      prebuilt: true,
+      prebuiltGeneration: "b".repeat(64),
+      filters: [qaLabFiles[0]],
+      failure: "provide",
+    });
+    expect(result.setupError).toBe("fixture provide failed");
+    expect(result.leases).toEqual([
+      { outDir: path.join(repoRoot, "dist", "control-ui"), closed: true, removed: false },
+    ]);
+    expect(result.contexts.every((context) => context.url === undefined)).toBe(true);
+  });
+
+  it("rejects an invalid prebuilt generation without building a replacement", () => {
+    const result = probeOwnership({
+      prebuilt: true,
+      prebuiltGeneration: "invalid",
+      filters: [qaLabFiles[0]],
+    });
+    expect(result.setupError).toBe("Prebuilt Control UI preview requires an admitted generation");
+    expect(result.steps).toEqual([{ builds: 0, closes: 0 }]);
+    expect(result.leases).toEqual([]);
   });
 
   it("propagates prebuilt admission failure before acquiring the preview", () => {

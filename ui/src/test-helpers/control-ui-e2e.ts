@@ -1065,7 +1065,7 @@ async function runProductionControlUiBuild(outDir: string): Promise<void> {
   });
 }
 
-async function startBuiltControlUiE2eServer(
+export async function startBuiltControlUiE2eServer(
   outDir: string,
   bootstrapConfig?: Record<string, unknown>,
 ): Promise<ControlUiE2eServer> {
