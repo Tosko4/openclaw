@@ -32,6 +32,10 @@ import {
   createContractsVitestConfig,
   pluginContractPatterns,
 } from "./vitest/vitest.contracts-shared.ts";
+import {
+  databaseWorkerExtensionTestFiles,
+  databaseWorkerExtensionTestRoots,
+} from "./vitest/vitest.extension-database-workers-paths.mjs";
 import { createExtensionDatabaseWorkersVitestConfig } from "./vitest/vitest.extension-database-workers.config.ts";
 import { createExtensionImessageVitestConfig } from "./vitest/vitest.extension-imessage.config.ts";
 import { createExtensionsVitestConfig } from "./vitest/vitest.extensions.config.ts";
@@ -533,11 +537,12 @@ describe("projects vitest config", () => {
       ).toContain(project);
       expect(testConfig.pool).toBe("forks");
       expect(testConfig.isolate).toBe(true);
-      expect(testConfig.include).toEqual([
-        "logbook/**/*.test.ts",
-        "team-reports/**/*.test.ts",
-        "imessage/src/approval-reactions.persistence.test.ts",
-      ]);
+      expect(testConfig.include).toEqual(
+        [
+          ...databaseWorkerExtensionTestRoots.map((root) => `${root}/**/*.test.ts`),
+          ...databaseWorkerExtensionTestFiles,
+        ].map((file) => file.replace(/^extensions\//u, "")),
+      );
       expect(requireTestConfig(createExtensionsVitestConfig({})).exclude).toContain(
         `${pluginId}/**`,
       );
