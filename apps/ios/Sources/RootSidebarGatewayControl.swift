@@ -157,7 +157,8 @@ struct RootSidebarGatewayControl: View {
                 connectedID: self.appModel.connectedGatewayID,
                 state: GatewayStatusBuilder.build(appModel: self.appModel)),
             fallbackName: self.fallbackName,
-            isSwitching: self.appModel.isGatewayPickerSwitching,
+            isSwitching: self.appModel.isGatewayPickerRequestInFlight ||
+                self.gatewayController.hasPendingConnectionHandoff,
             selectGateway: self.switchGateway,
             openSettings: self.openSettings)
             .onAppear { self.refreshRegistry() }
@@ -187,7 +188,9 @@ struct RootSidebarGatewayControl: View {
     }
 
     private func switchGateway(_ stableID: String) {
-        guard !self.appModel.isGatewayPickerSwitching else { return }
+        guard !self.appModel.isGatewayPickerRequestInFlight,
+              !self.gatewayController.hasPendingConnectionHandoff
+        else { return }
         let currentID = self.appModel.activeGatewayConnectConfig?.effectiveStableID
             ?? self.appModel.connectedGatewayID ?? self.registry.activeStableID
         guard !GatewayStableIdentifier.matches(stableID, currentID) else { return }
@@ -203,16 +206,17 @@ struct RootSidebarGatewayControl: View {
             self.switchError = String(localized: "Send or clear the current draft before switching gateways.")
             return
         }
-        self.appModel.isGatewayPickerSwitching = true
+        self.appModel.isGatewayPickerRequestInFlight = true
         Task { @MainActor in
             defer {
-                self.appModel.isGatewayPickerSwitching = false
+                self.appModel.isGatewayPickerRequestInFlight = false
                 self.refreshRegistry()
             }
             switch await self.gatewayController.switchToGateway(stableID: stableID) {
             case .accepted:
-                // Accepted is not connected: TLS approval and transport setup
-                // stay with the existing owner and its status/trust surfaces.
+                // Clear only request admission below. The controller-owned
+                // handoff state keeps the picker and composer protected through
+                // trust review, reset, and route commitment.
                 break
             case let .failed(message):
                 self.switchError = message

@@ -671,8 +671,8 @@ final class NodeAppModel {
 
     /// Non-owning access to the current composer; ChatProTab remains its lifecycle owner.
     @ObservationIgnored weak var presentedChatViewModel: OpenClawChatViewModel?
-    /// Prevent new composer input while a quick-switch waits for target validation.
-    var isGatewayPickerSwitching = false
+    /// Request admission only; the connection controller owns the later handoff.
+    var isGatewayPickerRequestInFlight = false
 
     /// Stable owner key for the long-lived chat view model. Connectivity still
     /// changes `chatViewModelIdentityID` for session-list refreshes, but must
