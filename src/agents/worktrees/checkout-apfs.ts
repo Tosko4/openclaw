@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate, setTimeout } from "node:timers/promises";
-import type { CloneFileMetadata } from "@openclaw/fs-safe/copy";
+import type { CloneFileMetadata } from "../../infra/fs-safe-copy-worker-contract.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
 import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 

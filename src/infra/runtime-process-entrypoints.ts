@@ -14,10 +14,10 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "git-operation.worker",
     distWorkerPath: "infra/git-operation.worker.js",
   },
-  worktreeFilesystem: {
+  fsSafeCopy: {
     currentModuleUrl,
-    sourceWorkerName: "../agents/worktrees/filesystem-native.worker",
-    distWorkerPath: "agents/worktrees/filesystem-native.worker.js",
+    sourceWorkerName: "fs-safe-copy.worker",
+    distWorkerPath: "infra/fs-safe-copy.worker.js",
   },
   sharedStateStore: {
     currentModuleUrl,

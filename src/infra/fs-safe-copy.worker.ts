@@ -9,12 +9,12 @@ import {
   readCloneFileMetadata,
 } from "@openclaw/fs-safe/copy";
 import type {
-  WorktreeFilesystemRead,
-  WorktreeFilesystemReply,
-  WorktreeFilesystemWrite,
-} from "./filesystem-native-contract.js";
+  FsSafeCopyRead,
+  FsSafeCopyReply,
+  FsSafeCopyWrite,
+} from "./fs-safe-copy-worker-contract.js";
 
-function failure(error: unknown): WorktreeFilesystemReply {
+function failure(error: unknown): FsSafeCopyReply {
   return {
     type: "failed",
     message: error instanceof Error ? error.message : String(error),
@@ -28,11 +28,11 @@ if (parentPort) {
   // This isolate uses the library's default and explicit operator environment.
   // Shared worker plumbing may load Gateway defaults; keep those in the host.
   const nativeConfig = getFsSafeNativeConfig();
-  const { serveWorkerTasks } = await import("../../infra/worker-task-pool.js");
+  const { serveWorkerTasks } = await import("./worker-task-pool.js");
   configureFsSafeNative(nativeConfig);
-  serveWorkerTasks<WorktreeFilesystemReply>(async (input) => {
+  serveWorkerTasks<FsSafeCopyReply>(async (input) => {
     // SAFETY: The private worker receives only the host's typed read operations.
-    const command = input as WorktreeFilesystemRead;
+    const command = input as FsSafeCopyRead;
     try {
       switch (command.type) {
         case "probe":
@@ -50,10 +50,10 @@ if (parentPort) {
   const controller = new AbortController();
   const abort = () => controller.abort();
   process.on("SIGTERM", abort);
-  let reply: WorktreeFilesystemReply;
+  let reply: FsSafeCopyReply;
   try {
     // SAFETY: The host sends its typed write command only after the live input guard succeeds.
-    const command = JSON.parse(readFileSync(0, "utf8")) as WorktreeFilesystemWrite;
+    const command = JSON.parse(readFileSync(0, "utf8")) as FsSafeCopyWrite;
     switch (command.type) {
       case "create":
         await createCloneSource(command.destination, { signal: controller.signal });

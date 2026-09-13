@@ -1,4 +1,9 @@
 import { deserialize } from "node:v8";
+import type {
+  FsSafeCopyRead,
+  FsSafeCopyReply,
+  FsSafeCopyWrite,
+} from "../../infra/fs-safe-copy-worker-contract.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -8,20 +13,15 @@ import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js
 import { runCommandBuffersWithTimeout } from "../../process/exec-runner.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
-import type {
-  WorktreeFilesystemRead,
-  WorktreeFilesystemReply,
-  WorktreeFilesystemWrite,
-} from "./filesystem-native-contract.js";
 import { WORKTREE_CHECKOUT_TIMEOUT_MS } from "./git.js";
 
 type ReadRuntime = {
-  pool?: WorkerTaskPool<WorktreeFilesystemRead, WorktreeFilesystemReply>;
+  pool?: WorkerTaskPool<FsSafeCopyRead, FsSafeCopyReply>;
   closing?: Promise<void>;
 };
 
 function workerUrl(): URL {
-  return resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.worktreeFilesystem);
+  return resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.fsSafeCopy);
 }
 
 function assertActive(options: WorktreeFilesystemOptions): void {
@@ -29,16 +29,16 @@ function assertActive(options: WorktreeFilesystemOptions): void {
   options.commitGuard();
 }
 
-function checkReply(reply: WorktreeFilesystemReply): void {
+function checkReply(reply: FsSafeCopyReply): void {
   if (reply.type === "failed") {
     throw Object.assign(new Error(reply.message), { code: reply.code });
   }
 }
 
 async function read(
-  command: WorktreeFilesystemRead,
+  command: FsSafeCopyRead,
   options: WorktreeFilesystemOptions,
-): Promise<WorktreeFilesystemReply> {
+): Promise<FsSafeCopyReply> {
   assertActive(options);
   const runtime = resolveGlobalSingleton<ReadRuntime>(
     Symbol.for("openclaw.worktreeFilesystemReads"),
@@ -57,10 +57,7 @@ async function read(
       "unavailable",
     );
   }
-  const pool = (runtime.pool ??= new WorkerTaskPool<
-    WorktreeFilesystemRead,
-    WorktreeFilesystemReply
-  >({
+  const pool = (runtime.pool ??= new WorkerTaskPool<FsSafeCopyRead, FsSafeCopyReply>({
     workerUrl: workerUrl(),
     maxWorkers: 1,
     idleTimeoutMs: 30_000,
@@ -78,10 +75,7 @@ async function read(
   return reply;
 }
 
-async function write(
-  command: WorktreeFilesystemWrite,
-  options: WorktreeFilesystemOptions,
-): Promise<void> {
+async function write(command: FsSafeCopyWrite, options: WorktreeFilesystemOptions): Promise<void> {
   assertActive(options);
   // A process owns its descriptor table. Never terminate a JS worker while
   // fs-safe's native task still borrows descriptors opened by that worker.
@@ -103,7 +97,7 @@ async function write(
     throw new Error(`Native worktree ${command.type} failed: ${result.termination}`);
   }
   // SAFETY: The private child returns a serialized reply only after its native call settles.
-  const reply = deserialize(result.stdout) as WorktreeFilesystemReply;
+  const reply = deserialize(result.stdout) as FsSafeCopyReply;
   checkReply(reply);
   if (reply.type !== "written") {
     throw new Error("Native worktree operation returned no completion receipt");
