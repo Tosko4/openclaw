@@ -12,7 +12,14 @@ import type {
   WorkboardTaskSummary,
 } from "../../lib/workboard/index.ts";
 import { cardAgentLabel } from "./agent-filter.ts";
-import { renderLifecycleIcon, type WorkboardProps } from "./view-helpers.ts";
+import { cardRelativeTime } from "./view-card-time.ts";
+import {
+  formatPriorityLabel,
+  formatUpdatedTime,
+  renderLifecycleIcon,
+  renderPriorityIcon,
+  type WorkboardProps,
+} from "./view-helpers.ts";
 import { renderSessionStatus, type SessionStatusPresentation } from "./view-session-status.ts";
 
 function alertLabel(alert: CardAlert) {
@@ -59,7 +66,26 @@ export function renderCardAlert(alerts: CardAlert[], descriptionId: string) {
     <span id=${descriptionId} hidden>${fullText}</span>`;
 }
 
-export { cardRelativeTime } from "./view-card-time.ts";
+export function renderCardUpdatedTime(updatedAt: number | undefined, now: number) {
+  return updatedAt === undefined
+      ? nothing
+      : html`<time
+          class="workboard-card__updated"
+          datetime=${new Date(updatedAt).toISOString()}
+          title=${t("workboard.detailUpdatedValue", { time: formatUpdatedTime(updatedAt) })}
+          >${cardRelativeTime(updatedAt, now)}</time
+        >`;
+}
+
+export function renderCardPriority(card: WorkboardCard) {
+  return card.priority === "normal"
+      ? nothing
+      : html`<span class="workboard-card__priority">
+          <span aria-hidden="true">${renderPriorityIcon(card.priority)}</span>${formatPriorityLabel(
+            card.priority,
+          )}
+        </span>`;
+}
 
 function labelOverflowRef(labels: readonly string[]) {
   let dispose = () => {};

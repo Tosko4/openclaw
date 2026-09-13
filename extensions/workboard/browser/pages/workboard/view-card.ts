@@ -27,7 +27,8 @@ import {
 } from "./view-card-actions.ts";
 import {
   renderCardAlert,
-  cardRelativeTime,
+  renderCardUpdatedTime,
+  renderCardPriority,
   renderCardMeta,
   renderCardCounts,
   renderCardSession,
@@ -36,10 +37,7 @@ import { openCardDetails, workboardCardDetailDrawerId } from "./view-card-detail
 import { openCreateModal, workboardCardModalId } from "./view-card-modal.ts";
 import {
   canMutate,
-  formatPriorityLabel,
-  renderPriorityIcon,
   formatStatusLabel,
-  formatUpdatedTime,
   type WorkboardProps,
 } from "./view-helpers.ts";
 import { closeWorkboardPopoverOnAction, workboardPopoverRef } from "./view-popover.ts";
@@ -165,23 +163,8 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
           </div>
         `
       : nothing;
-  const updatedTime =
-    updatedAt === undefined
-      ? nothing
-      : html`<time
-          class="workboard-card__updated"
-          datetime=${new Date(updatedAt).toISOString()}
-          title=${t("workboard.detailUpdatedValue", { time: formatUpdatedTime(updatedAt) })}
-          >${cardRelativeTime(updatedAt, now)}</time
-        >`;
-  const priority =
-    card.priority === "normal"
-      ? nothing
-      : html`<span class="workboard-card__priority">
-          <span aria-hidden="true">${renderPriorityIcon(card.priority)}</span>${formatPriorityLabel(
-            card.priority,
-          )}
-        </span>`;
+  const updatedTime = renderCardUpdatedTime(updatedAt, now);
+  const priority = renderCardPriority(card);
   return html`
     <article
       class="workboard-card priority-${card.priority} ${busy ? "workboard-card--busy" : ""} ${
