@@ -13,6 +13,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { hasNodeErrorCode } from "../infra/path-guards.js";
+import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
   collectSqliteSchemaIssues,
@@ -23,7 +24,7 @@ import {
   inspectSqliteSchemaHeader,
   prepareSqliteReadOnlyLocation,
 } from "../infra/sqlite-snapshot-source.js";
-import { readSqliteUserVersion, SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { discoverAgentDatabaseMigrationTargets } from "../infra/state-migrations.media-persistence-targets.js";
 import { isValidAgentId } from "../routing/session-key.js";
 import {
@@ -43,14 +44,12 @@ import {
 } from "./openclaw-agent-db-schema-helpers.js";
 import {
   describeDeferredStateSchemaPublication,
-  formatIncompatibleDatabaseSchemas,
   formatIndeterminateDatabaseReadiness,
+  OpenClawDatabaseSchemaPreflightError,
 } from "./openclaw-database-preflight.messages.js";
 import type {
   DeferredStateSchemaPublication,
-  IncompatibleOpenClawDatabase,
   OpenClawDatabaseSchemaPreflight,
-  OpenClawDatabaseSchemaPreflightOperation,
   OpenClawAgentSchemaPreflightResult,
   OpenClawStateSchemaPreflightResult,
 } from "./openclaw-database-preflight.types.js";
@@ -100,20 +99,9 @@ export type {
 } from "./openclaw-database-preflight.types.js";
 
 export { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "./openclaw-state-db.js";
+export { OpenClawDatabaseSchemaPreflightError } from "./openclaw-database-preflight.messages.js";
 
 type AgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
-
-/** Fatal refusal when persisted schemas were written by a newer build. */
-export class OpenClawDatabaseSchemaPreflightError extends SqliteSchemaVersionError {
-  constructor(
-    readonly incompatibleDatabases: readonly IncompatibleOpenClawDatabase[],
-    options: { operation?: OpenClawDatabaseSchemaPreflightOperation } = {},
-  ) {
-    const operation = options.operation ?? "gateway-startup";
-    super(formatIncompatibleDatabaseSchemas(incompatibleDatabases, operation));
-    this.name = "OpenClawDatabaseSchemaPreflightError";
-  }
-}
 
 /** Verify persisted runtime schemas before certifying repair or accepting restart. */
 export async function assertOpenClawDatabasesReady(
@@ -639,9 +627,16 @@ export async function preflightOpenClawDatabaseSchemas(options: {
           supportedVersion: options.supportedVersions.agent,
           ...(writerAppVersion ? { writerAppVersion } : {}),
         });
-      } else if (agentDatabase) {
+      } else if (agentDatabase && agentSnapshot) {
         if (options.requireStartupMigrationReadiness) {
-          assertSqliteIntegrity(agentDatabase, agentPath);
+          // Keep the private snapshot alive until the full integrity child has closed.
+          await assertSqliteIntegrityInWorker(
+            agentSnapshot.location,
+            OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+            options.signal ?? new AbortController().signal,
+            agentPath,
+          );
+          options.signal?.throwIfAborted();
           assertCanonicalAgentPersistenceVersion(agentDatabase, agentPath, agentVersion);
         }
         const agentId =
