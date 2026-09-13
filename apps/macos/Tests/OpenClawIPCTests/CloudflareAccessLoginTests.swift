@@ -16,12 +16,41 @@ struct CloudflareAccessLoginTests {
         #expect(claims.exp == self.now.timeIntervalSince1970 + 3600)
     }
 
-    @Test(arguments: ["hostname", "issuer", "audience", "stale", "future", "algorithm"])
+    @Test(arguments: [
+        ("absent", nil, "gateway.example.net"),
+        ("null", nil, "gateway.example.net"),
+        ("empty", "", "gateway.example.net"),
+        ("different", "app.example.net", "app.example.net"),
+        ("wildcard", "*.example.net", "-.example.net"),
+        ("path", "gateway.example.net/dashboard/*", "gateway.example.net-dashboard--"),
+        ("case", "*.Example.NET/Dashboard/*", "-.Example.NET-Dashboard--"),
+    ] as [(String, String?, String)])
+    func `companion discovery follows the helper application hostname`(
+        _ shape: String, _ hostname: String?, _ basename: String) throws
+    {
+        var metadata = self.metadataClaims
+        metadata["aud"] = "Application-123"
+        metadata["app_hostname"] = hostname
+        if shape == "null" { metadata["app_hostname"] = NSNull() }
+        let gateway = try #require(URL(string: "https://gateway.example.net/"))
+        let application = try CloudflareAccessLogin.application(
+            gatewayURL: gateway, metadata: self.jwt(metadata), now: self.now)
+        #expect(application.handoffFilename == "\(basename)-Application-123-token.url")
+        #expect(application.gatewayURL == gateway)
+
+        metadata["hostname"] = "other.example.net"
+        #expect(throws: CloudflareAccessLogin.LoginError.self) {
+            try CloudflareAccessLogin.application(gatewayURL: gateway, metadata: self.jwt(metadata), now: self.now)
+        }
+    }
+
+    @Test(arguments: ["hostname", "application-hostname", "issuer", "audience", "stale", "future", "algorithm"])
     func `rejects malformed or mismatched advertised discovery`(_ mutation: String) throws {
         var claims = self.metadataClaims
         var algorithm = "RS256"
         switch mutation {
         case "hostname": claims["hostname"] = "other.example.net"
+        case "application-hostname": claims["app_hostname"] = 42
         case "issuer": claims["auth_domain"] = "tenant.cloudflareaccess.com.attacker.example"
         case "audience": claims["aud"] = ""
         case "stale": claims["iat"] = self.now.timeIntervalSince1970 - 86401

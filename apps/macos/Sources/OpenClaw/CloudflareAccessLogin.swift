@@ -5,7 +5,7 @@ import Subprocess
 enum CloudflareAccessLogin {
     struct Application: Sendable {
         let gatewayURL: URL
-        fileprivate let hostname: String
+        let handoffFilename: String
         fileprivate let issuer: URL
         fileprivate let audience: String
     }
@@ -42,12 +42,14 @@ enum CloudflareAccessLogin {
     private struct Metadata: Decodable {
         let type: String
         let hostname: String
+        let appHostname: String?
         let authDomain: String
         let aud: String
         let iat: Double
 
         enum CodingKeys: String, CodingKey {
             case type, hostname, aud, iat
+            case appHostname = "app_hostname"
             case authDomain = "auth_domain"
         }
     }
@@ -155,9 +157,8 @@ enum CloudflareAccessLogin {
                 workingDirectory: temporary.path,
                 standardError: .discarded,
                 whileRunning: { process in
-                    let name = "\(application.hostname)-\(application.audience)-token.url"
-                        .replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: "*", with: "-")
-                    let file = temporary.appendingPathComponent(".cloudflared").appendingPathComponent(name)
+                    let file = temporary.appendingPathComponent(".cloudflared")
+                        .appendingPathComponent(application.handoffFilename)
                     // The pinned helper writes this private companion before invoking macOS `open`.
                     // Offer its documented manual handoff without opening a second browser automatically.
                     var published = false
@@ -269,8 +270,13 @@ enum CloudflareAccessLogin {
         guard let canonicalIssuer = URL(string: issuer.absoluteString.lowercased()) else {
             throw LoginError.invalidApplication
         }
+        // cloudflared keys its companion by application hostname (possibly a wildcard/path),
+        // while the requested hostname above remains authoritative for origin validation.
+        let appHostname = claims.appHostname.flatMap { $0.isEmpty ? nil : $0 } ?? claims.hostname
+        let filename = "\(appHostname)-\(claims.aud)-token.url"
+            .replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: "*", with: "-")
         return Application(
-            gatewayURL: gatewayURL, hostname: claims.hostname, issuer: canonicalIssuer, audience: claims.aud)
+            gatewayURL: gatewayURL, handoffFilename: filename, issuer: canonicalIssuer, audience: claims.aud)
     }
 
     static func claims(token: String, application: Application, now: Date = Date()) throws -> TokenClaims {
