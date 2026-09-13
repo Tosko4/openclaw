@@ -1158,16 +1158,17 @@ function getFieldRecordEdits(field: RedactionField, mode: RedactSensitiveMode): 
 }
 
 function getTextRecordEdits(field: RedactionField, mode: RedactSensitiveMode): RedactionEdit[] {
-  if (!field.string) {
-    return [];
-  }
   const { value } = field;
   const edits: RedactionEdit[] = [];
   redactRegisteredSecretValues(value, (secret, start) => {
-    edits.push({ start, end: start + secret.length, replacement: "***" });
+    edits.push({
+      start: field.string ? start : 0,
+      end: field.string ? start + secret.length : value.length,
+      replacement: "***",
+    });
     return secret;
   });
-  if (mode === "off") {
+  if (mode === "off" || !field.string) {
     return edits;
   }
   const bitmap = computeSensitiveRedactionBitmap(value, { mode, patterns: [] });

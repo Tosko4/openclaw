@@ -791,6 +791,8 @@ it.each(patternCases)(
     loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
     const logger = createSubsystemLogger("plugins");
     const { api, registry } = registerPlugin(logger, "jsonl-proof");
+    const registered = { value: 73928164, stringControl: "73928164", ordinary: 42 };
+    const maskedRegistered = { value: "***", stringControl: "***", ordinary: 42 };
     const keySecret = "registered-property-name-123456";
     registerSecretValueForRedaction(keySecret);
     let accessorReads = 0;
@@ -806,6 +808,7 @@ it.each(patternCases)(
     api.registerService({
       id: "jsonl-proof",
       start() {
+        registerSecretValueForRedaction(registered.stringControl);
         api.logger.info(message);
         api.runtime.logging.getChildLogger({ subsystem: "jsonl-proof" }).info(message, {
           nested: [{ message, token: 123456789 }],
@@ -821,6 +824,7 @@ it.each(patternCases)(
           unchanged: 42,
         });
         logger.info("abcd-efgh-ijkl-mnop", {
+          ...registered,
           token: "opaque-value",
           [keySecret]: true,
           "Proxy-Authorization": "Basic dXNlcjpwYXNz",
@@ -833,10 +837,7 @@ it.each(patternCases)(
     });
     await runPluginServices(registry);
     const raw = fs.readFileSync(file, "utf8");
-    const records = raw
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
+    const records = parseLogRecords(raw);
     expect(records).toHaveLength(5);
     expect(records[0]).toMatchObject({
       "1": maskedMessage,
@@ -852,15 +853,18 @@ it.each(patternCases)(
       unchanged: 42,
     });
     expect(records[2][1]).toMatchObject({
+      ...maskedRegistered,
       "Proxy-Authorization": "***",
       headers: maskedHeaders,
     });
     expect(accessorReads).toBe(1);
     expect(raw).not.toContain(token);
     expect(raw).not.toContain(keySecret);
+    expect(raw).not.toContain(registered.stringControl);
     const consoleRecords = output.mock.calls.map(([line]) => JSON.parse(String(line)));
     expect(consoleRecords[0].message).toBe(maskedMessage);
     expect(consoleRecords[1]).toMatchObject({
+      ...maskedRegistered,
       token: "***",
       message: "***",
       "Proxy-Authorization": "***",
@@ -971,10 +975,7 @@ it.each(patternCases)(
     });
     await runPluginServices(registry);
     const text = fs.readFileSync(file, "utf8");
-    const records = text
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
+    const records = parseLogRecords(text);
     const consoleRecords = output.mock.calls.map(([line]) => JSON.parse(String(line)));
     expect(records).toHaveLength(6);
     expect(consoleRecords).toHaveLength(3);
