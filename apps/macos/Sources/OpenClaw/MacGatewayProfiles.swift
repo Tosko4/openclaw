@@ -71,7 +71,7 @@ actor MacGatewayProfileStore {
             self.liveness.value
         }
 
-        fileprivate func revoke() {
+        func revoke() {
             self.liveness.withValue { $0 = false }
         }
 

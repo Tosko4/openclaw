@@ -20,6 +20,7 @@ enum BoundedProcess {
         environment: [String: String]? = nil,
         workingDirectory: String? = nil,
         standardError: some ErrorOutputProtocol = .combinedWithOutput,
+        whileRunning: @escaping @Sendable (ChildProcessExit) async throws -> Void = { _ in },
         timeout: TimeInterval) async throws -> BoundedProcessResult
     {
         precondition(timeout > 0)
@@ -46,7 +47,18 @@ enum BoundedProcess {
         { execution in
             let exitSignal = ChildProcessExit(
                 processIdentifier: pid_t(execution.processIdentifier.value))
-            let deadline = await exitSignal.wait(timeout: timeout)
+            let deadline = try await withThrowingTaskGroup(of: ChildProcessExit.Outcome?.self) { group in
+                group.addTask { await exitSignal.wait(timeout: timeout) }
+                group.addTask {
+                    try await whileRunning(exitSignal)
+                    return nil
+                }
+                defer { group.cancelAll() }
+                for try await outcome in group {
+                    if let outcome { return outcome }
+                }
+                throw CancellationError()
+            }
             try Task.checkCancellation()
 
             switch deadline {

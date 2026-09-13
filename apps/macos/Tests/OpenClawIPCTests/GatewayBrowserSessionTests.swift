@@ -556,6 +556,9 @@ struct MacGatewayBrowserSessionStoreTests {
                 password: nil,
                 attempt: initial)
             let attempt = try await store.beginBrowserSignIn(url: url)
+            let browserAction = GatewayBrowserHandoff(url: session.origin) { attempt.isCurrent }
+            var launches = 0
+            try browserAction.perform { _ in launches += 1 }
             let result: Result<Void, Error>
             do {
                 switch mutation {
@@ -572,6 +575,11 @@ struct MacGatewayBrowserSessionStoreTests {
                         attempt: edit)
                 default: try await store.remove(profileID: profile.id)
                 }
+                #expect(!browserAction.isAvailable)
+                #expect(throws: CancellationError.self) {
+                    try browserAction.perform { _ in launches += 1 }
+                }
+                #expect(launches == 1)
                 await #expect(throws: GatewayBrowserSessionError.superseded) {
                     try await store.saveBrowserSession(name: "Late", session: session, attempt: attempt)
                 }
