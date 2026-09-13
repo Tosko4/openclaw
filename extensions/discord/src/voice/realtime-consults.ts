@@ -276,6 +276,13 @@ export class DiscordRealtimeConsults {
       if (this.params.stopped() || providerEpoch !== this.params.providerEpoch()) {
         return;
       }
+      if (error instanceof Error && error.name === "AbortError") {
+        if (pendingForcedConsult) {
+          this.params.harness.forcedConsults.remove(pendingForcedConsult);
+        }
+        logger.warn(`discord voice: realtime transcript cancelled: ${formatErrorMessage(error)}`);
+        return;
+      }
       logger.warn(
         `discord voice: realtime active-run control failed; falling back to normal transcript handling: ${formatErrorMessage(error)}`,
       );
@@ -385,11 +392,13 @@ export class DiscordRealtimeConsults {
     if (!context) {
       return "";
     }
+    const providerEpoch = this.params.providerEpoch();
     return this.params.runAgentTurn({
       context,
       message: params.message,
       toolsAllow: this.params.consultToolsAllow(),
       userId: context.userId,
+      isCurrent: () => !this.params.stopped() && providerEpoch === this.params.providerEpoch(),
       ...(params.signal ? { signal: params.signal } : {}),
     });
   }

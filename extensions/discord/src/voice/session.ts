@@ -69,6 +69,7 @@ export type VoiceRealtimeAgentTurnParams = {
   message: string;
   toolsAllow?: string[];
   userId: string;
+  isCurrent: () => boolean;
   signal?: AbortSignal;
 };
 

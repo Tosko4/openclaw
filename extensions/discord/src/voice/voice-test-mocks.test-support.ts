@@ -1,6 +1,7 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { controlRealtimeVoiceAgentRun } from "openclaw/plugin-sdk/realtime-voice";
 import { vi, type Mock } from "vitest";
+import type { VoiceRealtimeSpeakerContext, VoiceSessionEntry } from "./session.js";
 const {
   createConnectionMock,
   getVoiceConnectionMock,
@@ -12,6 +13,7 @@ const {
   agentCommandMock,
   resolveRealtimeBootstrapContextInstructionsMock,
   resolveVoiceIngressWithParticipantsMock,
+  syntheticVoiceAdmissions,
   transcribeAudioFileMock,
   resolveAudioInputBudgetMock,
   prepareTtsRequestMock,
@@ -133,6 +135,10 @@ const {
   const realtimeSessionMockLocal = createRealtimeSessionMockLocal();
 
   return {
+    syntheticVoiceAdmissions: new WeakMap<
+      VoiceSessionEntry,
+      Map<string, VoiceRealtimeSpeakerContext>
+    >(),
     createConnectionMock: createConnectionMockLocal,
     getVoiceConnectionMock: getVoiceConnectionMockLocal,
     joinVoiceChannelMock: vi.fn(() => createConnectionMockLocal()),
@@ -229,6 +235,7 @@ const {
 });
 
 export const voiceTestMocks = {
+  syntheticVoiceAdmissions,
   createConnectionMock,
   getVoiceConnectionMock,
   joinVoiceChannelMock,
@@ -449,10 +456,15 @@ vi.mock("./participant-context.js", async () => {
     ...actual,
     resolveDiscordVoiceIngressContextWithParticipants: (
       ...args: Parameters<typeof actual.resolveDiscordVoiceIngressContextWithParticipants>
-    ) =>
-      resolveVoiceIngressWithParticipantsMock.getMockImplementation()
-        ? resolveVoiceIngressWithParticipantsMock(...args)
-        : actual.resolveDiscordVoiceIngressContextWithParticipants(...args),
+    ) => {
+      if (resolveVoiceIngressWithParticipantsMock.getMockImplementation()) {
+        return resolveVoiceIngressWithParticipantsMock(...args);
+      }
+      const context = syntheticVoiceAdmissions.get(args[0].entry)?.get(args[0].userId);
+      return context
+        ? Promise.resolve(context)
+        : actual.resolveDiscordVoiceIngressContextWithParticipants(...args);
+    },
   };
 });
 

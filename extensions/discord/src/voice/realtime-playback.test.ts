@@ -146,7 +146,7 @@ defineDiscordVoiceTests(
       const { bridgeParams, entry } = await createJoinedAgentProxyFixture({
         cfg: { commands: { ownerAllowFrom: ["user:u-owner"] } },
       });
-      beginSpeakerTurn(entry);
+      beginSpeakerTurn(entry, { realAdmission: true });
 
       void bridgeParams?.onToolCall?.(
         {
@@ -186,7 +186,7 @@ defineDiscordVoiceTests(
     it("rejects a provider control call after speaker admission is revoked", async () => {
       const { bridgeParams, entry, manager } = await createJoinedAgentProxyFixture();
       try {
-        beginSpeakerTurn(entry);
+        beginSpeakerTurn(entry, { realAdmission: true });
         resolveVoiceIngressWithParticipantsMock.mockResolvedValueOnce(null);
         await bridgeParams.onToolCall?.(
           {
@@ -232,7 +232,7 @@ defineDiscordVoiceTests(
         });
         let pending: Promise<void> | void = undefined;
         try {
-          beginSpeakerTurn(entry);
+          beginSpeakerTurn(entry, { realAdmission: true });
           pending = bridgeParams.onToolCall?.(
             {
               itemId: "pending",

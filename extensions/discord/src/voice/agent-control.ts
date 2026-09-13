@@ -32,7 +32,10 @@ export async function controlDiscordVoiceAgentRun(params: DiscordVoiceAgentContr
       params.entry.sessionLifecycle.status !== "active" ||
       !params.isCurrent()
     ) {
-      throw new Error("Discord voice speaker authorization changed before run control");
+      throw new DOMException(
+        "Discord voice speaker authorization changed before run control",
+        "AbortError",
+      );
     }
   };
   assertCurrent();
