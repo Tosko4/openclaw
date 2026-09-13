@@ -16,6 +16,7 @@ import {
   type WorkboardPriority,
   type WorkboardStatus,
   type WorkboardTaskSummary,
+  type WorkboardUiState,
 } from "../../lib/workboard/index.ts";
 import { isReservedSessionKey } from "../../lib/workboard/session-links.ts";
 import type { WorkboardSessionResolution } from "../../lib/workboard/session-resolution.ts";
