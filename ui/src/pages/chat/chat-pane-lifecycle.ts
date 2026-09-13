@@ -4,7 +4,7 @@ import type {
   TaskSuggestionEvent,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
-import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import {
   disposeQuestionPromptState,
   handleQuestionPromptEvent,
@@ -18,11 +18,10 @@ import {
   TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../components/panel-toggle-contract.ts";
-import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
@@ -69,7 +68,6 @@ import {
   refreshPageChat,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
-import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
@@ -643,55 +641,14 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     const board = this.resolveBoardView();
     this.syncRetainedBoardSession(board);
     this.sessionPanelToggles.flush();
-    const state = this.state;
-    const client = state?.client;
-    const sessionKey = state?.sessionKey;
-    const connectionEpoch = state?.connectionEpoch;
-    const agentId = state
-      ? scopedAgentParamsForSession(state, state.sessionKey).agentId
-      : undefined;
-    const session = state ? selectedChatSessionRow(state) : undefined;
-    // Keyboard focus may move to another split pane without hiding this resource.
-    this.activeSessionResources.sync(
-      state &&
-        client &&
-        sessionKey &&
-        state.connected &&
-        this.presented &&
-        this.visuallyPresented &&
-        !parseCatalogSessionKey(sessionKey)
-        ? {
-            client,
-            sessionKey,
-            agentId,
-            connectionEpoch: state.connectionEpoch,
-            desktopAvailable: isDesktopPanelAvailable(this.context.gateway.snapshot),
-            browserAvailable: isBrowserPanelAvailable(this.context.gateway.snapshot),
-            placement: session?.placement,
-            sessionId: session?.sessionId,
-            execNode: session?.execNode,
-            archived: session?.archived,
-            browserTab: [
-              ...latestBrowserTabCards(state.chatMessages, state.chatToolMessages).values(),
-            ].at(-1),
-            layout: () => state.sidebarLayout,
-            // Discovery is not a saved layout preference. Reload must validate again
-            // before mounting a resource; explicit UI actions still persist normally.
-            commit: (layout) => this.commitSidebarLayout(layout, { persist: false }),
-            requestUpdate: () => this.requestUpdate(),
-            isCurrent: () =>
-              this.isConnected &&
-              this.state === state &&
-              state.client === client &&
-              state.sessionKey === sessionKey &&
-              scopedAgentParamsForSession(state, state.sessionKey).agentId === agentId &&
-              state.connectionEpoch === connectionEpoch &&
-              state.connected &&
-              this.presented &&
-              this.visuallyPresented,
-          }
-        : null,
-    );
+    this.activeSessionResources.syncPane({
+      state: () => this.state,
+      gateway: this.context.gateway.snapshot,
+      isConnected: () => this.isConnected,
+      isPresented: () => this.presented && this.visuallyPresented,
+      commit: (layout) => this.commitSidebarLayout(layout, { persist: false }),
+      requestUpdate: () => this.requestUpdate(),
+    });
     this.setConversationVisible(
       Boolean(
         this.state &&

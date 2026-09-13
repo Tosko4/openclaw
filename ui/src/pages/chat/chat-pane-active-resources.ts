@@ -1,5 +1,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import {
   bindBrowserRequestClient,
   listBrowserTabs,
@@ -9,6 +11,8 @@ import {
   desktopSourceForEnvironment,
   loadDesktopEnvironments,
 } from "../../components/desktop/desktop-source.ts";
+import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import {
@@ -18,6 +22,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   openSlot,
   sidebarActivePanel,
@@ -100,6 +105,63 @@ export class ChatPaneActiveResources {
       }
     | undefined;
 
+  syncPane(view: {
+    state: () => ChatPageHost | undefined;
+    gateway: ApplicationGatewaySnapshot;
+    isConnected: () => boolean;
+    isPresented: () => boolean;
+    commit: (layout: SidebarLayout) => void;
+    requestUpdate: () => void;
+  }): void {
+    const state = view.state();
+    const client = state?.client;
+    const sessionKey = state?.sessionKey;
+    const connectionEpoch = state?.connectionEpoch;
+    const agentId = state
+      ? scopedAgentParamsForSession(state, state.sessionKey).agentId
+      : undefined;
+    const session = state ? selectedChatSessionRow(state) : undefined;
+    // Keyboard focus may move to another split pane without hiding this resource.
+    this.sync(
+      state &&
+        client &&
+        sessionKey &&
+        state.connected &&
+        view.isPresented() &&
+        !parseCatalogSessionKey(sessionKey)
+        ? {
+            client,
+            sessionKey,
+            agentId,
+            connectionEpoch: state.connectionEpoch,
+            desktopAvailable: isDesktopPanelAvailable(view.gateway),
+            browserAvailable: isBrowserPanelAvailable(view.gateway),
+            placement: session?.placement,
+            sessionId: session?.sessionId,
+            execNode: session?.execNode,
+            archived: session?.archived,
+            browserTab: [
+              ...latestBrowserTabCards(state.chatMessages, state.chatToolMessages).values(),
+            ].at(-1),
+            layout: () => state.sidebarLayout,
+            // Discovery is not a saved layout preference. Reload must validate again
+            // before mounting a resource; explicit UI actions still persist normally.
+            commit: (layout) => view.commit(layout),
+            requestUpdate: () => view.requestUpdate(),
+            isCurrent: () =>
+              view.isConnected() &&
+              view.state() === state &&
+              state.client === client &&
+              state.sessionKey === sessionKey &&
+              scopedAgentParamsForSession(state, state.sessionKey).agentId === agentId &&
+              state.connectionEpoch === connectionEpoch &&
+              state.connected &&
+              view.isPresented(),
+          }
+        : null,
+    );
+  }
+
   invalidate(): void {
     this.generation += 1;
     this.signature = undefined;
@@ -145,12 +207,15 @@ export class ChatPaneActiveResources {
   reconcile(refresh: () => Promise<boolean>): void {
     const current = this.probeCurrent;
     if (
-      (!this.pendingProbes && !this.reconciliationFailed && !this.reconciliation) ||
+      (!this.pendingProbes &&
+        !this.desktop &&
+        !this.reconciliationFailed &&
+        !this.reconciliation) ||
       !current?.()
     ) {
       return;
     }
-    const retryDiscovery = this.pendingProbes === 0;
+    const retryDiscovery = this.reconciliationFailed && this.pendingProbes === 0;
     const requestUpdate = this.requestProbeUpdate;
     const pending = Promise.resolve()
       .then(() => (current() ? refresh() : false))
@@ -160,6 +225,10 @@ export class ChatPaneActiveResources {
     void pending.then((ok) => {
       if (this.reconciliation === pending) {
         this.reconciliationFailed = !ok;
+        if (!ok && this.desktop) {
+          this.desktop.source = null;
+          requestUpdate?.();
+        }
         if (ok) {
           this.reconciliation = undefined;
           if (retryDiscovery && current() && this.pendingProbes === 0) {
@@ -263,23 +332,29 @@ export class ChatPaneActiveResources {
         };
       }
     }
-    if (this.dismissed(owner.layout())) {
+    const desktopAlreadyPresent = owner
+      .layout()
+      .columns.some((column) => column.panels.some((panel) => panel.slot === "desktop"));
+    if (this.dismissed(owner.layout()) && (!this.desktop || !desktopAlreadyPresent)) {
       this.desktop = undefined;
       return;
     }
     const current = () =>
-      generation === this.generation && owner.isCurrent() && !this.dismissed(owner.layout());
+      generation === this.generation &&
+      owner.isCurrent() &&
+      (!this.dismissed(owner.layout()) ||
+        (this.desktop !== undefined &&
+          owner
+            .layout()
+            .columns.some((column) => column.panels.some((panel) => panel.slot === "desktop"))));
     this.probeCurrent = current;
     this.requestProbeUpdate = owner.requestUpdate;
     // Independent probes: a broken browser route must not hide an available desktop.
     // Existing manual panels own their reads, including dormant retained tabs.
-    const desktopAlreadyPresent = owner
-      .layout()
-      .columns.some((column) => column.panels.some((panel) => panel.slot === "desktop"));
     if (owner.desktopAvailable && (this.desktop || !desktopAlreadyPresent)) {
       this.trackProbe(this.discoverDesktop(owner, current), generation);
     }
-    if (owner.browserAvailable && owner.browserTab) {
+    if (!this.dismissed(owner.layout()) && owner.browserAvailable && owner.browserTab) {
       this.trackProbe(this.discoverBrowser(owner, owner.browserTab, current), generation);
     }
   }
@@ -297,6 +372,9 @@ export class ChatPaneActiveResources {
     const existing = owner
       .layout()
       .columns.some((column) => column.panels.some((panel) => panel.slot === "desktop"));
+    if (this.dismissed(owner.layout()) && !existing) {
+      return;
+    }
     // A manual open that won the discovery race owns its explicit target.
     if (!this.desktop && (source === null || existing)) {
       return;
@@ -320,6 +398,9 @@ export class ChatPaneActiveResources {
 
   private reveal(owner: ActiveResourceOwner, slot: ResourceSlot): void {
     const layout = owner.layout();
+    if (this.dismissed(layout)) {
+      return;
+    }
     // Existing tabs (including minimized ones) are user-owned. Never reselect them.
     if (layout.columns.some((column) => column.panels.some((panel) => panel.slot === slot))) {
       return;

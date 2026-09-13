@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { ChatPaneActiveResources, type ActiveResourceOwner } from "./chat-pane-active-resources.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout-normalize.ts";
 import {
   closeSlot,
@@ -104,6 +105,87 @@ function fixture() {
 }
 
 describe("session active resource discovery", () => {
+  it("retains a visible verified Desktop when another resource is dismissed", async () => {
+    const f = fixture();
+    f.controller.sync(f.owner);
+    await settle();
+    f.setLayout({
+      ...closeSlot(promoteSidebarPanel(f.owner.layout(), "desktop"), "browser"),
+      resourceAutoOpenDismissed: true,
+    });
+    f.controller.sync(f.owner);
+    await settle();
+    expect(
+      f.controller.desktopSource(
+        f.owner.client,
+        key,
+        f.owner.agentId,
+        f.owner.connectionEpoch,
+        f.owner,
+      ),
+    ).toBe("worker-1");
+    expect(f.slots()).not.toContain("browser");
+  });
+
+  it("reconciles a published Desktop and fences an unconfirmed cached roster owner", async () => {
+    const f = fixture();
+    f.owner.browserAvailable = false;
+    f.controller.sync(f.owner);
+    await settle();
+    const source = () =>
+      f.controller.desktopSource(
+        f.owner.client,
+        key,
+        f.owner.agentId,
+        f.owner.connectionEpoch,
+        f.owner,
+      );
+    expect(source()).toBe("worker-1");
+    const before = f.request.mock.calls.length;
+    const refresh = vi.fn(async () => true);
+    f.controller.reconcile(refresh);
+    await settle();
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(source()).toBe("worker-1");
+    expect(f.request).toHaveBeenCalledTimes(before);
+    vi.mocked(f.owner.requestUpdate).mockClear();
+    f.controller.reconcile(async () => false);
+    await settle();
+    expect(source()).toBeNull();
+    expect(f.owner.requestUpdate).toHaveBeenCalled();
+  });
+
+  it("checks a completed Desktop against the post-event result, not a cached selected row", async () => {
+    const f = fixture();
+    f.owner.browserAvailable = false;
+    f.controller.sync(f.owner);
+    await settle();
+    const refreshReplacement = vi.fn(async () => ({ sessions: [] }));
+    // SAFETY: this event-boundary fixture supplies the state fields read by reconciliation;
+    // it deliberately retains the display cache while the fresh slice omits it.
+    const state = {
+      sessionKey: key,
+      assistantAgentId: "main",
+      sessionsResult: { sessions: [session] },
+      sessions: { refreshReplacement },
+    } as unknown as ChatPageHost;
+    f.controller.reconcileSession({ key, reason: "patch" }, state, {
+      requestUpdate: () => f.controller.sync(f.owner),
+      updated: async () => {},
+    });
+    await settle();
+    expect(refreshReplacement).toHaveBeenCalledOnce();
+    expect(
+      f.controller.desktopSource(
+        f.owner.client,
+        key,
+        f.owner.agentId,
+        f.owner.connectionEpoch,
+        f.owner,
+      ),
+    ).toBeNull();
+  });
+
   it("discovers only the exact target without waiting for unrelated inventory catalogs", async () => {
     const f = fixture();
     f.owner.browserAvailable = false;

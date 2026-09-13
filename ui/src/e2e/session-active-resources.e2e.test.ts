@@ -10,7 +10,7 @@ import {
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
-import { dockChatSidePanel } from "./chat-side-panel.test-support.ts";
+import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
 
@@ -91,15 +91,24 @@ async function assertNoProvisioning(gateway: MockGatewayControls) {
 }
 
 suite.define(() => {
-  it.each([
-    { width: 1280, staleRoster: false, reclaimOnReload: false, swapOnReload: false },
-    { width: 390, staleRoster: false, reclaimOnReload: false, swapOnReload: false },
-    { width: 1280, staleRoster: true, reclaimOnReload: false, swapOnReload: false },
-    { width: 1280, staleRoster: false, reclaimOnReload: true, swapOnReload: false },
-    { width: 1280, staleRoster: false, reclaimOnReload: false, swapOnReload: true },
-  ])(
-    "reveals a running desktop on direct entry at width $width (stale roster: $staleRoster, reclaim: $reclaimOnReload, swap: $swapOnReload) and respects reload",
-    async ({ width, staleRoster, reclaimOnReload, swapOnReload }) => {
+  it.each(
+    [
+      { width: 1280, staleRoster: false, reclaimOnReload: false, swapOnReload: false },
+      { width: 390, staleRoster: false, reclaimOnReload: false, swapOnReload: false },
+      { width: 1280, staleRoster: true, reclaimOnReload: false, swapOnReload: false },
+      { width: 1280, staleRoster: false, reclaimOnReload: true, swapOnReload: false },
+      { width: 1280, staleRoster: false, reclaimOnReload: false, swapOnReload: true },
+      {
+        width: 1280,
+        staleRoster: true,
+        reclaimOnReload: false,
+        swapOnReload: false,
+        closeOtherPanel: true,
+      },
+    ].map((scenario) => Object.assign({ closeOtherPanel: false }, scenario)),
+  )(
+    "reveals a running desktop on direct entry at width $width (stale roster: $staleRoster, reclaim: $reclaimOnReload, swap: $swapOnReload, close another: $closeOtherPanel) and respects reload",
+    async ({ width, staleRoster, reclaimOnReload, swapOnReload, closeOtherPanel }) => {
       await suite.withPage(
         { serviceWorkers: "block", viewport: { width, height: 900 } },
         async ({ page }) => {
@@ -145,6 +154,20 @@ suite.define(() => {
             path: path.join(suite.artifactDir, `direct-desktop-${width}.png`),
             animations: "disabled",
           });
+          if (closeOtherPanel) {
+            await pane(page).locator(".chat-panel-swap").click();
+            await pane(page).locator(".desktop-surface canvas").waitFor();
+            await openChatSidePanelType(page, "Browser");
+            const reads = (await gateway.getRequests("desktop.observe")).length;
+            await pane(page).getByRole("button", { name: "Close Browser", exact: true }).click();
+            await expectRequestCountStable(gateway, "desktop.observe", reads);
+            expect(await pane(page).locator(".desktop-surface canvas").isVisible()).toBe(true);
+            expect(
+              await pane(page).getByRole("tab", { name: "Browser", exact: true }).count(),
+            ).toBe(0);
+            await assertNoProvisioning(gateway);
+            return;
+          }
           if (swapOnReload) {
             await pane(page).locator(".chat-panel-swap").click();
             await page.reload();
