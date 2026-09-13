@@ -142,6 +142,9 @@ export async function copyApfsCloneIndex(
     await setTimeout(remainingMs, undefined, { signal: options.signal });
   }
   const updated = Buffer.from(data.subarray(0, parsed.entriesEnd));
+  const sourcePrefix = path.join(source, ".") + path.sep;
+  const destinationPrefix = path.join(destination, ".") + path.sep;
+  const indexSecond = Number(stamp.mtimeNs / 1_000_000_000n);
   for (const [i, entry] of parsed.entries.entries()) {
     if (i % 256 === 0) {
       await setImmediate();
@@ -151,13 +154,13 @@ export async function copyApfsCloneIndex(
     const offset = entry.offset;
     if (
       (data.readUInt32BE(offset + 24) & 0xf000) !== 0x8000 ||
-      BigInt(data.readUInt32BE(offset + 8)) >= stamp.mtimeNs / 1_000_000_000n
+      data.readUInt32BE(offset + 8) >= indexSecond
     ) {
       continue;
     }
     const snapshotSecond = Math.floor(Date.now() / 1000);
-    const original = apfsFilesystem.readFileMetadata(path.join(source, entry.name));
-    const cloned = apfsFilesystem.readFileMetadata(path.join(destination, entry.name));
+    const original = apfsFilesystem.readFileMetadata(sourcePrefix + entry.name);
+    const cloned = apfsFilesystem.readFileMetadata(destinationPrefix + entry.name);
     if (
       !original ||
       !cloned ||
