@@ -231,7 +231,7 @@ describe("formatUnknownText", () => {
 
   it.each([
     { name: "named", value: Symbol("agent"), expected: "Symbol(agent)" },
-    { name: "anonymous", value: Symbol(), expected: "Symbol()" },
+    { name: "anonymous", value: Symbol(undefined), expected: "Symbol()" },
     { name: "empty", value: Symbol(""), expected: "Symbol()" },
     { name: "registered", value: Symbol.for("会議"), expected: "Symbol(会議)" },
     { name: "well-known", value: Symbol.iterator, expected: "Symbol(Symbol.iterator)" },
