@@ -113,6 +113,11 @@ uses the admitted handle. Coalesced callers retain their own guards. History
 eviction also uses this admission when reopening after archive materialization,
 then rereads candidate protection before preparing reclamation.
 
+Artifact cleanup resolves session paths only when its file inventory contains
+candidate transcript, compaction checkpoint, or trajectory files. Prompt-reference
+projection runs only when prompt blobs exist. Age, exclusion, and containment
+checks still govern every removal.
+
 After archive preparation, session deletion rereads its target before admitting
 the final reclamation worker. A missing or changed target returns the existing
 entry-mismatch result without starting that worker, while preserving archives
