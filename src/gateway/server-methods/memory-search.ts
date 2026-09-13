@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
@@ -153,22 +154,40 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    let rebuildNotice: Record<string, unknown> | null = null;
+    let rebuildSequence: unknown;
+    const readRebuildWarning = () =>
+      rebuildNotice?.sequence !== rebuildSequence && typeof rebuildNotice?.warning === "string"
+        ? rebuildNotice.warning
+        : undefined;
     try {
+      rebuildNotice = asNullableRecord(manager.status().custom?.automaticRebuildNotice);
+      rebuildSequence = rebuildNotice?.sequence;
       const results = await manager.search(query, searchOptions);
       const status = manager.status();
+      const staleness = resolveMemorySearchStaleness(status, agentId);
+      const warning = [staleness?.warning, readRebuildWarning()]
+        .filter((message): message is string => typeof message === "string")
+        .join(" ");
       const payload: MemorySearchResponse = {
         agentId,
         provider: status.provider,
         searchMode: resolveSearchMode(status),
         results,
-        ...resolveMemorySearchStaleness(status, agentId),
+        ...staleness,
+        ...(warning ? { warning } : {}),
       };
       respond(true, payload, undefined);
     } catch (error) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, `memory search failed: ${formatErrorMessage(error)}`),
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          [`memory search failed: ${formatErrorMessage(error)}`, readRebuildWarning()]
+            .filter(Boolean)
+            .join(" "),
+        ),
       );
     } finally {
       await manager.close?.().catch(() => {});

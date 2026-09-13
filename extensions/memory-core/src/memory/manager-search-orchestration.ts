@@ -197,8 +197,10 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         (indexIdentity.status === "missing" ||
           (searchSyncEnabled &&
             indexIdentity.status === "mismatched" &&
-            indexIdentity.owner === "openclaw"));
+            indexIdentity.owner === "openclaw" &&
+            indexIdentity.versionOrder === "older"));
       if (shouldRepairIdentity) {
+        this.recordAutomaticRebuild();
         // The writer rechecks identity under its lease; another manager may have repaired it.
         await this.syncAdmitted(
           { reason: "search" },

@@ -7,6 +7,7 @@ import {
   resolveUserPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
+  formatMemoryIndexRebuildGuidance,
   MEMORY_CHUNKING_VERSION,
   MEMORY_INDEX_VECTOR_TABLE,
   type MemorySyncParams,
@@ -79,6 +80,13 @@ export type MemorySemanticProviderGeneration = Extract<
 const log = createSubsystemLogger("memory");
 
 export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
+  protected readonly automaticRebuildNotice = { sequence: 0, warning: "" };
+
+  protected recordAutomaticRebuild(): void {
+    this.automaticRebuildNotice.sequence += 1;
+    this.automaticRebuildNotice.warning = `Automatic memory index repair was requested. To rebuild manually, run: ${formatMemoryIndexRebuildGuidance({ requestedProvider: this.settings.provider }, this.agentId)}`;
+  }
+
   protected abstract readonly createProvider: MemoryManagerProviderFactory;
   protected abstract releaseProvider(provider: EmbeddingProvider): void;
   private fallbackProviderInitPromise: Promise<boolean> | null = null;
@@ -229,6 +237,16 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         hasIndexedChunks,
         ftsTokenizer: this.settings.store.fts.tokenizer,
       });
+      if (
+        indexIdentity.status === "mismatched" &&
+        indexIdentity.owner === "openclaw" &&
+        indexIdentity.versionOrder === "newer" &&
+        params?.reason !== "cli"
+      ) {
+        // Keep automatic force/retry/bootstrap paths from overwriting a newer publication.
+        needsFullReindex = true;
+        return;
+      }
       const needsInitialIndex = indexIdentity.status !== "valid" && !hasIndexedChunks;
       // Missing metadata cannot prove whether existing chunks were semantic.
       // Wait for the configured provider before replacing them with a rebuilt index,
@@ -311,6 +329,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       }
       try {
         if (needsFullReindex) {
+          if (params?.reason !== "cli" && hasIndexedChunks) {
+            this.recordAutomaticRebuild();
+          }
           await this.runInPlaceReindex({
             reason: params?.reason,
             force: params?.force,

@@ -13,7 +13,6 @@ import {
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
-  type MemoryIndexIdentityState,
   type MemoryProviderStatus,
   type MemoryReadResult,
   type MemorySearchManager,
@@ -49,6 +48,7 @@ import {
   type MemoryIndexManagerPurpose,
 } from "./manager-registry.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
+import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import { runMemorySearchMaintenance } from "./manager-search-maintenance.js";
 import { MemorySearchOrchestration } from "./manager-search-orchestration.js";
 import {
@@ -641,6 +641,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         providerState: this.providerLifecycle,
         providerUnavailableReason: this.providerUnavailableReason,
         indexIdentity: this.indexIdentityState,
+        automaticRebuildNotice: this.automaticRebuildNotice,
       },
     };
   }
