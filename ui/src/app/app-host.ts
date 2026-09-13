@@ -25,6 +25,7 @@ import { createIdleImport } from "../lib/idle-import.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import { invalidateModelCatalogCache } from "../lib/model-catalog-cache.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
+import { readSessionChangedEvent } from "../lib/sessions/reconcile.ts";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
@@ -498,12 +499,28 @@ class OpenClawShell
   private readonly handleGatewayEvent = (event: GatewayEventFrame) => {
     const client = this.context?.gateway?.snapshot.client;
     if (client && event.event === "sessions.changed") {
-      const agentId = asNullableRecord(event.payload)?.agentId;
-      // Session aliases are resolved by the Gateway; retire all saved projections for this agent.
-      invalidateModelCatalogCache(client, {
-        ...(typeof agentId === "string" ? { agentId } : {}),
-        sessionsOnly: true,
-      });
+      const source = asNullableRecord(event.payload);
+      const changed = readSessionChangedEvent(event.payload);
+      const agentId = typeof source?.agentId === "string" ? source.agentId : undefined;
+      if (
+        changed &&
+        (source?.reason === "reset" ||
+          source?.phase === "reset" ||
+          source?.reason === "command-metadata" ||
+          source?.reason === "patch")
+      ) {
+        invalidateChatMetadataStore(
+          client,
+          { agentId, sessionKey: changed.key },
+          {
+            hello: this.context?.gateway.snapshot.hello,
+            agentsList: this.context?.agents.state.agentsList,
+          },
+        );
+      } else {
+        // Session aliases are resolved by the Gateway; retire saved projections for this agent.
+        invalidateModelCatalogCache(client, { agentId, sessionsOnly: true });
+      }
     }
     if (event.event === "config.changed" || event.event === "chat.metadata.changed") {
       if (client) {

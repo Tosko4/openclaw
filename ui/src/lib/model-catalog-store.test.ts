@@ -9,8 +9,11 @@ import {
 } from "../test-helpers/gateway-client.ts";
 import {
   clearModelCatalogCache,
+  beginModelCatalogRead,
+  publishModelCatalogResult,
   invalidateModelCatalogCache,
   modelCatalogCache,
+  settleModelCatalogRequests,
 } from "./model-catalog-cache.ts";
 import { loadModelCatalog, peekModelCatalog } from "./model-catalog-store.ts";
 
@@ -18,6 +21,27 @@ const prepared = { id: "prepared", name: "Prepared", provider: "example" };
 const published = { id: "published", name: "Published", provider: "example" };
 
 describe("model catalog display cache", () => {
+  it("captures request settlement independently of a donated display snapshot", async () => {
+    const wire = createDeferred<ModelCatalogResult>();
+    const request = createGatewayRequestMock().mockReturnValueOnce(wire.promise);
+    const client = createTestGatewayClient(request);
+    const scope = { agentId: "main", sessionKey: "agent:main:retained" };
+    const donation = beginModelCatalogRead(client, scope);
+    const original = loadModelCatalog(client, scope);
+    const onSettled = vi.fn();
+    const settlement = settleModelCatalogRequests(client, scope).then(onSettled);
+    try {
+      publishModelCatalogResult(donation, scope, { models: [published] });
+      expect(await original).toEqual({ models: [published] });
+      expect(onSettled).not.toHaveBeenCalled();
+      wire.resolve({ models: [prepared] });
+      await settlement;
+      expect(onSettled).toHaveBeenCalledOnce();
+    } finally {
+      wire.resolve({ models: [prepared] });
+      await Promise.all([original, settlement]);
+    }
+  });
   it("rereads readiness when the earliest Gateway cooldown expires without a publication", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
     const cooling = {

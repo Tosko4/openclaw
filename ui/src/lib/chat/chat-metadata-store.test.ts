@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { invalidateChatMetadataStore, type ChatMetadataResult } from "./chat-metadata-cache.ts";
 import {
-  loadChatMetadata,
+  loadChatMetadataRefresh,
   peekChatMetadata,
   beginChatMetadataPublication,
   revalidateChatMetadata,
@@ -31,6 +31,31 @@ function metadata(name: string): ChatMetadataResult {
   return {
     commands: [{ name, description: name, source: "native", scope: "text", acceptsArgs: false }],
   };
+}
+
+function loadChatMetadata(
+  client: GatewayBrowserClient,
+  scope: Parameters<typeof loadChatMetadataRefresh>[1],
+): Promise<ChatMetadataResult> {
+  let failure: { error: unknown } | undefined;
+  const release = subscribeChatMetadata(client, scope, (update) => {
+    if (update.type === "error") {
+      failure = { error: update.error };
+    }
+  });
+  const refresh = loadChatMetadataRefresh(client, scope, { kind: "metadata" });
+  return refresh.completed
+    .then(() => {
+      if (failure) {
+        throw failure.error;
+      }
+      const result = peekChatMetadata(client, scope);
+      if (!result) {
+        throw new Error("Expected an observed metadata result");
+      }
+      return result;
+    })
+    .finally(release);
 }
 
 function startupUnavailableError(retryAfterMs = 250): GatewayRequestError {
@@ -129,10 +154,12 @@ describe("chat metadata store", () => {
     const first = loadChatMetadata(client, { agentId: "main" });
     const second = loadChatMetadata(client, { agentId: "main" });
 
-    expect(second).toBe(first);
     expect(request).toHaveBeenCalledOnce();
     pending.resolve(metadata("shared-model"));
-    await expect(first).resolves.toEqual(metadata("shared-model"));
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      metadata("shared-model"),
+      metadata("shared-model"),
+    ]);
   });
 
   it.each([
@@ -229,6 +256,95 @@ describe("chat metadata store", () => {
       },
     );
   });
+
+  it("keeps automatic producer settlement through final unsubscribe and remount", async () => {
+    const old = deferred<ChatMetadataResult>();
+    const fresh = deferred<ChatMetadataResult>();
+    let metadataReads = 0;
+    const request = vi.fn((method: string) =>
+      method === "chat.metadata"
+        ? ++metadataReads === 1
+          ? old.promise
+          : fresh.promise
+        : Promise.resolve({ models: [] }),
+    );
+    const client = clientWith(request);
+    const scope = { agentId: "main", sessionKey: "agent:main:retained" };
+    const first = subscribeChatMetadata(client, scope, () => {});
+    const original = loadChatMetadataRefresh(client, scope, { automatic: true });
+    invalidateChatMetadataStore(client, scope);
+    first();
+    const release = subscribeChatMetadata(client, scope, () => {});
+    const follower = loadChatMetadataRefresh(client, scope, { automatic: true });
+    try {
+      expect(metadataReads).toBe(1);
+      old.resolve(metadata("old"));
+      await original.completed;
+      await vi.waitFor(() => expect(metadataReads).toBe(2));
+      expect(peekChatMetadata(client, scope)).toBeUndefined();
+      fresh.resolve(metadata("fresh"));
+      await follower.completed;
+      expect(peekChatMetadata(client, scope)).toEqual(metadata("fresh"));
+    } finally {
+      release();
+      old.resolve(metadata("old"));
+      fresh.resolve(metadata("fresh"));
+      await Promise.allSettled([original.completed, follower.completed]);
+    }
+  });
+
+  it.each([false, true])(
+    "shares a failed generation and permits retry with earlier work pending=%s",
+    async (earlierPending) => {
+      const oldMetadata = deferred<ChatMetadataResult>();
+      const oldCatalog = deferred<{ models: never[] }>();
+      let metadataReads = 0;
+      let catalogReads = 0;
+      const request = vi.fn((method: string) => {
+        const read = method === "chat.metadata" ? ++metadataReads : ++catalogReads;
+        if (read === 1) {
+          return method === "chat.metadata" ? oldMetadata.promise : oldCatalog.promise;
+        }
+        if (read === 2) {
+          return Promise.reject(new Error("Shared refresh failed"));
+        }
+        return Promise.resolve(method === "chat.metadata" ? metadata("recovered") : { models: [] });
+      });
+      const client = clientWith(request);
+      const scope = { agentId: "main", sessionKey: "agent:main:retained" };
+      const release = subscribeChatMetadata(client, scope, () => {});
+      const original = loadChatMetadataRefresh(client, scope, { automatic: true });
+      invalidateChatMetadataStore(client, scope);
+      const followers = [
+        loadChatMetadataRefresh(client, scope, { automatic: true }),
+        loadChatMetadataRefresh(client, scope, { automatic: true }),
+      ];
+      const failures = followers.map((read) =>
+        expect(read.catalog).rejects.toThrow("Shared refresh failed"),
+      );
+      try {
+        expect([metadataReads, catalogReads]).toEqual([1, 1]);
+        if (earlierPending) {
+          loadChatMetadataRefresh(client, scope);
+        } else {
+          oldMetadata.resolve(metadata("old"));
+          oldCatalog.resolve({ models: [] });
+        }
+        await Promise.all([...followers.map((read) => read.completed), ...failures]);
+        expect([metadataReads, catalogReads]).toEqual([2, 2]);
+        const retry = loadChatMetadataRefresh(client, scope);
+        expect([metadataReads, catalogReads]).toEqual([3, 3]);
+        await retry.completed;
+        expect(await retry.catalog).toEqual({ models: [] });
+        expect(peekChatMetadata(client, scope)).toEqual(metadata("recovered"));
+      } finally {
+        release();
+        oldMetadata.resolve(metadata("old"));
+        oldCatalog.resolve({ models: [] });
+        await Promise.allSettled([original.completed, ...failures]);
+      }
+    },
+  );
 
   it("clears a failed pending load so a later read can retry", async () => {
     const result = metadata("recovered-model");

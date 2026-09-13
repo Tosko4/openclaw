@@ -3,11 +3,17 @@ import {
   resolveGatewayStartupRetryAfterMs,
 } from "@openclaw/gateway-client/browser";
 import type { ChatMetadataParams } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ModelCatalogResult } from "../../api/types.ts";
+import { settleModelCatalogRequests } from "../model-catalog-cache.ts";
+import { loadModelCatalog, peekModelCatalog } from "../model-catalog-store.ts";
 import {
   chatMetadataCache,
   notifyChatMetadataListeners,
   type ChatMetadataEntry,
+  type ChatMetadataRefresh,
+  type ChatMetadataRefreshRecord,
   type ChatMetadataResult,
   type ChatMetadataUpdate,
   type ChatMetadataWriter,
@@ -35,13 +41,22 @@ function metadataEntryFor(
   if (!entry) {
     const created: ChatMetadataEntry = {
       scope: params,
-      listeners: new Set(),
+      listeners: new Map(),
+      refreshRevision: 0,
       release: () => {
         // Selected-account projections live with their consumers, not every conversation/draft.
         // Retire the writer too: a late startup/read cannot repopulate a released entry.
         if ((params.sessionKey || params.authProfileId) && created.listeners.size === 0) {
+          if (created.writer || created.result) {
+            created.refreshRevision += 1;
+          }
           created.writer = undefined;
-          if (cache.get(key) === created) {
+          created.result = undefined;
+          if (
+            created.refresh?.phase !== "running" &&
+            created.refresh?.phase !== "waiting" &&
+            cache.get(key) === created
+          ) {
             cache.delete(key);
           }
         }
@@ -155,16 +170,17 @@ export function subscribeChatMetadata(
   client: GatewayBrowserClient,
   scope: ChatMetadataParams,
   listener: (update: ChatMetadataUpdate) => void,
+  isActive: () => boolean = () => true,
 ): () => void {
   const entry = metadataEntryFor(client, scope);
-  entry.listeners.add(listener);
+  entry.listeners.set(listener, isActive);
   return () => {
     entry.listeners.delete(listener);
     entry.release();
   };
 }
 
-export function loadChatMetadata(
+function loadChatMetadata(
   client: GatewayBrowserClient,
   scope: ChatMetadataParams,
 ): Promise<ChatMetadataResult> {
@@ -200,4 +216,121 @@ export function beginChatMetadataPublication(
   const { isCurrent, publish } = beginPublication(entry);
   notifyChatMetadataListeners(entry, { type: "loading" });
   return { isCurrent, publish };
+}
+
+/** One automatic refresh generation per scope, shared by every presentation. */
+export function loadChatMetadataRefresh(
+  client: GatewayBrowserClient,
+  scope: ChatMetadataParams,
+  options?: {
+    automatic?: boolean;
+    kind?: "startup" | "metadata";
+    revalidateMetadata?: () => boolean;
+  },
+): ChatMetadataRefresh {
+  const entry = metadataEntryFor(client, scope);
+  const previous = entry.refresh;
+  const metadataRequired = options?.kind !== "startup";
+  const catalogRequired = options?.kind !== "metadata";
+  const revalidate = options?.revalidateMetadata?.() === true;
+  if (previous?.phase === "waiting") {
+    previous.metadataRequired ||= metadataRequired;
+    previous.catalogRequired ||= catalogRequired;
+    if (revalidate) {
+      previous.revalidateMetadata = options?.revalidateMetadata;
+    }
+    previous.revision = entry.refreshRevision;
+    if (!options?.automatic) {
+      previous.start(true);
+    }
+    return previous;
+  }
+  if (
+    previous?.phase === "running" &&
+    previous.revision === entry.refreshRevision &&
+    (options?.automatic || !previous.failed) &&
+    (!metadataRequired || previous.metadataRequired) &&
+    (!catalogRequired || previous.catalogRequired) &&
+    !revalidate
+  ) {
+    return previous;
+  }
+
+  const previousSettlement = previous?.settled;
+  const catalog = createDeferredCore<ModelCatalogResult | undefined>();
+  const completed = createDeferredCore();
+  const settled = createDeferredCore();
+  const record: ChatMetadataRefreshRecord = {
+    catalog: catalog.promise,
+    completed: completed.promise,
+    settled: settled.promise,
+    phase: "waiting",
+    failed: false,
+    revision: entry.refreshRevision,
+    metadataRequired,
+    catalogRequired,
+    revalidateMetadata: revalidate ? options?.revalidateMetadata : undefined,
+    isCurrent: () =>
+      chatMetadataCache.get(client)?.get(metadataScopeKey(scope)) === entry &&
+      // A command-only startup fallback must not retire the catalog still serving its panes.
+      record.revision === entry.refreshRevision,
+    start: (explicit = false) => {
+      if (record.phase !== "waiting") {
+        return;
+      }
+      if (
+        chatMetadataCache.get(client)?.get(metadataScopeKey(scope)) !== entry ||
+        (!explicit &&
+          options?.automatic &&
+          !Array.from(entry.listeners.values()).some((active) => active()))
+      ) {
+        record.phase = "inactive";
+        catalog.resolve(undefined);
+        completed.resolve();
+        settled.resolve();
+        entry.release();
+        return;
+      }
+      record.phase = "running";
+      record.revision = entry.refreshRevision;
+      const metadataRead = record.metadataRequired
+        ? record.revalidateMetadata?.()
+          ? revalidateChatMetadata(client, scope)
+          : loadChatMetadata(client, scope)
+        : Promise.resolve();
+      const catalogRead = record.catalogRequired
+        ? loadModelCatalog(client, scope)
+        : Promise.resolve(peekModelCatalog(client, scope));
+      // Capture transport settlement now: accepted snapshots or explicit refreshes
+      // may fulfill subscribers and replace the catalog pending slot first.
+      const catalogSettlement = settleModelCatalogRequests(client, scope);
+      void catalogRead.then(catalog.resolve, catalog.reject);
+      void Promise.allSettled([metadataRead, catalogRead]).then(
+        ([metadataResult, catalogResult]) => {
+          record.failed =
+            metadataResult.status === "rejected" ||
+            catalogResult.status === "rejected" ||
+            catalogResult.value?.refreshFailed === true;
+          completed.resolve();
+        },
+      );
+      void Promise.allSettled([metadataRead, catalogSettlement, previousSettlement]).then(() => {
+        record.phase = "settled";
+        settled.resolve();
+        entry.release();
+      });
+    },
+  };
+  entry.refresh = record;
+  if (
+    options?.automatic &&
+    previous &&
+    previous.phase !== "settled" &&
+    previous.phase !== "inactive"
+  ) {
+    void previousSettlement?.then(() => record.start());
+  } else {
+    record.start();
+  }
+  return record;
 }

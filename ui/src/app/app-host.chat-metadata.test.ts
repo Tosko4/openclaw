@@ -273,6 +273,7 @@ it("retires an unmounted session catalog on session changes without evicting dra
   shell.runtime = {
     context: {
       gateway: { snapshot: { client, phase: "connected" } },
+      agents: { state: { agentsList: null } },
       sessions: { state: { deletedSessions: [] } },
     } as unknown as ApplicationContext,
   };
@@ -288,4 +289,89 @@ it("retires an unmounted session catalog on session changes without evicting dra
   expect(peekModelCatalog(client, session)).toBeUndefined();
   expect(peekModelCatalog(client, otherAgent)).toEqual({ models: [] });
   expect(peekModelCatalog(client, draft)).toEqual({ models: [] });
+});
+
+describe.each(["command-metadata", "patch", "reset"])("session metadata event %s", (reason) => {
+  it.each([
+    {
+      key: "agent:work:target",
+      eventKey: "agent:work:target",
+      otherKey: "agent:other:target",
+      agentId: "work",
+    },
+    { key: "global", eventKey: "global", otherKey: "global", agentId: "work" },
+    { key: "main", eventKey: "agent:main:main", otherKey: "agent:other:main", agentId: "main" },
+  ])(
+    "refreshes only the matching $agentId/$key scope",
+    async ({ key, eventKey, otherKey, agentId }) => {
+      const request = vi.fn().mockResolvedValue({ commands: [], models: [] });
+      const client = { request } as unknown as GatewayBrowserClient;
+      const hello = {
+        ...gatewayHelloForMethods([]),
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+          },
+        },
+      };
+      const states = [
+        { sessionKey: key, agentId },
+        { sessionKey: otherKey, agentId: "other" },
+        { sessionKey: "agent:work:unrelated", agentId: "work" },
+      ].map((scope) => {
+        const state = makeChatHost({ client }) as ChatPageHost;
+        state.hello = hello;
+        state.connected = true;
+        state.sessionKey = scope.sessionKey;
+        state.assistantAgentId = scope.agentId;
+        return state;
+      });
+      const invalidations = states.map((state) =>
+        vi.spyOn(state.sessions, "invalidate").mockImplementation(() => {}),
+      );
+      const selected = states[0];
+      assert.ok(selected);
+      const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
+      shell.runtime = {
+        context: {
+          gateway: { snapshot: { client, hello, phase: "connected" } },
+          agents: { state: { agentsList: null } },
+          sessions: selected.sessions,
+        } as unknown as ApplicationContext,
+      };
+      try {
+        await Promise.all(states.map((state) => refreshChatMetadata(state)));
+        const before = request.mock.calls.filter(([method]) => method === "chat.metadata").length;
+        for (const payload of [
+          { key: "agent:work:not-open", agentId: "work", reason },
+          { key: eventKey, agentId, reason: "message" },
+        ]) {
+          shell.handleGatewayEvent({ event: "sessions.changed", payload });
+        }
+        expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(
+          before,
+        );
+        shell.handleGatewayEvent({
+          event: "sessions.changed",
+          payload: { key: eventKey, agentId, reason },
+        });
+        await vi.waitFor(() =>
+          expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(
+            before + 1,
+          ),
+        );
+        expect(request.mock.calls.findLast(([method]) => method === "chat.metadata")?.[1]).toEqual({
+          agentId,
+          sessionKey: key,
+        });
+        for (const invalidate of invalidations) {
+          expect(invalidate).not.toHaveBeenCalled();
+        }
+      } finally {
+        states.forEach(retireChatMetadataRequests);
+      }
+    },
+  );
 });

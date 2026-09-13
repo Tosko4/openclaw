@@ -13,6 +13,7 @@ export type ModelCatalogRequest = {
   refresh: boolean;
   controller?: AbortController;
   promise: Promise<ModelCatalogResult>;
+  settled: Promise<ModelCatalogResult>;
   resolve: (result: ModelCatalogResult) => void;
   subscribers: Set<object>;
 };
@@ -188,6 +189,16 @@ export function publishModelCatalogResult(
   trimModelCatalogCache(cache);
   notifyModelCatalogCache(client);
   return true;
+}
+
+export async function settleModelCatalogRequests(
+  client: ModelCatalogClient,
+  scope: ModelsListParams,
+): Promise<void> {
+  const pending = modelCatalogCache
+    .get(client)
+    ?.entries.get(modelCatalogKey(modelCatalogParams(scope)))?.pending;
+  await Promise.allSettled(Array.from(pending?.values() ?? [], (request) => request.settled));
 }
 
 export function invalidateModelCatalogEntry(entry: ModelCatalogEntry): void {

@@ -4604,40 +4604,6 @@ describe("refreshChatMetadata", () => {
     },
   );
 
-  it.each(["command-metadata", "patch"])(
-    "refreshes only the matching session for %s, not streaming updates",
-    async (reason) => {
-      const request = vi.fn().mockResolvedValue({ commands: [], models: [] });
-      const state = createMetadataState(request);
-      const invalidateSessions = vi
-        .spyOn(state.sessions, "invalidate")
-        .mockImplementation(() => {});
-      await refreshChatMetadata(state);
-      for (const [key, eventReason] of [
-        ["agent:work:other", reason],
-        [state.sessionKey, "message"],
-      ]) {
-        handlePageGatewayEvent(state, {
-          type: "event",
-          event: "sessions.changed",
-          payload: { key, agentId: "work", reason: eventReason },
-        });
-      }
-      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(1);
-      handlePageGatewayEvent(state, {
-        type: "event",
-        event: "sessions.changed",
-        payload: { key: state.sessionKey, agentId: "work", reason },
-      });
-      await vi.waitFor(() =>
-        expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(2),
-      );
-      await refreshChatMetadata(state);
-      expect(invalidateSessions).not.toHaveBeenCalled();
-      retireChatMetadataRequests(state);
-    },
-  );
-
   it.each([
     {
       label: "warm",
@@ -4735,11 +4701,11 @@ describe("refreshChatMetadata", () => {
     await refreshChatMetadata(state);
     expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(3);
     expect(state.chatModelCatalog[0]?.id).toBe("other-model");
-    expect(request).toHaveBeenLastCalledWith(
-      "models.list",
-      { view: "configured", agentId: "other", sessionKey: "agent:other:main" },
-      { signal: expect.any(AbortSignal) },
-    );
+    expect(request).toHaveBeenLastCalledWith("models.list", {
+      view: "configured",
+      agentId: "other",
+      sessionKey: "agent:other:main",
+    });
   });
 
   it("ignores metadata after switching to a different agent", async () => {

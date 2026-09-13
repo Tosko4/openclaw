@@ -116,11 +116,19 @@ export async function loadModelCatalog(
   const read = beginModelCatalogRead(client, params, controller?.signal);
   const cache = read.cache.entries;
   const completion = createDeferredCore<ModelCatalogResult>();
+  const request =
+    controller || timeoutMs !== undefined
+      ? client.request<ModelCatalogResult>("models.list", params, {
+          ...(controller ? { signal: controller.signal } : {}),
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        })
+      : client.request<ModelCatalogResult>("models.list", params);
   const pending: ModelCatalogRequest = {
     refresh: params.refresh === true,
     controller,
     subscribers: new Set(),
     resolve: completion.resolve,
+    settled: request,
     promise: completion.promise.finally(() => {
       read.cache.reads.delete(read);
       if (cache.get(key) === entry && entry.pending.get(timeoutMs) === pending) {
@@ -132,13 +140,6 @@ export async function loadModelCatalog(
       }
     }),
   };
-  const request =
-    controller || timeoutMs !== undefined
-      ? client.request<ModelCatalogResult>("models.list", params, {
-          ...(controller ? { signal: controller.signal } : {}),
-          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        })
-      : client.request<ModelCatalogResult>("models.list", params);
   void request
     .then((result) => {
       publishModelCatalogResult(read, params, result);
