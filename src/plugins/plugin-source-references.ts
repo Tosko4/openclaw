@@ -216,8 +216,8 @@ function parseNativePluginJavaScript(source: string, sourceText: string): Progra
           child &&
           typeof child === "object" &&
           "type" in child &&
-          // SAFETY: Children belong to the Acorn tree, as in the reference visitor below.
           needsTransform(
+            // SAFETY: Children belong to the Acorn tree, as in the reference visitor below.
             child as AnyNode,
             exportedDeclaration ||
               (node.type === "ExportNamedDeclaration" && child === node.declaration),
