@@ -283,7 +283,10 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         activeSession?.activeModelProvider,
         props.modelCatalog,
       );
-  const triggerModelValue = activeModelValue || currentOverride;
+  // A persisted pin can match a changed default; equality cannot establish inheritance.
+  const pickerValue = modelOverrideSource === null ? "" : currentOverride;
+  const triggerModelValue =
+    activeModelValue || (props.modelSelectionLocked === true ? currentOverride : pickerValue);
   const defaultProviderHint = props.sessionsResult?.defaults?.modelProvider ?? "";
   const defaultCatalogEntry = catalog.entry(defaultModel);
   const canonicalDefaultLabel = resolveChatModelPickerLabel(defaultCatalogEntry, defaultLabel);
@@ -353,8 +356,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       provider: catalog.provider(defaultModel, defaultProviderHint),
     });
   }
-  // A persisted pin can match a changed default; equality cannot establish inheritance.
-  const pickerValue = modelOverrideSource === null ? "" : currentOverride;
   const activeModelOption =
     pickerValue === ""
       ? modelOptions.find((option) => option.isDefault)

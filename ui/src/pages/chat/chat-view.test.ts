@@ -8033,7 +8033,7 @@ describe("chat model controls", () => {
     container.remove();
   });
 
-  it("renders a Default row when the configured default is missing from the catalog", () => {
+  it("keeps the effective Default visible after reset when it is missing from the catalog", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.4",
       modelProvider: "openai",
@@ -8053,6 +8053,25 @@ describe("chat model controls", () => {
     expect(defaultRow?.parentElement?.querySelector("[data-chat-model-option]")).toBe(defaultRow);
     defaultRow?.click();
     expect(onModelSelect).toHaveBeenCalledWith("", "main");
+
+    state.sessionsResult = createSessionsListResult({
+      model: "retired-primary",
+      modelProvider: "example",
+      modelOverrideSource: null,
+      defaultsModel: "gpt-5",
+      defaultsProvider: "openai",
+    });
+    renderModelControls(state, { onModelSelect }, container);
+    expect(getChatModelSelect(container).textContent).toContain("gpt-5 · openai");
+    expect(getChatModelSelect(container).textContent).not.toContain("retired-primary");
+    expect(getChatModelSelect(container).dataset.chatSelectValue).toBe("");
+
+    Object.assign(state.sessionsResult.sessions[0]!, {
+      activeModel: "last-completed",
+      activeModelProvider: "example",
+    });
+    renderModelControls(state, { onModelSelect }, container);
+    expect(getChatModelSelect(container).textContent).toContain("example/last-completed");
   });
 
   it("keeps the Default row selectable when the default model needs sign-in", () => {

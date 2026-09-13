@@ -1569,7 +1569,6 @@ function resolveAllowedModelSelection(
 
 export type ModelVisibilityPolicy = {
   allowAny: boolean;
-  effectiveDefault: ModelRef | null;
   configuredCatalog: readonly ModelCatalogEntry[];
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
@@ -1613,7 +1612,7 @@ export function createModelVisibilityPolicyWithFallbacks(
     allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
-): ModelVisibilityPolicy {
+): ModelVisibilityPolicy & { effectiveDefault: ModelRef | null } {
   const prepared = prepareModelPolicy(params);
   const { visibility, policyAliasIndex, selectionAliasIndex, configuredCatalog } = prepared;
   const wildcardModelKeys = visibility.wildcardModelKeys;
@@ -1710,7 +1709,7 @@ export function createModelVisibilityPolicyWithFallbacks(
           allowedCatalog: allowed.allowedCatalog,
         })
     : null;
-  const policy: ModelVisibilityPolicy = {
+  const policy: ReturnType<typeof createModelVisibilityPolicyWithFallbacks> = {
     allowAny: allowed.allowAny,
     effectiveDefault,
     configuredCatalog,

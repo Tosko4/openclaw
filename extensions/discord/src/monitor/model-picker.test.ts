@@ -1297,10 +1297,10 @@ describe("Discord model picker recents view", () => {
       parseDiscordModelPickerCustomId(defaultBtn.custom_id ?? ""),
       "default recents button custom id should parse",
     );
-    expect(defaultState.action).toBe("submit");
+    expect(defaultState.action).toBe("reset");
     expect(defaultState.view).toBe("recents");
     expect(defaultState.recentSlot).toBeUndefined();
-    expect(defaultState.modelToken).toBe(createDiscordModelPickerModelToken("openai", "gpt-4.1"));
+    expect(defaultState.modelToken).toBeUndefined();
 
     // Second row: first recent.
     const recentBtn1 = requireValue(
@@ -1368,7 +1368,7 @@ describe("Discord model picker recents view", () => {
       "recents back button custom id should parse",
     );
 
-    expect(defaultState.runtime).toBe("codex");
+    expect(defaultState.runtime).toBeUndefined();
     expect(recentState.runtime).toBe("codex");
     expect(backState.runtime).toBe("codex");
   });
@@ -1423,7 +1423,7 @@ describe("Discord model picker recents view", () => {
         "recents custom id should parse",
       );
     });
-    expect(states[0]?.runtimeToken).toBe("runtime1");
+    expect(states[0]?.runtimeToken).toBeUndefined();
     expect(states[1]?.runtimeToken).toBe("runtime1");
     expect(states[2]?.runtimeToken).toBe("runtime1");
   });

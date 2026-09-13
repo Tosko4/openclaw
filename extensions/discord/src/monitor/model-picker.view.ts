@@ -551,12 +551,6 @@ function buildModelRows(params: {
     rows.push(modelNavRow);
   }
 
-  const resolvedDefault = params.data.resolvedDefault;
-  const shouldDisableReset =
-    Boolean(parsedCurrentModel) &&
-    parsedCurrentModel?.provider === resolvedDefault.provider &&
-    parsedCurrentModel?.model === resolvedDefault.model;
-
   const hasPendingSelection =
     Boolean(parsedPendingModel) &&
     parsedPendingModel?.provider === params.modelPage.provider &&
@@ -593,7 +587,6 @@ function buildModelRows(params: {
     }),
     createModelPickerButton({
       label: "Reset to default",
-      disabled: shouldDisableReset,
       customId: buildDiscordModelPickerCustomId({
         ...modelActionState,
         action: "reset",
@@ -871,13 +864,13 @@ export function renderDiscordModelPickerRecentsView(
           label: formatRecentsButtonLabel(modelRef, index === 0 ? "(default)" : undefined),
           customId: buildDiscordModelPickerCustomId({
             command: params.command,
-            action: "submit",
+            action: index === 0 ? "reset" : "submit",
             view: "recents",
-            recentSlot: index + 1,
-            modelToken: createModelRefToken(modelRef),
+            recentSlot: index === 0 ? undefined : index + 1,
+            modelToken: index === 0 ? undefined : createModelRefToken(modelRef),
             provider: params.provider,
-            runtime: params.runtime,
-            runtimeToken: params.runtimeToken,
+            runtime: index === 0 ? undefined : params.runtime,
+            runtimeToken: index === 0 ? undefined : params.runtimeToken,
             page: params.page,
             providerPage: params.providerPage,
             userId: params.userId,

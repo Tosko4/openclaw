@@ -51,7 +51,7 @@ export function createModelVisibilityPolicy(
     allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
-): ModelVisibilityPolicy {
+): ReturnType<typeof createModelVisibilityPolicyWithFallbacks> {
   return createModelVisibilityPolicyWithFallbacks({
     cfg: params.cfg,
     catalog: params.catalog,

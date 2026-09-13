@@ -227,6 +227,7 @@ describe("chat pane composer controls", () => {
       model: "gpt-5.6-sol",
       modelProvider: "openai",
       modelSelectionLocked: true,
+      modelOverrideSource: null,
       agentRuntime: { id: "codex", source: "model" },
     };
     const state = makeChatHost({
