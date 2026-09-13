@@ -169,11 +169,14 @@ describe("chat metadata store", () => {
     try {
       expect(replacement).toBeDefined();
       const following = read(client, scope);
-      newer.resolve(metadata("current"));
-      await replacement;
+      expect(following).toBe(replacement);
+      expect(request).toHaveBeenCalledOnce();
       older.resolve(metadata("obsolete"));
-      await expect(following).resolves.toEqual(metadata("current"));
       await first;
+      expect(peekChatMetadata(client, scope)).toBeUndefined();
+      expect(request).toHaveBeenCalledTimes(2);
+      newer.resolve(metadata("current"));
+      await expect(following).resolves.toEqual(metadata("current"));
       expect(peekChatMetadata(client, scope)).toEqual(metadata("current"));
       expect(request).toHaveBeenCalledTimes(2);
     } finally {
@@ -234,6 +237,7 @@ describe("chat metadata store", () => {
           await expect(first).rejects.toBe(failure);
           await expect(retry).resolves.toEqual(metadata("current"));
           expect(request).toHaveBeenCalledTimes(2);
+          expect(peekChatMetadata(client, scope)).toEqual(metadata("current"));
         } finally {
           await Promise.allSettled([first, retry]);
           unsubscribe();
@@ -257,37 +261,6 @@ describe("chat metadata store", () => {
 
     expect(request).toHaveBeenCalledTimes(2);
   });
-
-  it.each(
-    ["load", "revalidate"].flatMap((method) =>
-      [new Error("metadata read failed"), undefined].map((failure) => ({ method, failure })),
-    ),
-  )(
-    "retries $method from a synchronous error observer after $failure",
-    async ({ method, failure }) => {
-      const current = metadata("recovered");
-      const request = vi.fn().mockRejectedValueOnce(failure).mockResolvedValue(current);
-      const client = clientWith(request);
-      const scope = { agentId: "main" };
-      const read = method === "load" ? loadChatMetadata : revalidateChatMetadata;
-      let retry: Promise<ChatMetadataResult> | undefined;
-      const release = subscribeChatMetadata(client, scope, (update) => {
-        if (update.type === "error" && !retry) {
-          retry = read(client, scope);
-        }
-      });
-      const first = read(client, scope);
-      try {
-        await expect(first).rejects.toBe(failure);
-        expect(request).toHaveBeenCalledTimes(2);
-        await expect(retry).resolves.toEqual(current);
-        expect(peekChatMetadata(client, scope)).toEqual(current);
-      } finally {
-        await Promise.allSettled([first, retry]);
-        release();
-      }
-    },
-  );
 
   it("starts a fresh revalidation requested by a result observer", async () => {
     const next = deferred<ChatMetadataResult>();
