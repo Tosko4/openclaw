@@ -371,7 +371,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared removed-model choice recovery text for channel consumers.
       // +2: shared stored-account key selection and its plugin-owned policy type.
       // +3: prepared outbound planning, its plan type, and inbound delivery on channel-outbound only.
-      4467,
+      // +1: shared per-connection webhook request ordering for channel listeners.
+      4468,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -508,7 +509,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: canonical env-value reader and managed SecretRef marker constructor.
       // +1: shared stored-account key selection for channel readers and writers.
       // +2: prepared outbound planning and inbound delivery; deprecated channel-message stays frozen.
-      2640,
+      // +1: shared per-connection webhook request ordering for channel listeners.
+      2641,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
