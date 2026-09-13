@@ -33,12 +33,22 @@ export type UpdateCommandExecutor = {
 type ManagedUpdateLeaseAuthority = ManagedUpdateLeaseDatabaseIdentity &
   Readonly<{ installKey: string; owner: string }>;
 const admittedAuthorities = new WeakMap<UpdateRecoveryFence, ManagedUpdateLeaseAuthority>();
-const retainedOwners = new WeakSet<UpdateRecoveryFence>();
+const retainedOwners = new WeakMap<UpdateRecoveryFence, string>();
 
 /** Compatibility requirement from a live admission, never a serialized claim. */
 export function requiresRetainedUpdateCommandOwner(fence: UpdateRecoveryFence): boolean {
   captureUpdateCommandExecutorAuthority(fence);
   return retainedOwners.has(fence);
+}
+
+/** Validate the actual retained service lease, never an observed path or caller claim. */
+export function assertRetainedUpdateCommandRoot(fence: UpdateRecoveryFence, root: string): void {
+  captureUpdateCommandExecutorAuthority(fence);
+  if (retainedOwners.get(fence) !== resolveUpdateInstallRoot(root)) {
+    throw new UpdateCommandRecoveryPendingError(
+      "Service recovery requires its retained executor root.",
+    );
+  }
 }
 
 export function captureUpdateCommandExecutorAuthority(
@@ -380,7 +390,7 @@ export async function withDelegatedUpdateCommandExecutor<T>(
       );
     }
     if (retained) {
-      retainedOwners.add(fence);
+      retainedOwners.set(fence, retained.key);
     }
     outcome = { result: await operation(fence) };
   } catch (error) {
@@ -588,7 +598,7 @@ export async function withUpdateCommandExecutor<T>(
         assertCurrent();
         admittedAuthorities.set(fence, authority);
         if (serviceLease) {
-          retainedOwners.add(fence);
+          retainedOwners.set(fence, serviceLease.key);
         }
         if (enterOptions?.preflight && !borrowed) {
           preflightReleases.set(fence, () => {

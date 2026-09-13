@@ -2,12 +2,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveServiceEntrypoint } from "../../daemon/service-layout.js";
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { tryReadJson } from "../../infra/json-files.js";
-import { createPackageIntegrityReader } from "../../infra/package-update-integrity.js";
+import {
+  createPackageIntegrityReader,
+  PackageIntegrityTimeoutError,
+} from "../../infra/package-update-integrity.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import { defaultRuntime } from "../../runtime.js";
 import { parsePackageOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import {
   inspectGatewayRestart,
@@ -50,6 +56,51 @@ async function nodeIdentity(nodeRunner: string): Promise<string> {
     stat.mtimeNs,
     stat.ctimeNs,
   ].join(":");
+}
+
+// These mandatory reads have their own reader, never the optional tree's exhausted deadline.
+async function readOriginalServiceFiles(params: {
+  root: string;
+  nodeRunner: string;
+  command: GatewayServiceCommandConfig | null;
+  assertCurrent: () => void;
+  timeoutMs?: number;
+}) {
+  const { root, assertCurrent } = params;
+  assertCurrent();
+  const reader = createPackageIntegrityReader(params.timeoutMs);
+  const packageIdentity = await reader.directoryIdentity(root);
+  assertCurrent();
+  const launcherPath = params.command && resolveServiceEntrypoint(params.command);
+  if (!packageIdentity || !launcherPath) {
+    throw new Error("Original service directory or launcher identity is unavailable.");
+  }
+  const realPath = await fs.realpath(launcherPath);
+  assertCurrent();
+  const fingerprint = await reader.launcher(launcherPath);
+  assertCurrent();
+  const targetFingerprint = await reader.launcher(realPath);
+  assertCurrent();
+  const node = await nodeIdentity(params.nodeRunner);
+  assertCurrent();
+  const buildId = (await readBuiltGatewayBuildId(root)) ?? undefined;
+  assertCurrent();
+  const schemaVersions = parsePackageOpenClawSchemaVersions(
+    await tryReadJson<unknown>(path.join(root, "package.json")),
+  );
+  assertCurrent();
+  const finalIdentity = await reader.directoryIdentity(root);
+  assertCurrent();
+  if (!isDeepStrictEqual(finalIdentity, packageIdentity)) {
+    throw new Error("Original service directory changed during mandatory reads.");
+  }
+  return {
+    packageIdentity,
+    launcher: { path: launcherPath, realPath, fingerprint, targetFingerprint },
+    nodeIdentity: node,
+    buildId,
+    schemaVersions,
+  };
 }
 
 /** The observation is data. Every use requires an independently live admitted executor. */
@@ -98,11 +149,34 @@ export async function revalidateOriginalManagedServiceRuntime(
     verdict.kind !== "owned" ||
     resolveManagedServiceNodeRunner(state.command) !== original.nodeRunner ||
     (await fs.realpath(verdict.root)) !== original.root ||
-    (await nodeIdentity(original.nodeRunner)) !== original.nodeIdentity ||
-    !isDeepStrictEqual(
-      await createPackageIntegrityReader(timeoutMs).tree(original.root),
-      original.packageFingerprint,
-    )
+    original.version !== original.packageIdentity.version
+  ) {
+    throw new Error("Original managed service runtime changed; compensation was refused.");
+  }
+  assertCurrent();
+  if (original.packageFingerprint) {
+    // A complete baseline must still match. A later timeout cannot downgrade it.
+    const fingerprint = await createPackageIntegrityReader(timeoutMs).tree(original.root);
+    assertCurrent();
+    if (!isDeepStrictEqual(fingerprint, original.packageFingerprint)) {
+      throw new Error("Original managed service package changed; compensation was refused.");
+    }
+  }
+  const files = await readOriginalServiceFiles({
+    root: original.root,
+    nodeRunner: original.nodeRunner,
+    command: state.command,
+    assertCurrent,
+    timeoutMs,
+  });
+  if (
+    !isDeepStrictEqual(files, {
+      packageIdentity: original.packageIdentity,
+      launcher: original.launcher,
+      nodeIdentity: original.nodeIdentity,
+      buildId: original.buildId,
+      schemaVersions: original.schemaVersions,
+    })
   ) {
     throw new Error("Original managed service runtime changed; compensation was refused.");
   }
@@ -128,10 +202,26 @@ export async function observeOriginalManagedServiceRuntime(
     if (!before.serviceNodeRunner || !before.serviceEnv) {
       throw new Error("Original service Node or manager environment is unavailable.");
     }
+    assertCurrent();
+    const state = await readGatewayServiceState(resolveGatewayService(), {
+      env: before.serviceEnv,
+      requireEffective: true,
+      requireLoadedCommand: true,
+      validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
+      timeoutMs: params.updateStepTimeoutMs,
+    });
+    assertCurrent();
+    const files = await readOriginalServiceFiles({
+      root,
+      nodeRunner: before.serviceNodeRunner,
+      command: state.command,
+      assertCurrent,
+      timeoutMs: params.updateStepTimeoutMs,
+    });
     const original: OriginalManagedServiceRuntime = {
       root,
       nodeRunner: before.serviceNodeRunner,
-      version: null,
+      version: files.packageIdentity.version,
       verified: false,
       // Disable refresh permission: recovery may use only this exact original definition.
       service: {
@@ -139,14 +229,28 @@ export async function observeOriginalManagedServiceRuntime(
         serviceManagerUid: before.serviceManagerUid,
         serviceUpdateVerdict: { ...verdict, root, refreshDefinition: false },
       },
-      packageFingerprint: await createPackageIntegrityReader(params.updateStepTimeoutMs).tree(root),
-      nodeIdentity: await nodeIdentity(before.serviceNodeRunner),
+      ...files,
     };
-    original.version = original.packageFingerprint.version;
-    original.buildId = (await readBuiltGatewayBuildId(root)) ?? undefined;
-    original.schemaVersions = parsePackageOpenClawSchemaVersions(
-      await tryReadJson<unknown>(path.join(root, "package.json")),
-    );
+    const startedAt = performance.now();
+    try {
+      original.packageFingerprint = await createPackageIntegrityReader(
+        params.updateStepTimeoutMs,
+      ).tree(root);
+      assertCurrent();
+      if (
+        original.packageFingerprint.identity !== files.packageIdentity.identity ||
+        original.packageFingerprint.version !== files.packageIdentity.version
+      ) {
+        throw new Error("Original managed service package changed during observation.");
+      }
+    } catch (error) {
+      assertCurrent();
+      if (!(error instanceof PackageIntegrityTimeoutError)) {
+        throw error;
+      }
+      original.packageFingerprintWarning = `Original service full package fingerprint unavailable after ${Math.round(performance.now() - startedAt)} ms (scan budget ${error.budgetMs} ms). Compensation requires directory, version and launcher revalidation; full package contents are unverified.`;
+      defaultRuntime.error(original.packageFingerprintWarning);
+    }
     assertCurrent();
     const context = await captureTargetDatabaseSchemaContext(before.serviceEnv);
     assertCurrent();
@@ -205,7 +309,7 @@ export async function assertOriginalServiceStateCompatible(
   return context;
 }
 
-async function verifyPreviousGateway(params: {
+export async function verifyPreviousGateway(params: {
   root: string;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;

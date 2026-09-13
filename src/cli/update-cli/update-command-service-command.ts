@@ -1,6 +1,8 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
 import { GATEWAY_UPDATE_EXECUTOR_CONTRACT } from "../../daemon/service-update-authority.js";
+import { resolveGatewayService } from "../../daemon/service.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -12,6 +14,7 @@ import {
   type UpdateCommandChildGrant,
 } from "./update-command-executor.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { withRetainedUpdateServiceAuthority } from "./update-command-retained-service.js";
 import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
 import {
   runGatewayInstallWithLoadBoundary,
@@ -267,4 +270,26 @@ export async function runUpdatedInstallGatewayCommand(
     throw new UpdateCommandRecoveryPendingError(message);
   }
   throw new Error(message);
+}
+
+/** Await inside the admitted executor. This restarts retained A using candidate code,
+ * not A's older CLI. The caller owns compatibility/identity checks and later health. */
+export async function restartRetainedUpdateGatewayService(params: {
+  run: NonNullable<UpdateCommandOptions["run"]>;
+  root: string;
+  env: NodeJS.ProcessEnv;
+  stdout: NodeJS.WritableStream;
+  assertCurrent: () => void;
+  signal?: AbortSignal;
+}): Promise<GatewayServiceRestartResult> {
+  const env = { ...params.env };
+  return await withRetainedUpdateServiceAuthority(params, async (assertCurrent) =>
+    resolveGatewayService().restart({
+      stdout: params.stdout,
+      env,
+      assertCurrent,
+      preserveDefinition: true,
+      preserveAutoStart: true,
+    }),
+  );
 }

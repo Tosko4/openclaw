@@ -1,4 +1,7 @@
-import type { PackageIntegrityFingerprint } from "../../infra/package-update-integrity.js";
+import type {
+  PackageDirectoryIdentity,
+  PackageIntegrityFingerprint,
+} from "../../infra/package-update-integrity.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import type { ManagedGatewayUpdateVerdict } from "./update-command-service-plan.js";
@@ -43,6 +46,9 @@ export type OriginalManagedServiceRuntime = {
   schemaVersions?: OpenClawSchemaVersions;
   verified: boolean;
   service: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid">;
-  packageFingerprint: PackageIntegrityFingerprint;
+  packageIdentity: PackageDirectoryIdentity;
+  packageFingerprint?: PackageIntegrityFingerprint;
+  packageFingerprintWarning?: string;
+  launcher: { path: string; realPath: string; fingerprint: string; targetFingerprint: string };
   nodeIdentity: string;
 };

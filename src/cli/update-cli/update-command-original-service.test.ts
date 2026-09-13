@@ -26,6 +26,7 @@ import {
 import type { UpdateCommandOptions } from "./shared.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { registerCurrentF3Controls } from "./update-command-original-service-current.test-support.js";
 import { observeOriginalManagedServiceRuntime } from "./update-command-original-service.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
@@ -41,6 +42,9 @@ const mocks = vi.hoisted(() => ({
   stop: vi.fn(),
   package: vi.fn(),
   restart: vi.fn(),
+  capability: vi.fn(),
+  nativeRestart: vi.fn(),
+  readiness: vi.fn(),
   health: vi.fn(),
   inspect: vi.fn(),
   running: true,
@@ -57,6 +61,7 @@ vi.mock("../../daemon/service.js", async (original) => ({
   ...(await original<typeof import("../../daemon/service.js")>()),
   readGatewayServiceState: mocks.state,
   resolveGatewayService: () => ({
+    restart: mocks.nativeRestart,
     readCommand: async () => (await mocks.state()).command,
     readRuntime: async () => ({ status: mocks.running ? "running" : "stopped" }),
   }),
@@ -72,12 +77,13 @@ vi.mock("./update-command-package.js", async (original) => ({
 vi.mock("./update-command-service-command.js", async (original) => ({
   ...(await original<typeof import("./update-command-service-command.js")>()),
   runUpdatedInstallGatewayCommand: mocks.restart,
+  isUpdatedInstallGatewayExecutorSupported: mocks.capability,
 }));
 vi.mock("../daemon-cli/restart-health.js", async (original) => ({
   ...(await original<typeof import("../daemon-cli/restart-health.js")>()),
   inspectGatewayRestart: mocks.inspect,
   waitForGatewayHealthyRestart: mocks.health,
-  waitForGatewayHttpReadiness: async () => ({ readyz: 200 }),
+  waitForGatewayHttpReadiness: mocks.readiness,
 }));
 vi.mock("./progress.js", async (original) => ({
   ...(await original<typeof import("./progress.js")>()),
@@ -167,6 +173,15 @@ beforeEach(async () => {
   stopped = false;
   mocks.running = true;
   mocks.windows = false;
+  mocks.capability.mockResolvedValue(true);
+  mocks.readiness.mockResolvedValue({ readyz: 200 });
+  mocks.nativeRestart.mockImplementation(async (params) => {
+    params.assertCurrent();
+    expect(params.preserveDefinition).toBe(true);
+    expect(params.preserveAutoStart).toBe(true);
+    mocks.running = true;
+    return { outcome: "completed" };
+  });
   mocks.suspend.mockImplementation(async (_env, options) => {
     options.assertCurrent?.();
     await options.beforeMutation?.();
@@ -536,6 +551,8 @@ it("refuses B ledger admission independently from compatible service A state", a
 it.each([
   "fingerprint-timeout",
   "missing-node",
+  "missing-env",
+  "missing-schema",
   "unverified-health",
   "definition-raced",
   "authority-revoked",
@@ -554,6 +571,17 @@ it.each([
   const failure = new Error("write EPIPE: delegated Doctor exited before input");
   if (scenario === "missing-node") {
     before.serviceNodeRunner = undefined;
+  }
+  if (scenario === "missing-env") {
+    before.serviceEnv = undefined;
+  }
+  if (scenario === "missing-schema") {
+    const metadata = JSON.parse(await fs.readFile(path.join(rootA, "package.json"), "utf8"));
+    delete metadata.openclaw;
+    await fs.writeFile(path.join(rootA, "package.json"), JSON.stringify(metadata));
+  }
+  if (scenario === "fingerprint-timeout") {
+    mocks.capability.mockResolvedValue(false);
   }
   if (scenario === "unverified-health") {
     mocks.inspect.mockResolvedValue({ healthy: false, runtime: { status: "running" } });
@@ -606,6 +634,11 @@ it.each([
   await withUpdateCommandExecutor(run.runId, async (executor) => {
     const fence = await executor.enter(rootB, { serviceRoot: rootA });
     opts.run = { ...run, executorFence: fence };
+    if (scenario === "missing-env") {
+      await expect(
+        observeOriginalManagedServiceRuntime({ root: rootB, opts }, before),
+      ).rejects.toMatchObject({ reason: "original-service-unverified" });
+    }
     const execution = await executeMutableUpdate({
       root: rootB,
       installKind: "package",
@@ -630,7 +663,7 @@ it.each([
       },
     });
     expect(execution).not.toBeNull();
-    if (scenario === "certified-doctor-failure") {
+    if (scenario === "certified-doctor-failure" || scenario === "fingerprint-timeout") {
       expect(activated).toBe(true);
       expect(stopped).toBe(true);
       expect(execution!.originalManagedServiceRuntime).toMatchObject({
@@ -662,7 +695,8 @@ it.each([
           recovery: { serviceRestartSafe: false },
         },
       });
-      expect(mocks.restart).toHaveBeenCalledTimes(1);
+      expect(mocks.restart).toHaveBeenCalledTimes(scenario === "fingerprint-timeout" ? 0 : 1);
+      expect(mocks.nativeRestart).toHaveBeenCalledTimes(scenario === "fingerprint-timeout" ? 1 : 0);
       expect(mocks.health).toHaveBeenCalledWith(
         expect.objectContaining({
           expectedVersion: "2026.9.3",
@@ -678,7 +712,9 @@ it.each([
       expect(stopped).toBe(false);
       expect(execution!.result.status).toBe("error");
       if (scenario !== "authority-revoked") {
-        expect(execution!.result.reason).toBe("original-service-unverified");
+        expect(execution!.result.reason).toBe(
+          scenario === "missing-env" ? "managed-service-preflight" : "original-service-unverified",
+        );
       }
       expect(mocks.restart).not.toHaveBeenCalled();
       expect(mocks.running).toBe(true);
@@ -687,3 +723,5 @@ it.each([
   expect(await fs.readFile(path.join(rootB, "package.json"))).toEqual(packageBefore);
   expect(await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!)).toEqual(configBefore);
 });
+
+registerCurrentF3Controls(() => ({ state, rootA, rootB, before, serviceState, mocks }));

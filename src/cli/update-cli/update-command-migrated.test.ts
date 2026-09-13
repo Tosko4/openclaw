@@ -317,11 +317,15 @@ it.each([
           );
         }
       }
+      const originalFingerprint =
+        original && serviceRoot
+          ? await createPackageIntegrityReader().tree(serviceRoot)
+          : undefined;
       const executorFence = await executor.enter(root, { serviceRoot });
       return await continueMigratedUpdateInFreshProcess(
         {
           mutationStarted: true,
-          ...(original && serviceRoot
+          ...(originalFingerprint && serviceRoot
             ? {
                 originalManagedServiceRuntime: {
                   root: serviceRoot,
@@ -329,7 +333,15 @@ it.each([
                   version: "2026.9.3",
                   verified: false,
                   service: { serviceEnv: env },
-                  packageFingerprint: await createPackageIntegrityReader().tree(serviceRoot),
+                  packageFingerprint: originalFingerprint,
+                  packageIdentity: originalFingerprint,
+                  // Deliberately uncertified; these fields must not grant recovery.
+                  launcher: {
+                    path: path.join(serviceRoot, "unverified-launcher"),
+                    realPath: path.join(serviceRoot, "unverified-launcher"),
+                    fingerprint: "unverified",
+                    targetFingerprint: "unverified",
+                  },
                   nodeIdentity: "unverified-original-service-fixture",
                 },
               }
