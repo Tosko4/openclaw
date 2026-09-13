@@ -736,6 +736,8 @@ openclaw-settings-save-indicator:empty {
 }
 
 .settings-save-indicator--recovery {
+  flex-direction: column;
+  align-items: flex-start;
   white-space: pre-line;
   overflow-wrap: anywhere;
 }

@@ -62,7 +62,9 @@ suite.define(() => {
         await expect
           .poll(() => indicator.textContent())
           .toContain(rollbackStatus === "restored" ? "Save failed" : "Your draft is kept");
-        expect(await indicator.getByRole("button", { name: "Reload" }).count()).toBe(0);
+        expect(await indicator.getByRole("button", { name: "Reload", exact: true }).count()).toBe(
+          0,
+        );
         if (rollbackStatus !== "restored") {
           await gateway.setMethodResponse("config.get", {
             ...snapshot,
@@ -79,7 +81,39 @@ suite.define(() => {
           expect(await prefix.inputValue()).toBe("later draft");
           expect(await indicator.textContent()).toContain(configPath);
           expect(await indicator.textContent()).toContain(recoveryBackupPath);
-          expect(await indicator.getByRole("button").count()).toBe(0);
+          const recover = indicator.getByRole("button", { name: "Discard draft and reload" });
+          await recover.waitFor();
+          for (const candidate of [
+            { ...snapshot, exists: false, config: {}, raw: null, hash: "missing" },
+            { ...snapshot, valid: false, raw: "{", hash: "invalid" },
+          ]) {
+            const reads = (await gateway.getRequests("config.get")).length;
+            await gateway.deferNext("config.get");
+            await recover.click();
+            await gateway.waitForRequest("config.get", { after: reads });
+            await gateway.resolveDeferred("config.get", candidate);
+            await expect.poll(() => prefix.inputValue()).toBe("later draft");
+            expect(await indicator.textContent()).toContain(recoveryBackupPath);
+          }
+          // A clean draft must retain a usable recovery action after file repair.
+          await prefix.fill("initial");
+          await prefix.press("Tab");
+          await expect.poll(() => prefix.inputValue()).toBe("initial");
+          await gateway.setMethodResponse("config.get", { ...snapshot, hash: "recovered" });
+          await recover.click();
+          await expect.poll(() => indicator.textContent()).not.toContain("Your draft is kept");
+          await gateway.deferNext("config.set");
+          await prefix.fill("saved after recovery");
+          await prefix.press("Tab");
+          const saved = await gateway.waitForRequest("config.set", { after: 1 });
+          expect(saved.params).toMatchObject({ baseHash: "recovered" });
+          const { raw } = saved.params as { raw: string };
+          expect(JSON.parse(raw)).toEqual({
+            ...config,
+            messages: { responsePrefix: "saved after recovery" },
+          });
+          await gateway.resolveDeferred("config.set");
+          await expect.poll(() => indicator.textContent()).toContain("Saved");
         } else {
           await gateway.deferNext("config.set");
           await indicator.getByRole("button", { name: "Retry" }).click();

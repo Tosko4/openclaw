@@ -79,7 +79,14 @@ class SettingsSaveIndicator extends LitElement {
         <span>${t("configView.autoSaveSaving")}</span>`;
     } else if (props.status === "recovery") {
       modifier = " settings-save-indicator--danger settings-save-indicator--recovery";
-      content = html`<span>${props.lastError}</span>`;
+      content = html`<span>${props.lastError}</span>
+        <button
+          class="btn btn--xs settings-save-indicator__action"
+          type="button"
+          @click=${props.onReload}
+        >
+          ${t("configView.recoveryReload")}
+        </button>`;
     } else if (props.status === "error") {
       title = props.lastError?.trim() ?? "";
       label = title ? `${t("configView.autoSaveFailed")}: ${title}` : "";
