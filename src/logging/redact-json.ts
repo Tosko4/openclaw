@@ -373,9 +373,7 @@ export function redactJsonRecord(
   message?: RedactionMessage,
   batch?: { preserveLines: boolean },
 ): string {
-  const tokens = batch
-    ? readBatchTokens(input, origins, batch.preserveLines)
-    : readScalarTokens(input, origins);
+  let tokens = batch ? [] : readScalarTokens(input, origins);
   const decodedTokens = tokens.filter(
     (token) => !token.isKey && token.string && !preserveDecodedField(token),
   );
@@ -468,6 +466,10 @@ export function redactJsonRecord(
           });
           if (!capture || capture.end < capture.start) {
             continue;
+          }
+          // Batch rules need token coordinates only after a serialized match exists.
+          if (batch && tokens.length === 0) {
+            tokens = readBatchTokens(input, origins, batch.preserveLines);
           }
           for (
             let index = firstIntersectingToken(tokens, capture.start);
