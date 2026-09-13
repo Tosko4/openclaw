@@ -1,4 +1,5 @@
 import { ErrorCodes } from "@openclaw/gateway-client/browser";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err as failure, ok, type Result } from "@openclaw/normalization-core/result";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
@@ -67,16 +68,32 @@ export async function refreshDraft(
   reconcileAppliedRefresh();
 }
 
-/**
- * Gateway contract: requireConfigBaseHash in
- * src/gateway/server-methods/config.ts rejects writes whose baseHash no
- * longer matches the file with exactly this message. A conflict means another
- * writer changed openclaw.json; retrying the whole-form draft would clobber
- * their edit, so callers surface a reload affordance instead.
- */
-function isConfigBaseHashConflictError(err: unknown): boolean {
-  const message = formatUiError(err);
-  return message.includes("config changed since last load");
+// Publication outcomes outrank nested pre-write conflict messages.
+function classifyConfigMutationError(err: unknown): "conflict" | "error" | "recovery" {
+  if (
+    err instanceof GatewayRequestError &&
+    isRecord(err.details) &&
+    (err.details.publication === "partial" || err.details.publication === "complete")
+  ) {
+    return err.details.rollbackStatus === "restored" ? "error" : "recovery";
+  }
+  return formatUiError(err).includes("config changed since last load") ? "conflict" : "error";
+}
+
+function configMutationFailure(
+  state: RuntimeConfigState,
+  error: unknown,
+  submittedRaw?: string | null,
+) {
+  const status = classifyConfigMutationError(error);
+  const message =
+    status === "recovery" || submittedRaw !== undefined
+      ? formatConfigMutationError(error, submittedRaw ?? null)
+      : formatUiError(error);
+  if (status === "recovery") {
+    state.configRecoveryError = message;
+  }
+  return { status: status === "recovery" ? ("error" as const) : status, message };
 }
 
 function isDefinitiveConfigMutationRejection(err: unknown): boolean {
@@ -198,14 +215,16 @@ export async function executeConfigExternalMutation<T>(
         error: "Connection changed before the configuration update completed.",
       };
     }
+    const outcome = configMutationFailure(state, error);
     return {
       ok: false,
-      reason: isConfigBaseHashConflictError(error)
-        ? "conflict"
-        : isDefinitiveConfigMutationRejection(error)
-          ? "rejected"
-          : "error",
-      error: formatUiError(error),
+      reason:
+        outcome.status === "conflict"
+          ? "conflict"
+          : isDefinitiveConfigMutationRejection(error)
+            ? "rejected"
+            : "error",
+      error: outcome.message,
     };
   }
   const refreshFailure = (error: string): RuntimeConfigExternalMutationResult<T> => ({
@@ -333,6 +352,9 @@ async function readConfig(
     if (!isCurrent()) {
       return failure("The configuration refresh was superseded.");
     }
+    if (state.configRecoveryError !== null && (!res.exists || !res.valid)) {
+      return failure(state.configRecoveryError);
+    }
     // Recovery captures the latest intent before a clean draft is replaced.
     options.beforeApplySnapshot?.();
     if (!isCurrent()) {
@@ -407,7 +429,7 @@ export async function submitConfigDraft(
   const client = state.client;
   const canSubmitDraft = () =>
     mode !== "auto" || (state.configFormDirty && state.configFormMode === "form");
-  if (!client || !state.connected || !canSubmitDraft()) {
+  if (!client || !state.connected || !canSubmitDraft() || state.configRecoveryError !== null) {
     return false;
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
@@ -475,11 +497,10 @@ export async function submitConfigDraft(
     return true;
   } catch (err) {
     if (isCurrent()) {
-      state.lastError = formatConfigMutationError(err, submittedFormRaw);
-      if (isConfigBaseHashConflictError(err)) {
-        state.configAutoSaveStatus = "conflict";
-      } else if (mode !== "apply") {
-        state.configAutoSaveStatus = "error";
+      const outcome = configMutationFailure(state, err, submittedFormRaw);
+      state.lastError = outcome.message;
+      if (outcome.status === "conflict" || mode !== "apply") {
+        state.configAutoSaveStatus = outcome.status;
       }
     }
     return false;
@@ -509,8 +530,9 @@ export function teardownFlushConfigDraft(
   try {
     assertConfigDraftCurrent(state);
   } catch (error) {
-    state.lastError = formatUiError(error);
-    state.configAutoSaveStatus = isConfigBaseHashConflictError(error) ? "conflict" : "error";
+    const outcome = configMutationFailure(state, error);
+    state.lastError = outcome.message;
+    state.configAutoSaveStatus = outcome.status;
     return;
   }
   const draft = {
@@ -588,8 +610,9 @@ export async function patchConfig(
     return true;
   } catch (err) {
     if (isCurrentConfigConnection(state, client, connectionEpoch)) {
-      state.lastError = formatUiError(err);
-      state.configAutoSaveStatus = isConfigBaseHashConflictError(err) ? "conflict" : "error";
+      const outcome = configMutationFailure(state, err);
+      state.lastError = outcome.message;
+      state.configAutoSaveStatus = outcome.status;
     }
     return false;
   }

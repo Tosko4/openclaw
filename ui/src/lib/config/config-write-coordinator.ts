@@ -163,6 +163,7 @@ export function createConfigWriteCoordinator({
   // Stale bases and previous connections require explicit recovery, including teardown.
   const canAutoSaveDraft = () =>
     state.configAutoSaveStatus !== "conflict" &&
+    state.configRecoveryError === null &&
     !autoSaveRequiresExplicitSubmit &&
     autoSaveDraftConnection !== null &&
     autoSaveDraftConnection.client === state.client &&
@@ -377,7 +378,7 @@ export function createConfigWriteCoordinator({
         }
         // The updater may have started while we drained; suspension must be a
         // real barrier or an apply could restart the gateway mid-update.
-        if (writesSuspended || isDisposed()) {
+        if (writesSuspended || isDisposed() || state.configRecoveryError !== null) {
           return unavailable;
         }
         if (!client || !isCurrentConfigConnection(state, client, connectionEpoch)) {

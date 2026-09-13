@@ -36,6 +36,24 @@ export function clearConfigDraftTracking(state: RuntimeConfigState): void {
 }
 
 export function formatConfigMutationError(error: unknown, submittedRaw: string | null): string {
+  if (
+    error instanceof GatewayRequestError &&
+    isRecord(error.details) &&
+    (error.details.publication === "partial" || error.details.publication === "complete") &&
+    error.details.rollbackStatus !== "restored" &&
+    typeof error.details.configPath === "string"
+  ) {
+    const message = t(
+      error.details.rollbackStatus === "not-restored"
+        ? "configView.recoveryNotRestored"
+        : "configView.recoveryUnknown",
+      { path: error.details.configPath },
+    );
+    // Recovery paths are user instructions, unlike incidental paths in exception text.
+    return typeof error.details.recoveryBackupPath === "string"
+      ? message + "\n" + t("configView.recoveryBackup", { path: error.details.recoveryBackupPath })
+      : message;
+  }
   const formatted = formatUiError(error);
   let message = error instanceof GatewayRequestError ? `${error.name}: ${formatted}` : formatted;
   if (!submittedRaw || !(error instanceof GatewayRequestError) || !isRecord(error.details)) {
@@ -126,12 +144,15 @@ export function applyConfigSnapshot(
   snapshot: ConfigSnapshot,
   options: LoadConfigOptions = {},
 ) {
-  const preservePendingChanges = state.configFormDirty && options.discardPendingChanges !== true;
+  const preservePendingChanges =
+    (state.configFormDirty || state.configRecoveryError !== null) &&
+    options.discardPendingChanges !== true;
   if (options.discardPendingChanges === true) {
     // Discard resets pending edits and stale save status, but NOT the restart
     // banner: a saved-but-unapplied config still needs an apply even after
     // the local draft is thrown away.
     state.configAutoSaveStatus = "idle";
+    state.configRecoveryError = null;
   }
   const currentRevisionHash = snapshot.configRevisionHash ?? snapshot.hash ?? null;
   if (snapshot.appliedConfigHash !== undefined) {
@@ -515,10 +536,8 @@ function syncConfigDraft(state: RuntimeConfigState, nextForm: Record<string, unk
 /**
  * Any mutation invalidates a lingering "Saved"/"Save failed" indicator: a
  * dirty edit is about to reschedule, and a clean revert makes the old
- * failure moot (its error is cleared too). Three states persist regardless:
- * "saving" reports the in-flight request, "conflict" marks the snapshot
- * itself stale, and "paused" marks the reconnect latch — only an explicit
- * Save/Apply or discard clears it, no local edit can.
+ * failure moot (its error is cleared too). In-flight writes, stale snapshots,
+ * reconnect pauses and publication recovery survive local edits.
  */
 function resetStaleAutoSaveStatus(state: RuntimeConfigState) {
   if (
