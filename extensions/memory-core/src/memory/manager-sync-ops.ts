@@ -24,7 +24,7 @@ import {
   cleanupAgedMemoryReindexTempFiles,
   memoryDatabaseTableExists,
   openMemoryDatabaseAtPath,
-  publishMemoryDatabaseTables,
+  prepareMemoryDatabasePublication,
   readMemoryDatabaseRevision,
   removeMemoryDatabaseFiles,
 } from "./manager-db.js";
@@ -606,7 +606,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             nextMeta.vectorDims = this.vector.dims;
           }
 
-          this.writeMeta(nextMeta);
+          await this.withDatabaseWrite(() => this.writeMeta(nextMeta));
           return {
             nextMeta,
             vectorIndexComplete,
@@ -620,7 +620,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
 
       await withMemoryWorkspaceLock(this.workspaceDir, async () => {
         await withMemoryIndexPublishGeneration(dbPath, async () => {
-          await publishMemoryDatabaseTables({
+          const publish = await prepareMemoryDatabasePublication({
             targetDb: originalDb,
             sourcePath: tempDbPath,
             metaKey: MEMORY_INDEX_META_KEY,
@@ -628,14 +628,16 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             sourceHasVectors: rebuilt.hasVectors,
             vectorExtensionPath: shadow.vector.extensionPath,
           });
+          await this.withDatabaseWrite(() => {
+            publish();
+            if (rebuilt.vectorIndexComplete) {
+              // Publish completeness only after the shadow tables committed.
+              markMemoryVectorIndexClean(originalDb);
+            }
+          });
         });
       });
 
-      if (rebuilt.vectorIndexComplete) {
-        // Publish completeness only after the shadow tables committed. A crash
-        // before this point leaves the rebuild marker conservative and retryable.
-        markMemoryVectorIndexClean(originalDb);
-      }
       this.database.lastMetaSerialized = null;
       this.resetVectorState();
       this.fts.available = shadow.fts.available;

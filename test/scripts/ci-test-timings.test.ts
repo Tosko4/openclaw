@@ -32,6 +32,7 @@ import {
   createCompactSplitTimingGeneration,
   runtimePlacementTimingKey,
 } from "../../scripts/lib/vitest-shard-metadata.mts";
+import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 
 function uiLog(files: Record<string, number>, overhead = 0.6) {
   const body = Object.values(files).reduce((sum, value) => sum + value, 0);
@@ -173,23 +174,52 @@ describe("runtime placement observations", () => {
   it.each(["push", "pull-request"] as const)(
     "admits complete %s runtime placement without changing inventories or precise capacity",
     (compactMode) => {
-      const blacksmith = testTimings.readCompactGroupTimings("blacksmith");
-      const withoutPlacement = Object.fromEntries(
-        Object.entries(blacksmith).filter(([entry]) => !entry.startsWith("runtime-placement#")),
-      );
-      const spy = vi.spyOn(testTimings, "readCompactGroupTimings");
+      const originalShards = fullSuiteVitestShards.slice();
+      const runtimeConfig = "test/vitest/vitest.runtime-config.config.ts";
+      const infrastructure = "test/vitest/vitest.infra.config.ts";
+      const configs = new Set([
+        runtimeConfig,
+        infrastructure,
+        "test/vitest/vitest.gateway-methods.config.ts",
+      ]);
+      const spy = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
       const options = {
         compactMode,
         runnerBackend: "hybrid",
         includeReleaseOnlyPluginShards: false,
       };
       try {
-        spy.mockImplementation((profile) => (profile === "blacksmith" ? withoutPlacement : {}));
+        fullSuiteVitestShards.splice(
+          0,
+          fullSuiteVitestShards.length,
+          ...originalShards
+            .map((shard) => ({
+              ...shard,
+              projects: shard.projects.filter((config) => configs.has(config)),
+            }))
+            .filter((shard) => shard.projects.length > 0),
+        );
         const before = createNodeTestShardBundles(options);
+        const runtimeGroups = before
+          .flatMap((job) => job.groups)
+          .filter((group) => group.pretestBuildMode === "runtime");
+        expect(runtimeGroups).toHaveLength(3);
         const selected = ["src/config/state-startup-corpus.test.ts"];
         const preciseBefore = createSelectedNodeTestShardBundles(selected, {
           runnerBackend: "hybrid",
         });
+        // Synthetic costs follow the emitted readers; recorded measurements belong
+        // to their exact historical membership and must not be reused after growth.
+        const blacksmith = Object.fromEntries(
+          runtimeGroups.map((group) => [
+            runtimePlacementTimingKey(group)!,
+            group.configs.includes(runtimeConfig)
+              ? 200
+              : group.configs.includes(infrastructure)
+                ? 300
+                : 20,
+          ]),
+        );
         spy.mockImplementation((profile) => (profile === "blacksmith" ? blacksmith : {}));
         const after = createNodeTestShardBundles(options);
         if (compactMode === "pull-request") {
@@ -239,6 +269,26 @@ describe("runtime placement observations", () => {
         expect(crossing.every((group) => group.env?.OPENCLAW_VITEST_MAX_WORKERS === "2")).toBe(
           true,
         );
+        const configReader = runtimeGroups.find((group) => group.configs.includes(runtimeConfig))!;
+        spy.mockImplementation((profile) =>
+          profile === "blacksmith"
+            ? Object.fromEntries(
+                Object.entries(blacksmith).filter(
+                  ([entry]) => entry !== runtimePlacementTimingKey(configReader),
+                ),
+              )
+            : {},
+        );
+        const unmeasured = createNodeTestShardBundles(options);
+        expect(unmeasured.map((job) => [job.checkName, job.runner, job.groups])).toEqual(
+          before.map((job) => [job.checkName, job.runner, job.groups]),
+        );
+        const readerJob = unmeasured.find((job) =>
+          job.groups.some((group) => group.configs.includes(runtimeConfig)),
+        )!;
+        // The 300s sibling costs 261s in hybrid plus one 100s build. Unknown readers
+        // retain a positive cost instead of disappearing from that shared estimate.
+        expect(readerJob.predictedSeconds).toBeGreaterThan(361);
         spy.mockImplementation((profile) =>
           profile === "blacksmith"
             ? Object.fromEntries(
@@ -257,6 +307,7 @@ describe("runtime placement observations", () => {
         expect(unfit.some((job) => (job.predictedSeconds ?? 0) > 440)).toBe(true);
       } finally {
         spy.mockRestore();
+        fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards);
       }
     },
   );
