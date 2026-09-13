@@ -68,32 +68,46 @@ export async function refreshDraft(
   reconcileAppliedRefresh();
 }
 
-// Publication outcomes outrank nested pre-write conflict messages.
-function classifyConfigMutationError(err: unknown): "conflict" | "error" | "recovery" {
-  if (
-    err instanceof GatewayRequestError &&
-    isRecord(err.details) &&
-    (err.details.publication === "partial" || err.details.publication === "complete")
-  ) {
-    return err.details.rollbackStatus === "restored" ? "error" : "recovery";
-  }
-  return formatUiError(err).includes("config changed since last load") ? "conflict" : "error";
-}
-
+// Publication and read-recovery outcomes outrank nested pre-write conflict text.
 function configMutationFailure(
   state: RuntimeConfigState,
   error: unknown,
   submittedRaw?: string | null,
 ) {
-  const status = classifyConfigMutationError(error);
-  const message =
-    status === "recovery" || submittedRaw !== undefined
-      ? formatConfigMutationError(error, submittedRaw ?? null)
+  let message =
+    submittedRaw !== undefined
+      ? formatConfigMutationError(error, submittedRaw)
       : formatUiError(error);
-  if (status === "recovery") {
-    state.configRecoveryError = message;
+  const details =
+    error instanceof GatewayRequestError && isRecord(error.details) ? error.details : null;
+  const hasRecoveryOutcome =
+    details &&
+    (details.publication === "partial" ||
+      details.publication === "complete" ||
+      typeof details.recoveryBackupPath === "string");
+  if (hasRecoveryOutcome) {
+    if (details.rollbackStatus !== "restored") {
+      if (typeof details.configPath === "string") {
+        message = t(
+          details.rollbackStatus === "not-restored"
+            ? "configView.recoveryNotRestored"
+            : "configView.recoveryUnknown",
+          { path: details.configPath },
+        );
+        if (typeof details.recoveryBackupPath === "string") {
+          message += "\n" + t("configView.recoveryBackup", { path: details.recoveryBackupPath });
+        }
+      }
+      state.configRecoveryError = message;
+    }
+    return { status: "error" as const, message };
   }
-  return { status: status === "recovery" ? ("error" as const) : status, message };
+  return {
+    status: message.includes("config changed since last load")
+      ? ("conflict" as const)
+      : ("error" as const),
+    message,
+  };
 }
 
 function isDefinitiveConfigMutationRejection(err: unknown): boolean {
@@ -371,11 +385,12 @@ async function readConfig(
     }
     return ok(undefined);
   } catch (error) {
-    const message = formatUiError(error);
-    if (isCurrent()) {
-      state.lastError = message;
+    if (!isCurrent()) {
+      return failure("The configuration refresh was superseded.");
     }
-    return failure(message);
+    const outcome = configMutationFailure(state, error);
+    state.lastError = outcome.message;
+    return failure(outcome.message);
   } finally {
     if (isCurrentRequest(state, "config", version, client, connectionEpoch)) {
       state.configLoading = false;

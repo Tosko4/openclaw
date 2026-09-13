@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 // Config gateway methods: validation, redaction, secrets, reload planning.
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -864,15 +865,27 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateConfigGetParams, "config.get", respond)) {
       return;
     }
-    respond(
-      true,
-      await readConfigGetResponse({
-        getHotReloadStatus: context.getConfigReloaderHotReloadStatus,
-        loadUiHints: () => loadSchemaWithPlugins().uiHints,
-        revisionProjector: context.configRevisionProjector,
-      }),
-      undefined,
-    );
+    const snapshot = await readConfigGetResponse({
+      getHotReloadStatus: context.getConfigReloaderHotReloadStatus,
+      loadUiHints: () => loadSchemaWithPlugins().uiHints,
+      revisionProjector: context.configRevisionProjector,
+    });
+    const recoveryBackupPath = `${snapshot.path}.bak`;
+    if ((!snapshot.exists || !snapshot.valid) && existsSync(recoveryBackupPath)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "Configuration recovery required; restore the settings file before retrying.",
+          {
+            details: { configPath: snapshot.path, recoveryBackupPath, rollbackStatus: "unknown" },
+          },
+        ),
+      );
+      return;
+    }
+    respond(true, snapshot, undefined);
   },
   "config.schema": ({ params, respond }) => {
     if (!assertValidParams(params, validateConfigSchemaParams, "config.schema", respond)) {

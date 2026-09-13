@@ -1,11 +1,11 @@
 // @vitest-environment node
 import { expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
   createConfigCapabilityHarness,
   createConfigServerMock,
-  deferred,
 } from "./config-test-harness.ts";
 
 it.each(["Settings", "external"])(

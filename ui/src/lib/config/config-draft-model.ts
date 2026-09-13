@@ -36,24 +36,6 @@ export function clearConfigDraftTracking(state: RuntimeConfigState): void {
 }
 
 export function formatConfigMutationError(error: unknown, submittedRaw: string | null): string {
-  if (
-    error instanceof GatewayRequestError &&
-    isRecord(error.details) &&
-    (error.details.publication === "partial" || error.details.publication === "complete") &&
-    error.details.rollbackStatus !== "restored" &&
-    typeof error.details.configPath === "string"
-  ) {
-    const message = t(
-      error.details.rollbackStatus === "not-restored"
-        ? "configView.recoveryNotRestored"
-        : "configView.recoveryUnknown",
-      { path: error.details.configPath },
-    );
-    // Recovery paths are user instructions, unlike incidental paths in exception text.
-    return typeof error.details.recoveryBackupPath === "string"
-      ? message + "\n" + t("configView.recoveryBackup", { path: error.details.recoveryBackupPath })
-      : message;
-  }
   const formatted = formatUiError(error);
   let message = error instanceof GatewayRequestError ? `${error.name}: ${formatted}` : formatted;
   if (!submittedRaw || !(error instanceof GatewayRequestError) || !isRecord(error.details)) {
