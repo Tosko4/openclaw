@@ -14,6 +14,11 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "git-operation.worker",
     distWorkerPath: "infra/git-operation.worker.js",
   },
+  worktreeFilesystem: {
+    currentModuleUrl,
+    sourceWorkerName: "../agents/worktrees/filesystem-native.worker",
+    distWorkerPath: "agents/worktrees/filesystem-native.worker.js",
+  },
   sharedStateStore: {
     currentModuleUrl,
     sourceWorkerName: "../state/openclaw-state.worker",
