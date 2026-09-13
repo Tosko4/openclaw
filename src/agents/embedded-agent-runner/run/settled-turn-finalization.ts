@@ -58,6 +58,7 @@ type TerminalPreparationBase = Omit<
   | "sessionFileUsed"
   | "lastRunPromptUsage"
   | "terminalState"
+  | "settledTurnFinalizationAnswered"
 >;
 
 export async function prepareTerminalWithSettledTurnFinalization(input: {
@@ -279,6 +280,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     ...input.terminalBase,
     ...completion,
     lastRunPromptUsage,
+    settledTurnFinalizationAnswered: finalizationOutcome === "answered",
   });
   // Only a real finalizer answer may cross source-reply suppression. The
   // synthetic fallback remains a private diagnostic on message-tool-only runs.
