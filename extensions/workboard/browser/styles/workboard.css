@@ -148,61 +148,6 @@
   gap: 8px;
 }
 
-.workboard .input {
-  min-height: var(--workboard-control-height);
-  border: 1px solid var(--workboard-control-border);
-  border-radius: var(--workboard-control-radius);
-  background-color: var(--workboard-control-bg);
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1.25;
-  box-shadow: inset 0 1px 0 color-mix(in srgb, white 4%, transparent);
-  transition:
-    border-color var(--duration-fast) var(--ease-out),
-    background-color var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-fast) var(--ease-out);
-}
-
-.workboard .input:hover {
-  border-color: var(--workboard-control-border-hover);
-}
-
-.workboard .input:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
-  outline: none;
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 5%, transparent),
-    0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent);
-}
-
-.workboard input.input,
-.workboard select.input {
-  height: var(--workboard-control-height);
-  padding: 0 10px;
-}
-
-.workboard select.input {
-  max-width: 220px;
-  padding-right: 28px;
-  appearance: none;
-  background-image:
-    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
-    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
-  background-position:
-    calc(100% - 14px) 50%,
-    calc(100% - 9px) 50%;
-  background-size:
-    5px 5px,
-    5px 5px;
-  background-repeat: no-repeat;
-}
-
-.workboard input.input::placeholder,
-.workboard textarea.input::placeholder {
-  color: color-mix(in srgb, var(--muted) 76%, transparent);
-  opacity: 1;
-}
-
 .workboard-draft {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
