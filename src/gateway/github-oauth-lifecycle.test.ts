@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolsGitHubStatusResult } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   inspectGitHubOAuthRecord,
@@ -115,16 +116,6 @@ let stateDir: string;
 let installedTokens: string[];
 let refreshedTokens: string[];
 let lifecycleInstances: GitHubOAuthLifecycle[];
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
 
 function identity(profileId: string, options: { oauth?: boolean; author?: boolean } = {}) {
   return {
@@ -535,8 +526,8 @@ describe("GitHub OAuth authorization lifecycle", () => {
     async (race) => {
       const lifecycle = createLifecycle();
       const started = await startAuthorization(lifecycle, "system");
-      const installStarted = deferred<void>();
-      const continueInstall = deferred<void>();
+      const installStarted = deferred();
+      const continueInstall = deferred();
       mocks.pollDeviceToken.mockResolvedValue({ status: "authorized", tokens: TOKENS });
       mocks.installProfile.mockImplementationOnce(async ({ token, commitConfig }) => {
         installedTokens.push(token);
@@ -566,8 +557,8 @@ describe("GitHub OAuth authorization lifecycle", () => {
   it("reports cancellation as too late once the config commit starts", async () => {
     const lifecycle = createLifecycle();
     const started = await startAuthorization(lifecycle, "system");
-    const commitStarted = deferred<void>();
-    const continueCommit = deferred<void>();
+    const commitStarted = deferred();
+    const continueCommit = deferred();
     mocks.pollDeviceToken.mockResolvedValue({ status: "authorized", tokens: TOKENS });
     mocks.updateConfig.mockImplementationOnce(async (params) => {
       commitStarted.resolve();

@@ -2,6 +2,7 @@ import { access, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { WorkerDesktopEndpoint, WorkerSshEndpoint } from "../../plugins/types.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { createWorkerDesktopTunnels } from "./desktop-tunnel.js";
@@ -22,12 +23,7 @@ const DESKTOP: WorkerDesktopEndpoint = {
 const resolveIdentity = async () => ({ kind: "path", path: "/keys/worker" }) as const;
 
 function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
+  const { promise, resolve, reject } = createDeferred<T>();
   void promise.catch(() => undefined);
   return { promise, resolve, reject };
 }

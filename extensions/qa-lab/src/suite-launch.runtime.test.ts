@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QaSuiteInfraError } from "./errors.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
@@ -83,14 +84,6 @@ async function writeEvidence(pathLocal: string, writeFile = true) {
   return evidence;
 }
 
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 function requireDefaultQaFlowSuiteImplementation() {
   const implementation = runQaFlowSuite.getMockImplementation();
   if (!implementation) {
@@ -109,8 +102,8 @@ function requireDefaultQaTestFileImplementation() {
 
 function blockNextQaFlowSuite() {
   const implementation = requireDefaultQaFlowSuiteImplementation();
-  const started = createDeferred();
-  const blocked = createDeferred();
+  const started = createDeferred<void>();
+  const blocked = createDeferred<void>();
   runQaFlowSuite.mockImplementationOnce(async (params) => {
     started.resolve();
     await blocked.promise;
@@ -121,8 +114,8 @@ function blockNextQaFlowSuite() {
 
 function blockNextQaTestFileRun() {
   const implementation = requireDefaultQaTestFileImplementation();
-  const started = createDeferred();
-  const blocked = createDeferred();
+  const started = createDeferred<void>();
+  const blocked = createDeferred<void>();
   runQaTestFileScenarios.mockImplementationOnce(async (params) => {
     started.resolve();
     await blocked.promise;
@@ -2122,10 +2115,10 @@ describe("qa suite runtime launcher", () => {
     const repoRoot = await makeTempRepo("qa-suite-parallel-scripts-");
     const defaultFlowImplementation = requireDefaultQaFlowSuiteImplementation();
     const defaultTestFileImplementation = requireDefaultQaTestFileImplementation();
-    const flow = createDeferred();
-    const native = createDeferred();
-    const serial = createDeferred();
-    const parallel = createDeferred();
+    const flow = createDeferred<void>();
+    const native = createDeferred<void>();
+    const serial = createDeferred<void>();
+    const parallel = createDeferred<void>();
     const started: string[] = [];
     const preparedEnv = Object.freeze({ OPENCLAW_CURRENT_PACKAGE_TGZ: "/tmp/candidate.tgz" });
     const scriptEnvs: unknown[] = [];
@@ -2285,7 +2278,7 @@ describe("qa suite runtime launcher", () => {
   it("keeps selected evidence order and successful siblings when a parallel script rejects", async () => {
     const repoRoot = await makeTempRepo("qa-suite-parallel-script-rejection-");
     const defaultTestFileImplementation = requireDefaultQaTestFileImplementation();
-    const first = createDeferred();
+    const first = createDeferred<void>();
     runQaTestFileScenarios.mockImplementation(async (params) => {
       const scenario = params.scenarios[0] as QaTestFileScenario | undefined;
       if (!scenario) {
@@ -2349,7 +2342,7 @@ describe("qa suite runtime launcher", () => {
   it("serializes every fail-fast script and stops before post-failure work", async () => {
     const repoRoot = await makeTempRepo("qa-suite-fail-fast-scripts-");
     const defaultTestFileImplementation = requireDefaultQaTestFileImplementation();
-    const first = createDeferred();
+    const first = createDeferred<void>();
     const preparedEnv = Object.freeze({ OPENCLAW_CURRENT_PACKAGE_TGZ: "/tmp/candidate.tgz" });
     const started: string[] = [];
     let active = 0;

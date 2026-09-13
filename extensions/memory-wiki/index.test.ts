@@ -1,6 +1,7 @@
 // Memory Wiki tests cover index plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./api.js";
@@ -13,7 +14,6 @@ import {
   type MemoryWikiCompiledCacheSnapshot,
 } from "./src/compiled-cache.js";
 import { resolveMemoryWikiConfig } from "./src/config.js";
-import { deferred } from "./src/deferred.test-helpers.js";
 import {
   appendMemoryWikiLog,
   loadMemoryWikiValidatedVaultIdentity,
@@ -261,8 +261,8 @@ describe("memory-wiki plugin", () => {
       throw new Error("Expected an active Memory Wiki vault generation");
     }
     const snapshot = emptyCompiledSnapshot();
-    const validationEntered = deferred();
-    const releaseValidation = deferred();
+    const validationEntered = deferred<void>();
+    const releaseValidation = deferred<void>();
     const commitPublication = vi.fn();
     const publicationId = createMemoryWikiCompiledCachePublicationId();
     const publication = writeMemoryWikiCompiledCache(
@@ -302,8 +302,8 @@ describe("memory-wiki plugin", () => {
       const service = registerService.mock.calls[0]?.[0];
       await service?.start?.();
 
-      const mutationEntered = deferred();
-      const releaseMutation = deferred();
+      const mutationEntered = deferred<void>();
+      const releaseMutation = deferred<void>();
       const mutation = withMemoryWikiVaultMutation(rootDir, async () => {
         mutationEntered.resolve();
         await releaseMutation.promise;

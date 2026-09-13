@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
@@ -12,7 +13,6 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { rollbackChatGptImportRun } from "./chatgpt-import.js";
 import { configureMemoryWikiCompiledCacheStore } from "./compiled-cache.js";
-import { deferred } from "./deferred.test-helpers.js";
 import {
   configureMemoryWikiImportRunStateStore,
   createMemoryWikiImportRunStateStore,
@@ -349,15 +349,15 @@ describe("ChatGPT import rollback recovery", () => {
       contentHash: "not-the-edited-content",
     });
 
-    const lockEntered = deferred();
-    const releaseLock = deferred();
+    const lockEntered = deferred<void>();
+    const releaseLock = deferred<void>();
     const holder = withMemoryWikiVaultMutation(rootDir, async () => {
       lockEntered.resolve();
       await releaseLock.promise;
     });
     await lockEntered.promise;
 
-    const rollbackQueued = deferred();
+    const rollbackQueued = deferred<void>();
     const originalEnqueue = Object.getOwnPropertyDescriptor(KeyedAsyncQueue.prototype, "enqueue")
       ?.value as KeyedAsyncQueue["enqueue"];
     const enqueueSpy = vi

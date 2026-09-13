@@ -2,6 +2,7 @@
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayActiveWorkInspectors } from "../../infra/gateway-active-work.js";
 import {
   prepareGatewaySuspend,
@@ -25,14 +26,6 @@ import {
 
 const ROUTE_PATH = "/plugin/suspension-proof";
 let rateLimitEpochMs = Date.now();
-
-function deferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 function createRoute(
   params: Partial<PluginHttpRouteRegistration> & Pick<PluginHttpRouteRegistration, "handler">,

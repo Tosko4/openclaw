@@ -1,15 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { SessionCatalogListAdmission } from "./session-catalog-list-admission.js";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
 
 describe("SessionCatalogListAdmission", () => {
   it("starts at most the configured number of provider lists", async () => {
@@ -31,7 +22,7 @@ describe("SessionCatalogListAdmission", () => {
 
   it("releases a slot after rejection and preserves FIFO order", async () => {
     const admission = new SessionCatalogListAdmission(1, 2);
-    const active = deferred<void>();
+    const active = deferred();
     const order: string[] = [];
     const first = admission.run(() => active.promise);
     const second = admission.run(async () => {
@@ -51,7 +42,7 @@ describe("SessionCatalogListAdmission", () => {
 
   it("rejects overflow without starting the provider", async () => {
     const admission = new SessionCatalogListAdmission(1, 1);
-    const active = deferred<void>();
+    const active = deferred();
     const first = admission.run(() => active.promise);
     const queued = admission.run(async () => undefined);
     const overflowTask = vi.fn(async () => undefined);

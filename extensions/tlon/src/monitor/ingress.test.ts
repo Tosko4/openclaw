@@ -6,6 +6,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UrbitHttpError } from "../urbit/errors.js";
 import { createTlonIngressMonitor } from "./ingress.js";
@@ -107,14 +108,6 @@ function startMonitor(queue: TlonIngressQueue, dispatch: TlonIngressDispatch) {
   });
   monitor.start();
   return monitor;
-}
-
-function deferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 afterEach(() => {
@@ -331,8 +324,8 @@ describe("Tlon durable ingress", () => {
 
   it("waits for admitted work and leaves it pending on repeated stop", async () => {
     await withQueue(async (queue) => {
-      const stored = deferred();
-      const release = deferred();
+      const stored = deferred<void>();
+      const release = deferred<void>();
       const enqueue = queue.enqueue.bind(queue);
       queue.enqueue = async (...args) => {
         const result = await enqueue(...args);

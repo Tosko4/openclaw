@@ -1,6 +1,7 @@
 // Telegram tests cover account throttler plugin behavior.
 import { createRequire } from "node:module";
 import { Api } from "grammy";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { asTelegramClientFetch } from "./client-fetch.js";
@@ -30,14 +31,6 @@ function callLooseSendMessage(
     signal: undefined,
   ) => ReturnType<TelegramTransform>;
   return loose(prev, "sendMessage", payload, undefined);
-}
-
-function deferred<T>() {
-  let resolve: (value: T) => void;
-  const promise = new Promise<T>((innerResolve) => {
-    resolve = innerResolve;
-  });
-  return { promise, resolve: resolve! };
 }
 
 describe("getOrCreateAccountThrottler", () => {

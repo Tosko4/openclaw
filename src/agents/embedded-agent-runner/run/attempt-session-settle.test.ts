@@ -1,15 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { createEmbeddedAttemptSessionSettleTracker } from "./attempt-session-settle.js";
-
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 describe("createEmbeddedAttemptSessionSettleTracker", () => {
   it("preserves a teardown failure raised outside the caller async context", async () => {

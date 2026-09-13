@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupBackgroundHarnesses,
@@ -8,10 +9,7 @@ import {
 
 const releases = new Set<() => void>();
 function deferred<T>(value: T) {
-  let resolve = (_value: T) => {};
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
+  const { promise, resolve } = createDeferred<T>();
   const release = () => {
     releases.delete(release);
     resolve(value);

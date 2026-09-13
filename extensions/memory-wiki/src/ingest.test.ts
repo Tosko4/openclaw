@@ -1,9 +1,9 @@
 // Memory Wiki tests cover ingest plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { describe, expect, it, vi } from "vitest";
-import { deferred } from "./deferred.test-helpers.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -77,15 +77,15 @@ hello from source
     });
     const pagePath = path.join(config.vault.path, "sources", "meeting-notes.md");
 
-    const lockEntered = deferred();
-    const releaseLock = deferred();
+    const lockEntered = deferred<void>();
+    const releaseLock = deferred<void>();
     const holder = withMemoryWikiVaultMutation(config.vault.path, async () => {
       lockEntered.resolve();
       await releaseLock.promise;
     });
     await lockEntered.promise;
 
-    const ingestQueued = deferred();
+    const ingestQueued = deferred<void>();
     const originalEnqueue = Object.getOwnPropertyDescriptor(KeyedAsyncQueue.prototype, "enqueue")
       ?.value as KeyedAsyncQueue["enqueue"];
     const enqueueSpy = vi

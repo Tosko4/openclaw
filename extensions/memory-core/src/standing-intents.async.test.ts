@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   createPluginRecord,
@@ -66,14 +67,6 @@ vi.mock("openclaw/plugin-sdk/sqlite-runtime", async (importOriginal) => {
   };
 });
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 const pending: Promise<unknown>[] = [];
 const releases: Array<() => void> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -106,8 +99,8 @@ function keep<T>(work: Promise<T>): Promise<T> {
 }
 
 function holdAdmission(failure?: Error) {
-  const entered = deferred();
-  const finish = deferred();
+  const entered = deferred<void>();
+  const finish = deferred<void>();
   releases.push(finish.resolve);
   admission.pause = async () => {
     entered.resolve();
@@ -347,7 +340,7 @@ describe("standing-intent admitted operations", () => {
     const existing = await seed();
     const { runner } = registerHooks();
     closeOpenClawAgentDatabasesForTest();
-    const started = deferred();
+    const started = deferred<void>();
     admission.started = started.resolve;
     const held = holdAdmission();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

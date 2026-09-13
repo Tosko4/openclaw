@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { createClientVoiceConfirmationReadiness } from "../talk/client-voice-confirmation-readiness.js";
 import { VOICE_TRANSCRIPT_QUEUE_POLICY } from "../talk/voice-transcript.js";
 import type { RelaySession } from "./talk-realtime-relay-state.js";
@@ -14,14 +15,6 @@ const voiceSessionMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../talk/client-voice-session.js", () => voiceSessionMocks);
-
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((accept) => {
-    resolve = accept;
-  });
-  return { promise, resolve };
-}
 
 function createRelaySession(): {
   session: RelaySession;

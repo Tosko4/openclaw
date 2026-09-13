@@ -1,3 +1,4 @@
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { relayTestKey } from "../../../chrome-extension/relay-key.test-support.js";
 import { resolveProfile, type ResolvedBrowserConfig } from "../config.js";
@@ -74,14 +75,6 @@ function createHandle(token: string, port = RELAY_PORT): ExtensionRelayHandle {
     bridge: {} as ExtensionRelayHandle["bridge"],
     close: vi.fn(async () => {}),
   };
-}
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 describe("extension relay lifecycle", () => {
@@ -162,8 +155,8 @@ describe("extension relay lifecycle", () => {
   it("coalesces concurrent rebinds to one exact relay handle", async () => {
     const oldRelay = createHandle(OLD_TOKEN);
     const { profile, state } = createState(OLD_TOKEN, oldRelay);
-    const startEntered = deferred();
-    const releaseStart = deferred();
+    const startEntered = deferred<void>();
+    const releaseStart = deferred<void>();
     const replacement = createHandle(ROTATED_TOKEN);
     startExtensionRelayServerMock.mockImplementationOnce(async () => {
       startEntered.resolve();
@@ -186,8 +179,8 @@ describe("extension relay lifecycle", () => {
     const oldRelay = createHandle(OLD_TOKEN);
     const { profile, state } = createState(OLD_TOKEN, oldRelay);
     const runtime = getOrCreateProfileRuntime(state, profile);
-    const startEntered = deferred();
-    const releaseStart = deferred();
+    const startEntered = deferred<void>();
+    const releaseStart = deferred<void>();
     const replacement = createHandle(ROTATED_TOKEN);
     startExtensionRelayServerMock.mockImplementationOnce(async () => {
       startEntered.resolve();
@@ -232,8 +225,8 @@ describe("extension relay lifecycle", () => {
     const oldRelay = createHandle(OLD_TOKEN);
     const { profile, state } = createState(OLD_TOKEN, oldRelay);
     const runtime = getOrCreateProfileRuntime(state, profile);
-    const startEntered = deferred();
-    const releaseStart = deferred();
+    const startEntered = deferred<void>();
+    const releaseStart = deferred<void>();
     const replacement = createHandle(ROTATED_TOKEN);
     startExtensionRelayServerMock.mockImplementationOnce(async () => {
       startEntered.resolve();
@@ -281,8 +274,8 @@ describe("extension relay lifecycle", () => {
     const oldRelay = createHandle(OLD_TOKEN);
     const { profile, state } = createState(OLD_TOKEN, oldRelay);
     const runtime = getOrCreateProfileRuntime(state, profile);
-    const startEntered = deferred();
-    const releaseStart = deferred();
+    const startEntered = deferred<void>();
+    const releaseStart = deferred<void>();
     const replacement = createHandle(ROTATED_TOKEN);
     startExtensionRelayServerMock.mockImplementationOnce(async () => {
       startEntered.resolve();

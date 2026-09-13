@@ -1,6 +1,7 @@
 // Covers embedded backend behavior used by the TUI runtime.
 import fs from "node:fs/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -358,19 +359,6 @@ vi.mock("../gateway/server-methods/agent-timestamp.js", () => ({
   injectTimestamp: (message: string) => message,
   timestampOptsFromConfig: () => ({}),
 }));
-
-function deferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  let reject: ((error?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
 
 async function flushMicrotasks() {
   await Promise.resolve();
@@ -1128,7 +1116,7 @@ describe("EmbeddedTuiBackend", () => {
   it("publishes the configured runtime before admitting the first local turn", async () => {
     const initialConfig = { agents: { list: [{ id: "main" }] } };
     getRuntimeConfigMock.mockReturnValue(initialConfig);
-    const publication = deferred<void>();
+    const publication = deferred();
     refreshPreparedModelRuntimeSnapshotsMock.mockReturnValueOnce(publication.promise);
 
     const backend = new EmbeddedTuiBackend();
@@ -1159,7 +1147,7 @@ describe("EmbeddedTuiBackend", () => {
     backend.start();
     await vi.waitFor(() => expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledOnce());
 
-    const replacement = deferred<void>();
+    const replacement = deferred();
     refreshPreparedModelRuntimeSnapshotsMock.mockReturnValueOnce(replacement.promise);
     configWriteListener?.({ runtimeConfig: nextConfig });
 
@@ -1186,9 +1174,9 @@ describe("EmbeddedTuiBackend", () => {
     const middleConfig = { agents: { defaults: { model: "openai/middle" } } };
     const latestConfig = { agents: { defaults: { model: "openai/latest" } } };
     getRuntimeConfigMock.mockReturnValue(initialConfig);
-    const initial = deferred<void>();
-    const middle = deferred<void>();
-    const latest = deferred<void>();
+    const initial = deferred();
+    const middle = deferred();
+    const latest = deferred();
     refreshPreparedModelRuntimeSnapshotsMock
       .mockReturnValueOnce(initial.promise)
       .mockReturnValueOnce(middle.promise)
@@ -1240,7 +1228,7 @@ describe("EmbeddedTuiBackend", () => {
       runId: "runtime-refresh-second",
     });
 
-    const replacement = deferred<void>();
+    const replacement = deferred();
     refreshPreparedModelRuntimeSnapshotsMock.mockReturnValueOnce(replacement.promise);
     configWriteListener?.({
       runtimeConfig: { agents: { defaults: { model: "openai/next" } } },
@@ -1607,8 +1595,8 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("waits for the newest publication before returning model choices", async () => {
-    const initial = deferred<void>();
-    const replacement = deferred<void>();
+    const initial = deferred();
+    const replacement = deferred();
     refreshPreparedModelRuntimeSnapshotsMock
       .mockReturnValueOnce(initial.promise)
       .mockReturnValueOnce(replacement.promise);
@@ -1632,7 +1620,7 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("reports publication failure instead of returning stale model choices", async () => {
-    const publication = deferred<void>();
+    const publication = deferred();
     refreshPreparedModelRuntimeSnapshotsMock.mockReturnValueOnce(publication.promise);
     const backend = new EmbeddedTuiBackend();
     backend.start();

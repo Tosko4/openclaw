@@ -16,6 +16,7 @@
  *   user: @agent_a msg C     (triggers agent_a; agent_a sees [B] in history)
  */
 
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import {
@@ -88,17 +89,6 @@ function makeDevRoute(agentId: string) {
 beforeEach(() => {
   installMatrixMonitorTestRuntime();
 });
-
-function deferred<T>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred resolver to be initialized");
-  }
-  return { promise, resolve };
-}
 
 type HistoryHarnessOptions = NonNullable<Parameters<typeof createMatrixHandlerTestHarness>[0]>;
 type FinalizeInboundContext = NonNullable<HistoryHarnessOptions["finalizeInboundContext"]>;

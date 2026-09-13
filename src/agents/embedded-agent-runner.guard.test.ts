@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { createFileBackedSessionManagerForTest } from "../../test/helpers/session-manager-file-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
@@ -577,26 +578,13 @@ function toolResult(id: string, text: string): AgentMessage {
   } as AgentMessage;
 }
 
-function deferred<T>() {
-  // Tests control when waitForIdle resolves so real tool results can race the
-  // synthetic flush path deterministically.
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  const promise = new Promise<T>((r) => {
-    resolve = r;
-  });
-  if (!resolve) {
-    throw new Error("Expected wait-for-idle deferred resolver to be initialized");
-  }
-  return { promise, resolve };
-}
-
 describe("flushPendingToolResultsAfterIdle", () => {
   it("waits for idle so real tool results can land before flush", async () => {
     // Waiting gives the tool runner a chance to persist its real output before
     // the guard synthesizes a missing result.
     const sm = guardSessionManager(SessionManager.inMemory());
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-    const idle = deferred<void>();
+    const idle = deferred();
     const agent = { waitForIdle: () => idle.promise };
 
     appendMessage(idleToolCall("call_retry_1"));
@@ -688,7 +676,7 @@ describe("flushPendingToolResultsAfterIdle", () => {
   it("clamps oversized idle wait timeouts before scheduling", async () => {
     // JavaScript timers overflow above the platform max; clamp to keep huge
     // configs from firing immediately.
-    const idle = deferred<void>();
+    const idle = deferred();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       const flushPromise = flushPendingToolResultsAfterIdle({
@@ -709,7 +697,7 @@ describe("flushPendingToolResultsAfterIdle", () => {
     // Non-positive timeouts are an explicit "do not wait" policy.
     const sm = guardSessionManager(SessionManager.inMemory());
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-    const idle = deferred<void>();
+    const idle = deferred();
     const waitForIdleSpy = vi.fn(() => idle.promise);
     const agent = { waitForIdle: waitForIdleSpy };
 

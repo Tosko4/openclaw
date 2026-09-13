@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveQaStagedBundledPluginsRoot } from "./bundled-plugin-staging.js";
 import { createQaGatewayChild } from "./gateway-child.js";
@@ -142,14 +143,6 @@ function own(params: Parameters<ReturnType<typeof createQaGatewayChild>["start"]
   const owner = createQaGatewayChild();
   owners.push(owner);
   return { start: () => owner.start(params), stop: owner.stop };
-}
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", () => {
@@ -455,8 +448,8 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
     const owner = own(params);
     const gateway = await owner.start();
     pids();
-    const entered = deferred();
-    const release = deferred();
+    const entered = deferred<void>();
+    const release = deferred<void>();
     const restarting = gateway.restartAfterStateMutation(async () => {
       entered.resolve();
       await release.promise;

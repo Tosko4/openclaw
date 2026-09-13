@@ -1,6 +1,7 @@
 // Proves standalone MCP App HTTP work participates in Gateway suspension admission.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -26,14 +27,6 @@ import {
 } from "./server-http.test-harness.js";
 
 const MCP_APP_PATH = "/__openclaw__/mcp-app";
-
-function deferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 function mcpAppsConfig(): OpenClawConfig {
   return {

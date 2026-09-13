@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";
 import type { BrowserServerState } from "./server-context.js";
@@ -78,16 +79,6 @@ type ChromeLiveProfile = {
   userDataDir?: string;
   mcpArgs?: string[];
 };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
 
 function makeState(): BrowserServerState {
   return {

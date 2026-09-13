@@ -1,3 +1,4 @@
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Client, User } from "../internal/discord.js";
 
@@ -15,16 +16,6 @@ vi.mock("openclaw/plugin-sdk/logging-core", () => ({
 }));
 
 const { createDiscordAvatarResolver } = await import("./message-avatar.js");
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
 
 function discordUser(id: string, avatar: string | null): User {
   return { id, avatar } as User;

@@ -1,6 +1,7 @@
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { NodeDesktopStreamBroker } from "../desktop/node-stream-broker.js";
 import * as observeBridge from "../desktop/observe-bridge.js";
@@ -14,12 +15,7 @@ import * as support from "./service.test-support.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
 function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
+  const { promise, resolve, reject } = createDeferred<T>();
   void promise.catch(() => undefined);
   return { promise, reject, resolve };
 }

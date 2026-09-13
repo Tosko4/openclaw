@@ -1,6 +1,7 @@
 // Browser tests cover server context.ensure browser available.waits for cdp ready plugin behavior.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
 import { PROFILE_ATTACH_RETRY_TIMEOUT_MS } from "./cdp-timeouts.js";
@@ -12,14 +13,6 @@ import { beginProfileTransition, getProfileLifecycle } from "./server-context.li
 import { makeBrowserServerState, mockLaunchedChrome } from "./server-context.test-harness.js";
 
 const PROFILE_HTTP_REACHABILITY_TIMEOUT_MS = 300;
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 function fakeRunning(pid: number): RunningChrome {
   return {

@@ -1,6 +1,7 @@
 // Slack tests cover context plugin behavior.
 import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setSlackRuntime } from "../runtime.js";
@@ -18,14 +19,6 @@ vi.mock("./media.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./media.runtime.js")>()),
   saveRemoteMedia: saveRemoteMediaMock,
 }));
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 function createTestContext(params?: {
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import {
   clearActiveEmbeddedRun,
@@ -19,14 +20,6 @@ import type { PluginRuntime } from "../../plugins/runtime/types.js";
 type ConsultParams = Parameters<
   typeof import("../../talk/agent-consult-runtime.js").consultRealtimeVoiceAgent
 >[0];
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 const mocks = vi.hoisted(() => ({
   close: vi.fn(),

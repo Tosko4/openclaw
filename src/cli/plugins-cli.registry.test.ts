@@ -1,17 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import {
   refreshPluginRegistryMock,
   resetPluginsCliTestState,
   runPluginsCommand,
 } from "./plugins-cli-test-helpers.js";
-
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 describe("plugins registry refresh", () => {
   beforeEach(() => {

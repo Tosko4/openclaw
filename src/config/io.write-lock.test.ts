@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   releaseUpdateCommandPreflightForHandoff,
@@ -30,14 +31,6 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     cleanup();
   });
 });
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 async function withConfigExecutor(
   home: string,

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
 import {
@@ -49,14 +50,6 @@ function closeAdmission(mode: (typeof completionDrainModes)[number] | "direct cl
   const suspension = tryBeginGatewaySuspendAdmission(() => {});
   expect(suspension?.drain()).toBe(true);
   return suspension;
-}
-
-function deferred<T = void>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 function createClient(role: "operator" | "node", connId = "conn-live"): GatewayWsClient {

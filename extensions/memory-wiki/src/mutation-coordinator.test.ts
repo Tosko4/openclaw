@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it } from "vitest";
-import { deferred } from "./deferred.test-helpers.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
@@ -9,8 +9,8 @@ const { createTempDir } = createMemoryWikiTestHarness();
 
 describe("withMemoryWikiVaultMutation", () => {
   it("serializes mutations for one vault and permits nested work", async () => {
-    const firstEntered = deferred();
-    const releaseFirst = deferred();
+    const firstEntered = deferred<void>();
+    const releaseFirst = deferred<void>();
     const order: string[] = [];
 
     const first = withMemoryWikiVaultMutation("/tmp/wiki-a", async () => {
@@ -37,9 +37,9 @@ describe("withMemoryWikiVaultMutation", () => {
   });
 
   it("allows distinct agent vaults to mutate in parallel", async () => {
-    const firstEntered = deferred();
-    const secondEntered = deferred();
-    const releaseFirst = deferred();
+    const firstEntered = deferred<void>();
+    const secondEntered = deferred<void>();
+    const releaseFirst = deferred<void>();
 
     const first = withMemoryWikiVaultMutation("/tmp/wiki/support", async () => {
       firstEntered.resolve();
@@ -61,8 +61,8 @@ describe("withMemoryWikiVaultMutation", () => {
     const aliasPath = path.join(root, "vault-alias");
     await fs.mkdir(vaultPath);
     await fs.symlink(vaultPath, aliasPath, process.platform === "win32" ? "junction" : "dir");
-    const firstEntered = deferred();
-    const releaseFirst = deferred();
+    const firstEntered = deferred<void>();
+    const releaseFirst = deferred<void>();
     let aliasEntered = false;
     let first: Promise<void> | undefined;
     let alias: Promise<void> | undefined;
@@ -90,9 +90,9 @@ describe("withMemoryWikiVaultMutation", () => {
   });
 
   it("queues detached work after its inherited transaction has ended", async () => {
-    const releaseDetached = deferred();
-    const holderEntered = deferred();
-    const releaseHolder = deferred();
+    const releaseDetached = deferred<void>();
+    const holderEntered = deferred<void>();
+    const releaseHolder = deferred<void>();
     let detachedEntered = false;
     let detached!: Promise<void>;
 

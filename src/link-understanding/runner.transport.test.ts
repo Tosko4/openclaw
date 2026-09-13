@@ -2,6 +2,7 @@ import { createServer, type RequestListener } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPidAlive } from "../shared/pid-alive.js";
@@ -56,14 +57,6 @@ vi.mock("../process/exec.js", async () => {
     ),
   };
 });
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 async function within<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;

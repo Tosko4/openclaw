@@ -1,6 +1,7 @@
 // Browser tests cover runtime shutdown against deferred profile starts.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunningChrome } from "./chrome.js";
 import { makeBrowserProfile } from "./server-context.test-harness.js";
@@ -33,14 +34,6 @@ const {
   getOrCreateProfileRuntime,
   registerProfileHandle,
 } = await import("./server-context.lifecycle.js");
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 function fakeRunning(pid: number): RunningChrome {
   return {

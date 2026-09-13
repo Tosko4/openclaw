@@ -5,6 +5,7 @@ import net, { type AddressInfo } from "node:net";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,16 +19,6 @@ import {
   SLACK_RELAY_MAX_PAYLOAD_BYTES,
   type SlackRelayIdentity,
 } from "./relay-source.js";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((nextResolve, nextReject) => {
-    resolve = nextResolve;
-    reject = nextReject;
-  });
-  return { promise, reject, resolve };
-}
 
 function relayFrame(text: string): Buffer {
   return Buffer.from(text, "utf8");

@@ -1,14 +1,7 @@
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerTabAccessEvents } from "./tab-access-events.js";
 import type { BrowserTabSnapshot } from "./tab-eligibility.js";
-
-function deferred<T>() {
-  let resolve = (_value: T) => {};
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
 
 function createHarness(
   mode: "all" | "selected" = "selected",

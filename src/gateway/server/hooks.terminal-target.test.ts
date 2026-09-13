@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSystemEventOwnerAgentId } from "../../infra/system-event-ownership.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
@@ -71,14 +72,6 @@ function globalConfig(defaultAgentId: "main" | "work", includeMain = true): Open
     },
     session: { scope: "global" },
   };
-}
-
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((innerResolve) => {
-    resolve = innerResolve;
-  });
-  return { promise, resolve };
 }
 
 function dispatch(value: HookPayload): Promise<unknown> {

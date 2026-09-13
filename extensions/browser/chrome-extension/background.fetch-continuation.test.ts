@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExtensionRelayBridge } from "../src/browser/extension-relay/relay-bridge.js";
 import { FakeSocket } from "../src/browser/extension-relay/relay-bridge.test-support.js";
@@ -52,10 +53,7 @@ const bodyReads: FetchOperation[] = [
 const releases = new Set<() => void>();
 const cleanups: Array<() => Promise<void>> = [];
 function deferred() {
-  let release = () => {};
-  const promise = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const { promise, resolve: release } = createDeferred<void>();
   const finish = () => {
     releases.delete(finish);
     release();

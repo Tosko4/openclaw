@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import {
   clearActiveEmbeddedRun,
@@ -24,14 +25,6 @@ import {
 type ConsultParams = Parameters<
   typeof import("../talk/agent-consult-runtime.js").consultRealtimeVoiceAgent
 >[0];
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 const mocks = vi.hoisted(() => ({
   close: vi.fn(),
@@ -221,7 +214,7 @@ describe("Talk client agent consult admission", () => {
   it.each(["runOwnedArgs", "runPrompt"] as const)(
     "steers and claims only the exact registered consult owner through %s",
     async (entrypoint) => {
-      const core = deferred<void>();
+      const core = deferred();
       const chatAbortControllers = new Map();
       const isRunCurrent = vi.fn(() => true);
       const operationalRunInstance = {
@@ -302,9 +295,9 @@ describe("Talk client agent consult admission", () => {
   );
 
   it("waits for backend publication and projects its registered caller authority", async () => {
-    const announced = deferred<void>();
-    const publish = deferred<void>();
-    const finish = deferred<void>();
+    const announced = deferred();
+    const publish = deferred();
+    const finish = deferred();
     const chatAbortControllers = new Map();
     const client = sharingPolicyClient({
       deviceId: "caller-device",
@@ -391,8 +384,8 @@ describe("Talk client agent consult admission", () => {
   });
 
   it("refreshes steering authority when the admitted run publishes a new attempt", async () => {
-    const secondPublished = deferred<void>();
-    const finish = deferred<void>();
+    const secondPublished = deferred();
+    const finish = deferred();
     const chatAbortControllers = new Map();
     const firstHandle = createEmbeddedRunHandle({ runId: "run-talk" });
     const secondHandle = createEmbeddedRunHandle({ runId: "run-talk" });
@@ -496,8 +489,8 @@ describe("Talk client agent consult admission", () => {
   });
 
   it("rejects steering when a replacement reuses the run id from another admission", async () => {
-    const secondPublished = deferred<void>();
-    const finish = deferred<void>();
+    const secondPublished = deferred();
+    const finish = deferred();
     const outbound = vi.fn();
     const admittedRun = { instanceId: "instance:owner", runId: "run-talk" };
     const replacementRun = { instanceId: "instance:replacement", runId: "run-talk" };
@@ -575,10 +568,10 @@ describe("Talk client agent consult admission", () => {
   });
 
   it("does not let a stale runtime bind a replacement owner before admission", async () => {
-    const firstAnnounced = deferred<void>();
-    const secondAnnounced = deferred<void>();
-    const releaseFirst = deferred<void>();
-    const releaseSecond = deferred<void>();
+    const firstAnnounced = deferred();
+    const secondAnnounced = deferred();
+    const releaseFirst = deferred();
+    const releaseSecond = deferred();
     const staleRun = { instanceId: "instance:stale", runId: "run-talk" };
     const currentRun = { instanceId: "instance:current", runId: "run-talk" };
     let invocation = 0;
@@ -639,10 +632,10 @@ describe("Talk client agent consult admission", () => {
   });
 
   it("rejects a stale owner before it can announce over its replacement", async () => {
-    const firstWaiting = deferred<void>();
-    const releaseFirst = deferred<void>();
-    const secondPublished = deferred<void>();
-    const finishSecond = deferred<void>();
+    const firstWaiting = deferred();
+    const releaseFirst = deferred();
+    const secondPublished = deferred();
+    const finishSecond = deferred();
     const chatAbortControllers = new Map();
     const registerRun = vi.fn();
     const currentRun = { instanceId: "instance:current-owner", runId: "run-talk" };
@@ -737,10 +730,10 @@ describe("Talk client agent consult admission", () => {
   });
 
   it("does not let a stale runner revoke a replacement completion claim", async () => {
-    const staleWaiting = deferred<void>();
-    const releaseStale = deferred<void>();
-    const currentStarted = deferred<void>();
-    const finishCurrent = deferred<void>();
+    const staleWaiting = deferred();
+    const releaseStale = deferred();
+    const currentStarted = deferred();
+    const finishCurrent = deferred();
     let invocation = 0;
     mocks.consultRealtimeVoiceAgent.mockImplementation(async (params: ConsultParams) => {
       const currentInvocation = (invocation += 1);
@@ -802,8 +795,8 @@ describe("Talk client agent consult admission", () => {
   });
 
   it("installs steering ownership before readiness and delays backend admission", async () => {
-    const ready = deferred<void>();
-    const finish = deferred<void>();
+    const ready = deferred();
+    const finish = deferred();
     const chatAbortControllers = new Map();
     const handle = createEmbeddedRunHandle({ runId: "run-talk" });
     const operationalRunInstance = {

@@ -7,6 +7,7 @@ import { Agent, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -179,16 +180,6 @@ function mockExpiredLaunchPollingClock(): void {
     now += 1_000;
     return now;
   });
-}
-
-function deferred<T = void>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
 }
 
 async function startLinuxZombieProcess(): Promise<{ pid: number; reap: () => Promise<void> }> {
@@ -767,7 +758,7 @@ describe("chrome.ts internal", () => {
       stubBrowserExecutableAndPrefs("present");
       const proc = makeFakeProc({ pid: 51114 });
       spawnMock.mockReturnValue(proc);
-      const probeEntered = deferred();
+      const probeEntered = deferred<void>();
       vi.stubGlobal(
         "fetch",
         vi.fn(async () => {
@@ -792,7 +783,7 @@ describe("chrome.ts internal", () => {
     it("aborts bootstrap immediately and never reaches the runtime launch", async () => {
       stubBrowserExecutableAndPrefs("missing");
       const bootstrap = makeFakeProc({ pid: 51115 });
-      const spawned = deferred();
+      const spawned = deferred<void>();
       spawnMock.mockImplementation(() => {
         spawned.resolve();
         return bootstrap;
@@ -818,7 +809,7 @@ describe("chrome.ts internal", () => {
         kill: vi.fn(() => true),
       });
       spawnMock.mockReturnValue(proc);
-      const probeEntered = deferred();
+      const probeEntered = deferred<void>();
       vi.stubGlobal(
         "fetch",
         vi.fn(async () => {

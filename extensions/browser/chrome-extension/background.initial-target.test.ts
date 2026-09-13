@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExtensionRelayBridge } from "../src/browser/extension-relay/relay-bridge.js";
 import {
@@ -11,11 +12,7 @@ import {
 
 const pendingReleases = new Set<() => void>();
 function deferred<T>(fallback: T) {
-  let resolve = (_value: T) => {};
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  const pending = { promise, resolve };
+  const pending = createDeferred<T>();
   const release = () => pending.resolve(fallback);
   pendingReleases.add(release);
   return {

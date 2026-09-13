@@ -1,5 +1,6 @@
 // Browser tests cover bridge server.auth plugin behavior.
 import { createServer } from "node:http";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./bridge-server.js";
@@ -9,14 +10,6 @@ import {
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
 import { isBrowserRuntimeRunning } from "./server-context.lifecycle.js";
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 function buildResolvedConfig(): ResolvedBrowserConfig {
   return {
@@ -159,8 +152,8 @@ describe("startBrowserBridgeServer auth", () => {
   });
 
   it("invalidates an active request before waiting for HTTP close", async () => {
-    const attachStarted = deferred();
-    const releaseAttach = deferred();
+    const attachStarted = deferred<void>();
+    const releaseAttach = deferred<void>();
     const bridge = await startBrowserBridgeServer({
       resolved: buildResolvedConfig(),
       authToken: "secret-token",

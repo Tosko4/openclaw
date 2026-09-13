@@ -1,19 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { ClientVoiceMutationDigestOwner } from "./client-voice-mutation-digest-owner.js";
-
-function deferred<T>(): {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (error: Error) => void;
-} {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((accept, fail) => {
-    resolve = accept;
-    reject = fail;
-  });
-  return { promise, resolve, reject };
-}
 
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import {
   runCommandWithTimeout,
@@ -165,12 +166,7 @@ export function workspaceSetup(
 }
 
 export function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
+  const { promise, resolve, reject } = createDeferred<T>();
   void promise.catch(() => undefined);
   return { promise, resolve, reject };
 }

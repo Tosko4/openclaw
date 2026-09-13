@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,16 +8,6 @@ import {
   resolveMacOSDesktopGenerationWatchPaths,
 } from "./desktop-generation-fingerprint.js";
 import { createCodexDesktopGenerationOwner } from "./desktop-generation-owner.js";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
 
 describe("Codex desktop generation owner", () => {
   afterEach(() => vi.useRealTimers());

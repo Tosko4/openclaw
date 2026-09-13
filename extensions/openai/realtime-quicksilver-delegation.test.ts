@@ -1,4 +1,5 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeVoiceGatewayControl } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
@@ -13,14 +14,6 @@ import {
   createDelegationHarness,
   type ConsultRunner,
 } from "./realtime-quicksilver.test-helpers.js";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 function delegate(
   controller: OpenAIQuicksilverDelegationController,

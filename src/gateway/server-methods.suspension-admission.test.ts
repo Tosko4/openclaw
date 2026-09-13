@@ -1,5 +1,6 @@
 // Proves dispatcher root-work accounting and fail-closed suspension behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { createGatewayHostLifecycle } from "../cli/gateway-cli/host-lifecycle.js";
 import {
   consumeGatewaySuspendHandoff,
@@ -22,14 +23,6 @@ import { suspendHandlers } from "./server-methods/suspend.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
 import { baseOpenRequest, makeFakePty } from "./terminal/session-manager.test-helpers.js";
-
-function deferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 function dispatch(params: {
   method: string;

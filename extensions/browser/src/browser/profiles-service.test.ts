@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -120,14 +121,6 @@ function createCtx(resolved: BrowserServerState["resolved"]) {
   } as unknown as BrowserRouteContext;
 
   return { state, ctx };
-}
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 async function createWorkProfileWithConfig(params: {
@@ -616,8 +609,8 @@ describe("BrowserProfilesService", () => {
     const userDataDir = path.join(tempDir, "work", "user-data");
     fs.mkdirSync(userDataDir, { recursive: true });
     vi.mocked(resolveOpenClawUserDataDir).mockReturnValue(userDataDir);
-    const launch = deferred();
-    const entered = deferred();
+    const launch = deferred<void>();
+    const entered = deferred<void>();
     const running = {
       pid: 42,
       exe: { kind: "chromium", path: "/usr/bin/chromium" },
@@ -707,8 +700,8 @@ describe("BrowserProfilesService", () => {
       throw new Error("Expected work profile");
     }
     const runtime = getOrCreateProfileRuntime(state, profile);
-    const entered = deferred();
-    const release = deferred();
+    const entered = deferred<void>();
+    const release = deferred<void>();
     const starting = enqueueProfileStart({
       state,
       runtime,

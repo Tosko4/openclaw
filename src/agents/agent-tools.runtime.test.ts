@@ -1,6 +1,7 @@
 // Coverage for agent tool runtime execution and scoped authority.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
@@ -513,22 +514,6 @@ function ringZeroTool(name: string) {
   };
 }
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
-function deferredValue<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
 describe("agent ring-zero tool context", () => {
   it("isolates concurrent async runs and clears the scope after settlement", async () => {
     const firstTool = ringZeroTool("first-ring-zero");
@@ -577,7 +562,7 @@ describe("agent ring-zero tool context", () => {
 
   it("revokes authority from detached callbacks after the run settles", async () => {
     const tool = ringZeroTool("ring-zero");
-    const detachedResult = deferredValue<readonly { name: string }[]>();
+    const detachedResult = deferred<readonly { name: string }[]>();
 
     await runWithAgentRingZeroTools([tool], async () => {
       expect(getActiveAgentRingZeroTools().map((activeTool) => activeTool.name)).toEqual([

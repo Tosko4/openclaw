@@ -1,4 +1,5 @@
 // Telegram tests cover bot update tracker plugin behavior.
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { createTelegramUpdateTracker } from "./bot-update-tracker.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
@@ -17,17 +18,6 @@ const updateCtx = (updateId: number): TelegramUpdateKeyContext => ({
 async function flushTrackerMicrotasks() {
   await Promise.resolve();
   await Promise.resolve();
-}
-
-function deferred() {
-  let resolve: (() => void) | undefined;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  if (!resolve) {
-    throw new Error("Expected tracker deferred resolver to be initialized");
-  }
-  return { promise, resolve };
 }
 
 function expectTrackerState(
@@ -363,8 +353,8 @@ describe("createTelegramUpdateTracker", () => {
   });
 
   it("serializes and coalesces accepted offset persistence", async () => {
-    const firstWrite = deferred();
-    const secondWrite = deferred();
+    const firstWrite = deferred<void>();
+    const secondWrite = deferred<void>();
     const writes: number[] = [];
     const onAcceptedUpdateId = vi.fn((updateId: number) => {
       writes.push(updateId);

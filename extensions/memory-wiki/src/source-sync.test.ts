@@ -1,10 +1,10 @@
 // Memory Wiki tests cover source sync plugin behavior.
 import os from "node:os";
 import path from "node:path";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { resolveMemoryWikiConfig } from "./config.js";
-import { deferred } from "./deferred.test-helpers.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 
@@ -158,8 +158,8 @@ describe("syncMemoryWikiImportedSources", () => {
 
   it("waits for an existing vault mutation before starting source sync", async () => {
     const config = createConfig();
-    const blockerEntered = deferred();
-    const blockerGate = deferred();
+    const blockerEntered = deferred<void>();
+    const blockerGate = deferred<void>();
     const blocker = withMemoryWikiVaultMutation(config.vault.path, async () => {
       blockerEntered.resolve(undefined);
       await blockerGate.promise;
