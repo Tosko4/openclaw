@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 // Config gateway methods: validation, redaction, secrets, reload planning.
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -98,6 +97,11 @@ let configSchemaResponseCache: {
   pluginRegistryVersion: number;
   response: ConfigSchemaResponse;
 } | null = null;
+
+const configWriteRecovery = new WeakMap<
+  GatewayConfigRevisionProjector,
+  { configPath: string; error: ReturnType<typeof errorShape> }
+>();
 
 type ConfigRedactionHints = Parameters<typeof redactConfigObject>[1];
 type ConfigWriteCommitResult = Awaited<ReturnType<typeof commitGatewayConfigWrite>>;
@@ -779,16 +783,25 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
 }
 
 async function commitGatewayConfigWriteOrRespond(
-  params: Parameters<typeof commitGatewayConfigWrite>[0] & { respond: RespondFn },
+  params: Parameters<typeof commitGatewayConfigWrite>[0] & {
+    respond: RespondFn;
+    context: GatewayRequestContext;
+  },
 ): Promise<Awaited<ReturnType<typeof commitGatewayConfigWrite>> | null> {
+  const gateway = params.context.configRevisionProjector;
+  const recoveryAtStart = configWriteRecovery.get(gateway);
   try {
-    return await commitGatewayConfigWrite(params);
+    const result = await commitGatewayConfigWrite(params);
+    if (configWriteRecovery.get(gateway) === recoveryAtStart) {
+      configWriteRecovery.delete(gateway);
+    }
+    return result;
   } catch (error) {
     if (error instanceof ConfigWritePostCommitError) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, redactToolDetail(formatErrorMessage(error)), {
+      const outcome = errorShape(
+        ErrorCodes.UNAVAILABLE,
+        redactToolDetail(formatErrorMessage(error)),
+        {
           details: {
             publication: error.publication,
             rollbackStatus: error.rollbackStatus,
@@ -797,8 +810,14 @@ async function commitGatewayConfigWriteOrRespond(
               ? { recoveryBackupPath: error.recoveryBackupPath }
               : {}),
           },
-        }),
+        },
       );
+      if (error.rollbackStatus !== "restored") {
+        configWriteRecovery.set(gateway, { configPath: error.configPath, error: outcome });
+        // A pre-publication cached read must not admit a fresh tab after this failure.
+        invalidateConfigGetResponseCache();
+      }
+      params.respond(false, undefined, outcome);
       return null;
     }
     if (!(error instanceof ConfigMutationConflictError)) {
@@ -865,25 +884,22 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateConfigGetParams, "config.get", respond)) {
       return;
     }
+    const gateway = context.configRevisionProjector;
+    const recoveryAtStart = configWriteRecovery.get(gateway);
     const snapshot = await readConfigGetResponse({
       getHotReloadStatus: context.getConfigReloaderHotReloadStatus,
       loadUiHints: () => loadSchemaWithPlugins().uiHints,
       revisionProjector: context.configRevisionProjector,
     });
-    const recoveryBackupPath = `${snapshot.path}.bak`;
-    if ((!snapshot.exists || !snapshot.valid) && existsSync(recoveryBackupPath)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          "Configuration recovery required; restore the settings file before retrying.",
-          {
-            details: { configPath: snapshot.path, recoveryBackupPath, rollbackStatus: "unknown" },
-          },
-        ),
-      );
-      return;
+    const recovery = configWriteRecovery.get(gateway);
+    if (recovery?.configPath === snapshot.path) {
+      // Only a read started after this failure can reconcile its recorded outcome.
+      if (recovery === recoveryAtStart && snapshot.exists && snapshot.valid) {
+        configWriteRecovery.delete(gateway);
+      } else {
+        respond(true, { ...snapshot, writeError: recovery.error }, undefined);
+        return;
+      }
     }
     respond(true, snapshot, undefined);
   },

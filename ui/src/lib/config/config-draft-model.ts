@@ -148,9 +148,6 @@ export function applyConfigSnapshot(
   if (!rawAvailable && state.configFormMode === "raw") {
     state.configFormMode = "form";
   }
-  state.configValid = typeof snapshot.valid === "boolean" ? snapshot.valid : null;
-  state.configIssues = Array.isArray(snapshot.issues) ? snapshot.issues : [];
-
   if (!preservePendingChanges) {
     resetConfigPendingChanges(state);
   } else {

@@ -77,10 +77,16 @@ suite.define(() => {
             });
             await secondPage.goto(`${suite.server.baseUrl}settings/communications`);
             await secondGateway.waitForRequest("config.get");
-            await secondGateway.rejectDeferred("config.get", {
-              code: "UNAVAILABLE",
-              message: "Configuration recovery required",
-              details: { rollbackStatus: "unknown", configPath, recoveryBackupPath },
+            await secondGateway.resolveDeferred("config.get", {
+              ...snapshot,
+              exists: false,
+              raw: null,
+              config: {},
+              writeError: {
+                code: "UNAVAILABLE",
+                message,
+                details: { publication: "partial", rollbackStatus, configPath, recoveryBackupPath },
+              },
             });
             await expect
               .poll(() => secondPage.locator("openclaw-settings-save-indicator").textContent())
@@ -158,4 +164,25 @@ suite.define(() => {
       );
     },
   );
+
+  it("Settings config.get shows ordinary validation issues without claiming restoration failed", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const issues = [{ path: "gateway.port", message: "Expected number, received string" }];
+      await installMockGateway(page, {
+        methodResponses: {
+          ...scenario.methodResponses,
+          "config.get": { ...snapshot, raw: null, config: {}, valid: false, issues },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/advanced`);
+      const diagnostics = page.locator(".config-content-callout");
+      await expect.poll(() => diagnostics.textContent()).toContain("gateway.port");
+      expect(await diagnostics.textContent()).toContain("Expected number, received string");
+      const indicator = page.locator("openclaw-settings-save-indicator");
+      expect(await indicator.textContent()).not.toContain("restoration");
+      expect(
+        await indicator.getByRole("button", { name: "Discard draft and reload" }).count(),
+      ).toBe(0);
+    });
+  });
 });

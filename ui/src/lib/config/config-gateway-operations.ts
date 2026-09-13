@@ -81,10 +81,7 @@ function configMutationFailure(
   const details =
     error instanceof GatewayRequestError && isRecord(error.details) ? error.details : null;
   const hasRecoveryOutcome =
-    details &&
-    (details.publication === "partial" ||
-      details.publication === "complete" ||
-      typeof details.recoveryBackupPath === "string");
+    details && (details.publication === "partial" || details.publication === "complete");
   if (hasRecoveryOutcome) {
     if (details.rollbackStatus !== "restored") {
       if (typeof details.configPath === "string") {
@@ -365,6 +362,13 @@ async function readConfig(
     const res = await client.request<ConfigSnapshot>("config.get", {});
     if (!isCurrent()) {
       return failure("The configuration refresh was superseded.");
+    }
+    state.configValid = typeof res.valid === "boolean" ? res.valid : null;
+    state.configIssues = Array.isArray(res.issues) ? res.issues : [];
+    if (res.writeError) {
+      const outcome = configMutationFailure(state, new GatewayRequestError(res.writeError));
+      state.lastError = outcome.message;
+      return failure(outcome.message);
     }
     if (state.configRecoveryError !== null && (!res.exists || !res.valid)) {
       return failure(state.configRecoveryError);
