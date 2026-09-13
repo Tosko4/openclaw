@@ -299,7 +299,7 @@ describe("tsdown config", () => {
     },
   );
 
-  it("keeps session reclamation outside the archive worker bootstrap", async () => {
+  it("keeps writable database and session lifecycle outside the archive worker bootstrap", async () => {
     const workerEntry = "config/sessions/session-accessor.sqlite-archive.worker";
     const selected = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
     if (!selected) {
@@ -353,10 +353,12 @@ describe("tsdown config", () => {
         }
       }
       expect(
-        [...modules].filter((id) =>
-          /\/session-accessor\.sqlite-(?:reclamation|lifecycle-state|entry-store|archive)\.ts$/u.test(
-            id,
-          ),
+        [...modules].filter(
+          (id) =>
+            id.endsWith("/src/state/openclaw-agent-db.ts") ||
+            /\/session-accessor\.sqlite-(?:reclamation|lifecycle-state|entry-store|archive)\.ts$/u.test(
+              id,
+            ),
         ),
       ).toEqual([]);
     } finally {

@@ -12,7 +12,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   hashSessionArchiveBytes,
@@ -290,7 +290,7 @@ export async function materializeTranscriptArchiveInWorker(
     sessionId: plan.sessionId,
   })}.${randomUUID()}.jsonl-stage`;
   try {
-    const opened = withOpenClawAgentDatabaseReadOnly(
+    const opened = withFreshOpenClawAgentDatabaseReadOnly(
       (database) => {
         let transactionOpen = false;
         try {
@@ -347,7 +347,7 @@ export function publishTranscriptArchiveInWorker(
   plan: TranscriptArchivePublishPlan,
 ): TranscriptArchivePublishResult {
   try {
-    const opened = withOpenClawAgentDatabaseReadOnly(
+    const opened = withFreshOpenClawAgentDatabaseReadOnly(
       (database) => {
         const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db);
         return executeSqliteQuerySync(
