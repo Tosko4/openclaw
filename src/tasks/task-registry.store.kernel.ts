@@ -26,7 +26,10 @@ import {
   normalizeTaskTimestamps,
 } from "./task-registry-records.js";
 import { parseDeliveryContextJson, parseSqliteJsonValue } from "./task-registry.sqlite.shared.js";
-import type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
+import type {
+  TaskRegistryStoreSnapshot,
+  TaskRegistryMutationScope,
+} from "./task-registry.store.types.js";
 import {
   addTaskRegistrySummaryCounts,
   createEmptyTaskRegistrySummary,
@@ -605,6 +608,50 @@ export function matchesTaskIdentityInDatabase(
     row.child_session_key === (task.childSessionKey ?? null) &&
     row.started_at === (task.startedAt ?? null)
   );
+}
+
+/** The caller holds shared writer custody across this snapshot and its mutation. */
+export function readTaskRegistryMutationSnapshotInDatabase(
+  db: DatabaseSync,
+  scope: TaskRegistryMutationScope,
+): TaskRegistryStoreSnapshot {
+  return runSqliteDeferredTransactionSync(db, () => {
+    const kysely = getTaskRegistryKysely(db);
+    const selected = kysely
+      .selectFrom("task_runs")
+      .where((eb) =>
+        eb.or([
+          eb("task_id", "=", scope.taskId),
+          eb(eb.fn<string>("trim", [eb.ref("run_id")]), "=", scope.runId?.trim() || null),
+          eb(
+            eb.fn<string>("trim", [eb.ref("child_session_key")]),
+            "=",
+            scope.childSessionKey?.trim() || null,
+          ),
+        ]),
+      );
+    const taskRows = executeSqliteQuerySync(
+      db,
+      selected
+        .select(TASK_RUN_SELECT_COLUMNS)
+        .orderBy("created_at", "asc")
+        .orderBy("task_id", "asc"),
+    ).rows;
+    const deliveryRows = executeSqliteQuerySync(
+      db,
+      kysely
+        .selectFrom("task_delivery_state")
+        .select(TASK_DELIVERY_STATE_SELECT_COLUMNS)
+        .where("task_id", "in", selected.select("task_id"))
+        .orderBy("task_id", "asc"),
+    ).rows;
+    return {
+      tasks: new Map(taskRows.map((row) => [row.task_id, rowToTaskRecord(row)])),
+      deliveryStates: new Map(
+        deliveryRows.map((row) => [row.task_id, rowToTaskDeliveryState(row)]),
+      ),
+    };
+  });
 }
 
 /** Inspect only the supplied existing connection; never create or repair its schema. */
