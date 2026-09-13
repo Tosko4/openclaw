@@ -15,28 +15,10 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveStateDir } from "../paths.js";
 import type {
-  TranscriptArchivePublishPlan,
-  TranscriptArchivePublishResult,
-  TranscriptArchiveWorkerPlan,
-  TranscriptArchiveWorkerResult,
-} from "./session-accessor.sqlite-archive.js";
-
-export type SqliteArchiveOperation =
-  | { operation: "materialize"; plans: readonly TranscriptArchiveWorkerPlan[] }
-  | { operation: "publish"; plans: readonly TranscriptArchivePublishPlan[] };
-
-export type SqliteArchiveSessionRequest = SqliteArchiveOperation & {
-  type: "archive-operation";
-  operationId: number;
-};
-
-export type SqliteArchiveSessionResponse = {
-  operationId: number;
-  settled: true;
-} & (
-  | { type: "done"; results: TranscriptArchiveWorkerResult[] }
-  | { type: "published"; results: TranscriptArchivePublishResult[] }
-);
+  SqliteArchiveOperation,
+  SqliteArchiveSessionRequest,
+  SqliteArchiveSessionResponse,
+} from "./session-accessor.sqlite-archive-types.js";
 
 type ArchiveConnection = {
   worker: Worker;

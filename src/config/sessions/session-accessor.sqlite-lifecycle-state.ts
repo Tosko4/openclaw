@@ -15,7 +15,7 @@ import { persistSessionTranscriptArchive } from "./session-accessor.sqlite-archi
 import type {
   MaterializedSessionStateDeletePlan,
   SessionStateDeletePlan,
-} from "./session-accessor.sqlite-archive.js";
+} from "./session-accessor.sqlite-archive-types.js";
 import type {
   SessionEntryLifecycleRemoval,
   SessionEntryLifecycleUpsert,

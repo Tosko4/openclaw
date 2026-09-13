@@ -7,7 +7,7 @@ import type {
 import type {
   MaterializedSessionStateDeletePlan,
   SessionStateDeletePlan,
-} from "./session-accessor.sqlite-archive.js";
+} from "./session-accessor.sqlite-archive-types.js";
 import type {
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,

@@ -19,11 +19,11 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
-import {
-  runExclusiveSqliteTranscriptArchiveWorker,
-  type TranscriptArchivePublishWorkerMessage,
-  type TranscriptArchiveWorkerMessage,
-} from "./session-accessor.sqlite-archive.js";
+import type {
+  TranscriptArchivePublishWorkerMessage,
+  TranscriptArchiveWorkerMessage,
+} from "./session-accessor.sqlite-archive-types.js";
+import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";

@@ -2,8 +2,10 @@ import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -66,8 +68,9 @@ describe("SQLite session handle lifecycle", () => {
     databasePath = resolveSqliteTargetFromSessionStorePath(scope.storePath).path!;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     archiveMaterializationHook.afterMaterialize = undefined;
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
   });
 
@@ -316,8 +319,11 @@ describe("SQLite session handle lifecycle", () => {
       { sessionKey, storePath },
       { sessionId: "current-session", updatedAt: 2 },
     );
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
     const closeHandle = vi.fn(() => {
-      expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+      expect(database.db.isOpen).toBe(true);
+      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      expect(database.db.isOpen).toBe(false);
     });
     archiveMaterializationHook.afterMaterialize = closeHandle;
 

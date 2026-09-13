@@ -10,78 +10,24 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { runScopedSqliteArchiveOperation } from "./session-accessor.sqlite-archive-session.js";
 import type {
-  SessionLifecycleArchivedTranscript,
-  SqliteSessionReclamationDiagnostics,
-} from "./session-accessor.sqlite-contract.js";
+  MaterializedSessionStateDeletePlan,
+  SessionStateDeletePlan,
+  TranscriptArchivePublishPlan,
+  TranscriptArchivePublishResult,
+  TranscriptArchiveWorkerPlan,
+  TranscriptArchiveWorkerResult,
+} from "./session-accessor.sqlite-archive-types.js";
+import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import {
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
-import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import {
   runSqliteMutationWorkerRequest,
   type SqliteMutationWorkerValidationOwner,
   type SqliteWorkerWriteAdmission,
 } from "./session-accessor.sqlite-worker-request.js";
 import type { SessionColdWorkerData } from "./session-cold-storage-worker.js";
-
-export type SessionStateDeletePlan = {
-  agentId: string;
-  archiveDirectory: string;
-  archiveTranscript: boolean;
-  databasePath: string;
-  reason: "deleted" | "reset";
-  sessionId: string;
-  snapshot: SessionStateDeleteSnapshot;
-};
-
-export type MaterializedSessionStateDeletePlan = SessionStateDeletePlan & {
-  archive: MaterializedSessionTranscriptArchive | null;
-  archivedTranscript: SessionLifecycleArchivedTranscript | null;
-};
-
-type MaterializedSessionTranscriptArchive = {
-  archiveName: string;
-  bytes: Uint8Array;
-  createdAt: number;
-  encoding: "identity" | "zstd";
-  sha256: string;
-};
-
-export type TranscriptArchiveWorkerPlan = Pick<
-  SessionStateDeletePlan,
-  "agentId" | "archiveDirectory" | "databasePath" | "reason" | "sessionId" | "snapshot"
->;
-
-export type TranscriptArchiveWorkerResult = {
-  archive: MaterializedSessionTranscriptArchive | null;
-  sessionId: string;
-};
-
-export type TranscriptArchiveWorkerMessage = {
-  type: "done";
-  results: TranscriptArchiveWorkerResult[];
-};
-
-export type TranscriptArchivePublishPlan = {
-  agentId: string;
-  archiveDirectory: string;
-  databasePath: string;
-  generation: string;
-  sessionId: string;
-};
-
-export type TranscriptArchivePublishResult = {
-  archivedPath?: string;
-  error?: string;
-  generation: string;
-  sessionId: string;
-};
-
-export type TranscriptArchivePublishWorkerMessage = {
-  type: "published";
-  results: TranscriptArchivePublishResult[];
-};
 
 function resolveSourceWorkerExecArgv(): string[] {
   // Node 22 can strip the .ts entrypoint itself, but `--import tsx` does not

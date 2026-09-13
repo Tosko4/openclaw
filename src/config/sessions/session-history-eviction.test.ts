@@ -29,6 +29,7 @@ import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js"
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesAsync,
@@ -507,11 +508,13 @@ describe("SQLite historical session disk budget", () => {
     settlePhysicalUsage();
     const before = await measureSessionPhysicalDiskUsage(storePath);
 
-    const databasePath = database().path;
+    const cachedDatabase = database();
     const rm = fs.promises.rm.bind(fs.promises);
     const removeArchive = vi.spyOn(fs.promises, "rm").mockImplementation(async (...args) => {
       if (args[0] === archivePath) {
-        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        expect(cachedDatabase.db.isOpen).toBe(true);
+        closeCachedOpenClawAgentDatabase(cachedDatabase, { eviction: true });
+        expect(cachedDatabase.db.isOpen).toBe(false);
       }
       return await rm(...args);
     });
@@ -1000,10 +1003,9 @@ describe("SQLite historical session disk budget", () => {
 
   function setSessionUpdatedAt(sessionId: string, updatedAt: number): void {
     const owner = database();
-    const db = getSessionKysely(owner.db);
     executeSqliteQuerySync(
       owner.db,
-      db
+      getSessionKysely(owner.db)
         .updateTable("session_windows")
         .set({ updated_at: updatedAt })
         .where("session_id", "=", sessionId),

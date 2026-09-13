@@ -24,15 +24,13 @@ import {
 import type {
   SqliteArchiveSessionRequest,
   SqliteArchiveSessionResponse,
-} from "./session-accessor.sqlite-archive-session.js";
-import type {
   TranscriptArchivePublishPlan,
   TranscriptArchivePublishResult,
   TranscriptArchivePublishWorkerMessage,
   TranscriptArchiveWorkerMessage,
   TranscriptArchiveWorkerPlan,
   TranscriptArchiveWorkerResult,
-} from "./session-accessor.sqlite-archive.js";
+} from "./session-accessor.sqlite-archive-types.js";
 import {
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,

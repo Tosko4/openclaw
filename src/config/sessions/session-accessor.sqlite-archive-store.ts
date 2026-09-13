@@ -11,10 +11,8 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { ensureSessionTranscriptArchiveSchema } from "../../state/openclaw-agent-session-transcript-archive-schema.js";
 import { resolveRegisteredSqliteTranscriptArchiveName } from "./session-accessor.sqlite-archive-artifact.js";
-import {
-  runSqliteTranscriptArchivePublishWorker,
-  type MaterializedSessionStateDeletePlan,
-} from "./session-accessor.sqlite-archive.js";
+import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
+import { runSqliteTranscriptArchivePublishWorker } from "./session-accessor.sqlite-archive.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import {

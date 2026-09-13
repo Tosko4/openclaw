@@ -18,7 +18,7 @@ import {
   resolveOpenClawStateDirForDatabasePath,
   resolveOpenClawStateSqlitePath,
 } from "../../state/openclaw-state-db.paths.js";
-import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive.js";
+import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import type {
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
