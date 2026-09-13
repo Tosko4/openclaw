@@ -59,8 +59,8 @@ const scenarios = [
 
 it.for(scenarios)(
   "shipped legacy grant completes migrated finalization and native restart: %s",
+  { timeout: 90_000 },
   (scenario, { signal }) => runLegacyFinalizationScenario(scenario, signal),
-  90000,
 );
 
 function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], signal: AbortSignal) {
