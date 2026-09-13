@@ -1,5 +1,4 @@
 /** Lifecycle-owned model catalog access. */
-import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -8,7 +7,6 @@ import {
   resolveAgentWorkspaceDir,
   resolveAmbientOwnerAgentId,
 } from "./agent-scope.js";
-import { getPreparedRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -121,33 +119,12 @@ export function materializePreparedModelCatalogOwner(
   if (!fullAuth) {
     throw new Error("prepared full model catalog omitted its auth generation");
   }
-  let authStore = fullAuth.authStore;
-  const currentStore = getPreparedRuntimeAuthProfileStoreSnapshotCore(
-    snapshot.agentDir,
-    snapshot.inheritedAuthDir,
-  );
-  if (currentStore) {
-    // Discovery owns credentials; quota bookkeeping can change while discovery awaits I/O.
-    const usageStats = { ...authStore.usageStats };
-    for (const [profileId, profile] of Object.entries(authStore.profiles)) {
-      if (!isDeepStrictEqual(profile, currentStore.profiles[profileId])) {
-        continue;
-      }
-      const current = currentStore.usageStats?.[profileId];
-      if (current) {
-        usageStats[profileId] = current;
-      } else {
-        delete usageStats[profileId];
-      }
-    }
-    authStore = { ...authStore, usageStats };
-  }
   const materialized = Object.freeze({
     ...snapshot,
     authModes: fullAuth.authModes,
     modelCatalog,
   });
-  setPreparedModelRuntimeAuthStore(materialized, authStore);
+  setPreparedModelRuntimeAuthStore(materialized, fullAuth.authStore);
   setPreparedModelRuntimeAuthLabels(materialized, fullAuth.providerAuthLabels);
   // Later explicit auth refreshes stay bound to the original owner generation. Ordinary reads
   // consume the full worker's paired auth without invoking this loader.
