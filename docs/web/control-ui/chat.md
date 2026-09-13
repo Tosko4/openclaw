@@ -66,6 +66,11 @@ loads current choices again. Reopening a picker after a reported cooldown expire
 checks readiness again. A catalog refresh keeps existing controls visible,
 and the Gateway still validates the model and account when starting a run.
 
+Chat refreshes its available commands after skill selections or session settings
+change. Repeated changes share one pending refresh per conversation and connection;
+if a read is already running, one follow-up read picks up the latest changes.
+Older results cannot replace the current command list.
+
 If a New Session model lookup does not finish within 30 seconds, the controls
 show **Models unavailable**. Open the model picker to retry; your draft stays
 in place.

@@ -4413,19 +4413,23 @@ describe("refreshChatMetadata", () => {
   );
 
   it.each([
-    { pickerPending: false, scopedAfterGlobal: false },
-    { pickerPending: true, scopedAfterGlobal: false },
-    { pickerPending: false, scopedAfterGlobal: true },
+    { pickerPending: false, scopedAfterGlobal: false, metadataPending: false },
+    { pickerPending: true, scopedAfterGlobal: false, metadataPending: false },
+    { pickerPending: false, scopedAfterGlobal: true, metadataPending: false },
+    { pickerPending: false, scopedAfterGlobal: true, metadataPending: true },
   ])(
-    "converges catalog invalidation with pending picker=$pickerPending and scoped follow-up=$scopedAfterGlobal",
-    async ({ pickerPending, scopedAfterGlobal }) => {
+    "converges catalog invalidation with pending picker=$pickerPending, metadata=$metadataPending and scoped follow-up=$scopedAfterGlobal",
+    async ({ pickerPending, scopedAfterGlobal, metadataPending }) => {
       const prepared = { id: "model", name: "Model", provider: "test", contextWindow: 8_192 };
       const discovered = { ...prepared, contextWindow: 262_144 };
       const catalog = createDeferred<{ models: (typeof prepared)[] }>();
+      const metadata = createDeferred<{ commands: [] }>();
       let invalidated = false;
       const request = vi.fn((method: string) =>
         method === "chat.metadata"
-          ? Promise.resolve({ commands: [] })
+          ? metadataPending && invalidated
+            ? metadata.promise
+            : Promise.resolve({ commands: [] })
           : invalidated
             ? catalog.promise
             : Promise.resolve({ models: [prepared] }),
@@ -4452,7 +4456,10 @@ describe("refreshChatMetadata", () => {
         await picker;
 
         expect(state.chatModelCatalog).toEqual([discovered]);
+        metadata.resolve({ commands: [] });
+        await refreshChatMetadata(state);
       } finally {
+        metadata.resolve({ commands: [] });
         retireChatMetadataRequests(state);
       }
     },
