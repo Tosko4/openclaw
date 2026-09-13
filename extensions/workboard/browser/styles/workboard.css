@@ -1578,6 +1578,10 @@
   white-space: nowrap;
 }
 
+.workboard-create__short-label {
+  display: none;
+}
+
 .workboard-scope {
   display: flex;
   align-items: center;
@@ -1866,6 +1870,16 @@
   border: 0;
   background: transparent;
   box-shadow: none;
+}
+
+@media (max-width: 400px) {
+  .workboard-create .workboard-action-label {
+    display: none;
+  }
+
+  .workboard-create__short-label {
+    display: inline;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

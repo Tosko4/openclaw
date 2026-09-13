@@ -73,6 +73,7 @@ export default {
     editCard: "Edit card",
     editCardHelp: "Update queue metadata and session handoff.",
     newCard: "New card",
+    newCardShort: "New",
     newCardHelp: "Queue work for an agent session.",
     archiveCard: "Archive card",
     unarchiveCard: "Restore from archive",

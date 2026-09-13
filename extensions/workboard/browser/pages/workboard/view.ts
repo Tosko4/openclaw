@@ -310,6 +310,9 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
                       ${icons.plus}<span class="workboard-action-label"
                         >${t("workboard.newCard")}</span
                       >
+                      <span class="workboard-create__short-label"
+                        >${t("workboard.newCardShort")}</span
+                      >
                     </button>
                   `
                 : nothing
