@@ -2,6 +2,7 @@ import { runInNewContext } from "node:vm";
 import { Command } from "commander";
 // Google Meet tests cover index.create plugin behavior.
 import { createRequireRecord, useMeetingTestState } from "openclaw/plugin-sdk/test-fixtures";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import { registerGoogleMeetCli } from "./src/cli.js";
@@ -329,7 +330,7 @@ describe("google-meet create flow", () => {
     vi.resetModules();
   });
 
-  meetingTestState = useMeetingTestState();
+  meetingTestState = useMeetingTestState(createOpenClawTestState);
 
   it("CLI create can configure API-created space access", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {

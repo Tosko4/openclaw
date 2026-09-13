@@ -25,6 +25,7 @@ import type {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Google Meet tests cover index plugin behavior.
 import { createRequireRecord, useMeetingTestState } from "openclaw/plugin-sdk/test-fixtures";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import { findGoogleMeetCalendarEvent, listGoogleMeetCalendarEvents } from "./src/calendar.js";
@@ -1024,7 +1025,7 @@ describe("google-meet plugin", () => {
     vi.resetModules();
   });
 
-  meetingTestState = useMeetingTestState();
+  meetingTestState = useMeetingTestState(createOpenClawTestState);
 
   it("defaults to chrome agent mode with safe read-only tools", () => {
     const config = withPlatform("darwin", () => resolveGoogleMeetConfig({}));

@@ -3,12 +3,13 @@ import {
   defineMeetingSessionFlowTests,
   useMeetingTestState,
 } from "openclaw/plugin-sdk/test-fixtures";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, vi } from "vitest";
 import { teamsMeetingsConfig } from "./config.js";
 import { TeamsMeetingsRuntime } from "./runtime.js";
 
 const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
-const testState = useMeetingTestState();
+const testState = useMeetingTestState(createOpenClawTestState);
 
 const URL =
   "https://teams.microsoft.com/l/meetup-join/19%3ameeting_runtime%40thread.v2/0?context=%7b%22Tid%22%3a%22one%22%7d";

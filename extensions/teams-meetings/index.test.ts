@@ -3,6 +3,7 @@ import {
   defineMeetingPluginSurfaceTests,
   useMeetingTestState,
 } from "openclaw/plugin-sdk/test-fixtures";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 import { TEAMS_MEETINGS_CLI_METADATA } from "./src/cli-output-mode.js";
@@ -11,7 +12,7 @@ const MEETING_URL =
   "https://teams.microsoft.com/l/meetup-join/19%3ameeting_owned%40thread.v2/0?context=%7b%7d";
 
 const fixture = createMeetingPluginFixture({
-  testState: useMeetingTestState(),
+  testState: useMeetingTestState(createOpenClawTestState),
   plugin,
   id: "teams-meetings",
   name: "Microsoft Teams meetings",

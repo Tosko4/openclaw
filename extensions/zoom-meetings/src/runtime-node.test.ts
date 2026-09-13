@@ -2,11 +2,12 @@ import {
   createMeetingNodeBrowserFixture,
   useMeetingTestState,
 } from "openclaw/plugin-sdk/test-fixtures";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 import { zoomMeetingsConfig } from "./config.js";
 
 const resolveZoomMeetingsConfig = zoomMeetingsConfig.resolveConfig;
-const testState = useMeetingTestState();
+const testState = useMeetingTestState(createOpenClawTestState);
 
 const realtimeMocks = vi.hoisted(() => ({
   healths: [] as Array<{ bridgeClosed: boolean }>,

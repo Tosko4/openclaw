@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, vi } from "vitest";
-import type { OpenClawTestState } from "../test-state.js";
 
 type MeetingTestRuntime = {
   list(): { id: string }[];
@@ -7,9 +6,11 @@ type MeetingTestRuntime = {
 };
 type MeetingCleanupOptions = { readWarnings?: () => ReadonlyArray<readonly unknown[]> };
 
-export function useMeetingTestState() {
+export function useMeetingTestState(
+  createState: (options: { label: string }) => Promise<{ cleanup(): Promise<void> }>,
+) {
   const cleanups: Array<() => Promise<void>> = [];
-  let state: OpenClawTestState | undefined;
+  let state: Awaited<ReturnType<typeof createState>> | undefined;
   let producerFailure: AggregateError | undefined;
   const onCleanup = (cleanup: () => Promise<void>, options: MeetingCleanupOptions = {}) => {
     const initialWarnings = options.readWarnings?.();
@@ -36,8 +37,7 @@ export function useMeetingTestState() {
     if (state) {
       throw new Error("Previous meeting fixture cleanup did not complete");
     }
-    const { createOpenClawTestState } = await import("../test-state.js");
-    state = await createOpenClawTestState({ label: "meeting" });
+    state = await createState({ label: "meeting" });
   });
 
   afterEach(async () => {
