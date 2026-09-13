@@ -35,6 +35,7 @@ import {
   appendSessionTranscriptEvent,
   appendSessionTranscriptMessage,
 } from "./transcript-append.test-support.js";
+import { transcriptMessage } from "./transcript-message.test-support.js";
 import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js";
 import {
   bindOwnedSessionTranscriptWrites,
@@ -1077,21 +1078,21 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       {
         updateMode: "none",
         messages: [
-          {
-            eventId: "root-user",
-            parentId: null,
-            message: { role: "user", content: "keep this branch", timestamp: 1_000 },
-          },
-          {
-            eventId: "active-reply",
-            parentId: "root-user",
-            message: { role: "assistant", content: "active answer", timestamp: 2_000 },
-          },
-          {
-            eventId: "abandoned-reply",
-            parentId: "root-user",
-            message: { role: "assistant", content: "abandoned answer", timestamp: 3_000 },
-          },
+          transcriptMessage("root-user", null, {
+            role: "user",
+            content: "keep this branch",
+            timestamp: 1_000,
+          }),
+          transcriptMessage("active-reply", "root-user", {
+            role: "assistant",
+            content: "active answer",
+            timestamp: 2_000,
+          }),
+          transcriptMessage("abandoned-reply", "root-user", {
+            role: "assistant",
+            content: "abandoned answer",
+            timestamp: 3_000,
+          }),
         ],
       },
     );

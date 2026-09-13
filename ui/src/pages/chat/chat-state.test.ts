@@ -116,9 +116,16 @@ describe("canonical session message recovery", () => {
     });
   }
 
-  it.each(["before tool", "after tool", "after final delta"])(
-    "keeps overtaken commentary single with persistence %s",
-    (persistence) => {
+  it.each([
+    ["before tool", false],
+    ["after tool", false],
+    ["after final delta", false],
+    ["before tool", true],
+    ["after tool", true],
+    ["after final delta", true],
+  ] as const)(
+    "keeps streaming commentary whole with persistence %s (nested tools: %s)",
+    (persistence, nestedTools) => {
       const runId = "active-run";
       const text = "I am checking the files and will report the result.";
       const partial = text.slice(0, text.indexOf(" will report"));
@@ -168,9 +175,35 @@ describe("canonical session message recovery", () => {
         });
       const visible = () => renderedTranscript(state).filter((entry) => entry.text);
       const single = [{ role: "assistant", text }];
-      delta(partial);
-      expect(visible()).toEqual([{ role: "assistant", text: partial }]);
-      item(1);
+      if (nestedTools) {
+        for (const [index, value] of ["I am", partial].entries()) {
+          delta(value);
+          expect(visible()).toEqual([{ role: "assistant", text: value }]);
+          handlePageGatewayEvent(state, {
+            type: "event",
+            event: "agent",
+            payload: {
+              sessionKey: state.sessionKey,
+              runId,
+              seq: index + 1,
+              ts: index + 1,
+              stream: "tool",
+              data: {
+                phase: "start",
+                toolCallId: `earlier-${index}`,
+                parentToolCallId: "outer",
+                name: "read",
+                args: {},
+              },
+            },
+          });
+          expect(visible()).toEqual([{ role: "assistant", text: value }]);
+        }
+      } else {
+        delta(partial);
+        expect(visible()).toEqual([{ role: "assistant", text: partial }]);
+      }
+      item(10);
       expect(visible()).toEqual(single);
       if (persistence === "before tool") {
         persist();
@@ -202,10 +235,81 @@ describe("canonical session message recovery", () => {
         persist();
         expect(visible()).toEqual([...single, ...single]);
       }
-      item(3);
+      item(12);
       expect(visible()).toEqual([...single, ...single]);
       expect(state.chatMessages).toHaveLength(1);
       expect(extractText(state.chatMessages[0])).toBe(text);
+    },
+  );
+
+  it.each([true, false])(
+    "keeps completed messages distinct while tools overlap the next stream (persist first: %s)",
+    (persistFirst) => {
+      const runId = "active-run";
+      const { state } = createSessionEventState({ chatRunId: runId });
+      let seq = 0;
+      const delta = (text: string) =>
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "chat",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId,
+            state: "delta",
+            message: { role: "assistant", content: text },
+          },
+        });
+      const tool = (id: string) =>
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "agent",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId,
+            seq: ++seq,
+            ts: seq,
+            stream: "tool",
+            data: { phase: "start", toolCallId: id, name: "read", args: {} },
+          },
+        });
+      const first = "First observation.";
+      const persist = () =>
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "session.message",
+          payload: {
+            sessionKey: state.sessionKey,
+            sessionId: state.currentSessionId,
+            runId,
+            runActive: true,
+            messageId: "saved-first",
+            messageSeq: 1,
+            message: {
+              role: "assistant",
+              content: first,
+              __openclaw: { id: "saved-first", seq: 1, runId },
+            },
+          },
+        });
+      delta(first);
+      if (persistFirst) {
+        persist();
+      }
+      tool("outer");
+      expect(renderedTranscript(state).filter((entry) => entry.text)).toEqual([
+        { role: "assistant", text: first },
+      ]);
+      if (!persistFirst) {
+        persist();
+      }
+      for (const text of ["Next", "Next observation", "Next observation continues."]) {
+        delta(first + "\n\n" + text);
+        tool("overlap-" + seq);
+        expect(renderedTranscript(state).filter((entry) => entry.text)).toEqual([
+          { role: "assistant", text: first },
+          { role: "assistant", text },
+        ]);
+      }
     },
   );
 

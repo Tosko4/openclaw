@@ -34,11 +34,7 @@ const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? messa
 const loadConfigModule = createLazyRuntimeModule(() => import("../config/config.js"));
 
 async function assertDoctorDatabaseSchemasCompatible(scope?: "state") {
-  const [databasePreflight, agentDatabase, stateDatabase] = await Promise.all([
-    import("../state/openclaw-database-preflight.js"),
-    import("../state/openclaw-agent-db-contract.js"),
-    import("../state/openclaw-state-db-contract.js"),
-  ]);
+  const databasePreflight = await import("../state/openclaw-database-preflight.js");
   const [{ createConfigIO }, targets] = await Promise.all([
     import("../config/io.js"),
     import("../config/sessions/targets.js"),
@@ -59,10 +55,6 @@ async function assertDoctorDatabaseSchemasCompatible(scope?: "state") {
       { env: process.env },
     ),
     agentAdmissionConfig: cfg,
-    supportedVersions: {
-      state: stateDatabase.OPENCLAW_STATE_SCHEMA_VERSION,
-      agent: agentDatabase.OPENCLAW_AGENT_SCHEMA_VERSION,
-    },
   });
   if (databaseSchemas.incompatible.length > 0) {
     throw new databasePreflight.OpenClawDatabaseSchemaPreflightError(databaseSchemas.incompatible, {
