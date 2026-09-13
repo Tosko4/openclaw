@@ -1,8 +1,12 @@
-import { createMeetingNodeBrowserFixture } from "openclaw/plugin-sdk/test-fixtures";
+import {
+  createMeetingNodeBrowserFixture,
+  useMeetingTestState,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { teamsMeetingsConfig } from "./config.js";
 
 const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
+const testState = useMeetingTestState();
 
 const realtimeMocks = vi.hoisted(() => ({
   speak: vi.fn(),
@@ -68,15 +72,17 @@ describe("Microsoft Teams meetings node realtime recovery", () => {
             },
     });
     harness.state.inCall = false;
+    const logger = { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
     const runtime = new TeamsMeetingsRuntime({
       config: resolveTeamsMeetingsConfig({
         chrome: { waitForInCallMs: 1 },
         chromeNode: { node: "node-1" },
       }),
       fullConfig: {},
-      logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      logger,
       runtime: harness.runtime,
     });
+    testState.track(runtime, { readWarnings: () => logger.warn.mock.calls });
 
     const joined = await runtime.join({
       message: undefined,

@@ -60,15 +60,9 @@ import unitFastRootConfig from "./vitest/vitest.unit-fast-root.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 
 const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-");
-const scopedGatewayMethodsIsolatedTestFiles = [
-  "server-methods/agent.test.ts",
-  "server-methods/board.runtime-boundaries.test.ts",
-  "server-methods/chat.reset-visible-yield.test.ts",
-  "server-methods/system-agent-setup-control-ui.test.ts",
-  "server-methods/users-preferences.test.ts",
-  "server-methods/usage.test.ts",
-  "server-methods/usage.sessions-usage.test.ts",
-];
+const scopedGatewayMethodsIsolatedTestFiles = gatewayMethodsIsolatedTestFiles.map((file) =>
+  file.replace(/^src\/gateway\//u, ""),
+);
 
 function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
   if (!config.test) {
@@ -145,11 +139,13 @@ describe("projects vitest config", () => {
     expect(agenticShard?.projects).toContain(methodsIsolatedProject);
     expect(agenticShard?.projects).toContain(serverIsolatedProject);
     expect(methodsIsolatedConfig.isolate).toBe(true);
+    expect(methodsIsolatedConfig.pool).toBe("forks");
     expect(normalizeConfigPath(methodsIsolatedConfig.runner)).toBe("test/non-isolated-runner.ts");
     expect(methodsIsolatedConfig.include).toEqual(scopedGatewayMethodsIsolatedTestFiles);
     expect(serverConfig.pool).toBe("forks");
     expect(serverConfig.isolate).toBe(false);
     expect(serverConfig.fileParallelism).toBe(false);
+    expect(methodsIsolatedConfig.include).toContain("server-methods/transcripts.test.ts");
     expect(serverIsolatedConfig.isolate).toBe(true);
     expect(serverIsolatedConfig.runner).toBeUndefined();
     expect(serverIsolatedConfig.include).toEqual(gatewayServerIsolatedTestFiles);
@@ -158,6 +154,7 @@ describe("projects vitest config", () => {
     expect(serverConfig.exclude).toContain("server-plugin-subagent-runtime.overrides.test.ts");
     expect(gatewayFallback.exclude).toContain(overrideFixture);
     expect(methodsConfig.exclude).toContain("src/gateway/server-methods/agent.test.ts");
+    expect(methodsConfig.exclude).toContain("src/gateway/server-methods/transcripts.test.ts");
     expect(methodsConfig.exclude).toContain(
       "src/gateway/server-methods/board.runtime-boundaries.test.ts",
     );
@@ -168,6 +165,7 @@ describe("projects vitest config", () => {
       "src/gateway/server-methods/system-agent-setup-control-ui.test.ts",
     );
     expect(gatewayFallback.exclude).toContain("src/gateway/server-methods/agent.test.ts");
+    expect(gatewayFallback.exclude).toContain("src/gateway/server-methods/transcripts.test.ts");
     expect(gatewayFallback.exclude).toContain(
       "src/gateway/server-methods/board.runtime-boundaries.test.ts",
     );

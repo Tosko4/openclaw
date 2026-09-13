@@ -3,9 +3,11 @@ import path from "node:path";
 import { assert, expect, it } from "vitest";
 import { createGatewayClientVitestConfig } from "./vitest/vitest.gateway-client.config.ts";
 import { createGatewayCoreVitestConfig } from "./vitest/vitest.gateway-core.config.ts";
+import { createGatewayDatabaseWorkersVitestConfig } from "./vitest/vitest.gateway-database-workers.config.ts";
 import { createGatewayMethodsIsolatedVitestConfig } from "./vitest/vitest.gateway-methods-isolated.config.ts";
 import { createGatewayMethodsVitestConfig } from "./vitest/vitest.gateway-methods.config.ts";
 import { createGatewayServerIsolatedVitestConfig } from "./vitest/vitest.gateway-server-isolated.config.ts";
+import { gatewayDatabaseWorkerTestFiles } from "./vitest/vitest.gateway-server-paths.mjs";
 import { createGatewayServerVitestConfig } from "./vitest/vitest.gateway-server.config.ts";
 
 function gatewayProjectFiles(filters: string[]) {
@@ -15,6 +17,7 @@ function gatewayProjectFiles(filters: string[]) {
     return Object.fromEntries<string[]>(
       [
         createGatewayCoreVitestConfig,
+        createGatewayDatabaseWorkersVitestConfig,
         createGatewayClientVitestConfig,
         createGatewayMethodsVitestConfig,
         createGatewayMethodsIsolatedVitestConfig,
@@ -54,10 +57,12 @@ it.each(
     ["src/gateway/worker-environments"],
     ["src/gateway/managed-image-attachments.test.ts"],
     ["src/gateway/server.sessions.compaction-read-errors.test.ts"],
+    ...gatewayDatabaseWorkerTestFiles.map((file) => [file]),
     ["src/gateway/server", "src/gateway/worker-environments"],
   ].map((filters) => ({ filters })),
 )("preserves canonical project ownership for $filters", ({ filters }) => {
   const canonical = gatewayProjectFiles([]);
+  expect(canonical["gateway-database-workers"]).toEqual(gatewayDatabaseWorkerTestFiles);
   const expected = Object.fromEntries(
     Object.entries(canonical).map(([name, files]) => [
       name,

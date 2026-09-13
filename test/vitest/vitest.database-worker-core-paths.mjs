@@ -14,6 +14,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/meeting-bot/transcripts-bridge.test.ts",
   "src/transcripts/capture-stop.test.ts",
   "src/transcripts/library.async.test.ts",
+  "src/transcripts/library.query-budget.test.ts",
   "src/transcripts/library.search.test.ts",
   "src/transcripts/library.test.ts",
   "src/transcripts/status.metadata.test.ts",

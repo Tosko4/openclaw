@@ -1,12 +1,14 @@
 import {
   createMeetingBrowserFixture,
   defineMeetingSessionFlowTests,
+  useMeetingTestState,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { zoomMeetingsConfig } from "./config.js";
 import { ZoomMeetingsRuntime } from "./runtime.js";
 
 const resolveZoomMeetingsConfig = zoomMeetingsConfig.resolveConfig;
+const testState = useMeetingTestState();
 
 const URL = "https://zoom.us/j/12345678904?pwd=runtime";
 const urlWithPasscode = (passcode: string) => URL.replace("runtime", passcode);
@@ -91,6 +93,7 @@ function runtimeFixture(
     runtime: harness.runtime,
     logger,
   });
+  testState.track(runtime, { readWarnings: () => logger.warn.mock.calls });
   return { harness, runtime };
 }
 
