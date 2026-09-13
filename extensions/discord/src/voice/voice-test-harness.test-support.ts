@@ -331,7 +331,7 @@ function buildVoiceTestHarness() {
     );
     // Null preserves cases that start provider output before sending the first speaker audio.
     if (params.initialAudio !== null) {
-      turn.sendInputAudio(params.initialAudio ?? Buffer.alloc(8));
+      turn.sendInputAudio(params.initialAudio ?? Buffer.alloc(3840));
     }
     return turn;
   };
@@ -340,7 +340,10 @@ function buildVoiceTestHarness() {
     const manager = createAgentProxyManager(
       undefined,
       { voice: { realtime: { consultPolicy: "auto", requireWakeName: true } } },
-      { agents: { list: [{ id: "agent-1", identity: { name: agentName } }] } },
+      {
+        agents: { list: [{ id: "agent-1", identity: { name: agentName } }] },
+        commands: { ownerAllowFrom: ["user:u-owner"] },
+      },
     );
     await manager.join({ guildId: "g1", channelId: "1001" });
     return {

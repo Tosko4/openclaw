@@ -676,6 +676,8 @@ export class DiscordVoiceSessions {
           userId,
           ...(signal ? { signal } : {}),
         }),
+      resolveSpeakerContext: (userId) =>
+        this.params.receive.resolveDiscordVoiceIngressContext(entry, userId),
     });
     const generation = entry.realtimeLifecycle.generation + 1;
     entry.realtimeLifecycle = { status: "starting", generation, instance: realtime };

@@ -3,7 +3,6 @@ import {
   buildRealtimeVoiceAgentErrorProviderResult,
   classifyRealtimeVoiceConsultToolCall,
   classifySkippableRealtimeVoiceConsultTranscript,
-  controlRealtimeVoiceAgentRun,
   createRealtimeVoiceAgentTalkbackQueue,
   parseRealtimeVoiceAgentControlToolArgs,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -20,7 +19,8 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
+import { controlDiscordVoiceAgentRun, maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
+import type { DiscordVoiceIngressContext } from "./ingress.js";
 import { formatVoiceLogPreview } from "./log-preview.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import type { DiscordRealtimePlaybackPort } from "./realtime-playback.js";
@@ -67,6 +67,7 @@ export class DiscordRealtimeConsults {
 
   constructor(
     private readonly params: {
+      accountId: string;
       consultPolicy: () => "auto" | "always";
       consultToolPolicy: () => RealtimeVoiceAgentConsultToolPolicy;
       consultToolsAllow: () => string[] | undefined;
@@ -78,6 +79,7 @@ export class DiscordRealtimeConsults {
       playback: DiscordRealtimePlaybackPort;
       providerEpoch: () => number;
       runAgentTurn: (params: VoiceRealtimeAgentTurnParams) => Promise<string>;
+      resolveSpeakerContext: (userId: string) => Promise<DiscordVoiceIngressContext | null>;
       stopped: () => boolean;
       turns: DiscordRealtimeTurns;
       usesRealtimeAgentHandoff: () => boolean;
@@ -142,15 +144,15 @@ export class DiscordRealtimeConsults {
       await session.submitToolResult(callId, { error: "No Discord speaker context available" });
       return;
     }
+    if (this.params.consultToolPolicy() === "none") {
+      await session.submitToolResult(callId, { error: `Tool "${event.name}" not available` });
+      return;
+    }
     if (event.name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
       await this.handleAgentControlToolCall(event, session, callId, providerEpoch);
       return;
     }
     if (event.name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
-      await session.submitToolResult(callId, { error: `Tool "${event.name}" not available` });
-      return;
-    }
-    if (this.params.consultToolPolicy() === "none") {
       await session.submitToolResult(callId, { error: `Tool "${event.name}" not available` });
       return;
     }
@@ -267,11 +269,11 @@ export class DiscordRealtimeConsults {
     let control: Awaited<ReturnType<typeof maybeControlDiscordVoiceAgentRun>> | undefined;
     try {
       control = await maybeControlDiscordVoiceAgentRun({
-        entry: this.params.entry,
+        ...this.controlParams(providerEpoch),
         text: acceptedText,
       });
     } catch (error) {
-      if (providerEpoch !== this.params.providerEpoch()) {
+      if (this.params.stopped() || providerEpoch !== this.params.providerEpoch()) {
         return;
       }
       logger.warn(
@@ -279,7 +281,7 @@ export class DiscordRealtimeConsults {
       );
       control = undefined;
     }
-    if (providerEpoch !== this.params.providerEpoch()) {
+    if (this.params.stopped() || providerEpoch !== this.params.providerEpoch()) {
       return;
     }
     if (control?.handled) {
@@ -340,23 +342,38 @@ export class DiscordRealtimeConsults {
     let result: RealtimeVoiceAgentControlResult;
     try {
       const parsed = parseRealtimeVoiceAgentControlToolArgs(event.args);
-      result = await controlRealtimeVoiceAgentRun({
-        sessionKey: this.params.entry.route.sessionKey,
+      result = await controlDiscordVoiceAgentRun({
+        ...this.controlParams(providerEpoch),
         text: parsed.text,
         mode: parsed.mode,
       });
     } catch (error) {
-      if (providerEpoch !== this.params.providerEpoch()) {
+      if (this.params.stopped() || providerEpoch !== this.params.providerEpoch()) {
         return;
       }
       await session.submitToolResult(callId, { error: formatErrorMessage(error) });
       return;
     }
-    if (providerEpoch !== this.params.providerEpoch()) {
+    if (this.params.stopped() || providerEpoch !== this.params.providerEpoch()) {
       return;
     }
     this.logAgentControlResult(result);
     await session.submitToolResult(callId, result);
+  }
+
+  private controlParams(providerEpoch: number) {
+    const context = this.params.turns.speakerContext();
+    if (!context) {
+      throw new Error("No Discord speaker context available");
+    }
+    return {
+      entry: this.params.entry,
+      accountId: this.params.accountId,
+      context,
+      toolsAllow: this.params.consultToolsAllow(),
+      resolveContext: () => this.params.resolveSpeakerContext(context.userId),
+      isCurrent: () => !this.params.stopped() && providerEpoch === this.params.providerEpoch(),
+    };
   }
 
   private async runAgentTurn(params: {

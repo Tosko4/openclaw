@@ -305,15 +305,7 @@ export class DiscordVoiceReceive {
           isCurrent: () => this.params.isEntryCurrent(entry),
           canAdmit: () => !protectedPlayback(),
           createTurn: realtime
-            ? (context) => {
-                if (
-                  entry.player.state.status === voiceSdk.AudioPlayerStatus.Playing &&
-                  realtime.isBargeInEnabled()
-                ) {
-                  realtime.handleBargeIn("speaker-start");
-                }
-                return realtime.beginSpeakerTurn(context, userId, realtimeRecording);
-              }
+            ? (context) => realtime.beginSpeakerTurn(context, userId, realtimeRecording)
             : undefined,
           warn: (message) => logger.warn(message),
         })
@@ -526,7 +518,7 @@ export class DiscordVoiceReceive {
     });
   }
 
-  private async resolveDiscordVoiceIngressContext(
+  async resolveDiscordVoiceIngressContext(
     entry: VoiceSessionEntry,
     userId: string,
   ): Promise<DiscordVoiceIngressContext | null> {

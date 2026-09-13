@@ -1,5 +1,5 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
-import type { RealtimeVoiceAgentControlResult } from "openclaw/plugin-sdk/realtime-voice";
+import type { controlRealtimeVoiceAgentRun } from "openclaw/plugin-sdk/realtime-voice";
 import { vi, type Mock } from "vitest";
 const {
   createConnectionMock,
@@ -201,20 +201,18 @@ const {
       providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
     })),
     createRealtimeVoiceBridgeSessionMock: vi.fn((_params?: unknown) => realtimeSessionMockLocal),
-    controlRealtimeVoiceAgentRunMock: vi.fn<() => Promise<RealtimeVoiceAgentControlResult>>(
-      async () => ({
-        ok: false,
-        mode: "steer",
-        sessionKey: "discord:g1:c1",
-        active: false,
-        queued: false,
-        reason: "no_active_run",
-        message: "There is no active OpenClaw run to steer.",
-        speak: true,
-        show: true,
-        suppress: false,
-      }),
-    ),
+    controlRealtimeVoiceAgentRunMock: vi.fn<typeof controlRealtimeVoiceAgentRun>(async () => ({
+      ok: false,
+      mode: "steer",
+      sessionKey: "discord:g1:c1",
+      active: false,
+      queued: false,
+      reason: "no_active_run",
+      message: "There is no active OpenClaw run to steer.",
+      speak: true,
+      show: true,
+      suppress: false,
+    })),
     createRealtimeSessionMock: createRealtimeSessionMockLocal,
     realtimeSessionMock: realtimeSessionMockLocal,
     resolveAudioInputBudgetMock:
@@ -434,6 +432,7 @@ vi.mock("./audio.js", async () => {
     createDiscordOpusEncodeStream: vi.fn(() =>
       Object.assign(new PassThrough(), {
         flushPartialFrame: () => false,
+        flushPartialFrameWhenReady: () => {},
         takePcmBytes: (packet: Buffer) => packet.length,
       }),
     ),
@@ -459,7 +458,10 @@ vi.mock("./participant-context.js", async () => {
 
 vi.mock("../runtime.js", () => ({
   getDiscordRuntime: () => ({
-    agent: { runCommandFromIngress: agentCommandMock },
+    agent: {
+      runCommandFromIngress: agentCommandMock,
+      session: { getSessionEntry: () => undefined },
+    },
     mediaUnderstanding: {
       resolveAudioInputBudget: resolveAudioInputBudgetMock,
       transcribeAudioFile: transcribeAudioFileMock,

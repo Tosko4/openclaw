@@ -150,6 +150,9 @@ export async function respondToDiscordVoiceTranscript(
   let replyText: string;
   const control = await maybeControlDiscordVoiceAgentRun({
     entry,
+    accountId: params.accountId,
+    context: ingress,
+    isCurrent: conversationCurrent,
     text: transcript,
   }).catch((error: unknown) => {
     logger.warn(
