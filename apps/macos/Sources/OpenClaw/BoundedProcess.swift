@@ -47,8 +47,27 @@ enum BoundedProcess {
         { execution in
             let exitSignal = ChildProcessExit(
                 processIdentifier: pid_t(execution.processIdentifier.value))
-            let deadline = try await withThrowingTaskGroup(of: ChildProcessExit.Outcome?.self) { group in
-                group.addTask { await exitSignal.wait(timeout: timeout) }
+            let timedOut = try await withThrowingTaskGroup(of: Bool?.self) { group in
+                group.addTask {
+                    let deadline = await exitSignal.wait(timeout: timeout)
+                    try Task.checkCancellation()
+                    // Terminate before joining the observer: its callback may be awaiting a busy UI actor.
+                    switch deadline {
+                    case .exited:
+                        // The body still owns the unreaped leader, so its process-group ID cannot be reused.
+                        try? execution.send(signal: .kill, toProcessGroup: true)
+                        return false
+                    case .timedOut:
+                        if exitSignal.hasExited() {
+                            try? execution.send(signal: .kill, toProcessGroup: true)
+                            return false
+                        }
+                        try? execution.send(signal: .terminate, toProcessGroup: true)
+                        try? await Task.sleep(for: .milliseconds(100))
+                        try? execution.send(signal: .kill, toProcessGroup: true)
+                        return true
+                    }
+                }
                 group.addTask {
                     try await whileRunning(exitSignal)
                     return nil
@@ -60,23 +79,7 @@ enum BoundedProcess {
                 throw CancellationError()
             }
             try Task.checkCancellation()
-
-            switch deadline {
-            case .exited:
-                // The body runs before swift-subprocess reaps the group leader.
-                // Kill inherited descendants while the pid cannot be recycled.
-                try? execution.send(signal: .kill, toProcessGroup: true)
-                return false
-            case .timedOut:
-                if exitSignal.hasExited() {
-                    try? execution.send(signal: .kill, toProcessGroup: true)
-                    return false
-                }
-                try? execution.send(signal: .terminate, toProcessGroup: true)
-                try? await Task.sleep(for: .milliseconds(100))
-                try? execution.send(signal: .kill, toProcessGroup: true)
-                return true
-            }
+            return timedOut
         }
 
         if executionResult.closureResult {

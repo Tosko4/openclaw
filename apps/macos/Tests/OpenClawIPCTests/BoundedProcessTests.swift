@@ -5,6 +5,29 @@ import Testing
 @testable import OpenClaw
 
 struct BoundedProcessTests {
+    @Test func `timeout terminates the helper before joining a suspended observer`() async throws {
+        let held = AsyncStream.makeStream(of: (ChildProcessExit, CheckedContinuation<Void, Never>).self)
+        let operation = Task {
+            defer { held.continuation.finish() }
+            return try await BoundedProcess.run(
+                path: "/bin/sleep", arguments: ["30"],
+                whileRunning: { process in
+                    await withCheckedContinuation { release in held.continuation.yield((process, release)) }
+                }, timeout: 1)
+        }
+        defer { operation.cancel() }
+        var iterator = held.stream.makeAsyncIterator()
+        let (process, release) = try #require(await iterator.next())
+        let deadline = ContinuousClock.now + .seconds(10)
+        while !process.hasExited(), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        let terminatedBeforeJoin = process.hasExited()
+        release.resume()
+        await #expect(throws: BoundedProcessError.self) { try await operation.value }
+        #expect(terminatedBeforeJoin)
+    }
+
     @Test(arguments: ["exit", "timeout", "cancel"])
     func `retained browser actions stop with their exact helper`(_ terminal: String) async throws {
         let directory = FileManager.default.temporaryDirectory
