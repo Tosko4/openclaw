@@ -5314,7 +5314,9 @@ export const en: TranslationMap & {
       browserAnnotationRemoved: "Browser annotation removed.",
       browserAnnotationUndoUnavailable:
         "Undo is unavailable because the browser annotation limit has been reached.",
+      preparingAttachments: "Preparing attachments…",
       removeAttachment: "Remove attachment",
+      removeNamedAttachment: "Remove {name}",
       removeBrowserAnnotation: "Remove browser annotation: {name}",
       addAttachment: "Add attachment",
       attachPhoto: "Photo",
