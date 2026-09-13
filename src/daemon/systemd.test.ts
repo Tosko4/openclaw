@@ -1271,6 +1271,10 @@ describe("isNonFatalSystemdInstallProbeError", () => {
 });
 
 describe("readSystemdServiceRuntime", () => {
+  beforeEach(() => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  });
+
   async function readRuntimeFromShowOutput(output: string) {
     execFileMock.mockReset();
     execFileMock
@@ -1330,7 +1334,17 @@ describe("readSystemdServiceRuntime", () => {
         },
       );
       if (kind === "absent") {
-        expect(runtime).toEqual({ status: "stopped", missingUnit: true });
+        expect(runtime).toEqual({
+          status: "stopped",
+          missingUnit: true,
+          systemd: {
+            transport: {
+              kind: "session-bus",
+              address: process.env.DBUS_SESSION_BUS_ADDRESS,
+              runtimeDir: process.env.XDG_RUNTIME_DIR,
+            },
+          },
+        });
       } else {
         expect(runtime).toMatchObject({
           status: "unknown",
@@ -1510,6 +1524,11 @@ describe("readSystemdServiceRuntime", () => {
         killMode: "process",
         tasksCurrent: 807,
         memoryCurrent: 11_918_534_246,
+        transport: {
+          kind: "session-bus",
+          address: process.env.DBUS_SESSION_BUS_ADDRESS,
+          runtimeDir: process.env.XDG_RUNTIME_DIR,
+        },
       },
     });
   });
