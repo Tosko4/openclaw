@@ -14,7 +14,8 @@ import * as nodeSqlite from "./node-sqlite.js";
 import {
   createPackageActivationJournal,
   openPackageActivationJournal,
-  PACKAGE_ACTIVATION_JOURNAL,
+  resolvePackageActivationJournalPath,
+  resolvePackageActivationHelper,
   packageActivationIdentity,
   resolvePackageActivationAnchor,
   type PackageActivationDescriptor,
@@ -22,7 +23,6 @@ import {
   type PackageActivationPhase,
   type PackageActivationRecord,
 } from "./package-update-activation-journal.js";
-import { PACKAGE_ACTIVATION_HELPER } from "./package-update-activation-runtime-assets.js";
 import {
   readPackageActivationStatus,
   runPackageActivationRecovery,
@@ -48,19 +48,57 @@ afterEach(() => {
 async function fixture() {
   const packages = await createPackageSwapFixture(root);
   const anchor = resolvePackageActivationAnchor(packages.packageRoot);
-  const launcherRoot = path.join(anchor, "launchers");
-  fs.mkdirSync(anchor, { mode: 0o700 });
+  const stagedAnchor = `${anchor}.staged`;
+  const launcherRoot = path.join(stagedAnchor, "launchers");
+  fs.mkdirSync(stagedAnchor, { mode: 0o700 });
   fs.mkdirSync(launcherRoot, { mode: 0o700 });
   const helperBytes = Buffer.from("// sealed helper fixture\n");
-  fs.writeFileSync(path.join(anchor, PACKAGE_ACTIVATION_HELPER), helperBytes, { mode: 0o600 });
+  fs.writeFileSync(resolvePackageActivationHelper(stagedAnchor), helperBytes, { mode: 0o600 });
   const initial = await withUpdateCommandExecutor(randomUUID(), async (executor) => {
     const fence = await executor.enter(packages.packageRoot);
     const authority = captureUpdateCommandExecutorAuthority(fence);
     const descriptor: Omit<PackageActivationDescriptor, "journalIdentity"> = {
       version: 1,
+      layout: "external-helper",
+      helperIdentity: packageActivationIdentity(
+        resolvePackageActivationHelper(stagedAnchor),
+        false,
+      ),
+      preparation: [
+        {
+          name: "anchor",
+          source: stagedAnchor,
+          sourceParentIdentity: packageActivationIdentity(path.dirname(stagedAnchor), true),
+          identity: packageActivationIdentity(stagedAnchor, true),
+        },
+        {
+          name: "helper",
+          source: resolvePackageActivationHelper(stagedAnchor),
+          sourceParentIdentity: packageActivationIdentity(path.dirname(stagedAnchor), true),
+          identity: packageActivationIdentity(resolvePackageActivationHelper(stagedAnchor), false),
+        },
+        {
+          name: "candidate",
+          source: packages.params.stage.packageRoot,
+          sourceParentIdentity: packageActivationIdentity(
+            path.dirname(packages.params.stage.packageRoot),
+            true,
+          ),
+          identity: packageActivationIdentity(packages.params.stage.packageRoot, true),
+        },
+        {
+          name: "launchers",
+          source: packages.params.stage.layout.binDir,
+          sourceParentIdentity: packageActivationIdentity(
+            path.dirname(packages.params.stage.layout.binDir),
+            true,
+          ),
+          identity: packageActivationIdentity(launcherRoot, true),
+        },
+      ],
       operationId: randomUUID(),
       authority,
-      anchorIdentity: packageActivationIdentity(anchor, true),
+      anchorIdentity: packageActivationIdentity(stagedAnchor, true),
       parentIdentity: packageActivationIdentity(path.dirname(anchor), true),
       binDir: path.dirname(packages.launcher),
       binIdentity: packageActivationIdentity(path.dirname(packages.launcher), true),
@@ -92,9 +130,18 @@ async function fixture() {
       ],
     };
     const journal = createPackageActivationJournal(anchor, descriptor, fence.assertCurrent);
-    return { authority, journal, record: journal.read() };
+    fs.renameSync(stagedAnchor, anchor);
+    fs.renameSync(
+      resolvePackageActivationHelper(stagedAnchor),
+      resolvePackageActivationHelper(anchor),
+    );
+    return {
+      authority,
+      journal,
+      record: journal.transition(journal.read(), "prepared", null, fence.assertCurrent),
+    };
   });
-  const journalPath = path.join(anchor, PACKAGE_ACTIVATION_JOURNAL);
+  const journalPath = resolvePackageActivationJournalPath(anchor);
   const transition = (
     record: PackageActivationRecord,
     phase: PackageActivationPhase,
@@ -113,10 +160,11 @@ async function fixture() {
 
 function journalFiles(anchor: string) {
   return fs
-    .readdirSync(anchor)
+    .readdirSync(path.dirname(anchor))
+    .filter((name) => name.startsWith(path.basename(anchor)))
     .toSorted()
     .map((name) => {
-      const file = path.join(anchor, name);
+      const file = path.join(path.dirname(anchor), name);
       const stat = fs.lstatSync(file);
       return {
         name,
@@ -240,10 +288,10 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
 
   it("keeps one bounded descriptor while exact-revision intents advance", async () => {
     const f = await fixture();
-    expect(f.record).toMatchObject({ revision: 0, phase: "prepared", intent: null });
+    expect(f.record).toMatchObject({ revision: 1, phase: "prepared", intent: null });
     const publishing = await f.transition(f.record, "publishing", { kind: "displace" });
     expect(publishing).toMatchObject({
-      revision: 1,
+      revision: 2,
       phase: "publishing",
       intent: { kind: "displace" },
       descriptor: f.record.descriptor,
@@ -256,7 +304,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
     const restored = await f.transition(disarmed, "rolled-back", null);
     expect(openPackageActivationJournal(f.anchor).read()).toEqual(restored);
     expect(restored).toMatchObject({
-      revision: 3,
+      revision: 4,
       phase: "rolled-back",
       descriptor: f.record.descriptor,
     });
@@ -372,7 +420,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
     const record = openPackageActivationJournal(f.anchor).read();
     expect(record.descriptor.launchers).toEqual(launchers);
     expect(await f.transition(record, "publishing", { kind: "displace" })).toMatchObject({
-      revision: 1,
+      revision: 2,
       descriptor: { launchers },
     });
   });
@@ -430,14 +478,14 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
     expect(lost).toBe(true);
     const committed = openPackageActivationJournal(f.anchor).read();
     expect(committed).toMatchObject({
-      revision: 1,
+      revision: 2,
       phase: "publishing",
       intent: { kind: "displace" },
       descriptor: f.record.descriptor,
     });
     expect(() => f.journal.assertCurrent(f.record)).toThrow("no longer current");
     const disarmed = await f.transition(committed, "rollback-in-progress", null);
-    expect(disarmed.revision).toBe(2);
+    expect(disarmed.revision).toBe(3);
     expect(fs.existsSync(f.params.stage.packageRoot)).toBe(true);
     expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
   });
@@ -459,9 +507,9 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
 const jsonColumns = ["descriptor_json", "intent_json", "publications_json"] as const;
 
 function byteBoundsFixture(oversized?: (typeof jsonColumns)[number]) {
-  const anchor = dirs.make("package-journal-byte-bound-");
-  fs.chmodSync(anchor, 0o700);
-  const file = path.join(anchor, PACKAGE_ACTIVATION_JOURNAL);
+  const anchor = path.join(dirs.make("package-journal-byte-bound-"), "anchor");
+  fs.mkdirSync(anchor, { mode: 0o700 });
+  const file = resolvePackageActivationJournalPath(anchor);
   const db = new DatabaseSync(file);
   try {
     db.exec(

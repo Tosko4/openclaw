@@ -137,6 +137,7 @@ export async function swapStagedPackageInstall(params: {
   let retained = false;
   let projectActivated = false;
   let activationCompleted = false;
+  let preparationCustody = false;
   let activation: Awaited<ReturnType<typeof preparePackageActivation>> | undefined;
   const verifyNpmRecovery = (root: string, fromBackup: boolean) =>
     verifyNpmRootRecovery(
@@ -149,6 +150,11 @@ export async function swapStagedPackageInstall(params: {
       activation?.assertCurrent();
     };
     assertCurrent();
+    if (preparationCustody && !activation) {
+      return [
+        "Preparation custody is retained by the package recovery journal; run its repair command.",
+      ];
+    }
     if (activation) {
       packageBackedUp = await activation.disarmRollback();
     }
@@ -370,12 +376,17 @@ export async function swapStagedPackageInstall(params: {
         binDir: targetLayout.binDir,
         previous: previousRoot.tree,
         previousLauncherRoot: shimBackupDir,
+        onCustody: (custodyRetained) => {
+          preparationCustody = custodyRetained;
+          params.stage.activationCustody = custodyRetained;
+        },
         launchers: shims.map((shim) => ({
           name: path.basename(shim.destination),
           previous: shim.fingerprint ?? null,
         })),
       });
       if (activation) {
+        params.stage.activationCustody = false;
         backupRoot = path.join(activation.anchor, "previous");
         shimBackupDir = shimBackupDir && path.join(activation.anchor, "previous-launchers");
         for (const shim of shims) {
@@ -710,7 +721,7 @@ export async function swapStagedPackageInstall(params: {
     };
   } catch (error) {
     if (error instanceof PackageUpdateActivationError) {
-      if (shimBackupDir && !activation) {
+      if (shimBackupDir && !activation && !preparationCustody) {
         await discardPackageUpdateBackup(shimBackupDir, "shim backup", targetLayout.globalRoot);
       }
       throw error;

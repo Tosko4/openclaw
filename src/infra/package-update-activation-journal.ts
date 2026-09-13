@@ -11,7 +11,7 @@ import {
   type ExistingSqliteTransaction,
 } from "./sqlite-existing-database.js";
 
-export const PACKAGE_ACTIVATION_JOURNAL = "operation.sqlite";
+const PACKAGE_ACTIVATION_JOURNAL = "operation.sqlite";
 const MAX_PACKAGE_ACTIVATION_DESCRIPTOR_BYTES = 1024 * 1024;
 const absolutePath = z
   .string()
@@ -29,7 +29,9 @@ const basename = z
   .min(1)
   .max(255)
   .refine((value) => value !== "." && value !== ".." && !/[\\/\0]/u.test(value));
+const transferName = z.enum(["anchor", "helper", "candidate", "launchers", "previous-launchers"]);
 const PackageActivationDescriptorSchema = z.strictObject({
+  layout: z.literal("external-helper"),
   version: z.literal(1),
   operationId: z.uuid(),
   authority: z.strictObject({
@@ -49,6 +51,18 @@ const PackageActivationDescriptorSchema = z.strictObject({
   candidate: fingerprint,
   launcherRootIdentity: identity,
   previousLauncherRootIdentity: identity.nullable(),
+  helperIdentity: identity,
+  preparation: z
+    .array(
+      z.strictObject({
+        name: transferName,
+        source: absolutePath,
+        sourceParentIdentity: identity,
+        identity,
+      }),
+    )
+    .min(4)
+    .max(5),
   helperDigest: z.string().regex(/^[a-f0-9]{64}$/u),
   launchers: z
     .array(
@@ -64,6 +78,7 @@ const PackageActivationDescriptorSchema = z.strictObject({
 });
 export type PackageActivationDescriptor = z.infer<typeof PackageActivationDescriptorSchema>;
 const PackageActivationPhaseSchema = z.enum([
+  "preparing",
   "prepared",
   "publishing",
   "publication-complete",
@@ -72,10 +87,21 @@ const PackageActivationPhaseSchema = z.enum([
   "aborted",
   "retiring",
   "retired",
+  "anchor-retired",
 ]);
 export type PackageActivationPhase = z.infer<typeof PackageActivationPhaseSchema>;
 const intentSchema = z
   .union([
+    z.strictObject({
+      kind: z.literal("prepare"),
+      completed: z.array(transferName).max(5),
+      moving: transferName.nullable(),
+    }),
+    z.strictObject({
+      kind: z.enum(["remove-anchor", "unlink-helper"]),
+      identity,
+      selected: z.enum(["previous", "candidate"]),
+    }),
     z.strictObject({ kind: z.enum(["displace", "publish"]) }),
     z.strictObject({ kind: z.literal("launcher"), name: basename, identity }),
     z.strictObject({ kind: z.literal("retire"), selected: z.enum(["previous", "candidate"]) }),
@@ -133,6 +159,38 @@ export function resolvePackageActivationAnchor(installKey: string): string {
   return path.join(path.dirname(installKey), `.openclaw.package-activation-${key}`);
 }
 
+// Stable sibling paths survive removal of the disposable package anchor.
+export function resolvePackageActivationJournalPath(anchor: string): string {
+  return `${anchor}.sqlite`;
+}
+export function resolvePackageActivationHelper(anchor: string): string {
+  return `${anchor}.recovery.mjs`;
+}
+
+/** A receipt is a read-only completion fact, never a grant for another effect. */
+export function isPackageActivationComplete(
+  anchor: string,
+  record: PackageActivationRecord,
+): boolean {
+  if (record.phase !== "anchor-retired" || record.intent?.kind !== "unlink-helper") {
+    return false;
+  }
+  if (record.intent.identity !== record.descriptor.helperIdentity) {
+    throw new Error("Final helper unlink identity is invalid.");
+  }
+  for (const file of [anchor, resolvePackageActivationHelper(anchor)]) {
+    try {
+      fs.lstatSync(file);
+      return false;
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+        throw error;
+      }
+    }
+  }
+  return true;
+}
+
 function assertPrivate(file: string, directory: boolean): string {
   const value = packageActivationIdentity(file, directory);
   const stat = fs.lstatSync(file);
@@ -152,14 +210,20 @@ function descriptorJson(descriptor: PackageActivationDescriptor): string {
 
 /** An existing operation is never bootstrapped, migrated, or repaired on open. */
 export function openPackageActivationJournal(anchor: string) {
-  const journalPath = path.join(anchor, PACKAGE_ACTIVATION_JOURNAL);
-  const anchorIdentity = assertPrivate(anchor, true);
+  if (fs.lstatSync(path.join(anchor, PACKAGE_ACTIVATION_JOURNAL), { throwIfNoEntry: false })) {
+    throw new Error(
+      "Legacy package activation artifacts require their original recovery owner; no migration is performed.",
+    );
+  }
+  const journalPath = resolvePackageActivationJournalPath(anchor);
+  const parent = path.dirname(anchor);
+  const parentIdentity = packageActivationIdentity(parent, true);
   const journalIdentity = assertPrivate(journalPath, false);
   const assertFiles = () => {
     if (
-      assertPrivate(anchor, true) !== anchorIdentity ||
+      packageActivationIdentity(parent, true) !== parentIdentity ||
       assertPrivate(journalPath, false) !== journalIdentity ||
-      fs.realpathSync(anchor) !== anchor
+      fs.realpathSync(parent) !== parent
     ) {
       throw new Error("Package publication journal identity changed");
     }
@@ -195,13 +259,33 @@ export function openPackageActivationJournal(anchor: string) {
     }
     const descriptor = PackageActivationDescriptorSchema.parse(JSON.parse(row.descriptor_json));
     if (
-      descriptor.anchorIdentity !== anchorIdentity ||
+      descriptor.parentIdentity !== parentIdentity ||
       descriptor.journalIdentity !== journalIdentity ||
       resolvePackageActivationAnchor(descriptor.authority.installKey) !== anchor ||
       descriptor.parentIdentity !== packageActivationIdentity(path.dirname(anchor), true) ||
       new Set(descriptor.launchers.map((entry) => entry.name)).size !== descriptor.launchers.length
     ) {
       throw new Error("Package publication journal does not match its installation");
+    }
+    const expectedTransfers = new Map<string, string>([
+      ["anchor", descriptor.anchorIdentity],
+      ["helper", descriptor.helperIdentity],
+      ["candidate", descriptor.candidate.identity],
+      ["launchers", descriptor.launcherRootIdentity],
+    ]);
+    if (descriptor.previousLauncherRootIdentity) {
+      expectedTransfers.set("previous-launchers", descriptor.previousLauncherRootIdentity);
+    }
+    if (
+      descriptor.preparation.length !== expectedTransfers.size ||
+      new Set(descriptor.preparation.map((entry) => entry.name)).size !== expectedTransfers.size ||
+      descriptor.preparation.some(
+        (entry) => expectedTransfers.get(entry.name) !== entry.identity,
+      ) ||
+      descriptor.preparation.find((entry) => entry.name === "candidate")?.source !==
+        descriptor.originalStageRoot
+    ) {
+      throw new Error("Preparation custody does not match the recorded objects.");
     }
     const publications = z
       .array(z.strictObject({ name: basename, identity }))
@@ -265,6 +349,57 @@ export function openPackageActivationJournal(anchor: string) {
   };
   return {
     read,
+    replaceCompleted(
+      expected: PackageActivationRecord,
+      descriptor: Omit<PackageActivationDescriptor, "journalIdentity">,
+      assertCurrent: () => void,
+    ) {
+      const encoded = descriptorJson({ ...descriptor, journalIdentity });
+      return withDatabase(true, (db, transact) =>
+        transact(
+          () => {
+            assertFiles();
+            assertCurrent();
+            const previous = decode(readRow(db));
+            assertRecord(expected, previous);
+            if (
+              !isPackageActivationComplete(anchor, previous) ||
+              packageActivationIdentity(preparationSource(descriptor, "anchor"), true) !==
+                descriptor.anchorIdentity ||
+              packageActivationIdentity(preparationSource(descriptor, "helper"), false) !==
+                descriptor.helperIdentity ||
+              previous.descriptor.authority.databasePath !== descriptor.authority.databasePath ||
+              previous.descriptor.authority.databaseIdentity !==
+                descriptor.authority.databaseIdentity ||
+              previous.descriptor.authority.parentIdentity !== descriptor.authority.parentIdentity
+            ) {
+              throw new Error("The previous package receipt is not safely replaceable.");
+            }
+            executeSqliteQuerySync(
+              db,
+              queries(db)
+                .updateTable("package_activation")
+                .set({
+                  revision: previous.revision + 1,
+                  phase: "preparing",
+                  descriptor_json: encoded,
+                  intent_json: JSON.stringify({ kind: "prepare", completed: [], moving: null }),
+                  publications_json: "[]",
+                })
+                .where("slot", "=", 1)
+                .where("revision", "=", previous.revision),
+            );
+          },
+          {
+            withCommit: (commit) => {
+              assertFiles();
+              assertCurrent();
+              commit();
+            },
+          },
+        ),
+      );
+    },
     assertCurrent(expected: PackageActivationRecord) {
       assertRecord(expected, read());
     },
@@ -313,51 +448,89 @@ export function openPackageActivationJournal(anchor: string) {
 }
 export type PackageActivationJournal = ReturnType<typeof openPackageActivationJournal>;
 
+function preparationSource(
+  descriptor: Omit<PackageActivationDescriptor, "journalIdentity">,
+  name: "anchor" | "helper",
+): string {
+  const source = descriptor.preparation.find((entry) => entry.name === name)?.source;
+  if (!source) {
+    throw new Error("Package preparation bootstrap custody is missing.");
+  }
+  return source;
+}
+
 /** Only the original admitted producer may create the one-operation database. */
 export function createPackageActivationJournal(
   anchor: string,
   descriptor: Omit<PackageActivationDescriptor, "journalIdentity">,
   assertCurrent: () => void,
 ): PackageActivationJournal {
-  assertCurrent();
-  assertPrivate(anchor, true);
-  descriptorJson({ ...descriptor, journalIdentity: "0:0" });
-  const journalPath = path.join(anchor, PACKAGE_ACTIVATION_JOURNAL);
-  const fd = fs.openSync(journalPath, "wx", 0o600);
-  fs.closeSync(fd);
-  const journalIdentity = assertPrivate(journalPath, false);
-  const encoded = descriptorJson({ ...descriptor, journalIdentity });
-  const db = openNodeSqliteDatabase(resolveExistingSqliteFileUri(journalPath));
-  try {
+  const assertAnchor = () => {
     assertCurrent();
-    executeSqliteQuerySync(
-      db,
-      queries(db)
-        .schema.createTable("package_activation")
-        .addColumn("slot", "integer", (column) => column.primaryKey().notNull())
-        .addColumn("revision", "integer", (column) => column.notNull())
-        .addColumn("phase", "text", (column) => column.notNull())
-        .addColumn("descriptor_json", "text", (column) => column.notNull())
-        .addColumn("intent_json", "text", (column) => column.notNull())
-        .addColumn("publications_json", "text", (column) => column.notNull())
-        .modifyEnd(sql`STRICT`),
-    );
-    assertCurrent();
-    executeSqliteQuerySync(
-      db,
-      queries(db).insertInto("package_activation").values({
-        slot: 1,
-        revision: 0,
-        phase: "prepared",
-        descriptor_json: encoded,
-        intent_json: "null",
-        publications_json: "[]",
-      }),
-    );
-  } finally {
-    if (db.isOpen) {
-      db.close();
+    if (
+      assertPrivate(preparationSource(descriptor, "anchor"), true) !== descriptor.anchorIdentity ||
+      packageActivationIdentity(path.dirname(anchor), true) !== descriptor.parentIdentity ||
+      fs.realpathSync(path.dirname(anchor)) !== path.dirname(anchor) ||
+      fs.lstatSync(anchor, { throwIfNoEntry: false }) ||
+      fs.lstatSync(resolvePackageActivationHelper(anchor), { throwIfNoEntry: false })
+    ) {
+      throw new Error("Package publication journal identity changed");
     }
+  };
+  assertAnchor();
+  descriptorJson({ ...descriptor, journalIdentity: "0:0" });
+  const journalPath = resolvePackageActivationJournalPath(anchor);
+  const fd = fs.openSync(journalPath, "wx", 0o600);
+  try {
+    // Retain the created inode until SQLite closes; a later pathname must not
+    // become the authority for the file this producer created.
+    const created = fs.fstatSync(fd, { bigint: true });
+    const journalIdentity = `${created.dev}:${created.ino}`;
+    const assertCreated = () => {
+      assertAnchor();
+      if (assertPrivate(journalPath, false) !== journalIdentity) {
+        throw new Error("Package publication journal identity changed");
+      }
+    };
+    assertCreated();
+    const encoded = descriptorJson({ ...descriptor, journalIdentity });
+    const db = openNodeSqliteDatabase(resolveExistingSqliteFileUri(journalPath));
+    try {
+      assertCreated();
+      executeSqliteQuerySync(
+        db,
+        queries(db)
+          .schema.createTable("package_activation")
+          .addColumn("slot", "integer", (column) => column.primaryKey().notNull())
+          .addColumn("revision", "integer", (column) => column.notNull())
+          .addColumn("phase", "text", (column) => column.notNull())
+          .addColumn("descriptor_json", "text", (column) => column.notNull())
+          .addColumn("intent_json", "text", (column) => column.notNull())
+          .addColumn("publications_json", "text", (column) => column.notNull())
+          .modifyEnd(sql`STRICT`),
+      );
+      assertCreated();
+      executeSqliteQuerySync(
+        db,
+        queries(db)
+          .insertInto("package_activation")
+          .values({
+            slot: 1,
+            revision: 0,
+            phase: "preparing",
+            descriptor_json: encoded,
+            intent_json: JSON.stringify({ kind: "prepare", completed: [], moving: null }),
+            publications_json: "[]",
+          }),
+      );
+    } finally {
+      if (db.isOpen) {
+        db.close();
+      }
+    }
+    assertCreated();
+    return openPackageActivationJournal(anchor);
+  } finally {
+    fs.closeSync(fd);
   }
-  return openPackageActivationJournal(anchor);
 }

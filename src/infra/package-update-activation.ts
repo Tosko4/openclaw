@@ -9,9 +9,15 @@ import {
 } from "../cli/update-cli/update-command-executor.js";
 import { hasErrnoCode } from "./errors.js";
 import {
+  completePackageActivationCustody,
+  inspectPackageActivationCustody,
+} from "./package-update-activation-custody.js";
+import {
   openPackageActivationJournal,
   packageActivationIdentity,
-  PACKAGE_ACTIVATION_JOURNAL,
+  resolvePackageActivationJournalPath,
+  resolvePackageActivationHelper,
+  isPackageActivationComplete,
   resolvePackageActivationAnchor,
   type PackageActivationIntent,
   type PackageActivationJournal,
@@ -22,7 +28,6 @@ import {
   preparePackageActivationJournal,
   type PackageActivationPreparation,
 } from "./package-update-activation-prepare.js";
-import { PACKAGE_ACTIVATION_HELPER } from "./package-update-activation-runtime-assets.js";
 import {
   activateStagedNpmPackageRoot,
   copyPackagePathEntry,
@@ -40,12 +45,17 @@ import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
 export type { PackageActivationOptions } from "./package-update-activation-prepare.js";
 export type PackageActivationStatus = {
-  phase: PackageActivationPhase;
+  phase: PackageActivationPhase | "complete";
   operationId: string;
   installKey: string;
 };
 const status = (record: PackageActivationRecord): PackageActivationStatus => ({
-  phase: record.phase,
+  phase: isPackageActivationComplete(
+    resolvePackageActivationAnchor(record.descriptor.authority.installKey),
+    record,
+  )
+    ? "complete"
+    : record.phase,
   operationId: record.descriptor.operationId,
   installKey: record.descriptor.authority.installKey,
 });
@@ -53,23 +63,22 @@ const status = (record: PackageActivationRecord): PackageActivationStatus => ({
 /** Read-only correlation; callers still need a privately registered live fence. */
 function readPackageActivationContinuation(installKey: string) {
   const anchor = resolvePackageActivationAnchor(installKey);
-  try {
-    fs.lstatSync(anchor);
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
+  const journalPath = resolvePackageActivationJournalPath(anchor);
+  if (!fs.lstatSync(journalPath, { throwIfNoEntry: false })) {
+    if (
+      fs.lstatSync(anchor, { throwIfNoEntry: false }) ||
+      fs.lstatSync(resolvePackageActivationHelper(anchor), { throwIfNoEntry: false })
+    ) {
+      throw new Error(
+        `Incomplete or legacy recovery artifacts require their original owner: ${anchor}. The next mutable update is blocked.`,
+      );
     }
-    throw error;
-  }
-  if (
-    !fs.existsSync(path.join(anchor, PACKAGE_ACTIVATION_HELPER)) ||
-    !fs.existsSync(path.join(anchor, PACKAGE_ACTIVATION_JOURNAL))
-  ) {
-    throw new Error(
-      `Incomplete recovery artifacts require operator inspection: ${anchor}. The next mutable update is blocked.`,
-    );
+    return undefined;
   }
   const record = openPackageActivationJournal(anchor).read();
+  if (isPackageActivationComplete(anchor, record)) {
+    return undefined;
+  }
   if (
     record.phase !== "publication-complete" ||
     record.descriptor.authority.installKey !== installKey
@@ -96,7 +105,7 @@ export function assertNoPendingPackageActivation(
   }
   const anchor = resolvePackageActivationAnchor(installKey);
   throw new Error(
-    `Package publication recovery is pending. Run an external Node with ${path.join(anchor, PACKAGE_ACTIVATION_HELPER)} status, then repair or retire; keep other package managers stopped.`,
+    `Package publication recovery is pending. Run an external Node with ${resolvePackageActivationHelper(anchor)} status, then repair or retire; keep other package managers stopped.`,
   );
 }
 
@@ -110,18 +119,40 @@ function createPublicationOwner(
   let retirementSelected: "previous" | "candidate" | undefined;
   const live = descriptor.authority.installKey;
   const root = (name: string) => path.join(anchor, name);
-  const helperIdentity = packageActivationIdentity(root(PACKAGE_ACTIVATION_HELPER), false);
+  const helperIdentity = descriptor.helperIdentity;
+  const custodyPath = (name: "anchor" | "helper") => {
+    if (record.phase !== "preparing") {
+      return name === "anchor" ? anchor : resolvePackageActivationHelper(anchor);
+    }
+    const entry = inspectPackageActivationCustody(anchor, record).find(
+      (item) => item.name === name,
+    );
+    if (!entry) {
+      throw new Error("Package bootstrap custody is missing.");
+    }
+    return entry.moved ? entry.destination : entry.source;
+  };
+  const helper = () => custodyPath("helper");
   const artifactNames = [
     "previous",
     "candidate",
     "previous.candidate",
     "launchers",
     "previous-launchers",
-    PACKAGE_ACTIVATION_HELPER,
-    PACKAGE_ACTIVATION_JOURNAL,
   ];
   const assertInventory = (allowed = artifactNames) => {
-    const entries = fs.readdirSync(anchor);
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(custodyPath("anchor"));
+    } catch (error) {
+      if (
+        hasErrnoCode(error, "ENOENT") &&
+        (record.phase === "anchor-retired" || record.intent?.kind === "remove-anchor")
+      ) {
+        return;
+      }
+      throw error;
+    }
     if (entries.some((name) => !allowed.includes(name))) {
       throw new Error("Unknown package recovery artifacts require operator inspection.");
     }
@@ -160,6 +191,16 @@ function createPublicationOwner(
   const assertCurrent = () => {
     assertion();
     journal.assertCurrent(record);
+    const currentAnchor = entryIdentity(custodyPath("anchor"), true);
+    if (
+      currentAnchor !== descriptor.anchorIdentity &&
+      !(
+        currentAnchor === null &&
+        (record.phase === "anchor-retired" || record.intent?.kind === "remove-anchor")
+      )
+    ) {
+      throw new Error("Package recovery anchor identity changed.");
+    }
     if (packageActivationIdentity(descriptor.binDir, true) !== descriptor.binIdentity) {
       throw new Error("Package launcher parent changed");
     }
@@ -254,7 +295,10 @@ function createPublicationOwner(
   const verifyClosure = async () => {
     assertInventory();
     assertManagedUpdateLeaseDatabaseIdentity(descriptor.authority);
-    const bytes = await fsp.readFile(root(PACKAGE_ACTIVATION_HELPER));
+    if (packageActivationIdentity(helper(), false) !== helperIdentity) {
+      throw new Error("Sealed package recovery helper identity changed.");
+    }
+    const bytes = await fsp.readFile(helper());
     if (createHash("sha256").update(bytes).digest("hex") !== descriptor.helperDigest) {
       throw new Error("Sealed package recovery helper changed.");
     }
@@ -263,24 +307,34 @@ function createPublicationOwner(
   const preflight = async (action: "repair" | "retire") => {
     if (
       action === "repair" &&
-      !["prepared", "publishing", "publication-complete"].includes(record.phase)
+      !["preparing", "prepared", "publishing", "publication-complete"].includes(record.phase)
     ) {
       throw new Error(`Forward publication is disarmed (${record.phase}).`);
     }
     if (
       action === "retire" &&
-      !["publication-complete", "rolled-back", "aborted", "retiring", "retired"].includes(
-        record.phase,
-      )
+      ![
+        "publication-complete",
+        "rolled-back",
+        "aborted",
+        "retiring",
+        "retired",
+        "anchor-retired",
+      ].includes(record.phase)
     ) {
       throw new Error(`Package evidence cannot be retired (${record.phase}).`);
     }
     await verifyClosure();
-    if (action === "repair" || record.phase === "publication-complete") {
+    if (record.phase === "preparing") {
+      inspectPackageActivationCustody(anchor, record);
+    } else if (action === "repair" || record.phase === "publication-complete") {
       await inspect();
     } else {
       const selected =
-        record.intent?.kind === "remove" || record.intent?.kind === "retire"
+        record.intent?.kind === "remove" ||
+        record.intent?.kind === "retire" ||
+        record.intent?.kind === "remove-anchor" ||
+        record.intent?.kind === "unlink-helper"
           ? record.intent.selected
           : "previous";
       if (
@@ -298,8 +352,12 @@ function createPublicationOwner(
   };
   const publish = async (resume: boolean, onDisplaced?: () => void) => {
     await verifyClosure();
-    if (!["prepared", "publishing", "publication-complete"].includes(record.phase)) {
+    if (!["preparing", "prepared", "publishing", "publication-complete"].includes(record.phase)) {
       throw new Error(`Forward publication is disarmed (${record.phase}).`);
+    }
+    if (record.phase === "preparing") {
+      await completePackageActivationCustody(anchor, journal, assertion);
+      record = journal.read();
     }
     let observed = await inspect();
     assertCurrent();
@@ -387,14 +445,22 @@ function createPublicationOwner(
   const retire = async () => {
     await verifyClosure();
     if (
-      !["publication-complete", "rolled-back", "aborted", "retiring", "retired"].includes(
-        record.phase,
-      )
+      ![
+        "publication-complete",
+        "rolled-back",
+        "aborted",
+        "retiring",
+        "retired",
+        "anchor-retired",
+      ].includes(record.phase)
     ) {
       throw new Error(`Package evidence cannot be retired (${record.phase}).`);
     }
     const selected =
-      record.intent?.kind === "remove" || record.intent?.kind === "retire"
+      record.intent?.kind === "remove" ||
+      record.intent?.kind === "retire" ||
+      record.intent?.kind === "remove-anchor" ||
+      record.intent?.kind === "unlink-helper"
         ? record.intent.selected
         : record.phase === "publication-complete"
           ? "candidate"
@@ -409,7 +475,7 @@ function createPublicationOwner(
     }
     retirementSelected = selected;
     assertCurrent();
-    if (record.phase !== "retiring" && record.phase !== "retired") {
+    if (!["retiring", "retired", "anchor-retired"].includes(record.phase)) {
       for (const name of ["previous", "candidate", "previous.candidate"] as const) {
         await matches(
           root(name),
@@ -462,30 +528,47 @@ function createPublicationOwner(
         }
       });
     }
-    transition("retired", { kind: "retire", selected });
-    const outcome = status(record);
-    assertCurrent();
-    // "retired" records removal of retained package material, not completion of
-    // these final unlinks. A killed self-unlink leaves the same blocked anchor
-    // for operator inspection; missing metadata never means cleanup succeeded.
-    assertInventory([PACKAGE_ACTIVATION_HELPER, PACKAGE_ACTIVATION_JOURNAL]);
-    if (packageActivationIdentity(root(PACKAGE_ACTIVATION_HELPER), false) !== helperIdentity) {
-      throw new Error("Sealed recovery helper identity changed.");
+    if (record.phase !== "anchor-retired") {
+      if (record.intent?.kind !== "remove-anchor") {
+        transition("retired", {
+          kind: "remove-anchor",
+          identity: descriptor.anchorIdentity,
+          selected,
+        });
+      }
+      assertCurrent();
+      assertInventory([]);
+      const current = entryIdentity(anchor, true);
+      if (current !== null) {
+        if (current !== descriptor.anchorIdentity) {
+          throw new Error("Final anchor identity changed.");
+        }
+        await fsp.rmdir(anchor);
+      }
+      // A lost rmdir acknowledgement is reconciled only against the recorded
+      // exact-anchor intent. Positive completion precedes the final helper intent.
+      assertCurrent();
+      if (entryIdentity(anchor, true) !== null) {
+        throw new Error("Package anchor was not retired.");
+      }
+      transition("anchor-retired", { kind: "retire", selected });
     }
-    await fsp.unlink(root(PACKAGE_ACTIVATION_HELPER));
     assertCurrent();
-    assertInventory([PACKAGE_ACTIVATION_JOURNAL]);
-    await fsp.unlink(root(PACKAGE_ACTIVATION_JOURNAL));
-    assertion();
     if (
-      packageActivationIdentity(anchor, true) !== descriptor.anchorIdentity ||
-      packageActivationIdentity(live, true) !== descriptor[selected].identity
+      entryIdentity(anchor, true) !== null ||
+      packageActivationIdentity(helper(), false) !== helperIdentity
     ) {
       throw new Error("Final package recovery cleanup identity changed.");
     }
-    assertInventory([]);
-    await fsp.rmdir(anchor);
-    return outcome;
+    transition("anchor-retired", { kind: "unlink-helper", identity: helperIdentity, selected });
+    assertCurrent();
+    if (packageActivationIdentity(helper(), false) !== helperIdentity) {
+      throw new Error("Final helper identity changed.");
+    }
+    await fsp.unlink(helper());
+    // The bounded last receipt remains. A later reader can recognize this exact
+    // intended absence even when this acknowledgement is lost. No trailing write.
+    return status(record);
   };
   return {
     publish,
@@ -560,6 +643,18 @@ export async function preparePackageActivation(
     ),
   };
 }
+export function readPackageActivationReceipt(
+  installKey: string,
+): PackageActivationStatus | undefined {
+  const anchor = resolvePackageActivationAnchor(installKey);
+  if (!fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
+    readPackageActivationContinuation(installKey);
+    return undefined;
+  }
+  const record = openPackageActivationJournal(anchor).read();
+  assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
+  return status(record);
+}
 export async function readPackageActivationStatus(
   anchor: string,
 ): Promise<PackageActivationStatus> {
@@ -573,6 +668,10 @@ export async function runPackageActivationRecovery(
 ): Promise<PackageActivationStatus> {
   const journal = openPackageActivationJournal(anchor);
   const initial = journal.read();
+  if (isPackageActivationComplete(anchor, initial)) {
+    assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
+    return status(initial);
+  }
   // Reject malformed/foreign/disarmed recovery before acquiring a new writer.
   // Admission is still followed by the same observations under the fresh fence.
   await createPublicationOwner(anchor, journal, () => {

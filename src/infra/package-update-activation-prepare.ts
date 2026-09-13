@@ -4,15 +4,18 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { captureUpdateCommandExecutorAuthority } from "../cli/update-cli/update-command-executor.js";
+import { completePackageActivationCustody } from "./package-update-activation-custody.js";
 import {
+  type PackageActivationDescriptor,
   createPackageActivationJournal,
+  openPackageActivationJournal,
+  isPackageActivationComplete,
+  resolvePackageActivationJournalPath,
+  resolvePackageActivationHelper,
   packageActivationIdentity,
   resolvePackageActivationAnchor,
 } from "./package-update-activation-journal.js";
-import {
-  PACKAGE_ACTIVATION_HELPER,
-  packageActivationRuntimeEntrypoint,
-} from "./package-update-activation-runtime-assets.js";
+import { packageActivationRuntimeEntrypoint } from "./package-update-activation-runtime-assets.js";
 import {
   createPackageIntegrityReader,
   type PackageIntegrityFingerprint,
@@ -35,21 +38,16 @@ export type PackageActivationPreparation = {
   binDir: string;
   previous: PackageIntegrityFingerprint;
   previousLauncherRoot?: string;
+  onCustody?: (retained: boolean) => void;
   launchers: Array<{ name: string; previous: string | null }>;
 };
 
-function stagePackageActivationRuntime(anchor: string, assertCurrent: () => void): string {
+function readPackageActivationRuntime(): Buffer {
   const source = resolveRuntimeWorkerUrl(packageActivationRuntimeEntrypoint);
   if (!source.pathname.endsWith(".mjs")) {
     throw new Error("Package publication recovery requires its built sealed helper.");
   }
-  const bytes = fs.readFileSync(source);
-  assertCurrent();
-  fs.writeFileSync(path.join(anchor, PACKAGE_ACTIVATION_HELPER), bytes, {
-    flag: "wx",
-    mode: 0o600,
-  });
-  return createHash("sha256").update(bytes).digest("hex");
+  return fs.readFileSync(source);
 }
 
 export async function preparePackageActivationJournal(params: PackageActivationPreparation) {
@@ -100,45 +98,120 @@ export async function preparePackageActivationJournal(params: PackageActivationP
   ) {
     throw new Error("Package publication recovery requires same-filesystem directories.");
   }
-  assertCurrent();
-  await fsp.mkdir(anchor, { mode: 0o700 });
-  // From the first transfer onward the anchor owns these objects, even when a
-  // later journal commit loses its acknowledgement. Stage-finally must not remove them.
-  const anchorIdentity = packageActivationIdentity(anchor, true);
-  const helperDigest = stagePackageActivationRuntime(anchor, assertCurrent);
-  assertCurrent();
-  await fsp.rename(params.stageRoot, path.join(anchor, "candidate"));
-  assertCurrent();
-  await fsp.rename(params.launcherRoot, path.join(anchor, "launchers"));
-  if (params.previousLauncherRoot) {
-    assertCurrent();
-    await fsp.rename(params.previousLauncherRoot, path.join(anchor, "previous-launchers"));
+  // A completed receipt may be replaced only by this new, genuinely admitted
+  // operation in the same original store. Legacy/incomplete artifacts refuse.
+  const priorJournal = fs.lstatSync(resolvePackageActivationJournalPath(anchor), {
+    throwIfNoEntry: false,
+  })
+    ? openPackageActivationJournal(anchor)
+    : undefined;
+  const prior = priorJournal?.read();
+  if (prior && !isPackageActivationComplete(anchor, prior)) {
+    throw new Error("An unresolved package operation already owns this installation.");
   }
-  const journal = createPackageActivationJournal(
-    anchor,
+  const preparation: PackageActivationDescriptor["preparation"] = [
+    { name: "candidate" as const, source: params.stageRoot, identity: candidate.identity },
     {
-      version: 1,
-      operationId: randomUUID(),
-      authority,
-      anchorIdentity,
-      parentIdentity,
-      binDir: params.binDir,
-      binIdentity,
-      originalStageRoot: params.stageRoot,
-      previous: params.previous,
-      candidate,
-      launcherRootIdentity: packageActivationIdentity(path.join(anchor, "launchers"), true),
-      previousLauncherRootIdentity: params.previousLauncherRoot
-        ? packageActivationIdentity(path.join(anchor, "previous-launchers"), true)
-        : null,
-      helperDigest,
-      launchers,
+      name: "launchers" as const,
+      source: params.launcherRoot,
+      identity: packageActivationIdentity(params.launcherRoot, true),
     },
-    assertCurrent,
-  );
-  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-  const command = `${quote(node)} ${quote(path.join(anchor, PACKAGE_ACTIVATION_HELPER))}`;
+    ...(params.previousLauncherRoot
+      ? [
+          {
+            name: "previous-launchers" as const,
+            source: params.previousLauncherRoot,
+            identity: packageActivationIdentity(params.previousLauncherRoot, true),
+          },
+        ]
+      : []),
+  ].map((entry) => ({
+    name: entry.name,
+    source: entry.source,
+    identity: entry.identity,
+    sourceParentIdentity: packageActivationIdentity(path.dirname(entry.source), true),
+  }));
+  // Preflight the sealed helper before creating any blocking recovery artifact.
+  const helperBytes = readPackageActivationRuntime();
   assertCurrent();
+  // These objects remain inside the existing stage cleanup owner's prefix
+  // until the stable slot records their exact identities. A failed replacement
+  // cannot create blocking artifacts over the prior completion receipt.
+  const stagedAnchor = await fsp.mkdtemp(
+    path.join(path.dirname(params.stageRoot), ".activation-anchor-"),
+  );
+  const anchorIdentity = packageActivationIdentity(stagedAnchor, true);
+  const stagedHelper = `${stagedAnchor}.recovery.mjs`;
+  assertCurrent();
+  fs.writeFileSync(stagedHelper, helperBytes, { flag: "wx", mode: 0o600 });
+  const helperIdentity = packageActivationIdentity(stagedHelper, false);
+  const helperDigest = createHash("sha256").update(helperBytes).digest("hex");
+  preparation.unshift(
+    {
+      name: "anchor",
+      source: stagedAnchor,
+      identity: anchorIdentity,
+      sourceParentIdentity: packageActivationIdentity(path.dirname(stagedAnchor), true),
+    },
+    {
+      name: "helper",
+      source: stagedHelper,
+      identity: helperIdentity,
+      sourceParentIdentity: packageActivationIdentity(path.dirname(stagedHelper), true),
+    },
+  );
+  const descriptor = {
+    version: 1 as const,
+    layout: "external-helper" as const,
+    operationId: randomUUID(),
+    authority,
+    anchorIdentity,
+    parentIdentity,
+    binDir: params.binDir,
+    binIdentity,
+    originalStageRoot: params.stageRoot,
+    previous: params.previous,
+    candidate,
+    launcherRootIdentity: packageActivationIdentity(params.launcherRoot, true),
+    previousLauncherRootIdentity: params.previousLauncherRoot
+      ? packageActivationIdentity(params.previousLauncherRoot, true)
+      : null,
+    helperDigest,
+    helperIdentity,
+    preparation,
+    launchers,
+  };
+  // Notify the existing cleanup owner before a journal write can lose its
+  // acknowledgement. Conservatively retain the original stage on write failure.
+  params.onCustody?.(true);
+  const journal = priorJournal ?? createPackageActivationJournal(anchor, descriptor, assertCurrent);
+  if (priorJournal && prior) {
+    try {
+      priorJournal.replaceCompleted(prior, descriptor, assertCurrent);
+    } catch (error) {
+      // A proven rollback leaves all new objects in the existing stage owner's
+      // prefix. Lost commit acknowledgement or any read uncertainty retains it.
+      try {
+        assertCurrent();
+        priorJournal.assertCurrent(prior);
+        if (isPackageActivationComplete(anchor, prior)) {
+          params.onCustody?.(false);
+        }
+      } catch {
+        // Preserve the initiating failure and conservatively retain custody.
+      }
+      throw error;
+    }
+  }
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  const command = `${quote(node)} ${quote(resolvePackageActivationHelper(anchor))}`;
+  assertCurrent();
+  // Print both exact locations before transfer: one helper inode moves between
+  // them. The explicit anchor selects the same original journal, not authority.
+  params.options.onPrepared(
+    `${quote(node)} ${quote(stagedHelper)} --anchor ${quote(anchor)} status`,
+  );
   params.options.onPrepared(`${command} status`);
+  await completePackageActivationCustody(anchor, journal, assertCurrent);
   return { anchor, journal, command };
 }

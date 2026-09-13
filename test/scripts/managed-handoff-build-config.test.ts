@@ -6,11 +6,9 @@ import { pathToFileURL } from "node:url";
 import { build } from "tsdown";
 import { afterEach, expect, it, vi } from "vitest";
 import { withUpdateCommandExecutor } from "../../src/cli/update-cli/update-command-executor.js";
+import { resolvePackageActivationHelper } from "../../src/infra/package-update-activation-journal.js";
 import { preparePackageActivationJournal } from "../../src/infra/package-update-activation-prepare.js";
-import {
-  PACKAGE_ACTIVATION_HELPER,
-  packageActivationRuntimeEntrypoint,
-} from "../../src/infra/package-update-activation-runtime-assets.js";
+import { packageActivationRuntimeEntrypoint } from "../../src/infra/package-update-activation-runtime-assets.js";
 import { createPackageIntegrityReader } from "../../src/infra/package-update-integrity.js";
 import { createPackageSwapFixture } from "../../src/infra/package-update-swap.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
@@ -135,9 +133,9 @@ it.each(
           launchers: [],
         }),
       );
-      entry = path.join(prepared.anchor, PACKAGE_ACTIVATION_HELPER);
+      entry = resolvePackageActivationHelper(prepared.anchor);
       expect(readdirSync(prepared.anchor).toSorted()).toEqual(
-        ["candidate", "launchers", "operation.sqlite", PACKAGE_ACTIVATION_HELPER].toSorted(),
+        ["candidate", "launchers"].toSorted(),
       );
     }
 

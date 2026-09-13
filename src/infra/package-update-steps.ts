@@ -671,7 +671,7 @@ async function prepareStagedPackageInstall(
 }
 
 async function cleanupStagedPackageInstall(stage: StagedPackageInstall | null): Promise<void> {
-  if (stage) {
+  if (stage && !stage.activationCustody) {
     if (stage.native) {
       await removePackageUpdatePath(stage.native.binDir);
     }
