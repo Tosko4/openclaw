@@ -259,12 +259,9 @@ describe("triageCommand", () => {
           expect(mocks.spawn).toHaveBeenCalledTimes(launches && !run ? 1 : 0);
           expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
           expect(mocks.runOperatorTriage).toHaveBeenCalledTimes(launches && run ? 1 : 0);
-          expect(
-            runtime.log.mock.calls
-              .flat()
-              .join("\n")
-              .includes("No answer; skipping automatic repair."),
-          ).toBe(answer === "timeout");
+          const outputText = runtime.log.mock.calls.flat().join("\n");
+          const skipMessage = "No answer; skipping automatic repair.";
+          expect(outputText.includes(skipMessage)).toBe(answer === "timeout");
           expect(input.listenerCount("keypress")).toBe(0);
           expect(output.listenerCount("resize")).toBe(0);
           expect(input.isPaused()).toBe(true);
