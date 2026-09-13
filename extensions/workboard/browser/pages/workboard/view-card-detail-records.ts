@@ -3,7 +3,7 @@ import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
-import type { WorkboardCard, WorkboardDependencyState } from "../../lib/workboard/index.ts";
+import type { WorkboardCard, WorkboardDependencyState, WorkboardTaskSummary } from "../../lib/workboard/index.ts";
 import { formatStatusLabel, formatUpdatedTime } from "./view-helpers.ts";
 
 export function renderDependencyDetailList(dependencies: WorkboardDependencyState) {
@@ -56,7 +56,7 @@ export function renderDetailRow(label: string, value: unknown) {
   `;
 }
 
-export function renderDetailList(title: string, values: readonly string[]) {
+function renderDetailList(title: string, values: readonly string[]) {
   const entries = values.map((value) => value.trim()).filter(Boolean);
   if (entries.length === 0) {
     return nothing;
@@ -81,7 +81,7 @@ function renderDetailTime(value: number | undefined) {
   >`;
 }
 
-export function renderAttemptDetails(attempts: readonly WorkboardRunAttempt[]) {
+function renderAttemptDetails(attempts: readonly WorkboardRunAttempt[]) {
   if (!attempts.length) {
     return nothing;
   }
@@ -119,7 +119,7 @@ export function renderAttemptDetails(attempts: readonly WorkboardRunAttempt[]) {
   </section>`;
 }
 
-export function renderProofDetails(proof: readonly WorkboardProof[]) {
+function renderProofDetails(proof: readonly WorkboardProof[]) {
   if (!proof.length) {
     return nothing;
   }
@@ -159,7 +159,7 @@ function detailValues<T>(entries: readonly T[], ...fields: Array<keyof T>): stri
   return entries.map((entry) => joinDetailParts(...fields.map((field) => entry[field])));
 }
 
-export function getDetailSections(card: WorkboardCard) {
+function getDetailSections(card: WorkboardCard) {
   const links = card.metadata?.links ?? [];
   const artifacts = card.metadata?.artifacts ?? [];
   const attachments = card.metadata?.attachments ?? [];
@@ -211,4 +211,100 @@ export function getDetailSections(card: WorkboardCard) {
     ],
   ];
   return detailSections;
+}
+
+export function renderTechnicalDetails(
+  card: WorkboardCard,
+  task: WorkboardTaskSummary | undefined,
+  linkedSessionKey: string | undefined,
+  active: boolean,
+) {
+  const attempts = card.metadata?.attempts ?? [];
+  const proof = card.metadata?.proof ?? [];
+  const automation = card.metadata?.automation;
+  const metadata = card.metadata;
+  const notifications = metadata?.notifications ?? [];
+  const metadataFields: Array<readonly [string, string | number | undefined]> = [
+    [
+      t("workboard.detailTemplate"),
+      metadata?.templateId ? t(`workboard.template.${metadata.templateId}`) : undefined,
+    ],
+    [t("workboard.detailFailures"), metadata?.failureCount],
+    [
+      t("workboard.fieldStatus"),
+      metadata?.stale
+        ? `${t("workboard.badgeStale")}: ${formatUiExternalText(metadata.stale.reason)}`
+        : undefined,
+    ],
+    [
+      t("workboard.detailClaim"),
+      metadata?.claim ? formatUiExternalText(metadata.claim.ownerId) : undefined,
+    ],
+    [
+      t("workboard.detailHeartbeat"),
+      metadata?.claim ? formatUpdatedTime(metadata.claim.lastHeartbeatAt) : undefined,
+    ],
+  ];
+  const detailSections = getDetailSections(card);
+  const hasTechnicalDetails = Boolean(
+    task?.taskId ||
+    card.taskId ||
+    linkedSessionKey ||
+    card.runId ||
+    card.execution?.runId ||
+    automation?.tenant ||
+    metadataFields.some(([, value]) => value !== undefined && value !== "") ||
+    notifications.length ||
+    attempts.length ||
+    proof.length ||
+    detailSections.some(([, values]) => values.some((value) => value.trim())),
+  );
+  if (!hasTechnicalDetails) {
+    return nothing;
+  }
+  return html`<section
+                    class="workboard-detail__tabpanel workboard-detail__technical"
+                    id="workboard-detail-panel-details"
+                    role="tabpanel"
+                    aria-labelledby="workboard-detail-tab-details"
+                    tabindex="0"
+                    ?hidden=${!active}
+                  >
+                    <h3>${t("workboard.detailTechnical")}</h3>
+                    <div class="workboard-detail__technical-properties">
+                      ${renderDetailRow(t("workboard.detailTask"), task?.taskId ?? card.taskId)}
+                      ${renderDetailRow(t("workboard.fieldSession"), linkedSessionKey)}
+                      ${renderDetailRow(
+                        t("workboard.detailRun"),
+                        card.runId ?? card.execution?.runId,
+                      )}
+                      ${renderDetailRow(t("workboard.detailTenant"), automation?.tenant)}
+                      ${metadataFields.map(([label, value]) => renderDetailRow(label, value))}
+                    </div>
+                    ${
+                      task
+                        ? renderDetailList(t("workboard.detailTask"), [
+                            t(`workboard.taskStatus.${task.status}`),
+                            formatUiExternalText(task.progressSummary),
+                            formatUiExternalText(task.terminalSummary),
+                            formatUiExternalText(task.error),
+                          ])
+                        : nothing
+                    }
+                    ${
+                      notifications.length
+                        ? html`<section class="workboard-detail__section">
+                            <h3>${t("workboard.detailNotifications")}</h3>
+                            <ol class="workboard-detail__list">
+                              ${notifications.map(
+                                (notification) =>
+                                  html`<li>${formatUiExternalText(notification.message)}</li>`,
+                              )}
+                            </ol>
+                          </section>`
+                        : nothing
+                    }
+                    ${renderAttemptDetails(attempts)} ${renderProofDetails(proof)}
+                    ${detailSections.map(([title, values]) => renderDetailList(title, values))}
+                  </section>`;
 }

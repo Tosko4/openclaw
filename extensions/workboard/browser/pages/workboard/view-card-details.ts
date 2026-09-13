@@ -8,7 +8,6 @@ import {
 import { icons } from "../../components/icons.ts";
 import { renderWorkboardToast } from "../../components/toast.ts";
 import { t } from "../../i18n/index.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
 import {
   workboardCardBoardId,
   WORKBOARD_ALL_BOARDS_FILTER,
@@ -36,10 +35,7 @@ import {
 import {
   renderDependencyDetailList,
   renderDetailRow,
-  renderDetailList,
-  renderAttemptDetails,
-  renderProofDetails,
-  getDetailSections,
+  renderTechnicalDetails,
 } from "./view-card-detail-records.ts";
 import { renderCardDiscardDialog } from "./view-card-modal.ts";
 import {
@@ -199,50 +195,13 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
   const sessionStatus = getSessionStatus(card, lifecycle, task);
   const taskIsAuthoritative = task ? taskMatchesLifecycle(task, lifecycle) : false;
   const comments = card.metadata?.comments ?? [];
-  const attempts = card.metadata?.attempts ?? [];
-  const proof = card.metadata?.proof ?? [];
   const automation = card.metadata?.automation;
-  const metadata = card.metadata;
-  const notifications = metadata?.notifications ?? [];
-  const metadataFields: Array<readonly [string, string | number | undefined]> = [
-    [
-      t("workboard.detailTemplate"),
-      metadata?.templateId ? t(`workboard.template.${metadata.templateId}`) : undefined,
-    ],
-    [t("workboard.detailFailures"), metadata?.failureCount],
-    [
-      t("workboard.fieldStatus"),
-      metadata?.stale
-        ? `${t("workboard.badgeStale")}: ${formatUiExternalText(metadata.stale.reason)}`
-        : undefined,
-    ],
-    [
-      t("workboard.detailClaim"),
-      metadata?.claim ? formatUiExternalText(metadata.claim.ownerId) : undefined,
-    ],
-    [
-      t("workboard.detailHeartbeat"),
-      metadata?.claim ? formatUpdatedTime(metadata.claim.lastHeartbeatAt) : undefined,
-    ],
-  ];
   const boardId = workboardCardBoardId(card);
   const board = state.boards.find((entry) => entry.id === boardId);
   const events = (card.events ?? []).toReversed();
   const dependencies = getWorkboardDependencyState(card, state.cards);
-  const detailSections = getDetailSections(card);
-  const hasTechnicalDetails = Boolean(
-    task?.taskId ||
-    card.taskId ||
-    linkedSessionKey ||
-    card.runId ||
-    card.execution?.runId ||
-    automation?.tenant ||
-    metadataFields.some(([, value]) => value !== undefined && value !== "") ||
-    notifications.length ||
-    attempts.length ||
-    proof.length ||
-    detailSections.some(([, values]) => values.some((value) => value.trim())),
-  );
+  const technicalDetails = renderTechnicalDetails(card, task, linkedSessionKey, state.detailTab === "details");
+  const hasTechnicalDetails = technicalDetails !== nothing;
   const tabs = [
     { id: "overview", label: t("workboard.detailTabOverview") },
     { id: "activity", label: t("workboard.detailTabActivity") },
@@ -682,55 +641,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                 }
               </section>
             </section>
-            ${
-              hasTechnicalDetails
-                ? html`<section
-                    class="workboard-detail__tabpanel workboard-detail__technical"
-                    id="workboard-detail-panel-details"
-                    role="tabpanel"
-                    aria-labelledby="workboard-detail-tab-details"
-                    tabindex="0"
-                    ?hidden=${activeTab !== "details"}
-                  >
-                    <h3>${t("workboard.detailTechnical")}</h3>
-                    <div class="workboard-detail__technical-properties">
-                      ${renderDetailRow(t("workboard.detailTask"), task?.taskId ?? card.taskId)}
-                      ${renderDetailRow(t("workboard.fieldSession"), linkedSessionKey)}
-                      ${renderDetailRow(
-                        t("workboard.detailRun"),
-                        card.runId ?? card.execution?.runId,
-                      )}
-                      ${renderDetailRow(t("workboard.detailTenant"), automation?.tenant)}
-                      ${metadataFields.map(([label, value]) => renderDetailRow(label, value))}
-                    </div>
-                    ${
-                      task
-                        ? renderDetailList(t("workboard.detailTask"), [
-                            t(`workboard.taskStatus.${task.status}`),
-                            formatUiExternalText(task.progressSummary),
-                            formatUiExternalText(task.terminalSummary),
-                            formatUiExternalText(task.error),
-                          ])
-                        : nothing
-                    }
-                    ${
-                      notifications.length
-                        ? html`<section class="workboard-detail__section">
-                            <h3>${t("workboard.detailNotifications")}</h3>
-                            <ol class="workboard-detail__list">
-                              ${notifications.map(
-                                (notification) =>
-                                  html`<li>${formatUiExternalText(notification.message)}</li>`,
-                              )}
-                            </ol>
-                          </section>`
-                        : nothing
-                    }
-                    ${renderAttemptDetails(attempts)} ${renderProofDetails(proof)}
-                    ${detailSections.map(([title, values]) => renderDetailList(title, values))}
-                  </section>`
-                : nothing
-            }
+            ${technicalDetails}
             ${
               sessionTarget
                 ? html`<section
