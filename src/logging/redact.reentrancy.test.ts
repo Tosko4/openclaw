@@ -3,9 +3,9 @@ import { redactSensitiveText } from "../plugin-sdk/security-runtime.js";
 import { redactInputTextWithSourcePolicy, redactText } from "./redact.js";
 
 describe("nested redaction calls", () => {
-  it.each([false, true])(
-    "keeps nested matcher input and pattern order (fullContext=%s)",
-    (fullContext) => {
+  it.each(["direct text", "public wrapper"])(
+    "keeps nested matcher input and pattern order (%s)",
+    (entry) => {
       const inputs: string[] = [];
       const nested: string[] = [];
       const matcher = {
@@ -22,8 +22,8 @@ describe("nested redaction calls", () => {
       const input = "prefix [outer-one] [outer-two] suffix";
       const patterns = [/prefix/g, matcher, /suffix/g];
       expect(
-        fullContext
-          ? redactText(input, patterns, { fullContext })
+        entry === "direct text"
+          ? redactText(input, patterns)
           : redactSensitiveText(input, { patterns }),
       ).toBe("*** [***] [***] ***");
       expect(inputs).toEqual(["*** [outer-one] [outer-two] suffix"]);

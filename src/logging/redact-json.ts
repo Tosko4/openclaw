@@ -1,11 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import {
+  composeRedactionEdits,
+  rebaseRedactionEdits,
+  type RedactionEdit,
+} from "./redact-edit-composition.js";
+import {
   iterateRedactMatches,
   type RedactMatch,
   type ResolvedRedactPattern,
 } from "./redact-pattern-runtime.js";
 
-export type RedactionEdit = { start: number; end: number; replacement: string };
 export type RedactionTarget = {
   start: number;
   end: number;
@@ -73,7 +77,23 @@ type ScalarToken = RedactionField & {
   rootKey?: string;
   rootValueStart?: number;
   edits: RedactionEdit[];
-  fullMask: boolean;
+  projectedEdits: RedactionEdit[];
+  currentValue: string;
+  currentStart: number;
+  currentEnd: number;
+  currentRaw?: string;
+  encodedEdits?: EncodedEdit[];
+  pending?: RedactionEdit[];
+};
+
+type EncodedEdit = {
+  start: number;
+  end: number;
+  decodedStart: number;
+  decodedEnd: number;
+  sourceEnd: number;
+  sourceDecodedEnd: number;
+  replacement: string;
 };
 
 type FieldContext = Pick<RedactionField, "key" | "path" | "objectPath" | "messagePart"> & {
@@ -171,7 +191,10 @@ function readScalarTokens(text: string, messageKeys?: ReadonlySet<string>): Scal
       value,
       escaped: string && raw.includes("\\"),
       edits: [],
-      fullMask: false,
+      projectedEdits: [],
+      currentValue: value,
+      currentStart: start,
+      currentEnd: end,
     });
   }
   return tokens;
@@ -210,21 +233,22 @@ function encodedBoundary(text: string, token: ScalarToken, offset: number): numb
   return expectDefined(token.encodedBoundaries[offset], "decoded JSON edit boundary");
 }
 
+type ProjectedEdit = RedactionEdit & { scalar: boolean };
+
 function projectMessageEdits(
   input: string,
   tokens: ScalarToken[],
   message: RedactionMessage,
-): void {
+  getEdits: (token: ScalarToken) => RedactionEdit[],
+): ProjectedEdit[] {
   const parts = new Map(message.parts.map((part) => [part.key, part]));
-  const projected: RedactionEdit[] = [];
-  let messageToken: ScalarToken | undefined;
+  const projected: ProjectedEdit[] = [];
   for (const token of tokens) {
     if (!token.isKey && token.path.length === 1 && token.key === "message") {
-      messageToken = token;
       continue;
     }
     const part = token.rootKey === undefined ? undefined : parts.get(token.rootKey);
-    if (!part || (!token.fullMask && token.edits.length === 0)) {
+    if (!part) {
       continue;
     }
     if (
@@ -236,9 +260,7 @@ function projectMessageEdits(
     ) {
       continue;
     }
-    const edits = token.fullMask
-      ? [{ start: 0, end: token.value.length, replacement: "***" }]
-      : token.edits;
+    const edits = getEdits(token);
     for (const edit of edits) {
       let start: number;
       let end: number;
@@ -259,13 +281,16 @@ function projectMessageEdits(
         end = part.start + edit.end;
       }
       if (start < message.contentLength) {
-        projected.push({ start, end: Math.min(end, message.contentLength), replacement });
+        projected.push({
+          start,
+          end: Math.min(end, message.contentLength),
+          replacement,
+          scalar: part.json && !token.string,
+        });
       }
     }
   }
-  if (messageToken && !messageToken.fullMask) {
-    messageToken.edits.push(...projected);
-  }
+  return projected.toSorted((left, right) => left.start - right.start || left.end - right.end);
 }
 
 function firstIntersectingToken(tokens: ScalarToken[], start: number): number {
@@ -273,13 +298,176 @@ function firstIntersectingToken(tokens: ScalarToken[], start: number): number {
   let high = tokens.length;
   while (low < high) {
     const middle = (low + high) >>> 1;
-    if (expectDefined(tokens[middle], "bounded JSON token search").end <= start) {
+    if (expectDefined(tokens[middle], "bounded JSON token search").currentEnd <= start) {
       low = middle + 1;
     } else {
       high = middle;
     }
   }
   return low;
+}
+
+function updateCurrentToken(input: string, token: ScalarToken): void {
+  const parts: string[] = [];
+  const encodedEdits: EncodedEdit[] = [];
+  let cursor = token.start + (token.string ? 1 : 0);
+  let encodedLength = 0;
+  let decodedShift = 0;
+  for (const edit of token.edits) {
+    const start = token.string
+      ? encodedBoundary(input, token, edit.start)
+      : token.start + edit.start;
+    const end = token.string ? encodedBoundary(input, token, edit.end) : token.start + edit.end;
+    const replacement = JSON.stringify(edit.replacement).slice(1, -1);
+    const encodedStart = encodedLength + start - cursor;
+    const encodedEnd = encodedStart + replacement.length;
+    encodedEdits.push({
+      start: encodedStart,
+      end: encodedEnd,
+      decodedStart: edit.start + decodedShift,
+      decodedEnd: edit.start + decodedShift + edit.replacement.length,
+      sourceEnd: end,
+      sourceDecodedEnd: edit.end,
+      replacement,
+    });
+    parts.push(input.slice(cursor, start), replacement);
+    encodedLength = encodedEnd;
+    decodedShift += edit.replacement.length - (edit.end - edit.start);
+    cursor = end;
+  }
+  parts.push(input.slice(cursor, token.end - (token.string ? 1 : 0)));
+  token.currentRaw = `"${parts.join("")}"`;
+  token.encodedEdits = encodedEdits;
+}
+
+function currentDecodedBoundary(
+  input: string,
+  token: ScalarToken,
+  position: number,
+  replacements: Map<string, Map<number, number>>,
+): number | undefined {
+  const offset = position - token.currentStart - 1;
+  const edits = token.encodedEdits;
+  if (!edits) {
+    return decodedBoundary(input, token, token.start + 1 + offset);
+  }
+  let low = 0;
+  let high = edits.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (expectDefined(edits[middle], "current encoded edit").end < offset) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  const edit = edits[low];
+  if (edit && offset >= edit.start) {
+    const within = offset - edit.start;
+    if (!edit.replacement.includes("\\")) {
+      return edit.decodedStart + within;
+    }
+    let boundaries = replacements.get(edit.replacement);
+    if (!boundaries) {
+      boundaries = new Map();
+      let decoded = 0;
+      for (let encoded = 0; encoded < edit.replacement.length; decoded += 1) {
+        boundaries.set(encoded, decoded);
+        encoded +=
+          edit.replacement[encoded] === "\\" ? (edit.replacement[encoded + 1] === "u" ? 6 : 2) : 1;
+      }
+      boundaries.set(edit.replacement.length, decoded);
+      replacements.set(edit.replacement, boundaries);
+    }
+    const decoded = boundaries.get(within);
+    return decoded === undefined ? undefined : edit.decodedStart + decoded;
+  }
+  const previous = edits[low - 1];
+  const original = offset + (previous ? previous.sourceEnd - previous.end : token.start + 1);
+  const decoded = decodedBoundary(input, token, original);
+  return decoded === undefined
+    ? undefined
+    : decoded + (previous ? previous.decodedEnd - previous.sourceDecodedEnd : 0);
+}
+
+function commitPatternEdits(input: string, token: ScalarToken): boolean {
+  const pending = token.pending;
+  token.pending = undefined;
+  if (!pending) {
+    return false;
+  }
+  const edits = mergeRedactionEdits(pending);
+  const value = applyRedactionEdits(token.currentValue, edits);
+  if (value === token.currentValue) {
+    return false;
+  }
+  token.edits = composeRedactionEdits(token.value.length, token.edits, edits);
+  token.currentValue = value;
+  updateCurrentToken(input, token);
+  return true;
+}
+
+function changedRedactionEdits(
+  previous: RedactionEdit[],
+  current: RedactionEdit[],
+): RedactionEdit[] {
+  let index = 0;
+  return current.filter((edit) => {
+    while (
+      previous[index] &&
+      expectDefined(previous[index], "previous configured edit").start < edit.start
+    ) {
+      index += 1;
+    }
+    const before = previous[index];
+    return (
+      !before ||
+      before.start !== edit.start ||
+      before.end !== edit.end ||
+      before.replacement !== edit.replacement
+    );
+  });
+}
+
+function commitOriginalEdits(input: string, token: ScalarToken, edits: RedactionEdit[]): boolean {
+  if (edits.length === 0) {
+    return false;
+  }
+  const combined = mergeRedactionEdits([...token.edits, ...edits]);
+  const value = applyRedactionEdits(token.value, combined);
+  if (value === token.currentValue) {
+    return false;
+  }
+  token.edits = combined;
+  token.currentValue = value;
+  updateCurrentToken(input, token);
+  return true;
+}
+
+function updateCurrentRecord(
+  current: string,
+  tokens: ScalarToken[],
+  changed: ReadonlySet<ScalarToken>,
+): string {
+  const parts: string[] = [];
+  let cursor = 0;
+  let shift = 0;
+  for (const token of tokens) {
+    const start = token.currentStart;
+    const end = token.currentEnd;
+    if (changed.has(token)) {
+      const raw = expectDefined(token.currentRaw, "changed JSON token");
+      parts.push(current.slice(cursor, start), raw);
+      cursor = end;
+      token.currentStart = start + shift;
+      shift += raw.length - (end - start);
+    } else {
+      token.currentStart = start + shift;
+    }
+    token.currentEnd = end + shift;
+  }
+  parts.push(current.slice(cursor));
+  return parts.join("");
 }
 
 export function redactJsonRecord(
@@ -292,107 +480,213 @@ export function redactJsonRecord(
   ) => RedactionEdit | undefined,
   conditionalEdits: (field: RedactionField, changed: boolean) => RedactionEdit[],
   fieldEdits: (field: RedactionField) => RedactionEdit[],
+  prepEdits: (field: RedactionField) => RedactionEdit[],
   messageKeys?: ReadonlySet<string>,
   message?: RedactionMessage,
+  serializedInput = false,
 ): string {
   const tokens = readScalarTokens(input, messageKeys);
+  const messageToken = message
+    ? tokens.find((token) => !token.isKey && token.path.length === 1 && token.key === "message")
+    : undefined;
+  const replacementBoundaries = new Map<string, Map<number, number>>();
+  let projectedMessageEdits: RedactionEdit[] = [];
+  let projectedMessageValue = messageToken?.value ?? "";
+  let current = input;
+  const prepared = new Set<ScalarToken>();
   for (const token of tokens) {
-    token.edits = fieldEdits(token);
-    token.fullMask = !token.string && token.edits.length > 0;
-  }
-  // Both matching surfaces retain their original offsets until all captures are composed.
-  for (const pattern of patterns) {
-    for (const token of tokens) {
-      if (token.isKey) {
-        continue;
-      }
-      const { value } = token;
-      for (const match of iterateRedactMatches(value, pattern)) {
-        const edit = getEdit(match, pattern, (start, end) => ({
-          start,
-          end,
-          value: value.slice(start, end),
-          key: token.key,
-          fieldValue: token.value,
-        }));
-        if (!edit || edit.end <= edit.start) {
-          continue;
-        }
-        if (!token.string) {
-          token.fullMask = true;
-        } else {
-          token.edits.push(edit);
-        }
-      }
+    if (commitOriginalEdits(input, token, prepEdits(token))) {
+      prepared.add(token);
     }
-    for (const match of iterateRedactMatches(input, pattern)) {
-      let capture: { start: number; end: number } | undefined;
-      getEdit(match, pattern, (start, end) => {
-        capture = { start, end };
-        return undefined;
-      });
-      if (!capture || capture.end <= capture.start) {
-        continue;
-      }
-      for (
-        let index = firstIntersectingToken(tokens, capture.start);
-        index < tokens.length;
-        index += 1
+  }
+  if (prepared.size > 0) {
+    current = updateCurrentRecord(current, tokens, prepared);
+  }
+  const conditionalProtected = new Set<ScalarToken>();
+  const projectMessage = (): boolean => {
+    if (!messageToken || !message) {
+      return false;
+    }
+    const projected = projectMessageEdits(input, tokens, message, (token) => {
+      const edits = changedRedactionEdits(token.projectedEdits, token.edits);
+      token.projectedEdits = token.edits;
+      return edits;
+    });
+    if (projected.length === 0) {
+      return false;
+    }
+    const sourceEdits = rebaseRedactionEdits(projectedMessageEdits, projected);
+    const messageEdits = rebaseRedactionEdits(messageToken.edits, projected);
+    let generatedIndex = 0;
+    for (let index = 0; index < messageEdits.length; index += 1) {
+      const edit = expectDefined(messageEdits[index], "projected message edit");
+      const sourceEdit = expectDefined(sourceEdits[index], "projected source edit");
+      const projection = expectDefined(projected[index], "source projection");
+      while (
+        messageToken.edits[generatedIndex] &&
+        expectDefined(messageToken.edits[generatedIndex], "generated message span").start <
+          projection.start
       ) {
-        const token = expectDefined(tokens[index], "bounded JSON token capture");
-        if (token.start >= capture.end) {
-          break;
+        generatedIndex += 1;
+      }
+      const generated = messageToken.edits[generatedIndex];
+      const scalarPromotion =
+        projection.scalar &&
+        generated?.start === projection.start &&
+        generated.end === projection.end &&
+        edit.replacement === JSON.stringify(generated.replacement);
+      const before = messageToken.currentValue.slice(edit.start, edit.end);
+      if (
+        !scalarPromotion &&
+        before !== edit.replacement &&
+        before !== projectedMessageValue.slice(sourceEdit.start, sourceEdit.end)
+      ) {
+        // A source update cannot restore text hidden by a message-only rule.
+        edit.replacement = projection.scalar ? JSON.stringify("***") : "***";
+      }
+    }
+    messageToken.pending = messageEdits;
+    projectedMessageValue = applyRedactionEdits(projectedMessageValue, sourceEdits);
+    projectedMessageEdits = composeRedactionEdits(
+      messageToken.value.length,
+      projectedMessageEdits,
+      sourceEdits,
+    );
+    return commitPatternEdits(input, messageToken);
+  };
+  // Preserve the first matching representation used by each transport before adding the other.
+  for (let phase = 0; phase < 2; phase += 1) {
+    const decoded = serializedInput ? phase === 1 : phase === 0;
+    for (const pattern of patterns) {
+      let pending: Set<ScalarToken> | undefined;
+      const add = (token: ScalarToken, edit: RedactionEdit) => {
+        (token.pending ??= []).push(edit);
+        (pending ??= new Set()).add(token);
+      };
+      if (decoded) {
+        for (const token of tokens) {
+          if (token.isKey) {
+            continue;
+          }
+          const value = token.currentValue;
+          for (const match of iterateRedactMatches(value, pattern)) {
+            const edit = getEdit(match, pattern, (start, end) => ({
+              start,
+              end,
+              value: value.slice(start, end),
+              key: token.key,
+              fieldValue: value,
+            }));
+            if (!edit || edit.end <= edit.start) {
+              continue;
+            }
+            add(
+              token,
+              !token.string && token.edits.length === 0
+                ? { start: 0, end: value.length, replacement: "***" }
+                : edit,
+            );
+          }
         }
-        if (!token.string) {
-          token.fullMask = true;
-          continue;
+      } else {
+        for (const match of iterateRedactMatches(current, pattern)) {
+          let capture: { start: number; end: number } | undefined;
+          getEdit(match, pattern, (start, end) => {
+            capture = { start, end };
+            return undefined;
+          });
+          if (!capture || capture.end <= capture.start) {
+            continue;
+          }
+          for (
+            let index = firstIntersectingToken(tokens, capture.start);
+            index < tokens.length;
+            index += 1
+          ) {
+            const token = expectDefined(tokens[index], "bounded JSON token capture");
+            if (token.currentStart >= capture.end) {
+              break;
+            }
+            const value = token.currentValue;
+            if (!token.string && token.edits.length === 0) {
+              add(token, { start: 0, end: value.length, replacement: "***" });
+              continue;
+            }
+            const start = currentDecodedBoundary(
+              input,
+              token,
+              Math.max(capture.start, token.currentStart + 1),
+              replacementBoundaries,
+            );
+            const end = currentDecodedBoundary(
+              input,
+              token,
+              Math.min(capture.end, token.currentEnd - 1),
+              replacementBoundaries,
+            );
+            // Cutting an escape cannot leave the rest of a quoted credential visible.
+            if (start === undefined || end === undefined || end <= start) {
+              add(token, { start: 0, end: value.length, replacement: "***" });
+              continue;
+            }
+            const edit = getEdit(match, pattern, () => ({
+              start,
+              end,
+              value: value.slice(start, end),
+              key: token.key,
+              fieldValue: value,
+            }));
+            if (edit) {
+              add(token, edit);
+            }
+          }
         }
-        const { value } = token;
-        const start = decodedBoundary(input, token, Math.max(capture.start, token.start + 1));
-        const end = decodedBoundary(input, token, Math.min(capture.end, token.end - 1));
-        // Cutting an escape cannot leave the rest of a quoted credential visible.
-        if (start === undefined || end === undefined || end <= start) {
-          token.fullMask = true;
-          continue;
+      }
+      if (!pending) {
+        continue;
+      }
+      for (const token of pending) {
+        if (!commitPatternEdits(input, token)) {
+          pending.delete(token);
         }
-        const edit = getEdit(match, pattern, () => ({
-          start,
-          end,
-          value: value.slice(start, end),
-          key: token.key,
-          fieldValue: token.value,
-        }));
-        if (edit) {
-          token.edits.push(edit);
+      }
+      if (pending.size > 0) {
+        current = updateCurrentRecord(current, tokens, pending);
+      }
+    }
+    const changed = new Set<ScalarToken>();
+    for (const token of tokens) {
+      if (phase === 0 && commitOriginalEdits(input, token, fieldEdits(token))) {
+        changed.add(token);
+      }
+      if (token.string && !conditionalProtected.has(token)) {
+        const edits = conditionalEdits(token, token.edits.length > 0);
+        if (edits.length > 0) {
+          conditionalProtected.add(token);
+          if (commitOriginalEdits(input, token, edits)) {
+            changed.add(token);
+          }
         }
       }
     }
-  }
-  for (const token of tokens) {
-    if (token.string) {
-      token.edits.push(...conditionalEdits(token, token.fullMask || token.edits.length > 0));
+    if (projectMessage() && messageToken) {
+      changed.add(messageToken);
     }
-    token.edits = mergeRedactionEdits(token.edits);
-  }
-  if (message) {
-    projectMessageEdits(input, tokens, message);
-  }
-  const edits: RedactionEdit[] = [];
-  for (const token of tokens) {
-    if (token.fullMask) {
-      edits.push({ start: token.start, end: token.end, replacement: '"***"' });
-    } else if (token.edits.length > 0) {
-      const value = applyRedactionEdits(token.value, token.edits);
-      edits.push({
-        start: token.start,
-        end: token.end,
-        replacement: JSON.stringify(
-          message && !token.isKey && token.path.length === 1 && token.key === "message"
-            ? message.finish(value)
-            : value,
-        ),
-      });
+    if (changed.size > 0) {
+      current = updateCurrentRecord(current, tokens, changed);
     }
   }
-  return applyRedactionEdits(input, edits);
+  if (messageToken && message) {
+    const finished = message.finish(messageToken.currentValue);
+    if (finished !== messageToken.currentValue) {
+      return applyRedactionEdits(current, [
+        {
+          start: messageToken.currentStart,
+          end: messageToken.currentEnd,
+          replacement: JSON.stringify(finished),
+        },
+      ]);
+    }
+  }
+  return current;
 }

@@ -9,11 +9,11 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { readLoggingConfig } from "./config.js";
+import type { RedactionEdit } from "./redact-edit-composition.js";
 import { modelVisibleToolTextRedactionState } from "./redact-internal-state.js";
 import { isFullContextToolPayloadRedaction } from "./redact-internal.js";
 import {
   redactJsonRecord,
-  type RedactionEdit,
   type RedactionField,
   type RedactionMessage,
   type RedactionTarget,
@@ -1132,30 +1132,42 @@ export function redactSecrets<T>(value: T): T {
   return redactSecretsWithOptions(value, resolveToolPayloadRedaction());
 }
 
-function getBuiltInRecordEdits(field: RedactionField, mode: RedactSensitiveMode): RedactionEdit[] {
+function getFieldRecordEdits(field: RedactionField, mode: RedactSensitiveMode): RedactionEdit[] {
   const { key, value, path, objectPath } = field;
   if (!field.string) {
     return mode !== "off" && value !== "null" && shouldRedactStructuredPrimitiveField(key, path)
       ? [{ start: 0, end: value.length, replacement: "***" }]
       : [];
   }
+  if (mode === "off") {
+    return [];
+  }
+  if (
+    isPublicShareIdPath(path) ||
+    shouldRedactStructuredStringField(key, value, path, objectPath)
+  ) {
+    return [
+      {
+        start: 0,
+        end: value.length,
+        replacement: maskSecretFieldValue(key, value, true),
+      },
+    ];
+  }
+  return [];
+}
+
+function getTextRecordEdits(field: RedactionField, mode: RedactSensitiveMode): RedactionEdit[] {
+  if (!field.string) {
+    return [];
+  }
+  const { value } = field;
   const edits: RedactionEdit[] = [];
   redactRegisteredSecretValues(value, (secret, start) => {
     edits.push({ start, end: start + secret.length, replacement: "***" });
     return secret;
   });
   if (mode === "off") {
-    return edits;
-  }
-  if (
-    isPublicShareIdPath(path) ||
-    shouldRedactStructuredStringField(key, value, path, objectPath)
-  ) {
-    edits.push({
-      start: 0,
-      end: value.length,
-      replacement: maskSecretFieldValue(key, value, true),
-    });
     return edits;
   }
   const bitmap = computeSensitiveRedactionBitmap(value, { mode, patterns: [] });
@@ -1223,9 +1235,11 @@ export function redactLogRecordForTransport(
       resolved.patterns,
       (match, pattern, project) => getRedactionEdit(match, pattern, undefined, project),
       getAppPasswordRecordEdits,
-      (field) => getBuiltInRecordEdits(field, resolved.mode),
+      (field) => getFieldRecordEdits(field, resolved.mode),
+      (field) => getTextRecordEdits(field, resolved.mode),
       messageKeys,
       message,
+      typeof record === "string",
     ),
   );
 }

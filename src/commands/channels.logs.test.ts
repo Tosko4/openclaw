@@ -175,7 +175,7 @@ describe("channelsLogsCommand", () => {
 
     const output = runtime.log.mock.calls.flat().join("\n");
     expect(output).toContain("2026-04-25T12:00:00.000Z info");
-    expect(output).toContain("opaque=opaque…7890");
+    expect(output).toContain("opaque=***");
     expect(output).not.toContain(fixtureCredential);
   });
 
@@ -193,7 +193,7 @@ describe("channelsLogsCommand", () => {
     await channelsLogsCommand({ channel: "slack", json: true }, runtime);
 
     const payload = readJsonPayload();
-    expect(payload.lines[0]?.message).toBe("opaque=opaque…7890");
+    expect(payload.lines[0]?.message).toBe("opaque=***");
     expect(JSON.stringify(payload)).not.toContain(fixtureCredential);
   });
 

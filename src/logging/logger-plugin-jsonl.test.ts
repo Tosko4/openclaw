@@ -5,6 +5,7 @@ import { createPluginRecord } from "../plugins/loader-records.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { startPluginServices } from "../plugins/services.js";
+import { levelToMinLevel } from "./levels.js";
 import { readConfiguredLogTail } from "./log-tail.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { applyLoggingConfig, flushLogger, resetLogger } from "./logger.js";
@@ -55,6 +56,19 @@ function registerPlugin(logger: ReturnType<typeof createSubsystemLogger>, id: st
   return { api: host.createApi(record, { config: {} }), registry: host.registry };
 }
 
+async function runPluginServices(registry: ReturnType<typeof registerPlugin>["registry"]) {
+  const services = await startPluginServices({ registry, config: {} });
+  await services.stop();
+  await flushLogger();
+}
+
+function parseLogRecords(text: string) {
+  return text
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+}
+
 beforeAll(async () => await paths.setup());
 beforeEach(() => {
   rawConsole = loggingState.rawConsole;
@@ -84,6 +98,275 @@ const patternCases = [
   },
   { name: "copied-defaults", custom: false, patterns: getDefaultRedactPatterns() },
 ];
+
+it.each([
+  { customOnly: false, order: "forward" },
+  { customOnly: true, order: "forward" },
+  { customOnly: false, order: "reversed" },
+  { customOnly: true, order: "reversed" },
+  { customOnly: false, order: "partial-remask" },
+  { customOnly: true, order: "partial-remask" },
+])(
+  "Gateway plugin service applies configured rules in order (custom-only=$customOnly, order=$order)",
+  async ({ customOnly, order }) => {
+    vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
+    vi.stubEnv("OPENCLAW_TEST_CONSOLE", "1");
+    const file = paths.nextPath();
+    const dependent = String.raw`/\*\*\* (PRIVATE_[A-Z]+)/g`;
+    const patterns =
+      order === "reversed"
+        ? [dependent, "MASKME"]
+        : order === "partial-remask"
+          ? [
+              "MASKME",
+              String.raw`/(\*)(?=\*\* PRIVATE_[A-Z]+)/g`,
+              String.raw`/\*{5} (PRIVATE_[A-Z]+)/g`,
+            ]
+          : ["MASKME", dependent];
+    applyLoggingConfig({
+      level: "info",
+      file,
+      consoleStyle: "json",
+      consoleLevel: "info",
+      redactPatterns: [...(customOnly ? [] : getDefaultRedactPatterns()), ...patterns],
+    });
+    const output = vi.fn();
+    loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+    const logger = createSubsystemLogger("ordered-record");
+    const { api, registry } = registerPlugin(logger, "ordered-record");
+    api.registerService({
+      id: "ordered-record",
+      start() {
+        logger.info("HUNT ordered MASKME PRIVATE_VALUE", { value: "MASKME PRIVATE_VALUE" });
+      },
+    });
+    await runPluginServices(registry);
+    const stored = fs.readFileSync(file, "utf8");
+    const lines = stored.trim().split("\n");
+    const records = lines.map((line) => JSON.parse(line));
+    const consoleRecords = output.mock.calls.map(([line]) => JSON.parse(String(line)));
+    const tail = await readConfiguredLogTail();
+    const tailRecords = tail.lines.map((line) => JSON.parse(line));
+    expect(records).toHaveLength(1);
+    expect(consoleRecords).toHaveLength(1);
+    expect(tailRecords).toHaveLength(1);
+    const marker = order === "partial-remask" ? "*****" : "***";
+    const written = `${marker} ***`;
+    expect(records[0]).toMatchObject({
+      "1": { value: written },
+      message: `HUNT ordered ${written}`,
+    });
+    expect(consoleRecords[0]).toMatchObject({ value: written, message: `HUNT ordered ${written}` });
+    expect(tailRecords[0]).toMatchObject({
+      "1": { value: `${marker} ***` },
+      message: `HUNT ordered ${marker} ***`,
+    });
+    expect(tail.lines).toEqual(lines);
+    expect(fs.readFileSync(file, "utf8")).toBe(stored);
+  },
+);
+
+it.each([false, true])(
+  "Gateway plugin service defers earlier encoded rules until the next tail pass (custom-only=%s)",
+  async (customOnly) => {
+    vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
+    vi.stubEnv("OPENCLAW_TEST_CONSOLE", "1");
+    const file = paths.nextPath();
+    applyLoggingConfig({
+      level: "info",
+      file,
+      consoleStyle: "json",
+      consoleLevel: "info",
+      redactPatterns: [
+        ...(customOnly ? [] : getDefaultRedactPatterns()),
+        String.raw`/"stage":"\*\*\*","value":"(PRIVATE)"/g`,
+        String.raw`/"stage":"(MASKME)"/g`,
+      ],
+    });
+    const output = vi.fn();
+    loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+    const logger = createSubsystemLogger("reversed-context");
+    const { api, registry } = registerPlugin(logger, "reversed-context");
+    api.registerService({
+      id: "reversed-context",
+      start() {
+        logger.info("reversed context", { stage: "MASKME", value: "PRIVATE" });
+      },
+    });
+    await runPluginServices(registry);
+    const stored = fs.readFileSync(file, "utf8");
+    const records = parseLogRecords(stored);
+    const consoleRecords = output.mock.calls.map(([line]) => JSON.parse(String(line)));
+    const tail = await readConfiguredLogTail();
+    const tailRecords = tail.lines.map((line) => JSON.parse(line));
+    expect(records).toHaveLength(1);
+    expect(consoleRecords).toHaveLength(1);
+    expect(tailRecords).toHaveLength(1);
+    for (const record of [records[0][1], consoleRecords[0]]) {
+      expect(record).toMatchObject({ stage: "***", value: "PRIVATE" });
+    }
+    expect(tailRecords[0][1]).toEqual({ stage: "***", value: "***" });
+    for (const record of [records[0], consoleRecords[0], tailRecords[0]]) {
+      expect(record.message).toBe("reversed context");
+    }
+    expect(fs.readFileSync(file, "utf8")).toBe(stored);
+  },
+);
+
+it.each([false, true])(
+  "Gateway plugin service uses prior masks in JSON contexts and derived messages (custom-only=%s)",
+  async (customOnly) => {
+    vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
+    vi.stubEnv("OPENCLAW_TEST_CONSOLE", "1");
+    const file = paths.nextPath();
+    applyLoggingConfig({
+      level: "info",
+      file,
+      consoleStyle: "json",
+      consoleLevel: "info",
+      redactPatterns: [
+        ...(customOnly ? [] : getDefaultRedactPatterns()),
+        "MASKME",
+        String.raw`/"stage":"\*\*\*","value":"([\s\S]+?)","account":/g`,
+        String.raw`/"account":(123456)/g`,
+        String.raw`/"account":"\*\*\*","next":"(PRIVATE_[A-Z]+)"/g`,
+        String.raw`/"password":"\*\*\*","value2":"(PRIVATE)"/g`,
+      ],
+    });
+    const output = vi.fn();
+    loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+    const logger = createSubsystemLogger("ordered-context");
+    const rawLogger = getChildLogger({ subsystem: "ordered-context" });
+    const { api, registry } = registerPlugin(logger, "ordered-context");
+    const fields = {
+      stage: "MASKME",
+      value: 'prefix"\\\n😺\ud800PRIVATE_VALUE',
+      account: 123456,
+      next: "PRIVATE_NUMERIC",
+      ordinary: "visible",
+    };
+    let conversions = 0;
+    api.registerService({
+      id: "ordered-context",
+      start() {
+        logger.info("ordered context", { ...fields, password: "opaque", value2: "PRIVATE" });
+        rawLogger.log(
+          levelToMinLevel("info"),
+          "INFO",
+          undefined,
+          "derived ordered",
+          new (class {
+            toJSON() {
+              conversions += 1;
+              return fields;
+            }
+          })(),
+        );
+      },
+    });
+    await runPluginServices(registry);
+    const lines = fs.readFileSync(file, "utf8").trim().split("\n");
+    const records = lines.map((line) => JSON.parse(line));
+    const consoleRecords = output.mock.calls.map(([line]) => JSON.parse(String(line)));
+    const tail = await readConfiguredLogTail();
+    const tailRecords = tail.lines.map((line) => JSON.parse(line));
+    expect(records).toHaveLength(2);
+    expect(consoleRecords).toHaveLength(1);
+    expect(tailRecords).toHaveLength(2);
+    expect(conversions).toBe(1);
+    const masked = { stage: "***", value: "***", account: "***", next: "***", ordinary: "visible" };
+    for (const record of [records[0][1], consoleRecords[0], tailRecords[0][1]]) {
+      expect(record).toMatchObject({ ...masked, password: "***", value2: "***" });
+    }
+    for (const record of [records[1], tailRecords[1]]) {
+      expect(record[3]).toEqual(masked);
+      expect(record.message).toBe(`derived ordered ${JSON.stringify(masked)}`);
+    }
+    expect(tail.lines).toEqual(lines);
+    expect(JSON.stringify([records, consoleRecords, tailRecords])).not.toContain("PRIVATE_");
+  },
+);
+
+it("Gateway plugin service projects remasked empty values into derived messages", async () => {
+  vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
+  const file = paths.nextPath();
+  applyLoggingConfig({
+    level: "info",
+    file,
+    consoleLevel: "silent",
+    redactPatterns: [String.raw`/\*(?=\*{0,10}")/g`],
+  });
+  const logger = createSubsystemLogger("empty-mask-projection");
+  const rawLogger = getChildLogger({ subsystem: "empty-mask-projection" });
+  const { api, registry } = registerPlugin(logger, "empty-mask-projection");
+  api.registerService({
+    id: "empty-mask-projection",
+    start() {
+      rawLogger.log(
+        levelToMinLevel("info"),
+        "INFO",
+        undefined,
+        "empty projection",
+        new (class {
+          toJSON() {
+            return { password: "" };
+          }
+        })(),
+      );
+    },
+  });
+  await runPluginServices(registry);
+  const records = parseLogRecords(fs.readFileSync(file, "utf8"));
+  expect(records).toHaveLength(1);
+  expect(records[0][3]).toEqual({ password: "*********" });
+  expect(records[0].message).toBe('empty projection {"password":"*********"}');
+});
+
+it.each([false, true])(
+  "Gateway plugin service preserves decoded matches before encoded context masks (custom-only=%s)",
+  async (customOnly) => {
+    vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
+    vi.stubEnv("OPENCLAW_TEST_CONSOLE", "1");
+    const file = paths.nextPath();
+    applyLoggingConfig({
+      level: "info",
+      file,
+      consoleStyle: "json",
+      consoleLevel: "info",
+      redactPatterns: [
+        ...(customOnly ? [] : getDefaultRedactPatterns()),
+        String.raw`/"value":"(MASKME)/g`,
+        String.raw`/MASKME\n(PRIVATE)/g`,
+      ],
+    });
+    const output = vi.fn();
+    loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+    const logger = createSubsystemLogger("mixed-context");
+    const { api, registry } = registerPlugin(logger, "mixed-context");
+    api.registerService({
+      id: "mixed-context",
+      start() {
+        logger.info("mixed context", { value: "MASKME\nPRIVATE" });
+      },
+    });
+    await runPluginServices(registry);
+    const lines = fs.readFileSync(file, "utf8").trim().split("\n");
+    const records = lines.map((line) => JSON.parse(line));
+    const consoleRecords = output.mock.calls.map(([line]) => JSON.parse(String(line)));
+    const tail = await readConfiguredLogTail();
+    const tailRecords = tail.lines.map((line) => JSON.parse(line));
+    expect(records).toHaveLength(1);
+    expect(consoleRecords).toHaveLength(1);
+    expect(tailRecords).toHaveLength(1);
+    for (const record of [records[0][1], consoleRecords[0], tailRecords[0][1]]) {
+      expect(record.value).toBe("***\n***");
+    }
+    for (const record of [records[0], consoleRecords[0], tailRecords[0]]) {
+      expect(record.message).toBe("mixed context");
+    }
+    expect(tail.lines).toEqual(lines);
+  },
+);
 
 it.each([false, true])(
   "Gateway plugin service preserves anchored string patterns (custom-only=%s)",
@@ -117,14 +400,8 @@ it.each([false, true])(
         });
       },
     });
-    const services = await startPluginServices({ registry, config: {} });
-    await services.stop();
-    await flushLogger();
-    const records = fs
-      .readFileSync(file, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
+    await runPluginServices(registry);
+    const records = parseLogRecords(fs.readFileSync(file, "utf8"));
     const consoleRecords = output.mock.calls.map(([line]) => JSON.parse(String(line)));
     const tail = (await readConfiguredLogTail()).lines.map((line) => JSON.parse(line));
     expect(records).toHaveLength(1);
@@ -181,9 +458,7 @@ it.each([
         });
       },
     });
-    const services = await startPluginServices({ registry, config: {} });
-    await services.stop();
-    await flushLogger();
+    await runPluginServices(registry);
     const lines = fs.readFileSync(file, "utf8").trim().split("\n");
     const records = lines.map((line) => JSON.parse(line));
     const consoleRecords = output.mock.calls.map(([line]) => JSON.parse(String(line)));
@@ -219,7 +494,7 @@ it("Gateway plugin service tail masks pre-existing JSON credentials and embedded
   ];
   const legacyLines = legacy.map((record) => JSON.stringify(record));
   legacyLines.push(
-    ' { "Authorization" : "Basic dXNlcjpwYXNz", "account" : "LEGACY_CONTEXT_VALUE", "ordinary" : "visible" } ',
+    ' { "Authorization" : "Basic dXNlcjpwYXNz", "kind" : "legacy", "account" : "LEGACY_CONTEXT_VALUE", "ordinary" : "visible" } ',
   );
   fs.writeFileSync(file, `${legacyLines.join("\n")}\n`);
   applyLoggingConfig({
@@ -228,7 +503,7 @@ it("Gateway plugin service tail masks pre-existing JSON credentials and embedded
     consoleLevel: "silent",
     redactPatterns: [
       ...getDefaultRedactPatterns(),
-      String.raw`/"Authorization" : "Basic dXNlcjpwYXNz", "account" : "([^"]+)"/g`,
+      String.raw`/"kind" : "legacy", "account" : "([^"]+)"/g`,
     ],
   });
   const { api, registry } = registerPlugin(createSubsystemLogger("plugins"), "legacy-tail");
@@ -238,9 +513,7 @@ it("Gateway plugin service tail masks pre-existing JSON credentials and embedded
       api.logger.info("current record");
     },
   });
-  const services = await startPluginServices({ registry, config: {} });
-  await services.stop();
-  await flushLogger();
+  await runPluginServices(registry);
   const stored = fs.readFileSync(file, "utf8");
   const storedLines = stored.trim().split("\n");
   expect(storedLines.slice(0, 3)).toEqual(legacyLines);
@@ -254,7 +527,12 @@ it("Gateway plugin service tail masks pre-existing JSON credentials and embedded
   });
   expect(records[1].scenario).toBe("legacy private key");
   expect(records[1].message).not.toBe(privateKey);
-  expect(records[2]).toEqual({ Authorization: "***", account: "***", ordinary: "visible" });
+  expect(records[2]).toEqual({
+    Authorization: "***",
+    kind: "legacy",
+    account: "***",
+    ordinary: "visible",
+  });
   expect(tail.lines.join("\n")).not.toContain(privateKeyBody);
   expect(tail.lines.join("\n")).not.toContain("dXNlcjpwYXNz");
   expect(tail.lines.join("\n")).not.toContain("LEGACY_CONTEXT_VALUE");
@@ -276,9 +554,7 @@ it("Gateway plugin service tail applies reloaded patterns to earlier records", a
       api.logger.info("HUNT reload CUSTOM_ONLY_VALUE RELOADED_VALUE");
     },
   });
-  const services = await startPluginServices({ registry, config: {} });
-  await services.stop();
-  await flushLogger();
+  await runPluginServices(registry);
   const stored = fs.readFileSync(file, "utf8");
   const before = await readConfiguredLogTail();
   expect(before.lines).toEqual(stored.trim().split("\n"));
@@ -367,7 +643,9 @@ it.each([false, true])(
           payload: "https://example.test/?password=value&safe=1",
         });
         logger.info("message-only opaque-value", { scenario: "display-only" });
-        rawLogger.info(
+        rawLogger.log(
+          levelToMinLevel("info"),
+          "INFO",
           undefined,
           "derived context",
           new (class {
@@ -379,9 +657,7 @@ it.each([false, true])(
         );
       },
     });
-    const services = await startPluginServices({ registry, config: {} });
-    await services.stop();
-    await flushLogger();
+    await runPluginServices(registry);
     const lines = fs.readFileSync(file, "utf8").trim().split("\n");
     const records = lines.map((line) => JSON.parse(line));
     const consoleRecords = output.mock.calls.map(([line]) => JSON.parse(String(line)));
@@ -474,14 +750,8 @@ it.each([false, true])(
         });
       },
     });
-    const services = await startPluginServices({ registry, config: {} });
-    await services.stop();
-    await flushLogger();
-    const records = fs
-      .readFileSync(file, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
+    await runPluginServices(registry);
+    const records = parseLogRecords(fs.readFileSync(file, "utf8"));
     const consoleRecords = output.mock.calls.map(([line]) => JSON.parse(String(line)));
     const tail = (await readConfiguredLogTail()).lines.map((line) => JSON.parse(line));
     expect(records).toHaveLength(1);
@@ -495,7 +765,7 @@ it.each([false, true])(
         repeat: "repeat-***",
         lookup: "***",
         adjacent: "******",
-        overlap: "***",
+        overlap: "******",
         nested: [{ account: "***" }, { account: ["array-visible"] }],
       });
     }
@@ -561,9 +831,7 @@ it.each(patternCases)(
         api.logger.info("CUSTOM_ONLY_VALUE RELOADED_VALUE");
       },
     });
-    const services = await startPluginServices({ registry, config: {} });
-    await services.stop();
-    await flushLogger();
+    await runPluginServices(registry);
     const raw = fs.readFileSync(file, "utf8");
     const records = raw
       .trim()
@@ -621,14 +889,8 @@ it("Gateway plugin service logger overflow marker preserves quoted hostname JSON
       api.logger.info("second");
     },
   });
-  const services = await startPluginServices({ registry, config: {} });
-  await services.stop();
-  await flushLogger();
-  const records = fs
-    .readFileSync(file, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
+  await runPluginServices(registry);
+  const records = parseLogRecords(fs.readFileSync(file, "utf8"));
   expect(records).toHaveLength(2);
   expect(records[0]).toMatchObject({
     dropped: 1,
@@ -682,7 +944,7 @@ it.each(patternCases)(
           TOKEN: "${TOKEN:-literal-default-secret}",
           session: "$WORKSPACE_DIR/session.jsonl",
         });
-        rawLogger.info(undefined, "derived class", converted);
+        rawLogger.log(levelToMinLevel("info"), "INFO", undefined, "derived class", converted);
         rawLogger.info(
           new (class {
             toJSON() {
@@ -707,9 +969,7 @@ it.each(patternCases)(
         );
       },
     });
-    const services = await startPluginServices({ registry, config: {} });
-    await services.stop();
-    await flushLogger();
+    await runPluginServices(registry);
     const text = fs.readFileSync(file, "utf8");
     const records = text
       .trim()
