@@ -72,7 +72,7 @@ function publicResourceRegistry(
   return registry;
 }
 
-describe("MCP App sandbox HTTP origin", () => {
+describe("MCP App public-shell cache identity", () => {
   it.each(["GET", "HEAD"] as const)(
     "binds %s caching to the selected public shell and rejects stale cache identities",
     async (method) => {
@@ -109,7 +109,9 @@ describe("MCP App sandbox HTTP origin", () => {
       });
     },
   );
+});
 
+describe("MCP App sandbox HTTP origin", () => {
   it("serves only explicitly public registered assets without Gateway credentials", async () => {
     const read = vi.fn(async () => ({
       body: Buffer.from("window.rendererReady=true"),
