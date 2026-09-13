@@ -2,6 +2,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatChannelId } from "../channels/ids.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { ExecHost } from "../infra/exec-approvals.js";
 import {
   isDangerousHostEnvOverrideVarName,
@@ -21,6 +23,8 @@ import {
 } from "../infra/shell-env.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
@@ -31,6 +35,7 @@ import { buildSandboxEnv, coerceEnv } from "./bash-tools.shared.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 import { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
+import { isSubagentEnvelopeSession } from "./subagents/spawn/subagent-capabilities.js";
 import { ToolInputError } from "./tools/common.js";
 
 export type ExecToolArgs = Record<string, unknown> & {
@@ -166,11 +171,48 @@ function getResolvedExecWorkdirPreparedState(
   return resolvedExecWorkdirPreparedStates.get(params);
 }
 
-export function resolveNotifyOnExitEmptySuccess(defaults?: ExecToolDefaults): boolean {
+function resolveNotifyOnExitEmptySuccess(defaults?: ExecToolDefaults): boolean {
   if (typeof defaults?.notifyOnExitEmptySuccess === "boolean") {
     return defaults.notifyOnExitEmptySuccess;
   }
   return normalizeChatChannelId(defaults?.messageProvider) !== null;
+}
+
+/** Capture notification routing and child identity before process lifetime detaches. */
+export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
+  const notifyOnExit = defaults?.notifyOnExit !== false;
+  const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
+  const notifySessionKey = normalizeOptionalString(
+    defaults?.notifySessionKey ?? defaults?.sessionKey,
+  );
+  const notifyAgentSession = parseAgentSessionKey(notifySessionKey);
+  // Visible child ownership is persisted before dispatch, whereas registry
+  // registration can follow startup and retirement can precede process exit.
+  const subagentSession = isSubagentEnvelopeSession(notifySessionKey, {
+    entry:
+      notifySessionKey && defaults?.config && notifyAgentSession?.rest.startsWith("dashboard:")
+        ? loadSessionEntryReadOnly({
+            agentId: notifyAgentSession.agentId,
+            sessionKey: notifySessionKey,
+            storePath: resolveSessionStorePathCore(defaults.config.session?.store, {
+              agentId: notifyAgentSession.agentId,
+            }),
+          })
+        : undefined,
+  });
+  const notifyDeliveryContext = normalizeDeliveryContext({
+    channel: defaults?.messageProvider,
+    to: defaults?.currentChannelId,
+    accountId: defaults?.accountId,
+    threadId: defaults?.currentThreadTs,
+  });
+  return {
+    notifyOnExit,
+    notifyOnExitEmptySuccess,
+    notifySessionKey,
+    subagentSession,
+    notifyDeliveryContext,
+  };
 }
 
 export function resolveExecPreparedRunEnvironment(defaults?: ExecToolDefaults) {

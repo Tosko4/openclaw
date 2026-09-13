@@ -338,7 +338,11 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   }
 }
 
-function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
+function maybeNotifyOnExit(
+  session: ProcessSession,
+  status: "completed" | "failed",
+  subagentSession: boolean,
+) {
   if (
     !session.backgrounded ||
     !session.notifyOnExit ||
@@ -390,7 +394,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   }
   // Subagent sessions receive exec results via process poll and announce flow;
   // the heartbeat would fall back to the main session and cause spurious wakes.
-  if (!isSubagentSessionKey(sessionKey)) {
+  if (!subagentSession && !isSubagentSessionKey(sessionKey)) {
     const wakeOptions = scopedHeartbeatWakeOptionsForPolicy(
       sessionKey,
       {
@@ -661,6 +665,8 @@ export async function runExecProcess({
   pendingMaxOutput: number;
   cleanupMs?: number;
   notifyOnExit: boolean;
+  /** Start-time subagent identity resolved from the persisted spawn envelope. */
+  subagentSession?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
   sessionKey?: string;
@@ -841,7 +847,7 @@ export async function runExecProcess({
         }
         onSettledBeforeNotify?.(finalOutcome);
         if (shouldNotify) {
-          maybeNotifyOnExit(session, finalOutcome.status);
+          maybeNotifyOnExit(session, finalOutcome.status, opts.subagentSession === true);
         }
       } catch (error) {
         // Recover before yielding: scope joins queued by markExited must not

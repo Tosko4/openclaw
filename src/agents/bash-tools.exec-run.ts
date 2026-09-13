@@ -28,7 +28,6 @@ import {
 } from "../secrets/egress-proxy/registry.js";
 import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
@@ -39,7 +38,7 @@ import {
   createExecRequestPreparation,
   type ExecToolArgs,
   resolveExecPreparedRunEnvironment,
-  resolveNotifyOnExitEmptySuccess,
+  resolveExecNotificationDefaults,
   resolvePreparedExecEnvironment,
 } from "./bash-tools.exec-request-preparation.js";
 import {
@@ -155,17 +154,13 @@ export function createExecTool(
       `exec: interpreter/runtime binaries in safeBins (${unprofiledInterpreterSafeBins.join(", ")}) are unsafe without explicit hardened profiles; prefer allowlist entries`,
     );
   }
-  const notifyOnExit = defaults?.notifyOnExit !== false;
-  const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
-  const notifySessionKey = normalizeOptionalString(
-    defaults?.notifySessionKey ?? defaults?.sessionKey,
-  );
-  const notifyDeliveryContext = normalizeDeliveryContext({
-    channel: defaults?.messageProvider,
-    to: defaults?.currentChannelId,
-    accountId: defaults?.accountId,
-    threadId: defaults?.currentThreadTs,
-  });
+  const {
+    notifyOnExit,
+    notifyOnExitEmptySuccess,
+    notifySessionKey,
+    subagentSession,
+    notifyDeliveryContext,
+  } = resolveExecNotificationDefaults(defaults);
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
@@ -602,6 +597,7 @@ export function createExecTool(
           pendingMaxOutput: DEFAULT_PENDING_MAX_OUTPUT,
           cleanupMs,
           notifyOnExit,
+          subagentSession,
           notifyOnExitEmptySuccess,
           scopeKey: defaults?.scopeKey,
           sessionKey: notifySessionKey,
