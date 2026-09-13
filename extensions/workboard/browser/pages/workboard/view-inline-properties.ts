@@ -357,7 +357,7 @@ export class WorkboardInlineText extends LitElement {
       aria-haspopup=${field === "labels" ? "dialog" : nothing}
       aria-controls=${field === "labels" ? labelsPopoverId : nothing}
       aria-expanded=${field === "labels" ? String(this.editing) : nothing}
-      ?disabled=${disabled}
+      ?disabled=${disabled && !(field === "labels" && this.hasUnsavedChanges && !this.saving)}
       @click=${() => {
         if (!this.base || !this.hasUnsavedChanges) {
           this.base = card;
@@ -421,14 +421,16 @@ export class WorkboardInlineText extends LitElement {
               aria-label=${label}
               rows="3"
               .value=${this.value}
-              ?disabled=${locked}
+              ?disabled=${this.saving || (disabled && !readOnly)}
+              ?readonly=${readOnly}
               @input=${input}
             ></textarea>`
           : html`<input
               class="settings-input"
               aria-label=${label}
               .value=${this.value}
-              ?disabled=${locked}
+              ?disabled=${this.saving || (disabled && !readOnly)}
+              ?readonly=${readOnly}
               @input=${input}
             />`
       }

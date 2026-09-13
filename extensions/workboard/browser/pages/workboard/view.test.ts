@@ -3476,11 +3476,15 @@ describe("renderWorkboard", () => {
 
   it.each(
     (["title", "notes", "labels"] as const).flatMap((field) =>
-      (["permission", "archive"] as const).map((change) => ({ field, change })),
+      (["permission", "archive"] as const).flatMap((change) =>
+        (field === "labels" ? (["none", "before", "after"] as const) : (["none"] as const)).map(
+          (dismiss) => ({ field, change, dismiss }),
+        ),
+      ),
     ),
   )(
-    "retains dirty inline $field when live $change removes editability",
-    async ({ field, change }) => {
+    "retains dirty inline $field when live $change removes editability (dismiss=$dismiss)",
+    async ({ field, change, dismiss }) => {
       const card = createWorkboardCard({ title: "Original", notes: "Original", labels: [] });
       const client = createWorkboardTestClient({});
       let canWrite = true;
@@ -3507,7 +3511,7 @@ describe("renderWorkboard", () => {
         popover.showPopover = vi.fn();
       }
       trigger.click();
-      const input = await waitForFast(() =>
+      let input = await waitForFast(() =>
         expectDefined(
           owner.querySelector<HTMLInputElement | HTMLTextAreaElement>("input, textarea"),
           "inline input",
@@ -3515,13 +3519,32 @@ describe("renderWorkboard", () => {
       );
       input.value = "Unsaved change";
       input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      const dismissLabels = async () => {
+        expectDefined(popover, "labels popover").dispatchEvent(new Event("toggle"));
+        await waitForFast(() => expect(owner.querySelector("input")).toBeNull());
+      };
+      if (dismiss === "before") {
+        await dismissLabels();
+      }
       if (change === "permission") {
         canWrite = false;
       } else {
         state.cards = [{ ...card, metadata: { ...card.metadata, archivedAt: 1 } }];
       }
       renderView({ canWrite });
-      await waitForFast(() => expect(input.disabled).toBe(true));
+      if (dismiss === "after") {
+        await waitForFast(() => expect(input.readOnly).toBe(true));
+        await dismissLabels();
+      }
+      if (dismiss !== "none") {
+        await waitForFast(() => expect(trigger.disabled).toBe(false));
+        trigger.click();
+        input = await waitForFast(() =>
+          expectDefined(owner.querySelector<HTMLInputElement>("input"), "reopened labels draft"),
+        );
+      }
+      await waitForFast(() => expect(input.readOnly).toBe(true));
+      expect(input.disabled).toBe(false);
       expect(input.isConnected).toBe(true);
       expect(input.value).toBe("Unsaved change");
       expect(owner.querySelector("input, textarea")).toBe(input);
@@ -3544,7 +3567,8 @@ describe("renderWorkboard", () => {
         "retain draft",
       ).click();
       expect(input.value).toBe("Unsaved change");
-      expect(input.disabled).toBe(true);
+      expect(input.readOnly).toBe(true);
+      expect(input.disabled).toBe(false);
       close.click();
       expectDefined(
         buttonByText(container.querySelector(".workboard-discard")!, "Discard"),
