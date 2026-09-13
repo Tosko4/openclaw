@@ -33,7 +33,12 @@ function button(panel: Panel, name: string) {
   return found;
 }
 
-async function mount(name = "page.html", retained?: string, mimeType?: string) {
+async function mount(
+  name = "page.html",
+  retained?: string,
+  mimeType?: string,
+  retainedHash = "initial",
+) {
   const file: FileContent = {
     kind: "file",
     name,
@@ -45,7 +50,7 @@ async function mount(name = "page.html", retained?: string, mimeType?: string) {
   };
   opened.push(file);
   if (retained) {
-    setFileDraft(file, { content: retained, expectedHash: "initial" });
+    setFileDraft(file, { content: retained, expectedHash: retainedHash });
   }
   const panel = document.createElement("openclaw-chat-detail-panel") as Panel;
   panel.style.cssText = "width:100%;height:600px";
@@ -81,15 +86,14 @@ afterEach(() => {
 
 describe.runIf(browserMode)("HTML file presentation", () => {
   it("renders normalized HTML MIME without a filename extension", async () => {
-    const { panel } = await mount("report", undefined, "Text/HTML; charset=utf-8");
-    expect(panel.querySelector("iframe")?.srcdoc).toBe(source);
+    const { panel, request } = await mount("report", undefined, "Text/HTML; charset=utf-8");
+    expect(request.mock.lastCall?.[1]?.html).toBe(source);
     expect(panel.querySelector(".cm-editor")).toBeNull();
   });
 
   it("opens rendered HTML before loading CodeMirror, then retains editor and undo through draft preview", async () => {
-    const { panel, file } = await mount();
-    const originalFrame = panel.querySelector("iframe");
-    expect(originalFrame?.srcdoc).toBe(source);
+    const { panel, file, request } = await mount();
+    expect(request.mock.lastCall?.[1]?.html).toBe(source);
     expect(panel.querySelector(".cm-editor")).toBeNull();
     expect(panel.querySelector("h1")).toBeNull();
     await userEvent.click(button(panel, "Edit file"));
@@ -101,7 +105,7 @@ describe.runIf(browserMode)("HTML file presentation", () => {
     await userEvent.fill(input, "<h1>Unsaved draft</h1>");
     expect(readFileDraft(file)?.content).toBe("<h1>Unsaved draft</h1>");
     await userEvent.click(button(panel, "Preview"));
-    await expect.poll(() => panel.querySelector("iframe")?.srcdoc).toBe("<h1>Unsaved draft</h1>");
+    await expect.poll(() => request.mock.lastCall?.[1]?.html).toBe("<h1>Unsaved draft</h1>");
     expect(panel.querySelector(".cm-editor")).toBe(editor);
     expect(input.checkVisibility()).toBe(false);
     await userEvent.click(button(panel, "Source"));
@@ -136,9 +140,69 @@ describe.runIf(browserMode)("HTML file presentation", () => {
     expect(button(first.panel, "Preview")).toBeDefined();
   });
 
+  it("saves a restored HTML draft from Preview with its retained conflict hash", async () => {
+    const draft = "<h1>Restored HTML</h1>";
+    const { panel, file } = await mount("save-draft.html", draft, undefined, "retained-hash");
+    const save = vi.mocked(file.edit!.save);
+    save.mockResolvedValue({ ok: true, hash: "saved" });
+    expect(panel.querySelector(".cm-editor")).toBeNull();
+    expect(button(panel, "Save").disabled).toBe(false);
+    await userEvent.click(button(panel, "Save"));
+    await expect
+      .poll(() => save.mock.calls)
+      .toEqual([[{ content: draft, expectedHash: "retained-hash" }]]);
+    await expect.poll(() => button(panel, "Save").disabled).toBe(true);
+    expect(readFileDraft(file)).toBeUndefined();
+    expect(panel.querySelector(".cm-editor")).toBeNull();
+    await userEvent.click(button(panel, "Source"));
+    await expect.poll(() => panel.querySelector(".cm-content")?.textContent).toBe(draft);
+  });
+
+  it.each(["Reload", "Overwrite"])(
+    "resolves a retained draft conflict with %s from Preview",
+    async (action) => {
+      const draft = "<h1>Conflicting draft</h1>";
+      const latest = "<h1>Latest on disk</h1>";
+      const { panel, file, request } = await mount(
+        "conflict.html",
+        draft,
+        undefined,
+        "retained-hash",
+      );
+      const save = vi.mocked(file.edit!.save);
+      save
+        .mockResolvedValueOnce({ ok: false, code: "conflict" })
+        .mockResolvedValue({ ok: true, hash: "saved" });
+      vi.mocked(file.edit!.fetchLatest).mockResolvedValue({
+        content: latest,
+        hash: "latest-hash",
+        editable: true,
+      });
+      await userEvent.click(button(panel, "Save"));
+      await expect
+        .poll(() => panel.querySelector(".file-view__save-notice")?.textContent)
+        .toContain("Overwrite");
+      expect(readFileDraft(file)).toEqual({ content: draft, expectedHash: "retained-hash" });
+      await userEvent.click(button(panel, action));
+      await expect.poll(() => readFileDraft(file)).toBeUndefined();
+      expect(panel.querySelector(".cm-editor")).toBeNull();
+      if (action === "Overwrite") {
+        expect(save).toHaveBeenLastCalledWith({ content: draft, expectedHash: "latest-hash" });
+      } else {
+        expect(save).toHaveBeenCalledOnce();
+        await expect.poll(() => request.mock.lastCall?.[1]?.html).toBe(latest);
+      }
+      expect(button(panel, "Save").disabled).toBe(true);
+      await userEvent.click(button(panel, "Source"));
+      await expect
+        .poll(() => panel.querySelector(".cm-content")?.textContent)
+        .toBe(action === "Reload" ? latest : draft);
+    },
+  );
+
   it("previews a retained unsaved draft without initializing or discarding its editor", async () => {
-    const { panel, file } = await mount("draft.html", "<h1>Retained draft</h1>");
-    expect(panel.querySelector("iframe")?.srcdoc).toBe("<h1>Retained draft</h1>");
+    const { panel, file, request } = await mount("draft.html", "<h1>Retained draft</h1>");
+    expect(request.mock.lastCall?.[1]?.html).toBe("<h1>Retained draft</h1>");
     expect(panel.querySelector(".cm-editor")).toBeNull();
     await userEvent.click(button(panel, "Source"));
     await expect
@@ -147,7 +211,7 @@ describe.runIf(browserMode)("HTML file presentation", () => {
     expect(readFileDraft(file)?.content).toBe("<h1>Retained draft</h1>");
     await userEvent.click(button(panel, "Discard"));
     await userEvent.click(button(panel, "Preview"));
-    await expect.poll(() => panel.querySelector("iframe")?.srcdoc).toBe(source);
+    await expect.poll(() => request.mock.lastCall?.[1]?.html).toBe(source);
     expect(readFileDraft(file)).toBeUndefined();
   });
 });
