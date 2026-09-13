@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 const mocks = vi.hoisted(() => ({
   config: {} as object,
@@ -13,8 +14,13 @@ const mocks = vi.hoisted(() => ({
   prepareScopedCatalog: vi.fn(),
   refreshStaleCatalog: vi.fn(),
   isFullCatalog: vi.fn(),
+  runtimeAuthStore: vi.fn<() => AuthProfileStore | undefined>(),
   releaseSnapshot: vi.fn(async () => {}),
   releasePublishedSnapshot: vi.fn(async () => {}),
+}));
+
+vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
+  getPreparedRuntimeAuthProfileStoreSnapshotCore: mocks.runtimeAuthStore,
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -117,8 +123,46 @@ describe("prepared model catalog access", () => {
     mocks.prepareScopedCatalog.mockReset();
     mocks.refreshStaleCatalog.mockReset();
     mocks.isFullCatalog.mockReset();
+    mocks.runtimeAuthStore.mockReset();
     mocks.releaseSnapshot.mockReset();
     mocks.releasePublishedSnapshot.mockReset();
+  });
+
+  it("uses current quota state only for the same discovered credentials", async () => {
+    const profile = { type: "api_key", provider: "example", key: "synthetic-original" } as const;
+    const captured: AuthProfileStore = {
+      version: 1,
+      profiles: { recovered: profile, replaced: profile },
+      usageStats: {
+        recovered: { blockedUntil: 20_000 },
+        replaced: { blockedUntil: 30_000 },
+      },
+    };
+    const catalog = { entries: [], routeVariants: [] };
+    setPreparedModelFullCatalogAuth(catalog, {
+      authStore: captured,
+      authModes: {},
+      providerAuthLabels: new Map(),
+    });
+    const snapshot = {
+      ...fullSnapshot,
+      agentDir: "/tmp/prepared-model-catalog-agent",
+      loadFullModelCatalog: vi.fn(async () => catalog),
+    };
+    mocks.prepareSnapshot.mockResolvedValue(snapshot);
+    mocks.runtimeAuthStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        recovered: { ...profile },
+        replaced: { ...profile, key: "synthetic-replacement" },
+      },
+    });
+
+    const materialized = await loadPreparedModelCatalogOwnerSnapshot({ readOnly: false });
+    const projected = getPreparedModelRuntimeAuthStore(materialized);
+    expect(projected).toEqual({ ...captured, usageStats: { replaced: { blockedUntil: 30_000 } } });
+    expect(captured.usageStats?.recovered).toEqual({ blockedUntil: 20_000 });
+    expect(mocks.runtimeAuthStore).toHaveBeenCalledWith(snapshot.agentDir, undefined);
   });
 
   it.each([
