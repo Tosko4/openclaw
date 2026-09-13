@@ -8,6 +8,8 @@
     "../../src/agents/tools/**/*.test.tsx",
     "../../src/agents/sandbox/**/*.test.ts",
     "../../src/agents/sandbox/**/*.test.tsx",
+    "../../src/agents/subagents/**/*.test.ts",
+    "../../src/agents/subagents/**/*.test.tsx",
     "../../src/security/**/*.test.ts",
     "../../src/security/**/*.test.tsx",
     "../../src/agents/bash-tools*.test.ts",
