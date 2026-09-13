@@ -5026,6 +5026,8 @@ export const en: TranslationMap & {
     },
     messages: {
       copySelection: "Copy",
+      copyLink: "Copy link",
+      copyFileName: "Copy file name",
       forkFromHere: "Fork from here",
       reply: "Reply",
       replyToMessage: "Reply to message",
@@ -5189,6 +5191,7 @@ export const en: TranslationMap & {
       nextMatch: "Next match",
       overwrite: "Overwrite",
       viewRawText: "View Raw Text",
+      viewSource: "Source",
       renderedMarkdown: "Rendered Markdown",
       renderedMarkdownHint: "Sanitized rich-text preview for quick reading.",
       noPreviewableMarkdown: "No previewable markdown content.",

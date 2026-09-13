@@ -3,6 +3,7 @@ import hljs from "highlight.js/lib/core";
 import { render, type LitElement } from "lit";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { SparklineSample } from "../../components/sparkline-tile.ts";
@@ -51,16 +52,6 @@ async function updateOverlayVitals(overlay: TestDebugOverlay): Promise<void> {
   for (const tile of overlay.querySelectorAll<TestSparkline>("openclaw-sparkline")) {
     await tile.updateComplete;
   }
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((nextResolve, nextReject) => {
-    resolve = nextResolve;
-    reject = nextReject;
-  });
-  return { promise, resolve, reject };
 }
 
 function createDebugApplicationContext(
