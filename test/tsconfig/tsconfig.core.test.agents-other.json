@@ -17,6 +17,8 @@
     "../../src/agents/*.test.tsx",
     "../../src/agents/sandbox/**/*.test.ts",
     "../../src/agents/sandbox/**/*.test.tsx",
+    "../../src/agents/subagents/**/*.test.ts",
+    "../../src/agents/subagents/**/*.test.tsx",
     "../../src/agents/tools/**/*.test.ts",
     "../../src/agents/tools/**/*.test.tsx"
   ]
