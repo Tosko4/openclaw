@@ -8,6 +8,8 @@
     "../../src/agents/**/*.test.tsx"
   ],
   "exclude": [
+    "../../src/agents/cli-runner/**/*.test.ts",
+    "../../src/agents/cli-runner/**/*.test.tsx",
     "../../node_modules",
     "../../dist",
     "../../**/dist/**",
