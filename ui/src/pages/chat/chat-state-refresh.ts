@@ -193,7 +193,7 @@ export async function refreshChatMetadata(host: ChatPageHost): Promise<void> {
   // Only accepted store publications update availability or fetch errors.
   const metadata = loadChatMetadata(binding.client, binding.scope).catch(() => undefined);
   const version = binding.version;
-  const catalog = loadChatModelCatalog(host, binding).then(async (accepted) => {
+  const catalog = loadChatModelCatalog(host, binding).then((accepted) => {
     if (
       binding.sessionFactsInvalidated &&
       accepted &&
@@ -201,7 +201,7 @@ export async function refreshChatMetadata(host: ChatPageHost): Promise<void> {
       binding.version === version
     ) {
       binding.sessionFactsInvalidated = false;
-      await refreshCurrentChatSessionList(host).catch(() => undefined);
+      host.sessions.invalidate();
     }
   });
   await Promise.all([metadata, catalog]);
@@ -293,16 +293,19 @@ function applyChatModelCatalog(host: ChatPageHost, result: ModelCatalogResult) {
 }
 
 function applyCachedChatModelCatalog(host: ChatPageHost, binding: ChatMetadataBinding): boolean {
-  const result = peekModelCatalog(binding.client, binding.scope);
+  const fresh = peekModelCatalog(binding.client, binding.scope);
+  const result = fresh ?? peekModelCatalog(binding.client, binding.scope, { allowStale: true });
   if (!result || !binding.isCurrent()) {
     return false;
   }
-  binding.catalogRequest?.controller.abort();
-  binding.catalogRequest = undefined;
+  if (fresh) {
+    binding.catalogRequest?.controller.abort();
+    binding.catalogRequest = undefined;
+  }
   applyChatModelCatalog(host, result);
   host.chatModelsLoading = false;
   host.requestUpdate?.();
-  return true;
+  return Boolean(fresh);
 }
 
 export function applyChatModelCatalogSnapshot(host: ChatPageHost): void {

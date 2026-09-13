@@ -1,25 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
-import { isMainThread, threadId } from "node:worker_threads";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
-import { areDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
-import {
-  getActiveDiagnosticTraceContext,
-  runWithDiagnosticTraceContext,
-} from "../../infra/diagnostic-trace-context.js";
 import { isMissingPathError, formatErrorMessage } from "../../infra/errors.js";
-import { createFixedWindowBudget } from "../../infra/fixed-window-rate-limit.js";
+import { startGitOperationTiming } from "../../infra/git-operation-timing.js";
 import { runGitReadOperation } from "../../infra/git-read-cache.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createCommandError } from "../../process/command-error.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
 import { createCrustaceanSlug } from "../session-slug.js";
 import { resolveWorktreeBase } from "./base-ref.js";
@@ -133,73 +125,6 @@ export function classifyWorktreeRemovalError(error: unknown): WorktreeRemovalFai
 
 export { WorktreeRepositoryError } from "./errors.js";
 const log = createSubsystemLogger("agents/worktrees");
-
-function startRemovalTiming() {
-  try {
-    if (!areDiagnosticsEnabledForProcess() || !log.isEnabled("info")) {
-      return undefined;
-    }
-    const startedAt = performance.now();
-    const trace = getActiveDiagnosticTraceContext();
-    let enteredAt: number | undefined;
-    let bodyFinishedAt: number | undefined;
-    return {
-      enter() {
-        enteredAt = performance.now();
-      },
-      finishBody() {
-        bodyFinishedAt = performance.now();
-      },
-      finish(outcome: "returned" | "threw") {
-        try {
-          const endedAt = performance.now();
-          const durationMs = endedAt - startedAt;
-          if (durationMs < 1_000 || !areDiagnosticsEnabledForProcess() || !log.isEnabled("info")) {
-            return;
-          }
-          const state = resolveGlobalSingleton(
-            Symbol.for("openclaw.worktreeRemovalDiagnostics"),
-            () => ({
-              budget: createFixedWindowBudget({
-                maxRequests: 60,
-                windowMs: 60_000,
-                now: () => performance.now(),
-              }),
-              omitted: 0,
-            }),
-          );
-          if (!state.budget.consume().allowed) {
-            state.omitted = Math.min(Number.MAX_SAFE_INTEGER, state.omitted + 1);
-            return;
-          }
-          runWithDiagnosticTraceContext(trace, () =>
-            log.info("slow managed worktree removal", {
-              pid: process.pid,
-              threadId,
-              isMainThread,
-              durationMs: Math.round(durationMs),
-              admissionMs: Math.round((enteredAt ?? endedAt) - startedAt),
-              ...(enteredAt !== undefined && bodyFinishedAt !== undefined
-                ? {
-                    bodyMs: Math.round(bodyFinishedAt - enteredAt),
-                    finalizeMs: Math.round(endedAt - bodyFinishedAt),
-                  }
-                : {}),
-              callbackEntered: enteredAt !== undefined,
-              outcome,
-              omittedObservations: state.omitted,
-            }),
-          );
-          state.omitted = 0;
-        } catch {
-          // Diagnostics must preserve removal's result and original cleanup error.
-        }
-      },
-    };
-  } catch {
-    return undefined;
-  }
-}
 
 type ServiceOptions = {
   env?: NodeJS.ProcessEnv;
@@ -677,11 +602,6 @@ export class ManagedWorktreeService {
           }),
         )
       : 0;
-    this.requireAllocationSpace(
-      worktreePath,
-      repository,
-      2 * (gitBytes + provisionedBytes) + setupBytes,
-    );
     params.signal?.throwIfAborted();
     params.commitGuard?.();
     await fs.mkdir(root, { recursive: true });
@@ -700,6 +620,12 @@ export class ManagedWorktreeService {
         destination: worktreePath,
         branch,
         base: gitBase,
+        requireSpace: (cloneBytes) =>
+          this.requireAllocationSpace(
+            worktreePath,
+            repository,
+            (cloneBytes ?? 2 * gitBytes) + 2 * provisionedBytes + setupBytes,
+          ),
         signal: params.signal,
         commitGuard: () => params.commitGuard?.(),
       });
@@ -858,15 +784,15 @@ export class ManagedWorktreeService {
   }
 
   async remove(params: RemoveWorktreeParams): Promise<RemoveManagedWorktreeResult> {
-    const timing = startRemovalTiming();
+    const timing = startGitOperationTiming("worktree-removal", log);
     let outcome: "returned" | "threw" = "threw";
     try {
       const result = await this.withAllocationLease(params, async (guard) => {
-        timing?.enter();
+        timing?.markPhase();
         try {
           return await this.removeWithAllocation({ ...params, ...guard });
         } finally {
-          timing?.finishBody();
+          timing?.markPhase();
         }
       });
       outcome = "returned";
@@ -1065,7 +991,6 @@ export class ManagedWorktreeService {
       signal: params.signal,
       assertCurrent: params.commitGuard,
     });
-    this.requireAllocationSpace(record.path, repository, 2 * (gitBytes + provisionedBytes));
     let parent: string;
     try {
       parent = await requireGit(record.repoRoot, ["rev-parse", `${record.snapshotRef}^`]);
@@ -1100,6 +1025,12 @@ export class ManagedWorktreeService {
       worktreeRoot: path.dirname(path.dirname(record.path)),
       destination: record.path,
       base: record.snapshotRef,
+      requireSpace: (cloneBytes) =>
+        this.requireAllocationSpace(
+          record.path,
+          repository,
+          (cloneBytes ?? 2 * gitBytes) + 2 * provisionedBytes,
+        ),
       signal: params.signal,
       commitGuard: () => params.commitGuard?.(),
     });

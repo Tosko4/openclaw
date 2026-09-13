@@ -26,6 +26,7 @@
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نطق أحدث رد"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ النطق"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ الاستماع"</string>
+    <string name="stopping" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"جارٍ إنهاء المكالمة…"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ الاتصال"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ التفكير"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جارٍ الكتابة"</string>
