@@ -36,7 +36,7 @@ import {
 } from "../server-constants.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
-import { cleanupTalkConnection } from "../talk-session-registry.js";
+import { cleanupTalkConnection } from "../talk/session-registry.js";
 import {
   startWebSocketKeepalive,
   type WebSocketHeartbeatDiagnostics,

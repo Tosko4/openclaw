@@ -460,6 +460,7 @@ suite.define(() => {
         "talk.catalog",
         "talk.catalog",
         "talk.client.create",
+        "talk.voice.get",
       ]);
       console.info(
         "[video-talk-e2e] describe_view=input_image+function_output+response_create,gateway_frame_requests:0",
@@ -585,6 +586,7 @@ suite.define(() => {
         "talk.catalog",
         "talk.catalog",
         "talk.client.create",
+        "talk.voice.get",
       ]);
       await captureVideoTalkProof(suite, page, "05-gemini-live-camera-preview.png");
       console.info(

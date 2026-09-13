@@ -67,7 +67,7 @@ import {
   toggleTranscriptSearch,
 } from "./components/chat-thread-interactions.ts";
 import { renderWelcomeState } from "./components/chat-welcome.ts";
-import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
+import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 import {
   workspaceConflictPathForDisplay,
   workspaceResultConflictFromTranscript,
