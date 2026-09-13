@@ -838,7 +838,9 @@ it.for([
     ]);
     if (!otherRun && outcome === "failed") {
       await request("sessions.patch", { key, unread: false });
-      expect((await request("chat.startup", { sessionKey: key })).payload.sessionInfo).toMatchObject({
+      expect(
+        (await request("chat.startup", { sessionKey: key })).payload.sessionInfo,
+      ).toMatchObject({
         status: "failed",
         lastRunError: diagnostic,
       });

@@ -190,7 +190,10 @@ export function createControlUiSessionFixtures(input: {
     return { ok: true, key: next.key, entry: read(key) };
   };
   type RunStatus = Extract<SessionRunStatus, "running" | "done" | "failed" | "killed">;
-  const trackedRuns = new Map<string, Map<string, { status: RunStatus; acknowledged: boolean; errorMessage?: string }>>();
+  const trackedRuns = new Map<
+    string,
+    Map<string, { status: RunStatus; acknowledged: boolean; errorMessage?: string }>
+  >();
   const runsFor = (key: string) => {
     let runs = trackedRuns.get(key);
     if (!runs) {
