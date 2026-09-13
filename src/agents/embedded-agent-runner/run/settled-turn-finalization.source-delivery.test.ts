@@ -88,6 +88,7 @@ describe("settled finalizer through source dispatch", () => {
         ],
       });
       const input = createSettledFinalizationTestInput(attempt, await admission.admit("embedded"));
+      const runAttempt = vi.spyOn(input.finalization.harness, "runAttempt");
       Object.assign(
         input.finalization.preparedAttempt,
         createResolvedEmbeddedRunnerModel("openai", "gpt-4.1"),
@@ -152,7 +153,7 @@ describe("settled finalizer through source dispatch", () => {
             : finalization,
       );
       expect(finalize).toHaveBeenCalledTimes(finalization === "empty" ? 2 : recovered ? 1 : 0);
-      expect(input.finalization.harness.runAttempt).not.toHaveBeenCalled();
+      expect(runAttempt).not.toHaveBeenCalled();
       expect(finalized?.attempt.messagingToolSentTargets).toEqual(attempt.messagingToolSentTargets);
       expect(deliver).toHaveBeenCalledTimes(answered ? 1 : 0);
       if (answered) {
