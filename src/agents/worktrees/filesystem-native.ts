@@ -7,7 +7,7 @@ import {
 import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { runCommandBuffersWithTimeout } from "../../process/exec-runner.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import type { WorktreeFilesystemOptions } from "./filesystem-backend.js";
+import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
 import type {
   WorktreeFilesystemRead,
   WorktreeFilesystemReply,

@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate, setTimeout } from "node:timers/promises";
 import type { CloneFileMetadata } from "@openclaw/fs-safe/copy";
-import type { WorktreeFilesystemOptions } from "./filesystem-backend.js";
+import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
 import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 
 type IndexEntry = { offset: number; name: string };

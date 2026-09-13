@@ -1,23 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
+import type {
+  WorktreeFilesystemBackend,
+  WorktreeFilesystemOptions,
+} from "./filesystem-backend.types.js";
 import { nativeWorktreeFilesystem } from "./filesystem-native.js";
-
-export type WorktreeFilesystemOptions = {
-  signal?: AbortSignal;
-  commitGuard: () => void;
-};
-
-export interface WorktreeFilesystemBackend {
-  id: string;
-  estimateCloneBytes: (entries: number, indexBytes: number) => number;
-  createTemplate: (path: string, options: WorktreeFilesystemOptions) => Promise<void>;
-  cloneTemplate: (
-    source: string,
-    destination: string,
-    options: WorktreeFilesystemOptions,
-  ) => Promise<void>;
-}
 
 function assertActive(options: WorktreeFilesystemOptions): void {
   options.signal?.throwIfAborted();
