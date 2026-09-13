@@ -550,6 +550,50 @@ struct GatewayProcessManagerTests {
         }
     }
 
+    @Test(arguments: [
+        (
+            """
+            {"service":{"loaded":null,"loadState":{"status":"unknown"},
+            "runtime":{"status":"unknown"}}}
+            """,
+            false),
+        (
+            """
+            {"service":{"loaded":true,"loadState":{"status":"loaded"},
+            "runtime":{"status":"unknown","inspectionFailure":{
+              "code":"service-runtime-inspection-failed","detail":"launchctl print failed"}}}}
+            """,
+            false),
+        (#"{"ok":false,"error":"Gateway service inspection failed."}"#, false),
+        (
+            """
+            {"service":{"loaded":false,"loadState":{"status":"not-loaded"},
+            "runtime":{"status":"unknown","missingUnit":true}}}
+            """,
+            true),
+    ])
+    func `persistence ensure distinguishes unknown inspection from a missing service`(
+        statusPayload: String,
+        shouldInstall: Bool) async throws
+    {
+        let port = try self.availableGatewayPort()
+        // Queue status alone so an erroneous install still receives the fixture's success response.
+        try await self.withLaunchAgentEnvironment(port: port, statusPayloads: [statusPayload]) {
+            try #require(GatewayEnvironment.gatewayPort() == port)
+            let manager = self.manager
+            manager.setTestingDesiredActive(true)
+
+            let installed = await manager.ensureLaunchAgentEnabledIfNeeded()
+
+            var expectedCalls = [["status", "--json", "--no-probe"]]
+            if shouldInstall {
+                expectedCalls.append(["install", "--force", "--port", String(port), "--runtime", "node"])
+            }
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == expectedCalls)
+            #expect(installed == shouldInstall)
+        }
+    }
+
     @Test func `newer inactive lifecycle retains the pending disable`() async throws {
         try await self.withLaunchAgentEnvironment(commandDelayNanoseconds: 100_000_000) {
             let manager = self.manager
