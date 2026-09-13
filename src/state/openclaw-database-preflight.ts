@@ -6,11 +6,7 @@ import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/ses
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  clearNodeSqliteKyselyCacheForDatabase,
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { hasNodeErrorCode } from "../infra/path-guards.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
@@ -24,8 +20,11 @@ import {
   prepareSqliteReadOnlyLocation,
 } from "../infra/sqlite-snapshot-source.js";
 import { readSqliteUserVersion, SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import {
+  hasStateDatabaseSourceExclusion,
+  prepareStateDatabaseCanonicalMutation,
+} from "../infra/state-database-coordinator.js";
 import { discoverAgentDatabaseMigrationTargets } from "../infra/state-migrations.media-persistence-targets.js";
-import { isValidAgentId } from "../routing/session-key.js";
 import {
   AgentDatabaseAdmissionError,
   canIsolateAgentDatabase,
@@ -38,9 +37,10 @@ import type { ExistingAgentSchemaMeta } from "./openclaw-agent-db-metadata.js";
 import { isPersistentOpenClawAgentDatabasePath } from "./openclaw-agent-db-registry.js";
 import {
   assertCanonicalAgentPersistenceVersion,
-  assertOpenClawAgentCurrentRuntimeSchema,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-helpers.js";
+import { inspectAgentDatabaseSchemaInWorker } from "./openclaw-agent-schema-inspection-worker.js";
+import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
 import {
   describeDeferredStateSchemaPublication,
   formatIncompatibleDatabaseSchemas,
@@ -51,7 +51,6 @@ import type {
   IncompatibleOpenClawDatabase,
   OpenClawDatabaseSchemaPreflight,
   OpenClawDatabaseSchemaPreflightOperation,
-  OpenClawAgentSchemaPreflightResult,
   OpenClawStateSchemaPreflightResult,
 } from "./openclaw-database-preflight.types.js";
 import type { OpenClawSchemaVersions } from "./openclaw-schema-versions.js";
@@ -582,6 +581,7 @@ export async function preflightOpenClawDatabaseSchemas(options: {
       inspectedAgentPaths.add(realAgentPath);
       inspectedAgentTargets.add(inspectionKey);
       let agentVersion: number;
+      let schemaInspection: AgentSchemaInspection | null = null;
       let writerAppVersion: string | undefined;
       let agentSchemaMeta: ExistingAgentSchemaMeta | null | undefined;
       const inspectOwnership =
@@ -598,17 +598,40 @@ export async function preflightOpenClawDatabaseSchemas(options: {
         writerAppVersion = header.writerAppVersion;
         agentSchemaMeta = header.agentSchemaMeta;
       } else {
-        // Full readiness retains its private snapshot; diagnostics need only bounded metadata.
-        agentSnapshot = await prepareSqliteReadOnlyLocation(realAgentPath, {
-          signal: options.signal,
-        });
-        options.signal?.throwIfAborted();
-        agentDatabase = openNodeSqliteDatabase(agentSnapshot.location, { readOnly: true });
-        agentDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-        agentVersion = readSqliteUserVersion(agentDatabase);
-        writerAppVersion = readWriterAppVersion(agentDatabase);
-        if (inspectOwnership && agentVersion <= supportedVersions.agent) {
-          agentSchemaMeta = readExistingAgentSchemaMeta(agentDatabase);
+        // Shape and ownership share one child read; startup readiness retains its snapshot.
+        if (
+          !options.requireStartupMigrationReadiness &&
+          !hasStateDatabaseSourceExclusion(realAgentPath) &&
+          !prepareStateDatabaseCanonicalMutation(realAgentPath)
+        ) {
+          schemaInspection = await inspectAgentDatabaseSchemaInWorker(
+            {
+              pathname: realAgentPath,
+              agentId: row.agentId,
+              supportedVersion: supportedVersions.agent,
+              inspectOwnership,
+              verifyCurrentSchemaShape: options.verifyCurrentSchemaShape,
+            },
+            options.signal,
+          );
+        }
+        if (schemaInspection) {
+          agentVersion = schemaInspection.version;
+          writerAppVersion = schemaInspection.writerAppVersion;
+          agentSchemaMeta = schemaInspection.agentSchemaMeta;
+        } else {
+          // Full readiness retains its private snapshot; diagnostics need only bounded metadata.
+          agentSnapshot = await prepareSqliteReadOnlyLocation(realAgentPath, {
+            signal: options.signal,
+          });
+          options.signal?.throwIfAborted();
+          agentDatabase = openNodeSqliteDatabase(agentSnapshot.location, { readOnly: true });
+          agentDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+          agentVersion = readSqliteUserVersion(agentDatabase);
+          writerAppVersion = readWriterAppVersion(agentDatabase);
+          if (inspectOwnership && agentVersion <= supportedVersions.agent) {
+            agentSchemaMeta = readExistingAgentSchemaMeta(agentDatabase);
+          }
         }
       }
       if (agentVersion <= supportedVersions.agent && inspectOwnership && row.agentId) {
@@ -630,6 +653,9 @@ export async function preflightOpenClawDatabaseSchemas(options: {
           foundVersion: agentVersion,
           supportedVersion: supportedVersions.agent,
         });
+      }
+      if (schemaInspection?.reason) {
+        throw new Error(schemaInspection.reason);
       }
       if (agentVersion > supportedVersions.agent) {
         result.incompatible.push({
@@ -679,60 +705,4 @@ export async function preflightOpenClawDatabaseSchemas(options: {
     }
   }
   return result;
-}
-
-/** Validate one consolidated agent copy using this release's exact maintenance reader.
- * This never discovers, registers, migrates, or opens an ordinary runtime store.
- */
-export async function preflightOpenClawAgentDatabasePath(
-  databasePath: string,
-  agentId: string,
-): Promise<OpenClawAgentSchemaPreflightResult> {
-  const resolvedPath = path.resolve(databasePath);
-  const base = {
-    schema: "openclaw.agent-schema-preflight.v1" as const,
-    databasePath: resolvedPath,
-    agentId,
-    targetVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
-    requiresWrite: false,
-    issues: [],
-  };
-  let database: DatabaseSync | undefined;
-  let foundVersion: number | null = null;
-  let status: "indeterminate" | "incompatible" = "indeterminate";
-  try {
-    // The maintenance owner normalizes IDs. An explicit proof must never fall
-    // back to main or silently bless a different, normalized input identity.
-    if (!isValidAgentId(agentId) || agentId !== agentId.trim().toLowerCase()) {
-      throw new Error("Agent preflight requires an explicit canonical agent ID.");
-    }
-    const inspectionPath = realpathSync.native(resolvedPath);
-    if (inspectionPath !== resolvedPath || !statSync(inspectionPath).isFile()) {
-      throw new Error("Agent preflight requires a canonical regular copied database path.");
-    }
-    if (["-wal", "-shm", "-journal"].some((suffix) => existsSync(inspectionPath + suffix))) {
-      throw new Error("Agent preflight requires a consolidated snapshot with no SQLite sidecars.");
-    }
-    database = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(inspectionPath), {
-      readOnly: true,
-    });
-    database.exec(
-      `PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;`,
-    );
-    assertSqliteIntegrity(database, resolvedPath);
-    foundVersion = readSqliteUserVersion(database);
-    status = "incompatible";
-    assertOpenClawAgentDatabaseForMaintenance(database, { agentId, pathname: resolvedPath });
-    // Maintenance-compatible storage can still require a retired-schema repair
-    // before runtime admission. A read-only proof must never bless that repair.
-    assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname: resolvedPath });
-    return { ...base, foundVersion, status: "exact" as const };
-  } catch (error) {
-    return { ...base, foundVersion, status, reason: formatErrorMessage(error) };
-  } finally {
-    if (database) {
-      clearNodeSqliteKyselyCacheForDatabase(database);
-    }
-    database?.close();
-  }
 }
