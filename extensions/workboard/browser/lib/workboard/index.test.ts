@@ -3703,6 +3703,9 @@ describe("workboard controller", () => {
       const dragged = makeCard({ id: "dragged", status: "ready", position: 1000 });
       const peer = makeCard({ id: "peer", status: "todo", position: 2000 });
       state.cards = [dragged, peer];
+      state.detailCardId = dragged.id;
+      state.detailCommentBody = "  Keep this comment through recovery.  ";
+      const commentDraft = state.detailCommentBody;
       let canonical = dragged;
       const reload = createDeferred<{ cards: WorkboardCard[] }>();
       const client = createClient((method) => {
@@ -3712,6 +3715,9 @@ describe("workboard controller", () => {
         }
         if (method === "workboard.cards.list") {
           return reload.promise;
+        }
+        if (method === "workboard.cards.comment") {
+          return { card: canonical };
         }
         return {};
       });
@@ -3738,6 +3744,7 @@ describe("workboard controller", () => {
       }
       await pending;
       expect(state.error).toBe("move acknowledgment lost");
+      expect(state.detailCommentBody).toBe(commentDraft);
       if (reloadFails) {
         expect(state.mutationReadiness).toBe("canonical_reload_required");
         expect(state.lastRefreshError).toBe("canonical refresh unavailable");
@@ -3745,6 +3752,16 @@ describe("workboard controller", () => {
       } else {
         expect(state.mutationReadiness).toBe("ready");
         expect(state.cards.find((card) => card.id === dragged.id)).toEqual(canonical);
+        await addWorkboardCardComment({
+          host,
+          client,
+          cardId: dragged.id,
+          body: state.detailCommentBody,
+        });
+        expect(requestCalls(client, "workboard.cards.comment").map(([, params]) => params)).toEqual(
+          [{ id: dragged.id, body: commentDraft.trim() }],
+        );
+        expect(state.detailCommentBody).toBe("");
       }
     },
   );

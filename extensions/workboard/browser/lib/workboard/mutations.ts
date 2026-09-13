@@ -244,7 +244,7 @@ export async function moveWorkboardCard(
       requestUpdate: params.requestUpdate,
       force: true,
       preserveError: true,
-      taskRefresh: "linked",
+      taskRefresh: "all",
     });
   }
 }
