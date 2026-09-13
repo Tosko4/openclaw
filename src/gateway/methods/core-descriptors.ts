@@ -107,6 +107,9 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["wizard.cancel", "wizard", "operator.admin", "<=2026.7"],
   ["wizard.status", "wizard", "operator.admin", "<=2026.7"],
   ["talk.catalog", "talk", "operator.read", "<=2026.7"],
+  ["talk.voice.get", "talk", "operator.talk", "2026.9"],
+  ["talk.voice.set", "talk", "operator.talk", "2026.9"],
+  ["talk.voice.complete", "talk", "operator.talk", "2026.9"],
   // Params-aware: reading redacted config needs read; includeSecrets also needs talk secrets.
   ["talk.config", "talk", "dynamic", "<=2026.7"],
   ["talk.client.create", "talk", "operator.talk", "<=2026.7"],
@@ -730,14 +733,9 @@ export function listCoreGatewayHandlerMethodNames(): ReadonlyMap<
   return methodsByFamily;
 }
 
-/** Looks up the raw core method scope, including node and dynamic sentinel scopes. */
-function resolveCoreGatewayMethodScope(method: string): GatewayMethodScope | undefined {
-  return CORE_GATEWAY_METHOD_SPEC_BY_NAME.get(method)?.scope;
-}
-
 /** Looks up an operator-only core method scope, excluding node and dynamic methods. */
 export function resolveCoreOperatorGatewayMethodScope(method: string): OperatorScope | undefined {
-  const scope = resolveCoreGatewayMethodScope(method);
+  const scope = CORE_GATEWAY_METHOD_SPEC_BY_NAME.get(method)?.scope;
   return scope === NODE_GATEWAY_METHOD_SCOPE || scope === DYNAMIC_GATEWAY_METHOD_SCOPE
     ? undefined
     : scope;
@@ -745,12 +743,12 @@ export function resolveCoreOperatorGatewayMethodScope(method: string): OperatorS
 
 /** Returns true for core methods reserved for authenticated node clients. */
 export function isCoreNodeGatewayMethod(method: string): boolean {
-  return resolveCoreGatewayMethodScope(method) === NODE_GATEWAY_METHOD_SCOPE;
+  return CORE_GATEWAY_METHOD_SPEC_BY_NAME.get(method)?.scope === NODE_GATEWAY_METHOD_SCOPE;
 }
 
 /** Returns true for core methods whose required operator scope is resolved by the handler. */
 export function isDynamicOperatorGatewayMethod(method: string): boolean {
-  return resolveCoreGatewayMethodScope(method) === DYNAMIC_GATEWAY_METHOD_SCOPE;
+  return CORE_GATEWAY_METHOD_SPEC_BY_NAME.get(method)?.scope === DYNAMIC_GATEWAY_METHOD_SCOPE;
 }
 
 /** Returns true when a method name has an explicit core policy entry. */

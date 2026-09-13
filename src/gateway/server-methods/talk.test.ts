@@ -3569,6 +3569,7 @@ describe("talk.client.create handler", () => {
           },
         );
         return {
+          signal: new AbortController().signal,
           activate: mocks.gatewayControlActivate,
           adoptProvider: mocks.gatewayControlAdoptProvider,
           close: mocks.gatewayControlClose,
@@ -3849,7 +3850,12 @@ describe("talk.client.create handler", () => {
     });
 
     expect(createBrowserSession).toHaveBeenCalledWith(
-      expect.objectContaining({ gatewayControl: mocks.gatewayControl }),
+      expect.objectContaining({
+        gatewayControl: expect.objectContaining({
+          bindBridge: mocks.gatewayControl.bindBridge,
+          onReady: expect.any(Function),
+        }),
+      }),
     );
     expect(mocks.resolveConfiguredRealtimeVoiceProvider).toHaveBeenCalledWith(
       expect.objectContaining({ clientControl: { owner: "gateway" } }),
