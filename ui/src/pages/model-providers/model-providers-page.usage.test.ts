@@ -9,6 +9,7 @@ import {
   createHarness,
   createAuthStatus,
   focusDocument,
+  publishCatalog,
   requestCount,
   type ModelProvidersPageTestElement,
 } from "./model-providers-page.test-support.ts";
@@ -98,6 +99,7 @@ describe("ModelProvidersPage usage convergence", () => {
     await page.updateComplete;
     expect(harness.request.mock.calls.filter(([method]) => method !== "config.get")).toEqual([]);
 
+    publishCatalog(harness.context, "main", { models: [] });
     page.routeData = {
       gateway: harness.context.gateway,
       gatewaySnapshot: harness.context.gateway.snapshot,
