@@ -6,7 +6,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -641,13 +641,13 @@ export async function listSessionsFromStoreAsync(
         ++checkedItems % 16 === 0 &&
         performance.now() - workStartedAt >= SESSIONS_LIST_YIELD_INTERVAL_MS;
       const preparation = prepareSessionList(params, shouldYieldPreparation);
-      let step = preparation.next();
+      let step = withAgentRosterFactsBatch(cfg, () => preparation.next());
       while (!step.done) {
         const pause = yieldIfNeeded();
         if (pause) {
           await pause;
         }
-        step = preparation.next();
+        step = withAgentRosterFactsBatch(cfg, () => preparation.next());
       }
       const list = step.value;
       const sessions: GatewaySessionRow[] = [];
