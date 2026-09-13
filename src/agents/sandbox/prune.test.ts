@@ -172,6 +172,52 @@ describe("maybePruneSandboxes", () => {
     );
   });
 
+  it.each(["scope", "activity"])(
+    "continues container and browser cleanup after a lock failure (%s)",
+    async (boundary) => {
+      const lock =
+        boundary === "scope"
+          ? vi.spyOn(await import("./scope-lock.js"), "withSandboxScopeLock")
+          : vi.spyOn(await import("./runtime-activity.js"), "tryWithSandboxRuntimeMutations");
+      lock.mockRejectedValueOnce(
+        Object.assign(new Error("file lock stale"), { code: "file_lock_stale" }),
+      );
+      const entry = {
+        containerName: "sandbox-1",
+        backendId: "docker",
+        sessionKey: "agent:main:main",
+        createdAtMs: Date.now() - 4 * 60 * 60 * 1000,
+        lastUsedAtMs: Date.now() - 2 * 60 * 60 * 1000,
+        image: "openclaw-sandbox:bookworm-slim",
+      };
+      registryMocks.readRegistry.mockResolvedValue({
+        entries: [entry, { ...entry, containerName: "sandbox-2" }],
+      });
+      registryMocks.readBrowserRegistry.mockResolvedValue({
+        entries: [{ ...entry, containerName: "browser-1", cdpPort: 9222 }],
+      });
+
+      try {
+        await maybePruneSandboxes(buildPruneConfig());
+
+        expect(
+          backendMocks.removeRuntime.mock.calls.map(([params]) => params.entry.containerName),
+        ).toEqual(["sandbox-2", "browser-1"]);
+        expect(registryMocks.removeRegistryEntry).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ containerName: "sandbox-2" }),
+        );
+        expect(registryMocks.removeBrowserRegistryEntry).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ containerName: "browser-1" }),
+        );
+        expect(runtimeMocks.error).toHaveBeenCalledWith(
+          "Sandbox prune failed to remove sandbox-1: file lock stale",
+        );
+      } finally {
+        lock.mockRestore();
+      }
+    },
+  );
+
   it("does not destroy a runtime refreshed after the pruning snapshot", async () => {
     const now = Date.now();
     const snapshot = {

@@ -68,19 +68,19 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
     if (!shouldPruneSandboxEntry(resolvePruneConfig(params.config, entry), now, entry)) {
       continue;
     }
-    await withSandboxScopeLock(entry.sessionKey, async () => {
-      await tryWithSandboxRuntimeMutations([params.runtimeKey(entry)], async (lifecycle) => {
-        const current = (await params.read()).entries.find(
-          (candidate) => candidate.containerName === entry.containerName,
-        );
-        if (
-          !current ||
-          current.registryGeneration !== entry.registryGeneration ||
-          !shouldPruneSandboxEntry(resolvePruneConfig(params.config, current), now, current)
-        ) {
-          return;
-        }
-        try {
+    try {
+      await withSandboxScopeLock(entry.sessionKey, async () => {
+        await tryWithSandboxRuntimeMutations([params.runtimeKey(entry)], async (lifecycle) => {
+          const current = (await params.read()).entries.find(
+            (candidate) => candidate.containerName === entry.containerName,
+          );
+          if (
+            !current ||
+            current.registryGeneration !== entry.registryGeneration ||
+            !shouldPruneSandboxEntry(resolvePruneConfig(params.config, current), now, current)
+          ) {
+            return;
+          }
           await params.remove(current);
           if (
             !(await params.read()).entries.some(
@@ -89,19 +89,19 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
           ) {
             lifecycle.retire();
           }
-        } catch (error) {
-          const message =
-            error instanceof Error
-              ? error.message
-              : typeof error === "string"
-                ? error
-                : JSON.stringify(error);
-          defaultRuntime.error?.(
-            `Sandbox prune failed to remove ${entry.containerName}: ${message ?? "unknown error"}`,
-          );
-        }
+        });
       });
-    });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : JSON.stringify(error);
+      defaultRuntime.error?.(
+        `Sandbox prune failed to remove ${entry.containerName}: ${message ?? "unknown error"}`,
+      );
+    }
   }
 }
 
