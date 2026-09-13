@@ -6,6 +6,8 @@
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Commandes"</string>
     <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Parler"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Échec de l’audio de la montre"</string>
+    <string name="microphone_permission_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Autorisation d’accès au microphone requise"</string>
+    <string name="open_settings" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Ouvrir les paramètres"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dicter"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"En direct"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Fil"</string>

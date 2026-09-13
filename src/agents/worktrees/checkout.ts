@@ -39,8 +39,12 @@ type CheckoutOptions = WorktreeFilesystemOptions & {
   destination: string;
   base: string;
   branch?: string;
+  /** Restore reuses a warm template, or materializes its snapshot after registration. */
+  deferGitCheckout?: boolean;
   requireSpace: (cloneBytes?: number) => void;
 };
+
+type CheckoutResult = GitResult & { templateCloned?: true };
 
 function assertOwned(options: WorktreeFilesystemOptions) {
   options.signal?.throwIfAborted();
@@ -70,9 +74,8 @@ async function indexPath(worktree: string, options: WorktreeFilesystemOptions): 
 
 async function estimateTemplateCloneBytes(
   template: NonNullable<Awaited<ReturnType<typeof prepareTemplate>>>,
-  options: CheckoutOptions,
 ): Promise<number | undefined> {
-  const index = await fs.open(await indexPath(template.record.path, options), "r");
+  const index = await fs.open(template.sourceIndex, "r");
   try {
     const header = Buffer.alloc(12);
     const { bytesRead } = await index.read(header, 0, header.length, 0);
@@ -252,8 +255,12 @@ async function prepareTemplate(options: CheckoutOptions) {
     ) {
       assertOwned(options);
       touchTemplate(options.env, existing.id, options.now(), options.commitGuard);
-      return { record: existing, backend };
+      return { record: existing, backend, sourceIndex: await indexPath(existing.path, options) };
     }
+  }
+  // Restore must not build an obsolete parent tree just to overwrite it with its snapshot.
+  if (options.deferGitCheckout) {
+    return undefined;
   }
   options.requireSpace();
   if (existing) {
@@ -292,17 +299,17 @@ async function prepareTemplate(options: CheckoutOptions) {
   });
   assertOwned(options);
   markTemplateReady(options.env, id, options.now(), options.commitGuard);
-  return { record, backend };
+  return { record, backend, sourceIndex: await indexPath(record.path, options) };
 }
 
 /** Git owns registration, branches and indexes; the backend only materializes files. */
-export async function addManagedWorktree(options: CheckoutOptions): Promise<GitResult> {
+export async function addManagedWorktree(options: CheckoutOptions): Promise<CheckoutResult> {
   let template: Awaited<ReturnType<typeof prepareTemplate>>;
   let cloneBytes: number | undefined;
   if (options.enabled) {
     try {
       template = await prepareTemplate(options);
-      cloneBytes = template ? await estimateTemplateCloneBytes(template, options) : undefined;
+      cloneBytes = template ? await estimateTemplateCloneBytes(template) : undefined;
     } catch (error) {
       assertOwned(options);
       template = undefined;
@@ -327,7 +334,7 @@ export async function addManagedWorktree(options: CheckoutOptions): Promise<GitR
     [
       "worktree",
       "add",
-      ...(template ? ["--no-checkout"] : []),
+      ...(template || options.deferGitCheckout ? ["--no-checkout"] : []),
       ...(options.branch ? ["-b", options.branch] : ["--detach"]),
       "--",
       options.destination,
@@ -377,7 +384,7 @@ export async function addManagedWorktree(options: CheckoutOptions): Promise<GitR
     await fs.unlink(markerPath);
     assertOwned(options);
     await fs.writeFile(markerPath, marker);
-    const sourceIndex = await indexPath(template.record.path, options);
+    const sourceIndex = template.sourceIndex;
     assertOwned(options);
     let copied = false;
     if (template.backend.id === "apfs") {
@@ -400,7 +407,7 @@ export async function addManagedWorktree(options: CheckoutOptions): Promise<GitR
       ...gitOptions(options),
       timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
     });
-    return added;
+    return { ...added, templateCloned: true };
   } catch (error) {
     // A stale allocator cannot roll back a checkout after lease takeover.
     // Preserve Git's registration for recovery if authority was revoked.
@@ -416,6 +423,10 @@ export async function addManagedWorktree(options: CheckoutOptions): Promise<GitR
     log.warn(`worktree snapshot failed; using Git checkout: ${String(error)}`);
     let checkout: GitResult;
     try {
+      if (options.deferGitCheckout) {
+        options.requireSpace();
+        return added;
+      }
       checkout = await runGit(options.destination, ["reset", "--hard", "HEAD"], {
         ...gitOptions(options),
         beforeRun: () => {

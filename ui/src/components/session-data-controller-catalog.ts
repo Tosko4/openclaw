@@ -12,7 +12,6 @@ import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   refreshSessionCatalogsLive,
   SESSION_CATALOG_CHANGED_REFRESH_MS,
-  SESSION_CATALOG_STABLE_REFRESH_MS,
   SessionCatalogLiveState,
   sessionCatalogListClient,
 } from "./app-sidebar-session-catalog-live.ts";
@@ -74,6 +73,27 @@ function visibleSessionCatalogClient(owner: SessionCatalogDataOwner): GatewayBro
     return null;
   }
   return sessionCatalogListClient(owner.context?.gateway.snapshot, owner.sessionDataHostConnected);
+}
+
+function refreshSessionCatalogsInBackground(owner: SessionCatalogDataOwner): void {
+  const context = owner.context;
+  if (!context) {
+    return;
+  }
+  const scope = owner.sessionCatalogLive.refreshScope;
+  void context.connectionBootstrap.run(
+    scope,
+    async () => {
+      if (
+        owner.context === context &&
+        owner.sessionCatalogLive.refreshScope === scope &&
+        owner.isSessionDataHostConnected
+      ) {
+        await owner.refreshSessionCatalogs();
+      }
+    },
+    { background: true },
+  );
 }
 
 export function resolveSessionCatalogAgentId(
@@ -149,7 +169,7 @@ export function requestSessionCatalogRefresh(
       Boolean(sessionCatalogListClient(snapshot, owner.sessionDataHostConnected)),
     generation: owner.sessionScopeGeneration,
     queueIfActive,
-    refresh: () => void owner.refreshSessionCatalogs(),
+    refresh: () => refreshSessionCatalogsInBackground(owner),
   });
 }
 
@@ -168,7 +188,7 @@ export function updateSessionCatalogData(owner: SessionCatalogDataOwner, defer =
     scheduleSessionCatalogRefresh(owner);
     return;
   }
-  void owner.refreshSessionCatalogs();
+  refreshSessionCatalogsInBackground(owner);
 }
 
 export function applySessionCatalogPresence(
@@ -205,7 +225,7 @@ export function applySessionCatalogHostEvent(
     owner.sessionCatalogLive.schedule(
       SESSION_CATALOG_CHANGED_REFRESH_MS,
       owner.isSessionDataHostConnected,
-      () => void owner.refreshSessionCatalogs(),
+      () => refreshSessionCatalogsInBackground(owner),
     );
   }
 }
@@ -244,7 +264,6 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
   }
   const generation = owner.sessionScopeGeneration;
   const revision = owner.sessionCatalogRevision;
-  let refreshed = false;
   await refreshSessionCatalogsLive({
     live: owner.sessionCatalogLive,
     client,
@@ -258,7 +277,6 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
     pageDepths: owner.sessionCatalogPageDepths,
     connected: () => owner.isSessionDataHostConnected,
     applyFinal: (catalogs, revisedCatalogIds) => {
-      refreshed = true;
       owner.sessionCatalogs = catalogs;
       owner.sessionCatalogRefreshStatus = completePanelRefresh();
       owner.requestSessionDataUpdate();
@@ -270,6 +288,7 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
       }
       owner.sessionCatalogRevision += 1;
     },
+    continueRefresh: () => discoverHiddenSessionCatalogPages(owner),
     applyError: (error) => {
       owner.sessionCatalogRefreshStatus = failPanelRefresh(
         owner.sessionCatalogRefreshStatus,
@@ -278,15 +297,8 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
       );
       owner.requestSessionDataUpdate();
     },
-    refresh: () => void owner.refreshSessionCatalogs(),
+    refresh: () => refreshSessionCatalogsInBackground(owner),
   });
-  if (
-    refreshed &&
-    generation === owner.sessionScopeGeneration &&
-    client === visibleSessionCatalogClient(owner)
-  ) {
-    await discoverHiddenSessionCatalogPages(owner);
-  }
 }
 
 function hiddenSessionCatalogPages(owner: SessionCatalogDataOwner) {
@@ -302,46 +314,26 @@ function hiddenSessionCatalogPages(owner: SessionCatalogDataOwner) {
   });
 }
 
-async function discoverHiddenSessionCatalogPages(owner: SessionCatalogDataOwner): Promise<void> {
+async function discoverHiddenSessionCatalogPages(owner: SessionCatalogDataOwner): Promise<boolean> {
   const pages = hiddenSessionCatalogPages(owner);
   if (pages.length === 0) {
-    return;
+    return false;
   }
   const generation = owner.sessionScopeGeneration;
   const client = visibleSessionCatalogClient(owner);
   if (!client || !owner.isSessionDataHostConnected) {
-    return;
+    return false;
   }
   // One extra page per catalog uses the same cursor/depth owner as Load More.
   // The next refresh retains that window and advances again while it stays hidden.
-  const live = owner.sessionCatalogLive;
-  live.cancelTimer();
-  const { requestOwner } = live.beginRequest(generation);
-  try {
-    await Promise.all(
-      pages.map(({ catalogId, hostIds }) => loadMoreSessionCatalog(owner, catalogId, hostIds)),
-    );
-  } finally {
-    if (live.ownsRequest(requestOwner)) {
-      live.requestGeneration = null;
-      if (
-        generation === owner.sessionScopeGeneration &&
-        client === visibleSessionCatalogClient(owner)
-      ) {
-        const delayMs = live.refreshPending
-          ? 0
-          : hiddenSessionCatalogPages(owner).length > 0
-            ? SESSION_CATALOG_CHANGED_REFRESH_MS
-            : SESSION_CATALOG_STABLE_REFRESH_MS;
-        live.refreshPending = false;
-        live.schedule(
-          delayMs,
-          owner.isSessionDataHostConnected,
-          () => void owner.refreshSessionCatalogs(),
-        );
-      }
-    }
-  }
+  await Promise.all(
+    pages.map(({ catalogId, hostIds }) => loadMoreSessionCatalog(owner, catalogId, hostIds)),
+  );
+  return (
+    generation === owner.sessionScopeGeneration &&
+    client === visibleSessionCatalogClient(owner) &&
+    hiddenSessionCatalogPages(owner).length > 0
+  );
 }
 
 export async function loadMoreSessionCatalog(

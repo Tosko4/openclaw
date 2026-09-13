@@ -2,6 +2,8 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
+import { i18n, t } from "../../i18n/index.ts";
+import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import type { SessionLogEntry, TimeSeriesPoint, UsageSessionEntry } from "./types.ts";
 import { renderSessionDetailPanel } from "./view-details.ts";
 
@@ -344,26 +346,54 @@ describe("renderSessionDetailPanel filtered usage", () => {
     expect(conversationError?.querySelector("button")).toBeNull();
   });
 
-  it("keeps loaded details visible and marks them stale after refresh failures", () => {
-    const container = mount(
-      [point({ timestamp: 1000 }), point({ timestamp: 2000 })],
-      null,
-      null,
-      "total",
-      {},
-      {
-        timeSeries: "timeline unavailable",
-        sessionLogs: "logs unavailable",
-        sessionLogsData: [{ timestamp: 1000, role: "user", content: "retained message" }],
-        stale: true,
-      },
-    );
+  it("keeps loaded details visible and marks them stale after refresh failures", async () => {
+    const restoreI18n = captureI18nStateForTesting();
+    const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);
+    try {
+      for (const locale of ["en", "fr", "en"] as const) {
+        await i18n.setLocale(locale);
+        const container = mount(
+          [point({ timestamp: 1000 }), point({ timestamp: 2000 })],
+          null,
+          null,
+          "total",
+          {},
+          {
+            timeSeries: "timeline unavailable",
+            sessionLogs: "logs unavailable",
+            sessionLogsData: [
+              { timestamp, role: "user", content: "retained message" },
+              { timestamp: Number.NaN, role: "assistant", content: "undated message" },
+            ],
+            stale: true,
+          },
+        );
 
-    expect(container.querySelectorAll(".usage-detail-error--timeline strong")).toHaveLength(1);
-    expect(container.querySelectorAll(".usage-detail-error--conversation strong")).toHaveLength(1);
-    expect(container.querySelector(".timeseries-svg")).not.toBeNull();
-    expect(container.textContent).toContain("retained message");
-    expect(container.textContent).toContain("Showing stale data");
+        expect(container.querySelectorAll(".usage-detail-error--timeline strong")).toHaveLength(1);
+        expect(container.querySelectorAll(".usage-detail-error--conversation strong")).toHaveLength(
+          1,
+        );
+        expect(container.querySelector(".timeseries-svg")).not.toBeNull();
+        expect(container.textContent).toContain("retained message");
+        expect(container.textContent).toContain("undated message");
+        expect(container.textContent).toContain(
+          locale === "en" ? "Showing stale data" : t("common.staleData"),
+        );
+        const timestamps = [...container.querySelectorAll(".session-log-meta > span:nth-child(2)")];
+        expect(timestamps.map((element) => element.textContent)).toEqual([
+          new Date(timestamp).toLocaleString(locale, {
+            year: "numeric",
+            month: "numeric",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+          }),
+          t("common.na"),
+        ]);
+      }
+    } finally {
+      await restoreI18n();
+    }
   });
 
   it("preserves context-category order, sorted cards, expansion, and callbacks", () => {

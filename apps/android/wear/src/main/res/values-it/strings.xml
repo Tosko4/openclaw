@@ -6,6 +6,8 @@
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Controlli"</string>
     <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Parla"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Errore nell\'audio dell\'orologio"</string>
+    <string name="microphone_permission_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Autorizzazione per il microfono necessaria"</string>
+    <string name="open_settings" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Apri le impostazioni"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Detta"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"In diretta"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Thread"</string>

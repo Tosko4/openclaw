@@ -124,6 +124,8 @@ describe("ManagedWorktreeService failure diagnostics", () => {
     repo = await initializeRepository(root);
     service = new ManagedWorktreeService({
       env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
+      // Inject failures into the requested checkout rather than a source template.
+      getConfig: () => ({ worktreeAcceleration: false }),
     });
   });
 

@@ -17,6 +17,7 @@ import { createCrustaceanSlug } from "../session-slug.js";
 import { resolveWorktreeBase } from "./base-ref.js";
 import {
   directorySizeBytes,
+  estimateWorktreeCheckoutTransitionBytes,
   estimateWorktreeGitBytes,
   requireWorktreeDiskSpace,
   WORKTREE_SETUP_HEADROOM_BYTES,
@@ -35,6 +36,7 @@ import {
   requireGit,
   resolveGitRepositoryPaths,
   runGit,
+  WORKTREE_CHECKOUT_TIMEOUT_MS,
   type GitResult,
 } from "./git.js";
 import { worktreeOwnerMatches } from "./owner.js";
@@ -987,32 +989,39 @@ export class ManagedWorktreeService {
       (sum, entry) => sum + entry.chunks * SNAPSHOT_CHUNK_BYTES,
       0,
     );
-    const gitBytes = await estimateWorktreeGitBytes(record.repoRoot, record.snapshotRef, {
+    const gitOptions = {
       signal: params.signal,
-      assertCurrent: params.commitGuard,
-    });
+      beforeRun: params.commitGuard,
+      killProcessTree: true,
+    };
+    const snapshot = await requireGit(
+      record.repoRoot,
+      ["rev-parse", "--verify", `${record.snapshotRef}^{commit}`],
+      gitOptions,
+    );
     let parent: string;
     try {
-      parent = await requireGit(record.repoRoot, ["rev-parse", `${record.snapshotRef}^`]);
+      parent = await requireGit(record.repoRoot, ["rev-parse", `${snapshot}^`], gitOptions);
     } catch (error) {
-      const shallow = await runGit(record.repoRoot, ["rev-parse", "--is-shallow-repository"]);
+      const shallow = await runGit(
+        record.repoRoot,
+        ["rev-parse", "--is-shallow-repository"],
+        gitOptions,
+      );
       if (shallow.code !== 0 || shallow.stdout.trim() !== "true") {
-        throw error;
-      }
-      const snapshot = await runGit(record.repoRoot, [
-        "rev-parse",
-        "--verify",
-        `${record.snapshotRef}^{commit}`,
-      ]);
-      if (snapshot.code !== 0) {
         throw error;
       }
       // Origin cannot deepen a local-only snapshot that a later fetch made shallow.
       throw new Error(
-        `Cannot restore snapshot ${snapshot.stdout.trim()} in ${record.repoRoot}: shallow clone boundary; run \`git fetch --unshallow\` in ${record.repoRoot}. If the snapshot remains shallow, recover its parent from the original repository before retrying.`,
+        `Cannot restore snapshot ${snapshot} in ${record.repoRoot}: shallow clone boundary; run \`git fetch --unshallow\` in ${record.repoRoot}. If the snapshot remains shallow, recover its parent from the original repository before retrying.`,
         { cause: error },
       );
     }
+    const { targetBytes, changedBytes, requiresFullCheckout } =
+      await estimateWorktreeCheckoutTransitionBytes(record.repoRoot, parent, snapshot, {
+        signal: params.signal,
+        assertCurrent: params.commitGuard,
+      });
     params.commitGuard?.();
     await fs.mkdir(path.dirname(record.path), { recursive: true });
     params.commitGuard?.();
@@ -1024,12 +1033,15 @@ export class ManagedWorktreeService {
       commonDir: repository.commonDir,
       worktreeRoot: path.dirname(path.dirname(record.path)),
       destination: record.path,
-      base: record.snapshotRef,
+      base: parent,
+      branch: record.branch,
+      deferGitCheckout: true,
       requireSpace: (cloneBytes) =>
         this.requireAllocationSpace(
           record.path,
           repository,
-          (cloneBytes ?? 2 * gitBytes) + 2 * provisionedBytes,
+          (cloneBytes === undefined ? 2 * targetBytes : cloneBytes + 2 * changedBytes) +
+            2 * provisionedBytes,
         ),
       signal: params.signal,
       commitGuard: () => params.commitGuard?.(),
@@ -1037,29 +1049,36 @@ export class ManagedWorktreeService {
     if (added.code !== 0) {
       throw commandError("git worktree add", added);
     }
-    let branchCreated = false;
     let restoredProvisionedPaths: string[];
     try {
-      // Branch history stays at the original commit; the snapshot is restored as working state.
+      // Reuse the original source template. Git replaces only snapshot differences,
+      // then resets the index so saved additions are untracked and edits unstaged.
+      // The synthetic snapshot never becomes the branch's HEAD or a cached template.
+      const materializationBytes = added.templateCloned ? changedBytes : targetBytes;
+      const checkoutOptions = {
+        ...gitOptions,
+        beforeRun: () => {
+          params.commitGuard?.();
+          this.requireAllocationSpace(
+            record.path,
+            repository,
+            2 * materializationBytes + 2 * provisionedBytes,
+          );
+        },
+        timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
+      };
+      if (requiresFullCheckout && added.templateCloned) {
+        // Even checkout-index --force skips stat-matching files. Remove the owned
+        // source files first so Git must apply the snapshot's attributes to every blob.
+        await requireGit(
+          record.path,
+          ["rm", "-r", "--force", "--ignore-unmatch", "--", "."],
+          checkoutOptions,
+        );
+      }
+      await requireGit(record.path, ["read-tree", "--reset", "-u", snapshot], checkoutOptions);
       params.commitGuard?.();
-      await requireGit(record.repoRoot, ["branch", record.branch, parent], {
-        signal: params.signal,
-        beforeRun: params.commitGuard,
-        killProcessTree: true,
-      });
-      branchCreated = true;
-      params.commitGuard?.();
-      await requireGit(record.path, ["symbolic-ref", "HEAD", `refs/heads/${record.branch}`], {
-        signal: params.signal,
-        beforeRun: params.commitGuard,
-        killProcessTree: true,
-      });
-      params.commitGuard?.();
-      await requireGit(record.path, ["reset"], {
-        signal: params.signal,
-        beforeRun: params.commitGuard,
-        killProcessTree: true,
-      });
+      await requireGit(record.path, ["reset"], gitOptions);
       params.commitGuard?.();
       this.requireAllocationSpace(record.path, repository, 2 * provisionedBytes);
       await restoreProvisionedFiles(
@@ -1074,12 +1093,10 @@ export class ManagedWorktreeService {
       restoredProvisionedPaths = provisionedState.map((state) => state.path);
     } catch (error) {
       const removed = await runGit(record.repoRoot, ["worktree", "remove", "--force", record.path]);
-      const branchDeleted = branchCreated
-        ? await runGit(record.repoRoot, ["branch", "-D", record.branch])
-        : undefined;
-      if (removed.code !== 0 || (branchDeleted && branchDeleted.code !== 0)) {
+      const branchDeleted = await runGit(record.repoRoot, ["branch", "-D", record.branch]);
+      if (removed.code !== 0 || branchDeleted.code !== 0) {
         const failure =
-          branchDeleted && removed.code === 0
+          removed.code === 0
             ? commandError("git branch -D", branchDeleted)
             : commandError("git worktree remove", removed);
         throw new Error(`${String(error)}\nrestore cleanup failed: ${failure.message}`, {

@@ -12,11 +12,25 @@ export type ChatMetadataUpdate =
   | { type: "loading" }
   | { type: "result"; result: ChatMetadataResult }
   | { type: "error"; error: unknown };
+export type ChatMetadataPublication = {
+  isCurrent: () => boolean;
+  publish: (
+    result: ChatMetadataResult & { models?: unknown; accountSelection?: unknown },
+  ) => ChatMetadataResult;
+  fail: (error: unknown) => void;
+};
+export type ChatMetadataRequest = {
+  promise: Promise<ChatMetadataResult>;
+  publication: ChatMetadataPublication;
+  revalidation: boolean;
+  setStartupRetryDeadline: (deadlineAt?: number) => void;
+  start: () => void;
+};
 export type ChatMetadataEntry = {
   scope: ChatMetadataParams;
   result?: ChatMetadataResult;
-  loadPending?: Promise<ChatMetadataResult>;
-  revalidationPending?: Promise<ChatMetadataResult>;
+  activeRequest?: ChatMetadataRequest;
+  queuedRequest?: ChatMetadataRequest;
   writer?: object;
   listeners: Set<(update: ChatMetadataUpdate) => void>;
   release: () => void;
@@ -59,8 +73,6 @@ export function invalidateChatMetadataStore(
   // Retire every affected writer before subscribers can synchronously start replacements.
   for (const entry of invalidated) {
     entry.result = undefined;
-    entry.loadPending = undefined;
-    entry.revalidationPending = undefined;
     entry.writer = undefined;
   }
   for (const entry of invalidated) {

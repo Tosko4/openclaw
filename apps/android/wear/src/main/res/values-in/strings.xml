@@ -6,6 +6,8 @@
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kontrol"</string>
     <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bicara"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Audio jam tangan gagal"</string>
+    <string name="microphone_permission_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Izin mikrofon diperlukan"</string>
+    <string name="open_settings" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Buka Pengaturan"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Diktekan"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Langsung"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Utas"</string>

@@ -6,6 +6,8 @@
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kontroller"</string>
     <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konuş"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Saat sesi başarısız oldu"</string>
+    <string name="microphone_permission_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Mikrofon izni gerekli"</string>
+    <string name="open_settings" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Ayarları Aç"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dikte et"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Canlı"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"İleti dizisi"</string>

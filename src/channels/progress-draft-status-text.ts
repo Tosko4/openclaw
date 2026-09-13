@@ -34,7 +34,7 @@ export function normalizeReasoningProgressLine(text: string): string {
       /^\s*(?:>\s*)?(?:Reasoning:\s*(?:\r?\n|\r)\s*|Thinking\.{0,3}\s*(?:\r?\n|\r)\s*(?:\r?\n|\r)\s*)/i,
       "",
     )
-    .replace(/\s+/g, " ")
+    .replace(/\s{2,}|[^\S ]/g, " ")
     .trim();
 }
 
