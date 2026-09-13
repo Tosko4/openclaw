@@ -78,9 +78,9 @@ export {
 export {
   createOutboundPayloadPlan,
   createStructuredOutboundPayloadPlan,
-  type OutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "../infra/outbound/payloads.js";
+export type { OutboundPayloadPlan } from "../infra/outbound/reply-payload-parts.js";
 export { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 export type { OutboundSessionContext } from "../infra/outbound/session-context.js";
 export type { OutboundDeliveryFormattingOptions } from "../infra/outbound/formatting.js";

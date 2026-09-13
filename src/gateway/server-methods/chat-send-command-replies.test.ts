@@ -6,12 +6,12 @@ import {
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
+import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import {
   selectChatSendFinalReplyInputs,
   readChatSendReplyPayload,
-  type ChatSendReplyInput,
 } from "./chat-send-command-replies.js";
 
 function selectRawReplies(params: {
@@ -43,7 +43,7 @@ describe("selectChatSendFinalReplyInputs", () => {
       if (!blockPlan || !finalPlan) {
         throw new Error("expected both media plans");
       }
-      const blockInput: ChatSendReplyInput =
+      const blockInput: ReplyDispatchOperation =
         blockKind === "raw"
           ? { kind: "raw", payload: blockPayload }
           : { kind: "prepared", plan: blockPlan };

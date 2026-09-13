@@ -4,32 +4,26 @@ import {
   type ReplyMediaAttachment,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
-import {
-  createStructuredOutboundPayloadPlan,
-  type OutboundPayloadPlan,
-} from "../../infra/outbound/payloads.js";
+import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
+import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { parseInlineDirectives, sanitizeReplyDirectiveId } from "../../utils/directive-tags.js";
 import { sanitizeAssistantDisplayText } from "./chat-assistant-content.js";
 
-export type ChatSendReplyInput =
-  | { kind: "raw"; payload: ReplyPayload }
-  | { kind: "prepared"; plan: OutboundPayloadPlan };
-
 export type DeliveredChatSendReply = {
-  input: ChatSendReplyInput;
+  input: ReplyDispatchOperation;
   kind: "block" | "final";
 };
 
-export function readChatSendReplyPayload(input: ChatSendReplyInput): ReplyPayload {
+export function readChatSendReplyPayload(input: ReplyDispatchOperation): ReplyPayload {
   return input.kind === "raw" ? input.payload : input.plan.payload;
 }
 
 export function replaceChatSendReplyPayload(
-  input: ChatSendReplyInput,
+  input: ReplyDispatchOperation,
   payload: ReplyPayload,
-): ChatSendReplyInput[] {
+): ReplyDispatchOperation[] {
   return input.kind === "raw"
     ? [{ kind: "raw", payload }]
     : createStructuredOutboundPayloadPlan([payload]).map((plan) => ({ kind: "prepared", plan }));
@@ -180,7 +174,7 @@ export function selectChatSendFinalReplyInputs(params: {
   deliveredReplies: readonly DeliveredChatSendReply[];
   foldCommandBlocks: boolean;
   suppressReplies: boolean;
-}): ChatSendReplyInput[] {
+}): ReplyDispatchOperation[] {
   const { deliveredReplies, foldCommandBlocks, suppressReplies } = params;
   const finalPayloadEntries = deliveredReplies.filter((entry) => entry.kind === "final");
   const commandBlockPayloadEntries = foldCommandBlocks

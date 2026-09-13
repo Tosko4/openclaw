@@ -1,6 +1,5 @@
 // Outbound payload planning normalizes reply payloads into sendable text,
 // media, presentation, interactive, and mirror projections.
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import {
@@ -28,6 +27,10 @@ import {
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { collectReplyMediaEntries } from "./reply-media-entries.js";
+import {
+  resolveSendableOutboundReplyParts,
+  type OutboundPayloadPlan,
+} from "./reply-payload-parts.js";
 
 /** Runtime-ready outbound payload after text/media/rich-content normalization. */
 export type NormalizedOutboundPayload = {
@@ -59,16 +62,6 @@ export type OutboundPayloadJson = {
   interactive?: LegacyInteractiveReply;
   channelData?: Record<string, unknown>;
   location?: ReplyPayload["location"];
-};
-
-/** Prepared payload entry that keeps source indexing plus reusable projections. */
-export type OutboundPayloadPlan = {
-  sourceIndex: number;
-  payload: ReplyPayload;
-  parts: ReturnType<typeof resolveSendableOutboundReplyParts>;
-  hasPresentation: boolean;
-  hasInteractive: boolean;
-  hasChannelData: boolean;
 };
 
 type OutboundPayloadPlanContext = {

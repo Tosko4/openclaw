@@ -4,7 +4,7 @@ import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outco
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { AgentPlanStep } from "../channels/streaming.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
-import type { OutboundPayloadPlan } from "../infra/outbound/payloads.js";
+import type { OutboundPayloadPlan } from "../infra/outbound/reply-payload-parts.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";

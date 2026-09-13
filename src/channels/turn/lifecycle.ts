@@ -29,8 +29,8 @@ import {
 import {
   createStructuredOutboundPayloadPlan,
   summarizeOutboundPayloadForTransport,
-  type OutboundPayloadPlan,
 } from "../../infra/outbound/payloads.js";
+import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveMessageReceiptPrimaryId } from "../message/receipt.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";

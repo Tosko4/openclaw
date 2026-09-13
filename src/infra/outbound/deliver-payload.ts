@@ -17,9 +17,9 @@ import { flattenMarkdownDetails } from "./markdown-details.js";
 import {
   summarizeOutboundPayloadForTransport,
   type NormalizedOutboundPayload,
-  type OutboundPayloadPlan,
 } from "./payloads.js";
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
+import type { OutboundPayloadPlan } from "./reply-payload-parts.js";
 
 const log = createSubsystemLogger("outbound/deliver");
 

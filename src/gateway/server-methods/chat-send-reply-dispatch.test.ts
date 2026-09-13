@@ -7,6 +7,7 @@ import {
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
@@ -18,7 +19,6 @@ import {
 import {
   readChatSendReplyPayload,
   selectChatSendFinalReplyInputs,
-  type ChatSendReplyInput,
 } from "./chat-send-command-replies.js";
 import {
   buildTranscriptReplyTextFromInputs,
@@ -111,8 +111,8 @@ describe("buildAssistantReplyContentFromInputs", () => {
       ];
       const inputs =
         kind === "raw"
-          ? payloads.map((payload): ChatSendReplyInput => ({ kind: "raw", payload }))
-          : createStructuredOutboundPayloadPlan(payloads).map((plan): ChatSendReplyInput => ({
+          ? payloads.map((payload): ReplyDispatchOperation => ({ kind: "raw", payload }))
+          : createStructuredOutboundPayloadPlan(payloads).map((plan): ReplyDispatchOperation => ({
               kind: "prepared",
               plan,
             }));

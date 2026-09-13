@@ -1,5 +1,5 @@
 // Shared reply dispatcher type contracts for visible and message-tool delivery.
-import type { OutboundPayloadPlan } from "../../infra/outbound/payloads.js";
+import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import type { ReplyPayload } from "../types.js";
 import type { NormalizeReplyOutcome } from "./normalize-reply-skip-reason.js";
 

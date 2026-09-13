@@ -3,6 +3,7 @@ import {
   isReplyPayloadStatusNotice,
 } from "../../auto-reply/reply-payload.js";
 import type { QueuedFollowupReplyBatch } from "../../auto-reply/reply/queue/types.js";
+import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   appendLocalMediaParentRoots,
@@ -31,7 +32,6 @@ import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js
 import {
   readChatSendReplyPayload,
   replaceChatSendReplyPayload,
-  type ChatSendReplyInput,
   type DeliveredChatSendReply,
 } from "./chat-send-command-replies.js";
 import { isChatSendReplyDeliveryAuthorized } from "./chat-send-delivery-authority.js";
@@ -50,7 +50,7 @@ import type { GatewayRequestContext } from "./types.js";
 function selectChatSendAgentReplyInputs(params: {
   deliveredReplies: readonly DeliveredChatSendReply[];
   hasReturnedAgentErrorPayloads: boolean;
-}): ChatSendReplyInput[] {
+}): ReplyDispatchOperation[] {
   return params.deliveredReplies
     .filter((entry) => {
       const payload = readChatSendReplyPayload(entry.input);
@@ -202,7 +202,7 @@ export function createChatSendLateReplyFinalizer(
 
 async function finalizeChatSendAgentReplyPayloads(
   params: FinalizeChatSendAgentRepliesBase & {
-    inputs: readonly ChatSendReplyInput[];
+    inputs: readonly ReplyDispatchOperation[];
     suppressFinal?: boolean;
     publishMessage?: (message: Record<string, unknown>, deliveryAuthorized: () => boolean) => void;
     isCurrent?: () => boolean;
@@ -249,7 +249,7 @@ async function finalizeChatSendAgentReplyPayloads(
     getAgentScopedMediaLocalRoots(cfg, agentId),
     latestStorePath ? [latestStorePath] : undefined,
   );
-  const buildReplyContent = async (inputs: readonly ChatSendReplyInput[]) => {
+  const buildReplyContent = async (inputs: readonly ReplyDispatchOperation[]) => {
     const payloads = inputs.map(readChatSendReplyPayload);
     const mediaMessage = await buildWebchatAssistantMessageFromReplyPayloads(payloads, {
       localRoots: mediaLocalRoots,

@@ -41,8 +41,8 @@ import {
   emitOutboundAuditTerminals,
   uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
-import type { OutboundPayloadPlan } from "./payloads.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
+import type { OutboundPayloadPlan } from "./reply-payload-parts.js";
 import { normalizeOutboundReplyFacts } from "./reply-policy.js";
 
 const log = createSubsystemLogger("outbound/deliver");

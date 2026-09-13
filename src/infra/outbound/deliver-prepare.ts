@@ -19,16 +19,13 @@ import {
   resolveOutboundMediaAccessForSend,
   stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
-import {
-  createOutboundPayloadPlan,
-  createStructuredOutboundPayloadPlan,
-  type OutboundPayloadPlan,
-} from "./payloads.js";
+import { createOutboundPayloadPlan, createStructuredOutboundPayloadPlan } from "./payloads.js";
 import {
   PREPARED_OUTBOUND_BATCH_SCHEMA_VERSION,
   type PreparedOutboundBatch,
   type PreparedOutboundBatchEntry,
 } from "./prepared-batch.js";
+import type { OutboundPayloadPlan } from "./reply-payload-parts.js";
 import { createReplyToDeliveryPolicy, normalizeOutboundReplyFacts } from "./reply-policy.js";
 
 class OutboundPayloadPreparationError extends Error {

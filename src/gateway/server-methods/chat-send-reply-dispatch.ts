@@ -9,6 +9,7 @@ import {
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
+import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { readSessionTranscriptWatermark } from "../../config/sessions/session-accessor.js";
 import {
   recordAssistantManagedMediaUrls,
@@ -45,7 +46,6 @@ import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js
 import {
   readChatSendReplyPayload,
   replaceChatSendReplyPayload,
-  type ChatSendReplyInput,
   type DeliveredChatSendReply,
 } from "./chat-send-command-replies.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
@@ -63,7 +63,9 @@ import {
 import { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
 import type { GatewayRequestContext } from "./types.js";
 
-export function buildTranscriptReplyTextFromInputs(inputs: readonly ChatSendReplyInput[]): string {
+export function buildTranscriptReplyTextFromInputs(
+  inputs: readonly ReplyDispatchOperation[],
+): string {
   const chunks = inputs
     .map((input) => {
       const payload = readChatSendReplyPayload(input);
@@ -196,7 +198,7 @@ export function createChatSendReplyDispatch(params: {
     }
     return "unkeyed";
   };
-  const appendWebchatAgentMediaTranscriptIfNeeded = async (input: ChatSendReplyInput) => {
+  const appendWebchatAgentMediaTranscriptIfNeeded = async (input: ReplyDispatchOperation) => {
     const payload = readChatSendReplyPayload(input);
     if (!isAgentRunStarted() || !needsAgentMediaTranscriptFinalization(payload)) {
       return;
@@ -434,7 +436,7 @@ export function createChatSendReplyDispatch(params: {
     );
   };
   const deliverInput = async (
-    input: ChatSendReplyInput,
+    input: ReplyDispatchOperation,
     info: Parameters<ReplyDispatcherOptions["deliver"]>[1],
   ) => {
     const payload = readChatSendReplyPayload(input);
@@ -498,7 +500,7 @@ export function createChatSendReplyDispatch(params: {
     deliverPrepared: (plan, info) => deliverInput({ kind: "prepared", plan }, info),
   };
   const finalizeAgentMediaTranscript = async () => {
-    const latestPayloadByKey = new Map<string, ChatSendReplyInput>();
+    const latestPayloadByKey = new Map<string, ReplyDispatchOperation>();
     for (const { input } of deliveredReplies) {
       const payload = readChatSendReplyPayload(input);
       if (!needsAgentMediaTranscriptFinalization(payload)) {

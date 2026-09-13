@@ -15,8 +15,8 @@ import {
 import {
   createOutboundPayloadPlan,
   createStructuredOutboundPayloadPlan,
-  type OutboundPayloadPlan,
 } from "../../infra/outbound/payloads.js";
+import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";

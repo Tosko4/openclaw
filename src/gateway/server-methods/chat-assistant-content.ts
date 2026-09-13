@@ -5,6 +5,7 @@ import {
   stripReplyMediaFailureFallback,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
+import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { createOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
@@ -18,7 +19,6 @@ import {
   prepareOutgoingMediaFromReplyPayload,
 } from "../managed-image-attachments.js";
 import { formatForLog } from "../ws-log.js";
-import type { ChatSendReplyInput } from "./chat-send-command-replies.js";
 import type { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
 
 const MANAGED_OUTGOING_MEDIA_PATH_PREFIX = "/api/chat/media/outgoing/";
@@ -160,7 +160,7 @@ export function buildAssistantReplyContent(params: AssistantReplyContentParams) 
 
 export async function buildAssistantReplyContentFromInputs(
   params: Omit<AssistantReplyContentParams, "payloads"> & {
-    inputs: readonly ChatSendReplyInput[];
+    inputs: readonly ReplyDispatchOperation[];
   },
 ): Promise<{
   assistantContent: AssistantDisplayContentBlock[] | undefined;
