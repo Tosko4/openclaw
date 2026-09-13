@@ -53,6 +53,7 @@ import {
   TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS,
   TOOL_PAYLOAD_REDACT_PATTERNS,
 } from "./redact-patterns.js";
+import { PEM_REDACT_MATCHER, PEM_REDACT_PATTERN_SOURCE } from "./redact-pem.js";
 import { redactRegisteredSecretValues } from "./secret-redaction-registry.js";
 import { shouldRedactStructuredAuthorizationCode } from "./structured-authorization-code.js";
 
@@ -176,6 +177,9 @@ function normalizeMode(value?: string): RedactSensitiveMode {
 }
 
 function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
+  if (raw === PEM_REDACT_PATTERN_SOURCE) {
+    return PEM_REDACT_MATCHER;
+  }
   if (typeof raw !== "string" && !(raw instanceof RegExp)) {
     return raw;
   }
@@ -1571,9 +1575,13 @@ export function getDefaultRedactPatterns(): string[] {
 }
 
 // Match the complete batch, preserving JSON syntax through the transport's scalar editor.
-export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOptions): string[] {
+export function redactSensitiveLines(
+  lines: string[],
+  resolved: ResolvedRedactOptions,
+  selectedLines?: readonly boolean[],
+): string[] {
   if (lines.length === 0 || resolved.mode === "off") {
-    return lines;
+    return selectedLines ? lines.filter((_, index) => selectedLines[index]) : lines;
   }
   return redactJsonRecord(
     lines.join("\n"),
@@ -1585,7 +1593,9 @@ export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOp
     () => [],
     () => true,
     undefined,
-    true,
-  ).split("\n");
+    { preserveLines: selectedLines !== undefined },
+  )
+    .split("\n")
+    .filter((_, index) => selectedLines === undefined || selectedLines[index]);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -173,7 +173,7 @@ function firstIntersectingToken(tokens: ScalarToken[], start: number): number {
 }
 
 function updateCurrentToken(input: string, token: ScalarToken): void {
-  if (token.raw) {
+  if (token.raw || token.deferEncoding) {
     token.currentRaw = token.currentValue;
     return;
   }
@@ -371,9 +371,11 @@ export function redactJsonRecord(
   prepEdits: (field: RedactionField) => RedactionEdit[],
   preserveDecodedField: (field: RedactionField) => boolean,
   message?: RedactionMessage,
-  batch = false,
+  batch?: { preserveLines: boolean },
 ): string {
-  const tokens = batch ? readBatchTokens(input, origins) : readScalarTokens(input, origins);
+  const tokens = batch
+    ? readBatchTokens(input, origins, batch.preserveLines)
+    : readScalarTokens(input, origins);
   const decodedTokens = tokens.filter(
     (token) => !token.isKey && token.string && !preserveDecodedField(token),
   );
@@ -476,18 +478,22 @@ export function redactJsonRecord(
             if (token.currentStart >= capture.end) {
               break;
             }
+            if (batch && token.isKey) {
+              continue;
+            }
             const value = token.currentValue;
             if (!token.raw && !token.string && token.edits.length === 0) {
               add(token, { start: 0, end: value.length, replacement: "***" });
               continue;
             }
-            const padding = token.raw ? 0 : 1;
+            const unquoted = token.raw || token.deferEncoding;
+            const padding = unquoted ? 0 : 1;
             let startPosition = Math.max(capture.start, token.currentStart + padding);
-            let start = token.raw
+            let start = unquoted
               ? startPosition - token.currentStart
               : currentDecodedBoundary(input, token, startPosition, replacementBoundaries);
             let endPosition = Math.min(capture.end, token.currentEnd - padding);
-            let end = token.raw
+            let end = unquoted
               ? endPosition - token.currentStart
               : currentDecodedBoundary(input, token, endPosition, replacementBoundaries);
             if (start === undefined || end === undefined) {
@@ -509,7 +515,7 @@ export function redactJsonRecord(
               add(token, { start, end: maskEnd, replacement: "***" });
               continue;
             }
-            if (end < start) {
+            if (end < start || (batch && end === start)) {
               continue;
             }
             const { start: captureStart, end: captureEnd } = capture;
@@ -530,7 +536,7 @@ export function redactJsonRecord(
               capture.end <= token.currentEnd - padding
             ) {
               try {
-                replacement = token.raw ? edit.replacement : JSON.parse(`"${edit.replacement}"`);
+                replacement = unquoted ? edit.replacement : JSON.parse(`"${edit.replacement}"`);
               } catch {
                 // A legacy hint can cut an escape; its selected span still receives a full mask.
               }
@@ -579,5 +585,18 @@ export function redactJsonRecord(
       ]);
     }
   }
-  return current;
+  return applyRedactionEdits(
+    current,
+    tokens.flatMap((token) =>
+      token.deferEncoding && token.edits.length > 0
+        ? [
+            {
+              start: token.currentStart,
+              end: token.currentEnd,
+              replacement: JSON.stringify(token.currentValue),
+            },
+          ]
+        : [],
+    ),
+  );
 }

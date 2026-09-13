@@ -1,6 +1,7 @@
 // Log tail helpers read recent log lines with optional parsing and redaction.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { isMissingPathError } from "../infra/errno.js";
 import { readFileWindowFully } from "../infra/file-read.js";
 import { clamp } from "../utils.js";
@@ -76,6 +77,7 @@ async function readLogSlice(params: {
   limit: number;
   maxBytes: number;
   filter?: (line: string) => boolean;
+  redaction: ReturnType<typeof resolveRedactOptions>;
 }): Promise<Omit<LogTailPayload, "file">> {
   const size = (await fs.stat(params.file).catch(missingPathToNull))?.size ?? 0;
   const maxBytes = clamp(params.maxBytes, 1, MAX_BYTES);
@@ -125,6 +127,30 @@ async function readLogSlice(params: {
 
   const handle = await fs.open(params.file, "r");
   try {
+    const contexts = params.redaction.patterns.map((pattern) =>
+      pattern instanceof RegExp ? undefined : pattern.createContext?.(),
+    );
+    const consume = (text: string) => {
+      for (const context of contexts) {
+        context?.consume(text);
+      }
+    };
+    if (start > 0 && contexts.some(Boolean)) {
+      // Reconstruct matching context without retaining or tokenizing old file contents.
+      const prefixBuffer = Buffer.alloc(Math.min(start, DEFAULT_MAX_BYTES));
+      const decoder = new StringDecoder("utf8");
+      let offset = 0;
+      while (offset < start) {
+        const length = Math.min(prefixBuffer.length, start - offset);
+        const { bytesRead } = await handle.read(prefixBuffer, 0, length, offset);
+        if (bytesRead === 0) {
+          break;
+        }
+        consume(decoder.write(prefixBuffer.subarray(0, bytesRead)));
+        offset += bytesRead;
+      }
+      consume(decoder.end());
+    }
     let prefix = "";
     if (start > 0) {
       const prefixBuf = Buffer.alloc(1);
@@ -136,19 +162,25 @@ async function readLogSlice(params: {
     const buffer = Buffer.alloc(length);
     const bytesRead = await readFileWindowFully(handle, buffer, start);
     const text = buffer.toString("utf8", 0, bytesRead);
-    let lines = text.split("\n");
+    const lines = text.split("\n");
     lines.pop();
     if (start > 0 && prefix !== "\n") {
       // Drop the first partial line when starting in the middle of a file.
-      lines.shift();
+      const partial = lines.shift();
+      if (partial !== undefined) {
+        consume(`${partial}\n`);
+      }
     }
-    if (params.filter) {
-      // Sparse consumers inspect the full byte-bounded window before the shared line cap.
-      lines = lines.filter(params.filter);
-    }
-    if (lines.length > limit) {
+    const selected = lines.map((line) => params.filter?.(line) ?? true);
+    let selectedCount = selected.filter(Boolean).length;
+    if (selectedCount > limit) {
       truncated = true;
-      lines = lines.slice(lines.length - limit);
+      for (let index = 0; selectedCount > limit; index += 1) {
+        if (selected[index]) {
+          selected[index] = false;
+          selectedCount -= 1;
+        }
+      }
     }
 
     // Keep an unterminated record pending so a later read can emit it whole.
@@ -158,7 +190,16 @@ async function readLogSlice(params: {
     return {
       cursor,
       size,
-      lines,
+      lines: redactSensitiveLines(
+        lines,
+        {
+          ...params.redaction,
+          patterns: params.redaction.patterns.map(
+            (pattern, index) => contexts[index]?.pattern ?? pattern,
+          ),
+        },
+        selected,
+      ),
       truncated,
       reset,
       skippedBytes,
@@ -181,12 +222,11 @@ export async function readConfiguredLogTail(
     limit: params?.limit ?? DEFAULT_LIMIT,
     maxBytes: params?.maxBytes ?? DEFAULT_MAX_BYTES,
     filter,
+    redaction: resolveRedactOptions(),
   });
-  const redaction = resolveRedactOptions();
   return {
     file,
     ...result,
-    lines: redactSensitiveLines(result.lines, redaction),
   };
 }
 

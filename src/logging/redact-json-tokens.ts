@@ -17,6 +17,7 @@ export type RedactionField = {
 };
 export type ScalarToken = RedactionField & {
   raw?: boolean;
+  deferEncoding?: boolean;
   start: number;
   end: number;
   escaped: boolean;
@@ -55,6 +56,8 @@ type JsonContainer = {
   nextIndex: number;
   context: FieldContext;
   field?: FieldContext;
+  start: number;
+  tokenStart: number;
 };
 
 const JSON_TOKEN_RE = /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[{}[\]]/g;
@@ -89,11 +92,31 @@ export function readScalarTokens(text: string, origins: RedactionOrigins): Scala
         array,
         nextIndex: 0,
         context: array ? { ...context, objectPath: false } : context,
+        start: match.index,
+        tokenStart: tokens.length,
       });
       continue;
     }
     if (raw === "}" || raw === "]") {
-      containers.pop();
+      const container = expectDefined(containers.pop(), "JSON container");
+      if (container.tokenStart === tokens.length) {
+        const end = match.index + 1;
+        const value = text.slice(container.start, end);
+        tokens.push({
+          ...container.context,
+          isKey: false,
+          string: false,
+          value,
+          start: container.start,
+          end,
+          escaped: false,
+          edits: [],
+          projectedEdits: [],
+          currentValue: value,
+          currentStart: container.start,
+          currentEnd: end,
+        });
+      }
       continue;
     }
     const start = match.index;
@@ -165,7 +188,11 @@ export function readScalarTokens(text: string, origins: RedactionOrigins): Scala
   return tokens;
 }
 
-export function readBatchTokens(input: string, origins: RedactionOrigins): ScalarToken[] {
+export function readBatchTokens(
+  input: string,
+  origins: RedactionOrigins,
+  preserveLines = false,
+): ScalarToken[] {
   const tokens: ScalarToken[] = [];
   let offset = 0;
   for (const line of input.split("\n")) {
@@ -178,6 +205,7 @@ export function readBatchTokens(input: string, origins: RedactionOrigins): Scala
     }
     if (json) {
       for (const token of readScalarTokens(line, origins)) {
+        token.deferEncoding = !token.string;
         token.start += offset;
         token.end += offset;
         token.currentStart += offset;
@@ -186,7 +214,7 @@ export function readBatchTokens(input: string, origins: RedactionOrigins): Scala
       }
     } else {
       const previous = tokens.at(-1);
-      if (previous?.raw && previous.end + 1 === offset) {
+      if (!preserveLines && previous?.raw && previous.end + 1 === offset) {
         previous.value += `\n${line}`;
         previous.currentValue = previous.value;
         previous.end = previous.currentEnd = offset + line.length;

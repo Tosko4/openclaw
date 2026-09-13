@@ -36,6 +36,10 @@ export type RedactMatch = ReturnType<typeof readRedactMatch> & { replacement?: s
 type RedactMatcher = {
   readonly source: string;
   readonly exec: (text: string) => Iterable<RedactMatch>;
+  readonly createContext?: () => {
+    consume: (text: string) => void;
+    pattern: ResolvedRedactPattern;
+  };
 };
 export type ResolvedRedactPattern = RegExp | RedactMatcher;
 export type RedactPattern = string | ResolvedRedactPattern;
