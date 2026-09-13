@@ -253,6 +253,7 @@ describe("readGatewayServiceState", () => {
         }
         process.env.HOME = home;
         process.env.PATH = home;
+        process.env.XDG_RUNTIME_DIR = path.join(home, "runtime");
         const expectedPort = portSource === "config" ? 19902 : 19901;
         if (portSource === "config") {
           await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
