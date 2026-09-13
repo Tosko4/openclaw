@@ -21,7 +21,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { getSkillsSnapshotVersion } from "../../skills/runtime/refresh-state.js";
 import {
   assertAgentDatabaseAdmitted,
@@ -81,12 +81,6 @@ type PreparedMetadataGeneration = {
   sessionProjectionByKey: Map<string, AgentProjectionEntry>;
 };
 
-type MetadataReplacement = {
-  promise: Promise<void>;
-  reject: (error: Error) => void;
-  resolve: () => void;
-};
-
 type ChatMetadataRuntimeDeps = {
   getConfig: () => OpenClawConfig;
   getContext: () => GatewayRequestContext;
@@ -109,7 +103,7 @@ type ChatMetadataRuntimeDeps = {
 
 const CHAT_METADATA_CACHE_MAX_ENTRIES = 64;
 
-function createMetadataReplacement(): MetadataReplacement {
+function createMetadataReplacement(): Deferred {
   const replacement = createDeferredCore();
   // Reads and lifecycle refreshes observe the original promise. This handler only prevents an
   // unobserved rejection when shutdown or reload failure occurs without a concurrent reader.
@@ -243,7 +237,7 @@ export function createGatewayChatMetadataRuntime(params: {
   };
   let current: PreparedMetadataGeneration | undefined;
   let lastError: Error | undefined;
-  let replacement: MetadataReplacement | undefined;
+  let replacement: Deferred | undefined;
   let invalidationEpoch = 0;
   let refreshVersion = 0;
   let lastSettlement: PreparedMetadataGeneration | number | undefined;
