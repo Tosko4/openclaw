@@ -3646,21 +3646,22 @@ describe("renderWorkboard", () => {
       state.cards = [card];
       state.detailCardId = card.id;
       renderView();
-      const choice = expectDefined(
-        container.querySelector<HTMLInputElement>(
-          `[name="workboard-detail-${field}-${card.id}"][value="${next}"]`,
-        ),
-        "next property option",
-      );
-      const prior = expectDefined(
-        container.querySelector<HTMLInputElement>(
-          `[name="workboard-detail-${field}-${card.id}"][value="${original}"]`,
-        ),
-        "saved property option",
-      );
-      choice.click();
+      const propertyOption = (value: string) =>
+        expectDefined(
+          container.querySelector<HTMLInputElement>(
+            `[name="workboard-detail-${field}-${card.id}"][value="${value}"]`,
+          ),
+          `${value} property option`,
+        );
+      propertyOption(next).click();
       await waitForFast(() => expect(state.error).toContain("Review and retry"));
-      await waitForFast(() => expect(choice.disabled).toBe(false));
+      await waitForFast(() => {
+        expect(state.loading).toBe(false);
+        expect(state.mutationReadiness).toBe("ready");
+        expect(propertyOption(next).disabled).toBe(false);
+      });
+      const choice = propertyOption(next);
+      const prior = propertyOption(original);
       expect(attempts).toBe(1);
       expect(state.cards[0]?.[field]).toBe(original);
       expect(choice.checked).toBe(false);
