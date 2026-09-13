@@ -3615,19 +3615,29 @@ describe("renderWorkboard", () => {
     async ({ field, original, next }) => {
       const card = createWorkboardCard({ priority: "normal", status: "todo" });
       let attempts = 0;
-      const client = createWorkboardTestClient(() => {
+      let canonical = card;
+      const mutationMethod = field === "status" ? "workboard.cards.move" : "workboard.cards.update";
+      const client = createWorkboardTestClient((method) => {
+        if (method === "workboard.cards.list") {
+          return { cards: [canonical], boards: [] };
+        }
+        if (method === "tasks.list") {
+          return { tasks: [] };
+        }
+        if (method !== mutationMethod) {
+          throw new Error(`Unexpected request: ${method}`);
+        }
         attempts += 1;
         if (attempts === 1) {
+          canonical = { ...card, updatedAt: card.updatedAt + 1 };
           throw new GatewayProtocolRequestError({
             code: "workboard_conflict",
             message: "Review and retry the property.",
-            details: {
-              type: "workboard_card_conflict",
-              card: { ...card, updatedAt: card.updatedAt + 1 },
-            },
+            details: { type: "workboard_card_conflict", card: canonical },
           });
         }
-        return { card: { ...card, [field]: next, updatedAt: card.updatedAt + 2 } };
+        canonical = { ...card, [field]: next, updatedAt: card.updatedAt + 2 };
+        return { card: canonical };
       });
       const { state, container, renderView } = createWorkboardView({
         client,
@@ -3651,6 +3661,8 @@ describe("renderWorkboard", () => {
       choice.click();
       await waitForFast(() => expect(state.error).toContain("Review and retry"));
       await waitForFast(() => expect(choice.disabled).toBe(false));
+      expect(attempts).toBe(1);
+      expect(state.cards[0]?.[field]).toBe(original);
       expect(choice.checked).toBe(false);
       expect(prior.checked).toBe(true);
       choice.click();
