@@ -3773,6 +3773,8 @@ export const en: TranslationMap & {
   palette: {
     placeholder: "Search chats and commands…",
     noResults: "No results",
+    searchingSessions: "Searching sessions…",
+    searchingCommands: "Searching commands…",
     searchFailed: "Chat search failed — check the gateway logs and retry",
     modelSearchFailed: "Model search unavailable. Change your search to retry.",
     searchPartial: "Transcript search unavailable — showing chat titles and metadata",
