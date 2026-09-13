@@ -33,44 +33,48 @@ type TaskFlowReadQuery = {
 };
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
-export type OpenClawStateWorkerOperations = UserPreferenceWorkerOperations & TranscriptReadOperations & {
-  "flows.runTask": { input: ManagedTaskInFlowInput; output: RunTaskInFlowResult };
-  "tasks.mutationSnapshot": { input: TaskRegistryMutationScope; output: TaskRegistryStoreSnapshot };
-  "flows.createManaged": {
-    input: { flow: TaskFlowRecord };
-    output: TaskFlowRecord;
-  };
-  "flows.updateManaged": {
-    input: TaskFlowRegistryUpdate & {
-      ownerKey: string;
+export type OpenClawStateWorkerOperations = UserPreferenceWorkerOperations &
+  TranscriptReadOperations & {
+    "flows.runTask": { input: ManagedTaskInFlowInput; output: RunTaskInFlowResult };
+    "tasks.mutationSnapshot": {
+      input: TaskRegistryMutationScope;
+      output: TaskRegistryStoreSnapshot;
     };
-    output:
-      | TaskFlowRegistryUpdateResult
-      | { applied: false; reason: "not_managed"; current: TaskFlowRecord }
-      | { applied: false; reason: "persist_failed"; current?: TaskFlowRecord };
+    "flows.createManaged": {
+      input: { flow: TaskFlowRecord };
+      output: TaskFlowRecord;
+    };
+    "flows.updateManaged": {
+      input: TaskFlowRegistryUpdate & {
+        ownerKey: string;
+      };
+      output:
+        | TaskFlowRegistryUpdateResult
+        | { applied: false; reason: "not_managed"; current: TaskFlowRecord }
+        | { applied: false; reason: "persist_failed"; current?: TaskFlowRecord };
+    };
+    "flows.current": { input: { flowId: string }; output: TaskFlowRecord | undefined };
+    "tasks.get": { input: { taskId: string }; output: TaskRecord | undefined };
+    "tasks.list": { input: { ownerKey: string }; output: TaskRecord[] };
+    "tasks.resolve": {
+      input: { ownerKey: string; token: string };
+      output: TaskLookupRecords;
+    };
+    "flows.list": { input: { ownerKey: string }; output: TaskFlowRecord[] };
+    "flows.views": { input: { ownerKey: string }; output: TaskFlowView[] };
+    "flows.summary": {
+      input: { ownerKey: string; flowId: string };
+      output: TaskRegistrySummary | undefined;
+    };
+    "flows.read": {
+      input: TaskFlowReadQuery;
+      output: TaskFlowRecord | undefined;
+    };
+    "flows.detail": {
+      input: TaskFlowReadQuery;
+      output: TaskFlowRead | undefined;
+    };
   };
-  "flows.current": { input: { flowId: string }; output: TaskFlowRecord | undefined };
-  "tasks.get": { input: { taskId: string }; output: TaskRecord | undefined };
-  "tasks.list": { input: { ownerKey: string }; output: TaskRecord[] };
-  "tasks.resolve": {
-    input: { ownerKey: string; token: string };
-    output: TaskLookupRecords;
-  };
-  "flows.list": { input: { ownerKey: string }; output: TaskFlowRecord[] };
-  "flows.views": { input: { ownerKey: string }; output: TaskFlowView[] };
-  "flows.summary": {
-    input: { ownerKey: string; flowId: string };
-    output: TaskRegistrySummary | undefined;
-  };
-  "flows.read": {
-    input: TaskFlowReadQuery;
-    output: TaskFlowRecord | undefined;
-  };
-  "flows.detail": {
-    input: TaskFlowReadQuery;
-    output: TaskFlowRead | undefined;
-  };
-};
 
 /** Internal inspection cannot open canonical state or execute a domain command. */
 export type OpenClawStateWorkerInspectionOperations = {

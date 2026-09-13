@@ -2,10 +2,7 @@
 export const gatewayPluginTestFiles = ["test/plugins/codex-model-catalog.gateway.test.ts"];
 
 // Native database consumers retain the Gateway runner and setup in forked processes.
-export const gatewayDatabaseWorkerTestFiles = [
-  "src/gateway/config-reload.transcripts.test.ts",
-  "src/gateway/server-plugin-reload.recovery.test.ts",
-];
+export const gatewayDatabaseWorkerTestFiles = ["src/gateway/config-reload.transcripts.test.ts"];
 
 // Canonical file ownership for the non-isolated Gateway server Vitest project.
 export const gatewayServerBackedHttpTestFiles = [

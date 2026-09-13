@@ -204,12 +204,13 @@ it("allows normal writer bookkeeping beside titles but not other metadata", () =
   ).toBe(true);
 });
 
-it.each([false, true])(
+it.for([false, true])(
   "keeps an admitted capture through a real title config commit (pending=%s) and applies the future title",
-  async (pending) => {
+  async (pending, { signal }) => {
     const stateDir = await fs.realpath(tempDirs.make("transcripts-title-reload-"));
     const configPath = path.join(stateDir, "openclaw.json");
     const requests: TranscriptStartRequest[] = [];
+    let providerEntered: ReturnType<typeof createDeferred<TranscriptStartRequest>> | undefined;
     const startupGate = createDeferred();
     if (!pending) {
       startupGate.resolve();
@@ -224,6 +225,7 @@ it.each([false, true])(
       sourceKinds: ["live-caption"],
       async start(request) {
         requests.push(request);
+        providerEntered?.resolve(request);
         await startupGate.promise;
         return { ok: true, session: request.session };
       },
@@ -249,7 +251,15 @@ it.each([false, true])(
         ],
       },
     };
-    const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn() };
+    const logger = {
+      warn: vi.fn((message: string) => {
+        if (message.startsWith("transcripts autoStart")) {
+          providerEntered?.reject(new Error(message));
+        }
+      }),
+      info: vi.fn(),
+      error: vi.fn(),
+    };
     const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
@@ -272,6 +282,23 @@ it.each([false, true])(
             agentId: "notes",
             logger,
           });
+          const startAndWaitForProvider = async () => {
+            signal.throwIfAborted();
+            const entered = createDeferred<TranscriptStartRequest>();
+            const aborted = () =>
+              entered.reject(
+                new Error("Transcript fixture start aborted", { cause: signal.reason }),
+              );
+            providerEntered = entered;
+            signal.addEventListener("abort", aborted, { once: true });
+            try {
+              service.start();
+              return await entered.promise;
+            } finally {
+              signal.removeEventListener("abort", aborted);
+              providerEntered = undefined;
+            }
+          };
           const restart = vi.fn(async (_plan: GatewayReloadPlan, next: OpenClawConfig) => {
             current = next;
             await service.stop();
@@ -333,13 +360,12 @@ it.each([false, true])(
           });
           await reloader.ready;
           try {
-            service.start();
+            const request = await startAndWaitForProvider();
             await vi.waitFor(async () =>
               expect(
                 pending ? requests : (await readTranscriptLibraryStatus(store, current)).active,
               ).toHaveLength(1),
             );
-            const request = requests[0]!;
             const admitted = structuredClone(request.session);
             const selector = transcriptSessionSelector(admitted);
             await request.onUtterance({ text: "Before title edit", final: true });
@@ -391,7 +417,7 @@ it.each([false, true])(
                 agentId: "notes",
                 logger,
               });
-              service.start();
+              await startAndWaitForProvider();
               await vi.waitFor(async () =>
                 expect(
                   (await readTranscriptLibraryStatus(store, generated)).configuredSources[0]?.state,

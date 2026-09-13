@@ -57,12 +57,16 @@ it.each(
     ["src/gateway/worker-environments"],
     ["src/gateway/managed-image-attachments.test.ts"],
     ["src/gateway/server.sessions.compaction-read-errors.test.ts"],
+    ["src/gateway/server-plugin-reload.recovery.test.ts"],
     ...gatewayDatabaseWorkerTestFiles.map((file) => [file]),
     ["src/gateway/server", "src/gateway/worker-environments"],
   ].map((filters) => ({ filters })),
 )("preserves canonical project ownership for $filters", ({ filters }) => {
   const canonical = gatewayProjectFiles([]);
   expect(canonical["gateway-database-workers"]).toEqual(gatewayDatabaseWorkerTestFiles);
+  expect(canonical["gateway-server"]).toContain(
+    "src/gateway/server-plugin-reload.recovery.test.ts",
+  );
   const expected = Object.fromEntries(
     Object.entries(canonical).map(([name, files]) => [
       name,
