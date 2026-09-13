@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { Transform, type Readable, type TransformCallback } from "node:stream";
+import { Duplex, type Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import {
   Application,
@@ -44,6 +44,8 @@ type OpusDecodeCallbacks = {
   onVerbose: (message: string) => void;
   onWarn: (message: string) => void;
 };
+
+type StreamCallback = (error?: Error | null) => void;
 
 let warnedOpusMissing = false;
 
@@ -142,10 +144,10 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
   return opusStream;
 }
 
-class DiscordOpusEncodeStream extends Transform {
+class DiscordOpusEncodeStream extends Duplex {
   #partialFrame = Buffer.alloc(DISCORD_OPUS_FRAME_BYTES);
   #partialBytes = 0;
-  #pending: { chunk: Buffer; offset: number; done: TransformCallback } | undefined;
+  #pending: { chunk: Buffer; offset: number; done: StreamCallback } | undefined;
   #scheduled: NodeJS.Immediate | undefined;
   #readBlocked = false;
   #partialFlushRequested = false;
@@ -156,8 +158,8 @@ class DiscordOpusEncodeStream extends Transform {
     super({ readableObjectMode: true });
   }
 
-  override _construct(done: (error?: Error | null) => void): void {
-    // Node defers transforms and destruction until construction settles, so a late
+  override _construct(done: StreamCallback): void {
+    // Node defers writes and destruction until construction settles, so a late
     // encoder is released by _destroy without processing cancelled playback.
     void createLibopusEncoder({
       application: Application.Audio,
@@ -172,15 +174,13 @@ class DiscordOpusEncodeStream extends Transform {
     );
   }
 
-  override _transform(chunk: Buffer, _encoding: BufferEncoding, done: TransformCallback): void {
+  override _write(chunk: Buffer, _encoding: BufferEncoding, done: StreamCallback): void {
     this.#pending = { chunk, offset: 0, done };
     this.#schedule();
   }
 
-  override _read(size: number): void {
+  override _read(): void {
     this.#readBlocked = false;
-    // oxlint-disable-next-line eslint/no-underscore-dangle -- Node's Transform owns this hook name.
-    super._read(size);
     this.#schedule();
   }
 
@@ -239,9 +239,10 @@ class DiscordOpusEncodeStream extends Transform {
     }
   }
 
-  override _flush(done: TransformCallback): void {
+  override _final(done: StreamCallback): void {
     try {
       this.flushPartialFrame();
+      this.push(null);
       done();
     } catch (err) {
       done(err instanceof Error ? err : new Error(formatErrorMessage(err)));
@@ -285,7 +286,7 @@ class DiscordOpusEncodeStream extends Transform {
     return bytes;
   }
 
-  override _destroy(err: Error | null, done: (error?: Error | null) => void): void {
+  override _destroy(err: Error | null, done: StreamCallback): void {
     this.#encoder?.free();
     clearImmediate(this.#scheduled);
     this.#scheduled = undefined;
