@@ -293,6 +293,66 @@ describe("chat metadata store", () => {
     }
   });
 
+  it.each(["visible", "invalidated", "remounted"] as const)(
+    "preserves a hidden startup fallback until %s demand returns",
+    async (returning) => {
+      const oldCatalog = { models: [{ id: "old", name: "Old", provider: "example" }] };
+      const freshCatalog = { models: [{ id: "fresh", name: "Fresh", provider: "example" }] };
+      const pendingCatalog = deferred<typeof oldCatalog>();
+      let metadataReads = 0;
+      let catalogReads = 0;
+      const request = vi.fn((method: string) => {
+        if (method === "chat.metadata") {
+          metadataReads += 1;
+          return Promise.resolve(metadata("current"));
+        }
+        return ++catalogReads === 1 ? pendingCatalog.promise : Promise.resolve(freshCatalog);
+      });
+      const client = clientWith(request);
+      const scope = { agentId: "main", sessionKey: "agent:main:retained" };
+      let active = true;
+      let release = subscribeChatMetadata(
+        client,
+        scope,
+        () => {},
+        () => active,
+      );
+      beginChatMetadataPublication(client, scope);
+      const startup = loadChatMetadataRefresh(client, scope, { automatic: true, kind: "startup" });
+      active = false;
+      const fallback = loadChatMetadataRefresh(client, scope, {
+        automatic: true,
+        kind: "metadata",
+      });
+      if (returning !== "visible") {
+        invalidateChatMetadataStore(client, scope);
+      }
+      if (returning === "remounted") {
+        release();
+        release = subscribeChatMetadata(
+          client,
+          scope,
+          () => {},
+          () => active,
+        );
+      }
+      active = true;
+      const resumed = loadChatMetadataRefresh(client, scope, { automatic: true });
+      try {
+        expect([metadataReads, catalogReads]).toEqual([returning === "visible" ? 1 : 0, 1]);
+        pendingCatalog.resolve(oldCatalog);
+        await Promise.all([startup.completed, fallback.completed, resumed.completed]);
+        expect([metadataReads, catalogReads]).toEqual([1, returning === "visible" ? 1 : 2]);
+        expect(await resumed.catalog).toEqual(returning === "visible" ? oldCatalog : freshCatalog);
+        expect(peekChatMetadata(client, scope)).toEqual(metadata("current"));
+      } finally {
+        release();
+        pendingCatalog.resolve(oldCatalog);
+        await Promise.allSettled([startup.completed, fallback.completed, resumed.completed]);
+      }
+    },
+  );
+
   it.each([false, true])(
     "shares a failed generation and permits retry with earlier work pending=%s",
     async (earlierPending) => {

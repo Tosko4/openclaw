@@ -240,15 +240,15 @@ export function loadChatMetadataRefresh(
       previous.revalidateMetadata = options?.revalidateMetadata;
     }
     previous.revision = entry.refreshRevision;
-    if (!options?.automatic) {
-      previous.start(true);
-    }
+    previous.start(!options?.automatic);
     return previous;
   }
   if (
     previous?.phase === "running" &&
     previous.revision === entry.refreshRevision &&
     (options?.automatic || !previous.failed) &&
+    // Error observers can retry before the paired refresh records its rejection.
+    (options?.automatic || !metadataRequired || Boolean(entry.result || entry.writer?.pending)) &&
     // Startup still owns commands; automatic reobservation only joins its catalog.
     (!metadataRequired ||
       previous.metadataRequired ||
@@ -260,6 +260,8 @@ export function loadChatMetadataRefresh(
   }
 
   const previousSettlement = previous?.settled;
+  let previousPending = previous?.phase === "running";
+  const requestedRevision = entry.refreshRevision;
   const startupCatalog =
     previous?.phase === "running" &&
     previous.revision === entry.refreshRevision &&
@@ -288,12 +290,17 @@ export function loadChatMetadataRefresh(
       if (record.phase !== "waiting") {
         return;
       }
-      if (
-        chatMetadataCache.get(client)?.get(metadataScopeKey(scope)) !== entry ||
-        (!explicit &&
-          options?.automatic &&
-          !Array.from(entry.listeners.values()).some((active) => active()))
-      ) {
+      const inheritedCatalog =
+        requestedRevision === entry.refreshRevision ? startupCatalog : undefined;
+      const active =
+        explicit ||
+        !options?.automatic ||
+        Array.from(entry.listeners.values()).some((isActive) => isActive());
+      // Hidden startup fallbacks retain the transport barrier until demand returns.
+      if (options?.automatic && !explicit && previousPending && (!inheritedCatalog || !active)) {
+        return;
+      }
+      if (chatMetadataCache.get(client)?.get(metadataScopeKey(scope)) !== entry || !active) {
         record.phase = "inactive";
         catalog.resolve(undefined);
         completed.resolve();
@@ -310,7 +317,7 @@ export function loadChatMetadataRefresh(
         : Promise.resolve();
       // Keep startup catalog delivery shared when missing commands join it.
       const catalogRead =
-        startupCatalog ??
+        inheritedCatalog ??
         (record.catalogRequired
           ? loadModelCatalog(client, scope)
           : Promise.resolve(peekModelCatalog(client, scope)));
@@ -335,16 +342,12 @@ export function loadChatMetadataRefresh(
     },
   };
   entry.refresh = record;
-  if (
-    options?.automatic &&
-    previous &&
-    previous.phase !== "settled" &&
-    previous.phase !== "inactive" &&
-    !startupCatalog
-  ) {
-    void previousSettlement?.then(() => record.start());
-  } else {
-    record.start();
+  if (options?.automatic && previousPending) {
+    void previousSettlement?.then(() => {
+      previousPending = false;
+      record.start();
+    });
   }
+  record.start();
   return record;
 }
