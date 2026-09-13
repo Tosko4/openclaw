@@ -324,6 +324,15 @@ function writeProperties(properties) {
 
 function run() {
   const [operation, ...args] = process.argv.slice(2);
+  if (
+    operation === "busctl" &&
+    args.length === 7 &&
+    args.join(" ") ===
+      `--user --auto-start=no get-property ${manager} ${root} ${manager}.Manager Version`
+  ) {
+    console.log('s "252.39-1~deb12u2"');
+    return;
+  }
   if (operation === "busctl" && inspectLoadedRuntime(args)) {
     return;
   }

@@ -257,6 +257,13 @@ function execFileSuccess(): ExecFileMock {
 
 type ExecFileResult = [error: ExecFileError | null, stdout: string, stderr: string];
 
+function systemctlVersionResult(result: ExecFileResult = [null, "", ""]): ExecFileMock {
+  return (_command, args, _options, done) => {
+    expect(args).toEqual(["--version"]);
+    done(...result);
+  };
+}
+
 function systemctlUserResult(result: ExecFileResult, ...command: string[]): ExecFileMock {
   return (_cmd, args, _opts, cb) => {
     assertUserSystemctlArgs(args, ...command);
@@ -4175,7 +4182,7 @@ describe("uninstallLegacySystemdUnits", () => {
   });
 
   it.each(["exit", "signal"] as const)(
-    "preserves a legacy unit file when disable fails after status %s",
+    "preserves a legacy unit file when disable fails after executable probe %s",
     async (termination) => {
       const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-unit-"));
       const env = { HOME: path.join(tempHomeRoot, "home") };
@@ -4196,10 +4203,11 @@ describe("uninstallLegacySystemdUnits", () => {
           mode: 0o644,
         });
         execFileMock.mockImplementation((_command, args, _options, callback) => {
-          if (args[1] === "status") {
+          if (args[0] === "--version") {
+            expect(args).toEqual(["--version"]);
             callback(
               termination === "signal"
-                ? createExecFileError("status interrupted", { termination })
+                ? createExecFileError("executable probe interrupted", { termination })
                 : null,
               "",
               "",
@@ -4282,7 +4290,7 @@ describe("uninstallUserSystemdGatewayUnit", () => {
         mode: 0o644,
       });
       execFileMock
-        .mockImplementationOnce(systemctlUserSuccess("status"))
+        .mockImplementationOnce(systemctlVersionResult())
         .mockImplementationOnce(systemctlUserSuccess("disable", "--now", GATEWAY_SERVICE))
         // A deleted unit stays loaded until the manager reloads.
         .mockImplementationOnce(systemctlUserSuccess("daemon-reload"));
@@ -4305,7 +4313,7 @@ describe("uninstallUserSystemdGatewayUnit", () => {
         mode: 0o600,
       });
       execFileMock
-        .mockImplementationOnce(systemctlUserSuccess("status"))
+        .mockImplementationOnce(systemctlVersionResult())
         .mockImplementationOnce(systemctlUserSuccess("disable", "--now", GATEWAY_SERVICE));
 
       const { write, stdout } = createWritableStreamMock();
@@ -4341,7 +4349,7 @@ describe("uninstallUserSystemdGatewayUnit", () => {
   });
 
   it.each(["exit", "signal"] as const)(
-    "preserves the unit file when disable fails after status %s",
+    "preserves the unit file when disable fails after executable probe %s",
     async (termination) => {
       await withUserUnitFixture(async ({ env, unitPath }) => {
         await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Gateway\n", {
@@ -4350,16 +4358,13 @@ describe("uninstallUserSystemdGatewayUnit", () => {
         });
         execFileMock
           .mockImplementationOnce(
-            systemctlUserResult(
-              [
-                termination === "signal"
-                  ? createExecFileError("status interrupted", { termination })
-                  : null,
-                "",
-                "",
-              ],
-              "status",
-            ),
+            systemctlVersionResult([
+              termination === "signal"
+                ? createExecFileError("executable probe interrupted", { termination })
+                : null,
+              "",
+              "",
+            ]),
           )
           .mockImplementationOnce(
             systemctlUserResult(
@@ -4387,7 +4392,7 @@ describe("uninstallUserSystemdGatewayUnit", () => {
         mode: 0o644,
       });
       execFileMock
-        .mockImplementationOnce(systemctlUserSuccess("status"))
+        .mockImplementationOnce(systemctlVersionResult())
         .mockImplementationOnce(systemctlUserSuccess("disable", "--now", GATEWAY_SERVICE))
         .mockImplementationOnce(
           systemctlUserResult(

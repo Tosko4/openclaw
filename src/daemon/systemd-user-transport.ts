@@ -7,14 +7,11 @@ import {
   ServiceInspectionError,
   type ServiceInspectionReason,
 } from "./service-inspection-error.js";
+import type { SystemdUserTransport } from "./service-runtime.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import { decodeLegacyBusctlOutput } from "./systemd-busctl-legacy.js";
 import { openSystemdUserManager } from "./systemd-peer-native.js";
-
-export type SystemdUserTransport =
-  | { kind: "session-bus" | "runtime-bus" | "private"; address: string; runtimeDir: string }
-  | { kind: "machine"; user: string };
 
 // Reachability is a process-local routing fact, never a connection or mutation grant.
 type Selection = { transport: SystemdUserTransport; timedOut: boolean };

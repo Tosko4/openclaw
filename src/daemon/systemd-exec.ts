@@ -306,8 +306,8 @@ export async function assertSystemdAvailable(
 }
 
 export async function isSystemctlAvailable(env: GatewayServiceEnv): Promise<boolean> {
-  const res = await execSystemctlUser(env, ["status"]);
-  // Cleanup uses false to permit file-only removal. An interrupted status probe
+  const res = await execSystemctl(["--version"], env);
+  // Cleanup uses false to permit file-only removal. An interrupted executable probe
   // must still attempt disable before removing a potentially loaded unit.
   return res.code === 0 || !isSystemctlMissing(res);
 }

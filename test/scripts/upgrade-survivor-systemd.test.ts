@@ -26,6 +26,8 @@ function fixture(customPaths = true, registry?: string, managerSetup = "") {
   };
   const env: NodeJS.ProcessEnv = {
     HOME: home,
+    XDG_RUNTIME_DIR: join(home, "runtime"),
+    DBUS_SESSION_BUS_ADDRESS: `unix:path=${join(home, "runtime", "bus")}`,
     PATH: `${home}/bin:${process.env.PATH}`,
     npm_config_prefix: home,
     NPM_CONFIG_REGISTRY: registry,
@@ -95,6 +97,21 @@ setInterval(() => {}, 1000);
 
   it("distinguishes confirmed absence from unsupported inspection and reads the generated service", async () => {
     const { home, env, systemctl, unit, paths } = fixture();
+    const managerVersion = spawnSync(
+      join(home, "bin/busctl"),
+      [
+        "--user",
+        "--auto-start=no",
+        "get-property",
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+        "Version",
+      ],
+      { env, encoding: "utf8" },
+    );
+    expect(managerVersion.status, managerVersion.stderr).toBe(0);
+    expect(managerVersion.stdout.trim()).toBe('s "252.39-1~deb12u2"');
     // First install must reach the same effective reader used by the guarded writer.
     expect(await readLoadedSystemdServiceRuntime(env)).toMatchObject({ status: "unknown" });
     expect(existsSync(`${unit}.loaded-unit`)).toBe(false);

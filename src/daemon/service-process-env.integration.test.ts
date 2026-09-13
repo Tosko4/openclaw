@@ -272,7 +272,7 @@ fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({
   command: path.basename(process.argv[1]), args,
   canaries: ["BOUNDARY_PARENT_ONLY", "BOUNDARY_INLINE", "BOUNDARY_FILE", "BOUNDARY_SHARED"].map(name => Object.hasOwn(process.env, name)),
   selectors: ["OPENCLAW_SYSTEMD_UNIT", "OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR"].some(name => Object.hasOwn(process.env, name)),
-  native: ${JSON.stringify(Object.entries(env).filter(([name]) => !name.startsWith("OPENCLAW_") && !name.startsWith("BOUNDARY_")))}.every(([name, value]) => process.env[name] === value),
+  native: ${JSON.stringify(Object.entries(env).filter(([name]) => !name.startsWith("OPENCLAW_") && !name.startsWith("BOUNDARY_")))}.every(([name, value]) => process.env[name] === (name === "XDG_RUNTIME_DIR" && path.basename(process.argv[1]) === "systemctl" ? undefined : value)),
   marker: process.env.OPENCLAW_CLI === "1",
 }) + "\\n");`;
       for (const command of ["systemctl", "busctl"]) {
@@ -282,7 +282,8 @@ fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({
 const fs = require("node:fs"), path = require("node:path");
 ${record}
 if (${JSON.stringify(command)} === "busctl") {
-  if (args.includes("LoadUnit")) console.log(JSON.stringify({ type: "o", data: ["/org/freedesktop/systemd1/unit/boundary"] }));
+  if (JSON.stringify(args) === JSON.stringify(["--user", "--auto-start=no", "get-property", "org.freedesktop.systemd1", "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "Version"])) console.log('s "252.39"');
+  else if (args.includes("LoadUnit")) console.log(JSON.stringify({ type: "o", data: ["/org/freedesktop/systemd1/unit/boundary"] }));
   else if (args.includes("org.freedesktop.systemd1.Unit")) console.log(${JSON.stringify(unitProperties)});
   else if (args.includes("org.freedesktop.systemd1.Service")) console.log(${JSON.stringify(serviceProperties)});
   else process.exit(91);
@@ -297,6 +298,7 @@ import assert from "node:assert/strict";
 import { readSystemdServiceExecStart } from ${JSON.stringify(new URL("./systemd-service-files.ts", import.meta.url).href)};
 import { mergeGatewayServiceEnv } from ${JSON.stringify(new URL("./service-env-merge.ts", import.meta.url).href)};
 import { execSystemctlUser } from ${JSON.stringify(new URL("./systemd-exec.ts", import.meta.url).href)};
+Object.defineProperty(process, "platform", { value: "linux" });
 const command = await readSystemdServiceExecStart(process.env, { requireEffective: true });
 assert.deepEqual(command.environment, {
   BOUNDARY_INLINE: "synthetic-inline", BOUNDARY_SHARED: "file-wins", BOUNDARY_FILE: "synthetic-file",
