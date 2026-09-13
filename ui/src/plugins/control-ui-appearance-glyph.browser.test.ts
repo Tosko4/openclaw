@@ -26,6 +26,8 @@ describe.runIf("__vitest_browser__" in globalThis)("mounted appearance glyph", (
     });
     const props = { icon: "bot", color: "blue", fallback: "B" };
     const handle = components.mountAppearanceGlyph(container, props);
+    await vi.dynamicImportSettled();
+    expect(onError).not.toHaveBeenCalled();
     const renderedColor = (index = 0) => {
       const glyph = container.querySelectorAll("openclaw-appearance-glyph")[index];
       const svg = glyph?.shadowRoot?.querySelector("svg");
