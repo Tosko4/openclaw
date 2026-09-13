@@ -76,7 +76,7 @@ function observeArchiveReads(
     const statement = prepare.call(this, sql);
     if (
       this.location() !== location ||
-      !/^select\b/iu.test(sql) ||
+      !/^(?:select|with)\b/iu.test(sql) ||
       !sql.includes("meeting_transcript_")
     ) {
       return statement;
