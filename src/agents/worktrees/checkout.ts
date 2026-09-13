@@ -39,6 +39,7 @@ type CheckoutOptions = WorktreeFilesystemOptions & {
   destination: string;
   base: string;
   branch?: string;
+  requireSpace: (cloneBytes?: number) => void;
 };
 
 function assertOwned(options: WorktreeFilesystemOptions) {
@@ -65,6 +66,34 @@ async function indexPath(worktree: string, options: WorktreeFilesystemOptions): 
       await requireGit(worktree, ["rev-parse", "--git-path", "index"], gitOptions(options)),
     ),
   );
+}
+
+async function estimateTemplateCloneBytes(
+  template: NonNullable<Awaited<ReturnType<typeof prepareTemplate>>>,
+  options: CheckoutOptions,
+): Promise<number | undefined> {
+  const index = await fs.open(await indexPath(template.record.path, options), "r");
+  try {
+    const header = Buffer.alloc(12);
+    const { bytesRead } = await index.read(header, 0, header.length, 0);
+    const { size } = await index.stat();
+    const version = header.readUInt32BE(4);
+    const entries = header.readUInt32BE(8);
+    // Git already validated the template. Unsupported or incomplete index headers
+    // cannot justify reduced admission; retain the full checkout allowance.
+    if (
+      bytesRead !== 12 ||
+      header.toString("ascii", 0, 4) !== "DIRC" ||
+      version < 2 ||
+      version > 4 ||
+      entries > Math.floor((size - 12) / 62)
+    ) {
+      return undefined;
+    }
+    return template.backend.estimateCloneBytes(entries, size);
+  } finally {
+    await index.close();
+  }
 }
 
 // Path-dependent filters and per-worktree configuration need a fresh checkout.
@@ -102,8 +131,18 @@ async function checkoutKey(options: CheckoutOptions, commit: string): Promise<st
   if (await worktreePathExists(path.join(options.commonDir, "info", "attributes"))) {
     return undefined;
   }
-  for (const variable of ["GIT_ATTR_GLOBAL", "GIT_ATTR_SYSTEM"]) {
-    const result = await runGit(options.repoRoot, ["var", variable], gitOptions(options));
+  // Join both probes before returning or throwing, including cancellation, so
+  // checkout cleanup cannot race an admitted Git process.
+  const attributePaths = await Promise.allSettled(
+    ["GIT_ATTR_GLOBAL", "GIT_ATTR_SYSTEM"].map((variable) =>
+      runGit(options.repoRoot, ["var", variable], gitOptions(options)),
+    ),
+  );
+  for (const probe of attributePaths) {
+    if (probe.status === "rejected") {
+      throw probe.reason;
+    }
+    const result = probe.value;
     // git var exits 1 without output for a known but disabled path (for example
     // GIT_ATTR_NOSYSTEM=1). Unknown variables on older Git still report an error.
     if (
@@ -116,7 +155,9 @@ async function checkoutKey(options: CheckoutOptions, commit: string): Promise<st
     }
     // Older Git cannot report its attribute search paths: retain native checkout.
     if (
+      result.termination !== "exit" ||
       result.code !== 0 ||
+      result.stdoutTruncatedBytes ||
       (result.stdout.trim() &&
         (await worktreePathExists(normalizeGitPathForFilesystem(result.stdout.trim()))))
     ) {
@@ -193,19 +234,28 @@ async function prepareTemplate(options: CheckoutOptions) {
   ) {
     const status = await runGit(
       existing.path,
-      ["status", "--porcelain", "--untracked-files=all", "--ignored"],
+      ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--ignored"],
       gitOptions(options),
     );
-    const head =
-      status.code === 0
-        ? await requireGit(existing.path, ["rev-parse", "HEAD"], gitOptions(options))
-        : undefined;
-    if (status.code === 0 && !status.stdout && head === commit) {
+    // Porcelain v2 reports HEAD with the inventory. NUL records keep newlines
+    // in filenames from impersonating headers; every non-header means dirty.
+    const fields = status.stdout.split("\0");
+    const heads = fields.filter((field) => field.startsWith("# branch.oid "));
+    if (
+      status.termination === "exit" &&
+      status.code === 0 &&
+      !status.stdoutTruncatedBytes &&
+      fields.pop() === "" &&
+      fields.every((field) => field.startsWith("# ")) &&
+      heads.length === 1 &&
+      heads[0] === `# branch.oid ${commit}`
+    ) {
       assertOwned(options);
       touchTemplate(options.env, existing.id, options.now(), options.commitGuard);
       return { record: existing, backend };
     }
   }
+  options.requireSpace();
   if (existing) {
     await retireTemplate(options.env, existing, options);
   }
@@ -229,10 +279,15 @@ async function prepareTemplate(options: CheckoutOptions) {
   reserveTemplate(options.env, record, options.commitGuard);
   assertOwned(options);
   await fs.mkdir(directory, { recursive: true });
+  options.requireSpace();
   await backend.createTemplate(record.path, options);
   assertOwned(options);
   await requireGit(options.repoRoot, ["worktree", "add", "--detach", "--", record.path, commit], {
     ...gitOptions(options),
+    beforeRun: () => {
+      assertOwned(options);
+      options.requireSpace();
+    },
     timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
   });
   assertOwned(options);
@@ -243,15 +298,30 @@ async function prepareTemplate(options: CheckoutOptions) {
 /** Git owns registration, branches and indexes; the backend only materializes files. */
 export async function addManagedWorktree(options: CheckoutOptions): Promise<GitResult> {
   let template: Awaited<ReturnType<typeof prepareTemplate>>;
+  let cloneBytes: number | undefined;
   if (options.enabled) {
     try {
       template = await prepareTemplate(options);
+      cloneBytes = template ? await estimateTemplateCloneBytes(template, options) : undefined;
     } catch (error) {
       assertOwned(options);
+      template = undefined;
       log.warn(`worktree acceleration unavailable; using Git checkout: ${String(error)}`);
     }
   }
   assertOwned(options);
+  try {
+    options.requireSpace(cloneBytes);
+  } catch (error) {
+    if (!template) {
+      throw error;
+    }
+    // Tiny source trees can cost less than the conservative clone metadata allowance.
+    // Select Git before registration only when its full checkout budget fits.
+    options.requireSpace();
+    template = undefined;
+    cloneBytes = undefined;
+  }
   const added = await runGit(
     options.repoRoot,
     [
@@ -263,7 +333,14 @@ export async function addManagedWorktree(options: CheckoutOptions): Promise<GitR
       options.destination,
       options.base,
     ],
-    { ...gitOptions(options), timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS },
+    {
+      ...gitOptions(options),
+      beforeRun: () => {
+        assertOwned(options);
+        options.requireSpace(cloneBytes);
+      },
+      timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
+    },
   );
   if (added.code !== 0 || !template) {
     return added;
@@ -272,16 +349,28 @@ export async function addManagedWorktree(options: CheckoutOptions): Promise<GitR
   let marker: Buffer | undefined;
   try {
     marker = await fs.readFile(markerPath);
-    const destinationIndex = await indexPath(options.destination, options);
-    const head = await requireGit(options.destination, ["rev-parse", "HEAD"], gitOptions(options));
+    const metadata = await requireGit(
+      options.destination,
+      ["rev-parse", "HEAD", "--git-path", "index"],
+      gitOptions(options),
+    );
+    // Only HEAD occupies a fixed line; the index path can contain newlines.
+    const separator = metadata.indexOf("\n");
+    const head = metadata.slice(0, separator).trimEnd();
     if (head !== template.record.sourceCommit) {
       throw new Error("worktree base moved during template preparation");
     }
+    const destinationIndex = path.resolve(
+      options.destination,
+      normalizeGitPathForFilesystem(metadata.slice(separator + 1)),
+    );
     assertOwned(options);
     await fs.unlink(markerPath);
     assertOwned(options);
     await fs.rmdir(options.destination);
+    options.requireSpace(cloneBytes);
     await template.backend.cloneTemplate(template.record.path, options.destination, options);
+    const cloneCompletedAtMs = Date.now();
     assertOwned(options);
     // Git marks this file hidden on Windows; opening that clone with O_CREAT
     // fails. Replace the template's link with this worktree's own registration.
@@ -298,7 +387,7 @@ export async function addManagedWorktree(options: CheckoutOptions): Promise<GitR
         options.destination,
         sourceIndex,
         destinationIndex,
-        options,
+        { ...options, cloneCompletedAtMs },
       );
     }
     if (!copied) {
@@ -325,22 +414,36 @@ export async function addManagedWorktree(options: CheckoutOptions): Promise<GitR
     }
     assertOwned(options);
     log.warn(`worktree snapshot failed; using Git checkout: ${String(error)}`);
-    const checkout = await runGit(options.destination, ["reset", "--hard", "HEAD"], {
-      ...gitOptions(options),
-      timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
-    });
+    let checkout: GitResult;
+    try {
+      checkout = await runGit(options.destination, ["reset", "--hard", "HEAD"], {
+        ...gitOptions(options),
+        beforeRun: () => {
+          assertOwned(options);
+          options.requireSpace();
+        },
+        timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
+      });
+    } catch (fallbackError) {
+      await removeFailedCheckout(options);
+      throw fallbackError;
+    }
     if (checkout.code !== 0) {
-      assertOwned(options);
-      await requireGit(
-        options.repoRoot,
-        ["worktree", "remove", "--force", options.destination],
-        gitOptions(options),
-      );
-      if (options.branch) {
-        assertOwned(options);
-        await requireGit(options.repoRoot, ["branch", "-D", options.branch], gitOptions(options));
-      }
+      await removeFailedCheckout(options);
     }
     return checkout.code === 0 ? added : checkout;
+  }
+}
+
+async function removeFailedCheckout(options: CheckoutOptions): Promise<void> {
+  assertOwned(options);
+  await requireGit(
+    options.repoRoot,
+    ["worktree", "remove", "--force", options.destination],
+    gitOptions(options),
+  );
+  if (options.branch) {
+    assertOwned(options);
+    await requireGit(options.repoRoot, ["branch", "-D", options.branch], gitOptions(options));
   }
 }

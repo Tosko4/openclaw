@@ -81,13 +81,13 @@ function readReasoningProgressTextOutsideCode(text: string): string | undefined 
 }
 
 function isPartialReasoningProgressTagPrefix(text: string): boolean {
-  const normalized = text.trimStart().toLowerCase();
-  return (
-    normalized.startsWith("<") &&
-    !normalized.includes(">") &&
-    REASONING_PROGRESS_TAG_PREFIXES.some(
-      (prefix) => prefix.startsWith(normalized) || normalized.startsWith(prefix),
-    )
+  const trimmed = text.trimStart();
+  if (!trimmed.startsWith("<") || trimmed.includes(">")) {
+    return false;
+  }
+  const normalized = trimmed.toLowerCase();
+  return REASONING_PROGRESS_TAG_PREFIXES.some(
+    (prefix) => prefix.startsWith(normalized) || normalized.startsWith(prefix),
   );
 }
 

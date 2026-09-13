@@ -847,7 +847,7 @@ suite.define(() => {
             ).toHaveLength(initializations);
 
             // Playwright does not support BFCache restoration; use its supported history flow.
-            // Private responses remain no-store; only the versioned public shell is cacheable.
+            // App documents stay uncached; the public versioned sandbox shell is immutable.
             // Ordinary history is not BFCache proof.
             const historyContext = await newProofContext();
             const historyPage = await historyContext.newPage();
@@ -925,11 +925,13 @@ suite.define(() => {
               expect(
                 historyEvents.filter((event) => event.event === "response-written"),
               ).toMatchObject([{ id: historyCallId, isError: false }]);
-              for (const pathname of ["/__openclaw__/mcp-app", "/__openclaw__/mcp-app/view"]) {
+              for (const [pathname, cacheControl] of [
+                ["/__openclaw__/mcp-app", "no-store"],
+                ["/__openclaw__/mcp-app/view", "no-store"],
+                ["/mcp-app-sandbox", "public, max-age=31536000, immutable"],
+              ] as const) {
                 expect(responses.filter((response) => response.pathname === pathname)).toEqual(
-                  expect.arrayContaining([
-                    expect.objectContaining({ status: 200, cacheControl: "no-store" }),
-                  ]),
+                  expect.arrayContaining([expect.objectContaining({ status: 200, cacheControl })]),
                 );
               }
               const shells = responses.filter(

@@ -27,8 +27,8 @@ import {
   listTaskRecordsForFlowReadInDatabase,
   listTaskRecordsForOwnerReadInDatabase,
   readTaskViewRecordInDatabase,
+  summarizeTaskRecordsForFlowInDatabase,
 } from "../tasks/task-registry.store.kernel.js";
-import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import {
   closeOpenClawStateDatabaseByPath,
   clearOpenClawStateDatabaseOpenFailure,
@@ -174,9 +174,7 @@ export function openExistingSqliteWorkerBackend(
           case "flows.summary": {
             const { ownerKey, flowId } = command.input;
             const flow = ownedFlow(readTaskFlowViewRecordInDatabase(db, flowId), ownerKey);
-            return flow
-              ? summarizeTaskRecords(listTaskRecordsForFlowReadInDatabase(db, flow.flowId))
-              : undefined;
+            return flow ? summarizeTaskRecordsForFlowInDatabase(db, flow.flowId) : undefined;
           }
           case "flows.current": {
             const flow = readTaskFlowRecord(db, command.input.flowId);
