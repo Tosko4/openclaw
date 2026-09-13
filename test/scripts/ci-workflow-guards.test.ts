@@ -18349,7 +18349,8 @@ it("reports stale Linux release requests before selected code runs", () => {
   const requestRun = {
     repository: { full_name: "openclaw/openclaw" },
     event: "workflow_dispatch",
-    name: "Linux App Release Request",
+    name: "Linux App Release Request [v2026.8.2] desktop=false",
+    path: ".github/workflows/linux-app-release-request.yml",
     head_branch: "main",
     head_sha: requestSha,
     conclusion: "success",
@@ -18364,7 +18365,7 @@ it("reports stale Linux release requests before selected code runs", () => {
   for (const changedRun of [
     { repository: { full_name: "untrusted/openclaw" } },
     { event: "push" },
-    { name: "Another workflow" },
+    { path: ".github/workflows/another-workflow.yml" },
     { head_branch: "topic" },
     { conclusion: "failure" },
   ]) {

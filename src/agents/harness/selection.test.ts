@@ -51,7 +51,10 @@ import {
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
 import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
-import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../auth-profiles/credential-fixtures.test-support.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   createModelGenerationFixture,
@@ -235,10 +238,9 @@ beforeEach(async () => {
   );
   clearAgentHarnesses();
   compactAuthMocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
-  compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
-    version: 1,
-    profiles: {},
-  });
+  compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue(
+    createAuthProfileStoreFixture({}),
+  );
   compactAuthMocks.resolveModelAsync.mockResolvedValue({
     model: { id: "gpt-5.5", provider: "openai" },
   });
@@ -4291,12 +4293,11 @@ describe("selectAgentHarness", () => {
         };
       },
     );
-    compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
-      version: 1,
-      profiles: {
+    compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue(
+      createAuthProfileStoreFixture({
         "local-proxy:stale": createApiKeyCredential("local-proxy", "stale-key"),
-      },
-    });
+      }),
+    );
     const profilePlan = {
       providerForAuth: "local-proxy",
       authProfileProviderForAuth: "local-proxy",
