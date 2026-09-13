@@ -20,6 +20,9 @@ enum GatewayCredentialPersistenceError: Error, Equatable, LocalizedError {
 }
 
 enum GatewaySettingsStore {
+    /// Invalidates read-only UI projections after the registry owner commits a mutation.
+    static let gatewayRegistryDidChange = Notification.Name("GatewaySettingsStore.gatewayRegistryDidChange")
+
     private static let productionGatewayService = "ai.openclawfoundation.app.gateway"
     private static var gatewayService: String {
         #if DEBUG
@@ -580,7 +583,10 @@ enum GatewaySettingsStore {
     }
 
     static func clearGatewayRegistry(defaults: UserDefaults = .standard) {
-        _ = KeychainStore.delete(service: self.gatewayService, account: self.gatewayRegistryAccount)
+        let registryRemoved = KeychainStore.delete(service: self.gatewayService, account: self.gatewayRegistryAccount)
+        if registryRemoved {
+            NotificationCenter.default.post(name: self.gatewayRegistryDidChange, object: nil)
+        }
         _ = KeychainStore.delete(service: self.gatewayService, account: self.lastGatewayConnectionAccount)
         self.removeLastGatewayDefaults(defaults)
     }
@@ -593,10 +599,13 @@ enum GatewaySettingsStore {
         guard let data = try? encoder.encode(normalized),
               let json = String(data: data, encoding: .utf8)
         else { return false }
-        return KeychainStore.saveString(
+        guard KeychainStore.saveString(
             json,
             service: self.gatewayService,
             account: self.gatewayRegistryAccount)
+        else { return false }
+        NotificationCenter.default.post(name: self.gatewayRegistryDidChange, object: nil)
+        return true
     }
 
     private static func gatewayRegistryMutationsAllowed() -> Bool {

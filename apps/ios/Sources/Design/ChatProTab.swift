@@ -74,6 +74,7 @@ struct ChatProTab: View {
 
     var body: some View {
         self.content
+            .disabled(self.appModel.isGatewayPickerSwitching)
             .task {
                 await self.appModel.restoreChatSessionRoutingIdentityIfNeeded()
                 self.syncChatViewModel()
@@ -449,6 +450,7 @@ struct ChatProTab: View {
     }
 
     private func syncChatViewModel() {
+        defer { self.appModel.presentedChatViewModel = self.viewModel }
         let sessionKey = self.appModel.chatSessionKey
         // Includes the cache gateway identity so switching paired gateways
         // rebuilds the view model even while the transport mode stays the same.
