@@ -7,6 +7,14 @@ import {
   type RedactionEdit,
 } from "./redact-edit-composition.js";
 import {
+  readBatchTokens,
+  readScalarTokens,
+  type ScalarToken,
+  type EncodedEdit,
+  type RedactionOrigins,
+  type RedactionField,
+} from "./redact-json-tokens.js";
+import {
   iterateRedactMatches,
   type RedactMatch,
   type ResolvedRedactPattern,
@@ -16,11 +24,6 @@ export type RedactionTarget = {
   start: number;
   end: number;
   value: string;
-};
-type RedactionScalarOrigin = { structured: boolean; primitiveMask: boolean };
-export type RedactionOrigins = {
-  value: RedactionScalarOrigin;
-  children: Map<string, RedactionOrigins>;
 };
 export type RedactionEditSelector = (
   match: RedactMatch,
@@ -47,15 +50,6 @@ export function getPatternRedactionEdits(
   return edits;
 }
 
-export type RedactionField = {
-  origin: RedactionScalarOrigin;
-  key: string;
-  path: readonly string[];
-  objectPath: boolean;
-  isKey: boolean;
-  string: boolean;
-  value: string;
-};
 export type RedactionMessage = {
   text: string;
   contentLength: number;
@@ -68,155 +62,6 @@ export type RedactionMessage = {
     primitiveLength?: number;
   }[];
 };
-
-type ScalarToken = RedactionField & {
-  start: number;
-  end: number;
-  escaped: boolean;
-  boundaries?: Map<number, number>;
-  encodedBoundaries?: number[];
-  rootKey?: string;
-  rootValueStart?: number;
-  edits: RedactionEdit[];
-  projectedEdits: RedactionEdit[];
-  currentValue: string;
-  currentStart: number;
-  currentEnd: number;
-  currentRaw?: string;
-  encodedEdits?: EncodedEdit[];
-  pending?: RedactionEdit[];
-};
-
-type EncodedEdit = {
-  start: number;
-  end: number;
-  decodedStart: number;
-  decodedEnd: number;
-  sourceEnd: number;
-  sourceDecodedEnd: number;
-  replacement: string;
-};
-
-type FieldContext = Pick<RedactionField, "key" | "path" | "objectPath"> & {
-  origins?: RedactionOrigins;
-  origin: RedactionScalarOrigin;
-  rootKey?: string;
-  rootValueStart?: number;
-};
-type JsonContainer = {
-  array: boolean;
-  nextIndex: number;
-  context: FieldContext;
-  field?: FieldContext;
-};
-
-const JSON_TOKEN_RE = /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[{}[\]]/g;
-
-function readScalarTokens(text: string, origins: RedactionOrigins): ScalarToken[] {
-  const tokens: ScalarToken[] = [];
-  const containers: JsonContainer[] = [];
-  const root: FieldContext = {
-    key: "",
-    path: [],
-    origins,
-    origin: origins.value,
-    objectPath: true,
-  };
-  const valueContext = (parent: JsonContainer | undefined): FieldContext =>
-    !parent
-      ? root
-      : parent.array
-        ? {
-            ...parent.context,
-            origin: parent.context.origins?.value ?? parent.context.origin,
-            origins: parent.context.origins?.children.get(String(parent.nextIndex++)),
-          }
-        : expectDefined(parent.field, "JSON object field context");
-  for (const match of text.matchAll(JSON_TOKEN_RE)) {
-    const raw = match[0];
-    const parent = containers.at(-1);
-    if (raw === "{" || raw === "[") {
-      const context = valueContext(parent);
-      const array = raw === "[";
-      containers.push({
-        array,
-        nextIndex: 0,
-        context: array ? { ...context, objectPath: false } : context,
-      });
-      continue;
-    }
-    if (raw === "}" || raw === "]") {
-      containers.pop();
-      continue;
-    }
-    const start = match.index;
-    const end = start + raw.length;
-    const string = raw.startsWith('"');
-    const value: string = string ? JSON.parse(raw) : raw;
-    let next = end;
-    while (
-      text[next] === " " ||
-      text[next] === "\t" ||
-      text[next] === "\r" ||
-      text[next] === "\n"
-    ) {
-      next += 1;
-    }
-    const isKey = string && text[next] === ":";
-    let context: FieldContext;
-    if (isKey) {
-      const container = expectDefined(parent, "JSON property container");
-      const inherited = container.context;
-      context = {
-        key: "",
-        path: [],
-        origin: inherited.origin,
-        objectPath: false,
-        rootKey: inherited.rootKey,
-        rootValueStart: inherited.rootValueStart,
-      };
-      let valueStart = next + 1;
-      while (
-        text[valueStart] === " " ||
-        text[valueStart] === "\t" ||
-        text[valueStart] === "\r" ||
-        text[valueStart] === "\n"
-      ) {
-        valueStart += 1;
-      }
-      container.field = {
-        key: value,
-        path: [...inherited.path, value],
-        origins: inherited.origins?.children.get(value),
-        origin: inherited.origins?.value ?? inherited.origin,
-        objectPath: inherited.objectPath,
-        rootKey: containers.length === 1 ? value : inherited.rootKey,
-        rootValueStart: containers.length === 1 ? valueStart : inherited.rootValueStart,
-      };
-    } else {
-      context = valueContext(parent);
-    }
-    const origin: RedactionScalarOrigin = isKey
-      ? { structured: false, primitiveMask: false }
-      : (context.origins?.value ?? context.origin);
-    tokens.push({
-      ...context,
-      origin,
-      start,
-      end,
-      isKey,
-      string,
-      value,
-      escaped: string && raw.includes("\\"),
-      edits: [],
-      projectedEdits: [],
-      currentValue: value,
-      currentStart: start,
-      currentEnd: end,
-    });
-  }
-  return tokens;
-}
 
 function stringBoundaries(text: string, token: ScalarToken): Map<number, number> {
   const boundaries = new Map<number, number>();
@@ -326,6 +171,10 @@ function firstIntersectingToken(tokens: ScalarToken[], start: number): number {
 }
 
 function updateCurrentToken(input: string, token: ScalarToken): void {
+  if (token.raw) {
+    token.currentRaw = token.currentValue;
+    return;
+  }
   const parts: string[] = [];
   const encodedEdits: EncodedEdit[] = [];
   let cursor = token.start + (token.string ? 1 : 0);
@@ -520,8 +369,9 @@ export function redactJsonRecord(
   prepEdits: (field: RedactionField) => RedactionEdit[],
   preserveDecodedField: (field: RedactionField) => boolean,
   message?: RedactionMessage,
+  batch = false,
 ): string {
-  const tokens = readScalarTokens(input, origins);
+  const tokens = batch ? readBatchTokens(input, origins) : readScalarTokens(input, origins);
   const decodedTokens = tokens.filter(
     (token) => !token.isKey && token.string && !preserveDecodedField(token),
   );
@@ -625,14 +475,19 @@ export function redactJsonRecord(
               break;
             }
             const value = token.currentValue;
-            if (!token.string && token.edits.length === 0) {
+            if (!token.raw && !token.string && token.edits.length === 0) {
               add(token, { start: 0, end: value.length, replacement: "***" });
               continue;
             }
-            let startPosition = Math.max(capture.start, token.currentStart + 1);
-            let start = currentDecodedBoundary(input, token, startPosition, replacementBoundaries);
-            let endPosition = Math.min(capture.end, token.currentEnd - 1);
-            let end = currentDecodedBoundary(input, token, endPosition, replacementBoundaries);
+            const padding = token.raw ? 0 : 1;
+            let startPosition = Math.max(capture.start, token.currentStart + padding);
+            let start = token.raw
+              ? startPosition - token.currentStart
+              : currentDecodedBoundary(input, token, startPosition, replacementBoundaries);
+            let endPosition = Math.min(capture.end, token.currentEnd - padding);
+            let end = token.raw
+              ? endPosition - token.currentStart
+              : currentDecodedBoundary(input, token, endPosition, replacementBoundaries);
             if (start === undefined || end === undefined) {
               while (start === undefined) {
                 start = currentDecodedBoundary(
@@ -660,17 +515,20 @@ export function redactJsonRecord(
               start,
               end,
               value: current.slice(
-                Math.max(captureStart, token.currentStart + 1),
-                Math.min(captureEnd, token.currentEnd - 1),
+                Math.max(captureStart, token.currentStart + padding),
+                Math.min(captureEnd, token.currentEnd - padding),
               ),
             }));
             if (!edit) {
               continue;
             }
             let replacement = "***";
-            if (capture.start >= token.currentStart + 1 && capture.end <= token.currentEnd - 1) {
+            if (
+              capture.start >= token.currentStart + padding &&
+              capture.end <= token.currentEnd - padding
+            ) {
               try {
-                replacement = JSON.parse(`"${edit.replacement}"`);
+                replacement = token.raw ? edit.replacement : JSON.parse(`"${edit.replacement}"`);
               } catch {
                 // A legacy hint can cut an escape; its selected span still receives a full mask.
               }

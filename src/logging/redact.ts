@@ -16,13 +16,12 @@ import {
 } from "./redact-edit-composition.js";
 import { modelVisibleToolTextRedactionState } from "./redact-internal-state.js";
 import { isFullContextToolPayloadRedaction } from "./redact-internal.js";
+import type { RedactionField, RedactionOrigins } from "./redact-json-tokens.js";
 import {
   redactJsonRecord,
   getPatternRedactionEdits,
-  type RedactionField,
   type RedactionMessage,
   type RedactionTarget,
-  type RedactionOrigins,
 } from "./redact-json.js";
 import {
   iterateRedactMatches,
@@ -1570,15 +1569,22 @@ export function getDefaultRedactPatterns(): string[] {
   return [...DEFAULT_REDACT_STRING_PATTERNS];
 }
 
-// Applies already-resolved redaction to a batch of lines without re-resolving options.
-// Lines are joined before redacting so multiline patterns (e.g. PEM blocks) can match across
-// line boundaries, then split back. Use this instead of mapping redactSensitiveText when
-// options are resolved once per request.
+// Match the complete batch, preserving JSON syntax through the transport's scalar editor.
 export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOptions): string[] {
   if (lines.length === 0 || resolved.mode === "off") {
     return lines;
   }
-  const exactRedactedLines = lines.map((line) => redactRegisteredSecretValues(line, maskToken));
-  return redactText(exactRedactedLines.join("\n"), resolved.patterns).split("\n");
+  return redactJsonRecord(
+    lines.join("\n"),
+    { value: { structured: false, primitiveMask: false }, children: new Map() },
+    [[], [...preparationPatterns, ...resolved.patterns]],
+    (match, pattern, project) => getRedactionEdit(match, pattern, undefined, project),
+    () => [],
+    () => [],
+    () => [],
+    () => true,
+    undefined,
+    true,
+  ).split("\n");
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
