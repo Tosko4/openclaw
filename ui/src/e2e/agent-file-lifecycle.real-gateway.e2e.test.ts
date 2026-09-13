@@ -103,6 +103,7 @@ const catalogSuite = createControlUiE2eSuite({
       name: "agents-catalog-publication",
       env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
       config: {
+        update: { checkOnStart: false },
         gateway: { controlUi: { enabled: true } },
         agents: {
           defaults: {
