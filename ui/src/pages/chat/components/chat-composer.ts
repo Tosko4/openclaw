@@ -386,7 +386,7 @@ export function renderChatComposer(props: ChatComposerProps) {
         !state.slashMenuOpen &&
         !state.mentionMenu.open,
     );
-    if (goalComposer.active) {
+    if (event.type === "keyup" || goalComposer.active) {
       return;
     }
     updateSlashMenu(target.value, state, slashMenuHost, requestUpdate);
@@ -403,8 +403,11 @@ export function renderChatComposer(props: ChatComposerProps) {
     props.onTypingChange?.(Boolean(value.trim()), value);
   };
   const handleBlur = (event: FocusEvent) => {
+    const emojiWasOpen = state.emojiMenu.open;
     state.emojiMenu.close();
-    requestUpdate();
+    if (emojiWasOpen) {
+      requestUpdate();
+    }
     const target = event.target as HTMLTextAreaElement;
     // A dropped compositionend (detach/blur mid-IME) must not wedge the
     // composing flag: it persists across renders and kills Enter-send,

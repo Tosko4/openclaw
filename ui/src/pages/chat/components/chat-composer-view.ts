@@ -509,15 +509,18 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                       }
                     }}
                     @compositionstart=${(event: CompositionEvent) => {
+                      const emojiWasOpen = state.emojiMenu.open;
                       state.mentionMenu.close();
                       state.emojiMenu.close();
-                      requestUpdate();
                       state.editRevision += 1;
                       state.composerComposing = true;
                       state.composingDraft = {
                         key: draftKey,
                         value: (event.target as HTMLTextAreaElement).value,
                       };
+                      if (emojiWasOpen) {
+                        requestUpdate();
+                      }
                     }}
                     @compositionend=${handleCompositionEnd}
                     @blur=${handleBlur}

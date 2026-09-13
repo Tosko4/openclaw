@@ -166,6 +166,11 @@ export function waitForQueuedChatHistory(
   const connectionIsCurrent = captureChatConnectionOwner(host);
   const sessions = host.sessions;
   const history = getChatHistoryLoadState(host);
+  // A passive outbox wake must not turn a settled history failure into a new
+  // startup window. The history owner's explicit retry or reconnect resumes it.
+  if (history.phase === "failed") {
+    return Promise.resolve(null);
+  }
   // The outbox already owns the draft. Join startup before reusing cached
   // session/branch identity, without issuing a competing history request.
   const loading =

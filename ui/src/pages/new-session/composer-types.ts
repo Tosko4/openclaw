@@ -4,7 +4,7 @@ import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts"
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import type { HumanMentionDirectory } from "../chat/components/chat-composer-mention-menu.ts";
 import type { CapabilityMenuProps } from "../chat/components/chat-composer-types.ts";
-import type { NewSessionComposerTextareaController } from "./composer.ts";
+import type { NewSessionComposerTextareaController } from "./composer-controller.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 
 export type NewSessionComposerOptions = {
