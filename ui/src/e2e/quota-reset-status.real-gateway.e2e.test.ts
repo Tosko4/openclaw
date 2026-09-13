@@ -132,6 +132,12 @@ async function captureFinalStatus(
       });
       socket.on("framereceived", ({ payload }) => {
         const frame = JSON.parse(String(payload));
+        if (
+          frame.type === "event" &&
+          (frame.event === "chat.metadata.changed" || frame.event === "models.snapshot")
+        ) {
+          observations.push({ action: "browser-event", frame });
+        }
         const method = methods.get(frame.id);
         if (method?.startsWith("models.")) {
           observations.push({ action: "browser-rpc", method, frame });
@@ -153,8 +159,23 @@ async function captureFinalStatus(
       const card = page.locator('[data-provider-id="openai"]');
       await card.waitFor({ state: "visible" });
       const badge = card.locator(".model-providers__head .settings-status");
+      let previousStatus: string | undefined;
       await expect
-        .poll(async () => (await badge.textContent())?.trim(), { timeout: 60_000 })
+        .poll(
+          async () => {
+            const badgeStatus = (await badge.textContent())?.trim();
+            if (badgeStatus !== previousStatus) {
+              observations.push({
+                action: "provider-status-poll",
+                ts: Date.now(),
+                status: badgeStatus,
+              });
+              previousStatus = badgeStatus;
+            }
+            return badgeStatus;
+          },
+          { timeout: 60_000 },
+        )
         .toBe("Ready");
       observations.push({
         action: "control-ui-provider-status",

@@ -261,15 +261,18 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       void this.context.agents.ensureList();
     }
     // The route owns initial loading, even when its page module is already cached.
-    const client = this.gateway.client;
+    const client = this.gateway.connected ? this.gateway.client : null;
     if (
       !this.routeDataObserved ||
       this.loaderPending ||
-      !this.gateway.connected ||
       !client ||
       !this.selectedAgentId ||
       this.core.loading ||
-      (this.data !== null && this.data.updatedAt !== null && client === this.dataClient)
+      // A publication can retire the route's catalog read before this page subscribes.
+      (this.data?.updatedAt != null &&
+        client === this.dataClient &&
+        (this.data.catalogError !== null ||
+          peekModelCatalog(client, { agentId: this.selectedAgentId }) !== undefined))
     ) {
       return;
     }

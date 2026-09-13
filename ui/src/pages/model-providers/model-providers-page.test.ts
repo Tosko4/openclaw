@@ -15,6 +15,7 @@ import {
   createAuthStatus,
   createEmptyModelProvidersRouteData,
   createHarness,
+  publishCatalog,
   waitForProviders,
   requestCount,
   saveKey,
@@ -49,6 +50,7 @@ describe("ModelProvidersPage agent scope", () => {
       page.context = context;
       page.routeData = createEmptyModelProvidersRouteData(context);
       if (loadSource === "preload") {
+        publishCatalog(context, "main", { models: [] });
         const routeData = {
           gateway: context.gateway,
           gatewaySnapshot: snapshot,
@@ -93,6 +95,7 @@ describe("ModelProvidersPage agent scope", () => {
       page.context = context;
       page.routeData = createEmptyModelProvidersRouteData(context);
       if (loadSource === "preload") {
+        publishCatalog(context, "main", { models: [] });
         page.routeData = {
           gateway: context.gateway,
           gatewaySnapshot: snapshot,
