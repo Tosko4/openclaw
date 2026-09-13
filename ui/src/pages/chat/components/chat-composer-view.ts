@@ -88,6 +88,7 @@ type ChatComposerViewContext = {
   slashMenuVisible: boolean;
   skillMenuVisible: boolean;
   mentionMenuVisible: boolean;
+  emojiMenuVisible: boolean;
   mentionMenuHost: HumanMentionMenuHost;
   mentionError: string | null;
   skillMenuHost: SkillMenuHost;
@@ -130,6 +131,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     slashMenuVisible,
     skillMenuVisible,
     mentionMenuVisible,
+    emojiMenuVisible,
     mentionMenuHost,
     mentionError,
     skillMenuHost,
@@ -140,7 +142,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     slashMenuAnnouncementId,
     goalComposer,
   } = context;
-  if (slashMenuVisible || skillMenuVisible || mentionMenuVisible) {
+  if (slashMenuVisible || skillMenuVisible || mentionMenuVisible || emojiMenuVisible) {
     ensureChatComposerPickerDismissal();
   }
   const disabledBanner = props.disabledBanner
@@ -365,6 +367,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 resetSlashMenuState(state);
                 resetSkillMenuState(state);
                 state.mentionMenu.close();
+                state.emojiMenu.dismiss(state.composerTextarea);
                 requestUpdate();
               }}
               @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
@@ -380,6 +383,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   : nothing
               }
               ${skillMenuVisible ? renderSkillMenu(state, skillMenuHost, requestUpdate) : nothing}
+              ${state.emojiMenu.render(props.paneId, state.composerTextarea, requestUpdate)}
               ${
                 mentionMenuVisible
                   ? state.mentionMenu.render(mentionMenuHost, requestUpdate)
@@ -473,12 +477,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     ?readonly=${dictation?.locksComposer === true || goalComposer.pending}
                     aria-autocomplete="list"
                     aria-controls=${ifDefined(
-                      slashMenuVisible || skillMenuVisible || mentionMenuVisible
+                      slashMenuVisible || skillMenuVisible || mentionMenuVisible || emojiMenuVisible
                         ? slashMenuListboxId
                         : undefined,
                     )}
                     aria-expanded=${ifDefined(
-                      slashMenuVisible || skillMenuVisible || mentionMenuVisible
+                      slashMenuVisible || skillMenuVisible || mentionMenuVisible || emojiMenuVisible
                         ? "true"
                         : undefined,
                     )}
@@ -495,8 +499,19 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     @select=${handleSelect}
                     @focus=${handleSelect}
                     @pointerup=${handleSelect}
+                    @keyup=${(event: KeyboardEvent) => {
+                      if (
+                        event.key.startsWith("Arrow") ||
+                        event.key === "Home" ||
+                        event.key === "End"
+                      ) {
+                        handleSelect(event);
+                      }
+                    }}
                     @compositionstart=${(event: CompositionEvent) => {
                       state.mentionMenu.close();
+                      state.emojiMenu.close();
+                      requestUpdate();
                       state.editRevision += 1;
                       state.composerComposing = true;
                       state.composingDraft = {
