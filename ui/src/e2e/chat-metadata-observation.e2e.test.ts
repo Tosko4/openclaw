@@ -85,9 +85,13 @@ async function setDocumentVisibility(page: Page, visibility: DocumentVisibilityS
 }
 
 suite.define(() => {
-  it.each([1, 2])(
-    "delivers the cold catalog when startup omits metadata (%i panes)",
-    async (paneCount) => {
+  it.each([
+    { paneCount: 1, wake: "early" },
+    { paneCount: 1, wake: "late" },
+    { paneCount: 2, wake: "late" },
+  ])(
+    "delivers the cold catalog after visibility returns while commands remain pending ($paneCount panes, $wake wakeup)",
+    async ({ paneCount, wake }) => {
       await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
         if (paneCount === 2) {
           await seedSharedSessionPanes(page);
@@ -95,7 +99,11 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           sessionKey: sessionKeys[0],
           models: [model],
-          deferredMethods: ["models.list"],
+          deferredMethods: [
+            "models.list",
+            "chat.metadata",
+            ...(wake === "early" ? ["chat.startup"] : []),
+          ],
           methodResponses: {
             "sessions.list": sessionsResponse(),
             "chat.startup": {
@@ -109,6 +117,12 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKeys[0]));
         const panes = page.locator('openclaw-chat-pane[aria-hidden="false"]');
         await expect.poll(() => panes.count()).toBe(paneCount);
+        await gateway.waitForRequest("models.list");
+        if (wake === "early") {
+          await setDocumentVisibility(page, "hidden");
+          await setDocumentVisibility(page, "visible");
+          await gateway.resolveDeferred("chat.startup");
+        }
         await expect
           .poll(() =>
             panes.evaluateAll((nodes) =>
@@ -119,13 +133,25 @@ suite.define(() => {
             ),
           )
           .toEqual(Array.from({ length: paneCount }, () => false));
-        await gateway.waitForRequest("models.list");
+        await gateway.waitForRequest("chat.metadata");
+        if (wake === "late") {
+          await setDocumentVisibility(page, "hidden");
+          await setDocumentVisibility(page, "visible");
+        }
         await gateway.resolveDeferred("models.list");
         for (const pane of await panes.all()) {
           await expectCatalog(pane, model.name);
+          await expect
+            .poll(() =>
+              pane
+                .locator(".chat-controls__model-picker [data-chat-model-select]")
+                .getAttribute("aria-disabled"),
+            )
+            .toBe("false");
         }
         expect(await gateway.getRequests("models.list")).toHaveLength(1);
         expect(await gateway.getRequests("chat.metadata")).toHaveLength(1);
+        await gateway.resolveDeferred("chat.metadata");
       });
     },
   );

@@ -249,7 +249,10 @@ export function loadChatMetadataRefresh(
     previous?.phase === "running" &&
     previous.revision === entry.refreshRevision &&
     (options?.automatic || !previous.failed) &&
-    (!metadataRequired || previous.metadataRequired) &&
+    // Startup still owns commands; automatic reobservation only joins its catalog.
+    (!metadataRequired ||
+      previous.metadataRequired ||
+      (options?.automatic && options.kind === undefined)) &&
     (!catalogRequired || previous.catalogRequired) &&
     !revalidate
   ) {
@@ -257,6 +260,13 @@ export function loadChatMetadataRefresh(
   }
 
   const previousSettlement = previous?.settled;
+  const startupCatalog =
+    previous?.phase === "running" &&
+    previous.revision === entry.refreshRevision &&
+    !previous.metadataRequired &&
+    !catalogRequired
+      ? previous.catalog
+      : undefined;
   const catalog = createDeferredCore<ModelCatalogResult | undefined>();
   const completed = createDeferredCore();
   const settled = createDeferredCore();
@@ -268,7 +278,7 @@ export function loadChatMetadataRefresh(
     failed: false,
     revision: entry.refreshRevision,
     metadataRequired,
-    catalogRequired,
+    catalogRequired: catalogRequired || Boolean(startupCatalog),
     revalidateMetadata: revalidate ? options?.revalidateMetadata : undefined,
     isCurrent: () =>
       chatMetadataCache.get(client)?.get(metadataScopeKey(scope)) === entry &&
@@ -298,9 +308,12 @@ export function loadChatMetadataRefresh(
           ? revalidateChatMetadata(client, scope)
           : loadChatMetadata(client, scope)
         : Promise.resolve();
-      const catalogRead = record.catalogRequired
-        ? loadModelCatalog(client, scope)
-        : Promise.resolve(peekModelCatalog(client, scope));
+      // Keep startup catalog delivery shared when missing commands join it.
+      const catalogRead =
+        startupCatalog ??
+        (record.catalogRequired
+          ? loadModelCatalog(client, scope)
+          : Promise.resolve(peekModelCatalog(client, scope)));
       // Capture transport settlement now: accepted snapshots or explicit refreshes
       // may fulfill subscribers and replace the catalog pending slot first.
       const catalogSettlement = settleModelCatalogRequests(client, scope);
@@ -326,7 +339,8 @@ export function loadChatMetadataRefresh(
     options?.automatic &&
     previous &&
     previous.phase !== "settled" &&
-    previous.phase !== "inactive"
+    previous.phase !== "inactive" &&
+    !startupCatalog
   ) {
     void previousSettlement?.then(() => record.start());
   } else {

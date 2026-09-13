@@ -222,6 +222,7 @@ export async function refreshChatMetadata(
       ) {
         return;
       }
+      host.chatModelsLoading = false;
       applyChatModelCatalog(host, result);
       if (binding.sessionFactsInvalidated) {
         binding.sessionFactsInvalidated = false;
@@ -235,6 +236,7 @@ export async function refreshChatMetadata(
         refresh.isCurrent() &&
         binding.refreshPending?.refresh === refresh
       ) {
+        host.chatModelsLoading = false;
         host.chatModelCatalogError = formatUiError(error);
         host.requestUpdate?.();
       }
