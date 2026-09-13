@@ -17,7 +17,11 @@
     "../../src/agents/*.test.tsx",
     "../../src/agents/sandbox/**/*.test.ts",
     "../../src/agents/sandbox/**/*.test.tsx",
+    "../../src/agents/sessions/tools/**/*.test.ts",
+    "../../src/agents/sessions/tools/**/*.test.tsx",
     "../../src/agents/tools/**/*.test.ts",
-    "../../src/agents/tools/**/*.test.tsx"
+    "../../src/agents/tools/**/*.test.tsx",
+    "../../src/agents/worktrees/**/*.test.ts",
+    "../../src/agents/worktrees/**/*.test.tsx"
   ]
 }
