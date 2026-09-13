@@ -1752,13 +1752,20 @@ if (args[args.indexOf("--stripe") + 1] === process.env.FAIL_TYPE_STRIPE) process
     for (const directory of ["scripts/lib", "packages", "node_modules"]) {
       symlinkSync(path.resolve(directory), path.join(root, directory), "dir");
     }
-    writeFileSync(
-      path.join(root, "scripts/check-native-state-schema-version.mjs"),
-      `
+    writeFileSync(path.join(root, "scripts/tsx.mjs"), `import ${JSON.stringify(TSX_IMPORT)};\n`);
+    for (const script of [
+      "scripts/check-native-state-schema-version.mjs",
+      "scripts/check-extension-plugin-sdk-boundary.mts",
+    ]) {
+      writeFileSync(
+        path.join(root, script),
+        `
 import { appendFileSync } from "node:fs";
-appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCLAW_LOCAL_CHECK ?? "<unset>", "node scripts/check-native-state-schema-version.mjs"].join("\\t") + "\\n");
+const command = ["node", ...process.execArgv, ${JSON.stringify(script)}, ...process.argv.slice(2)].join(" ");
+appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCLAW_LOCAL_CHECK ?? "<unset>", command].join("\\t") + "\\n");
 `,
-    );
+      );
+    }
   }
   const scripts = Object.fromEntries(options.scripts.map((name) => [name, "true"]));
   if (options.types?.compose) {
