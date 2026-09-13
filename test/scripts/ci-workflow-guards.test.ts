@@ -1752,6 +1752,16 @@ if (args[args.indexOf("--stripe") + 1] === process.env.FAIL_TYPE_STRIPE) process
     for (const directory of ["scripts/lib", "packages", "node_modules"]) {
       symlinkSync(path.resolve(directory), path.join(root, directory), "dir");
     }
+    copyFileSync("scripts/tsx.mjs", path.join(root, "scripts/tsx.mjs"));
+    // The consolidated SDK check runs through Node, outside the pnpm recorder.
+    writeFileSync(
+      path.join(root, "scripts/check-extension-plugin-sdk-boundary.mts"),
+      `
+import { appendFileSync } from "node:fs";
+const command = "node --import ./scripts/tsx.mjs scripts/check-extension-plugin-sdk-boundary.mts " + process.argv.slice(2).join(" ");
+appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCLAW_LOCAL_CHECK ?? "<unset>", command].join("\\t") + "\\n");
+`,
+    );
     writeFileSync(
       path.join(root, "scripts/check-native-state-schema-version.mjs"),
       `
