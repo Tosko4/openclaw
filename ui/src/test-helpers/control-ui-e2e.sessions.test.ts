@@ -882,6 +882,61 @@ it.for([
 );
 
 it.for([
+  { event: "final", outcome: "done" },
+  { event: "error", outcome: "failed" },
+  { event: "aborted", outcome: "killed" },
+  { event: "abort receipt", outcome: "killed" },
+])(
+  "preserves newer $event before the first delayed send ACK",
+  async ({ event, outcome }, { connect }) => {
+    const key = "agent:main:delayed-completion";
+    const { send, response, request, controls } = await connect({
+      sessions: [{ key, status: "running", hasActiveRun: true, activeRunIds: ["other-run"] }],
+      deferredMethods: ["chat.send"],
+      methodResponses: { "chat.send": { runId: "fast-run", status: "started" } },
+    });
+    const id = await send("chat.send", {
+      sessionKey: key,
+      message: "Complete before acknowledgment",
+      idempotencyKey: "fast-run",
+    });
+    controls.emit("chat", {
+      sessionKey: key,
+      runId: "fast-run",
+      state: "error",
+      errorMessage: "Earlier run failed",
+    });
+    if (event === "abort receipt") {
+      await request("chat.abort", { sessionKey: key, runId: "other-run" });
+    } else {
+      controls.emit("chat", {
+        sessionKey: key,
+        runId: "other-run",
+        state: event,
+        ...(event === "error" ? { errorMessage: "Later run failed" } : {}),
+      });
+    }
+    const completed = (await request("chat.startup", { sessionKey: key })).payload.sessionInfo;
+    expect(completed).toMatchObject({
+      status: outcome,
+      activeRunIds: [],
+      hasActiveRun: false,
+      abortedLastRun: outcome === "killed",
+    });
+    if (event === "error") {
+      expect(completed).toHaveProperty("lastRunError", "Later run failed");
+    } else {
+      expect(completed).not.toHaveProperty("lastRunError");
+    }
+    expect(response(id)).toBeUndefined();
+    controls.resolveDeferred("chat.send");
+    await flush();
+    expect(response(id)?.payload).toMatchObject({ runId: "fast-run", status: "started" });
+    expect((await request("sessions.list")).payload.sessions).toEqual([completed]);
+  },
+);
+
+it.for([
   { targeted: true, outcome: "success" },
   { targeted: false, outcome: "success" },
   { targeted: true, outcome: "not-aborted" },
