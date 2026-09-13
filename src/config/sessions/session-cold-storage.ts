@@ -134,6 +134,7 @@ async function runColdMutation(
                   },
                   "session.reclamation.worker-commit",
                   { ...diagnostics, reclamationAdmission },
+                  "worker",
                 ),
               workerData: {
                 type: "sqlite-transcript-archive-v2",

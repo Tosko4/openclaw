@@ -27,8 +27,8 @@ import {
   listTaskRecordsForFlowReadInDatabase,
   listTaskRecordsForOwnerReadInDatabase,
   readTaskViewRecordInDatabase,
+  summarizeTaskRecordsForFlowInDatabase,
 } from "../tasks/task-registry.store.kernel.js";
-import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import {
   closeOpenClawStateDatabaseByPath,
   clearOpenClawStateDatabaseOpenFailure,
@@ -41,6 +41,7 @@ import type {
   OpenClawStateWorkerOperations,
   OpenClawStateWorkerInspectionOperations,
 } from "./openclaw-state-worker-contract.js";
+import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
 
 const log = createSubsystemLogger("state/worker");
 type ManagedFlowWriteResult =
@@ -79,6 +80,12 @@ export function openExistingSqliteWorkerBackend(
           command.input.generation,
           readStableSqliteFileGeneration(context.databasePath),
         );
+      }
+      if (command.type === "userPreferences.read" || command.type === "userPreferences.write") {
+        return executeUserPreferenceCommand(command, {
+          path: context.databasePath,
+          env: getSqliteWorkerStateContext().environment,
+        });
       }
       if (command.type === "flows.createManaged" || command.type === "flows.updateManaged") {
         let observed: TaskFlowRecord | undefined;
@@ -167,9 +174,7 @@ export function openExistingSqliteWorkerBackend(
           case "flows.summary": {
             const { ownerKey, flowId } = command.input;
             const flow = ownedFlow(readTaskFlowViewRecordInDatabase(db, flowId), ownerKey);
-            return flow
-              ? summarizeTaskRecords(listTaskRecordsForFlowReadInDatabase(db, flow.flowId))
-              : undefined;
+            return flow ? summarizeTaskRecordsForFlowInDatabase(db, flow.flowId) : undefined;
           }
           case "flows.current": {
             const flow = readTaskFlowRecord(db, command.input.flowId);

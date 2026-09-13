@@ -1,5 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
+import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { renderSettingsToggleRow } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { pluginConfigSchema, pluginEntryValue } from "../plugins/settings-model.ts";
@@ -11,24 +12,28 @@ const SESSION_SOURCES = [
   {
     pluginId: "anthropic",
     plugin: "Anthropic",
+    icon: "claude",
     key: "sessionCatalog",
     labelKey: "configView.sessionSources.claude",
   },
   {
     pluginId: "codex",
     plugin: "Codex",
+    icon: "codex",
     key: "sessionCatalog",
     labelKey: "configView.sessionSources.codex",
   },
   {
     pluginId: "opencode",
     plugin: "OpenCode",
+    icon: "opencode",
     key: "sessionCatalog",
     labelKey: "configView.sessionSources.opencode",
   },
   {
     pluginId: "acpx",
     plugin: "ACPX",
+    icon: "pi",
     key: "piSessionCatalog",
     labelKey: "configView.sessionSources.pi",
   },
@@ -68,10 +73,11 @@ export function renderSessionSources(props: ConfigProps) {
       ${
         sources.length > 0
           ? html`<div class="settings-group">
-              ${sources.map(({ pluginId, plugin, key, labelKey, enabledSchema }) => {
+              ${sources.map(({ pluginId, plugin, icon, key, labelKey, enabledSchema }) => {
                 const config = asNullableRecord(pluginEntryValue(props.formValue, pluginId).config);
                 const preference = asNullableRecord(config?.[key])?.enabled;
                 return renderSettingsToggleRow({
+                  icon: renderProviderBrandIcon(icon, { className: "session-source__icon" }),
                   title: t(labelKey),
                   description: enabledSchema
                     ? t("configView.sessionSources.sourceHint", { plugin })

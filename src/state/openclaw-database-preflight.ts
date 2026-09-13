@@ -497,7 +497,7 @@ export async function preflightOpenClawDatabaseSchemas(options: {
         closeWorkshopIndexReadDatabase(stateDatabase, closeStateSchemaReadAdmission);
       }
     } finally {
-      stateSnapshot?.cleanup();
+      await stateSnapshot?.cleanupAsync();
     }
   }
   if (options.scope === "state") {
@@ -668,7 +668,7 @@ export async function preflightOpenClawDatabaseSchemas(options: {
       try {
         agentDatabase?.close();
       } finally {
-        agentSnapshot?.cleanup();
+        await agentSnapshot?.cleanupAsync();
       }
     }
   }
