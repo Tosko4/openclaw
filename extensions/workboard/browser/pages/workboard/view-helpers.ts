@@ -103,7 +103,7 @@ export function formatWorkboardDate(value: number | undefined): string {
   return value ? formatDateMs(value, { month: "short", day: "numeric" }, "") : "";
 }
 
-export function formatRefreshTime(value: number): string {
+function formatRefreshTime(value: number): string {
   return new Intl.DateTimeFormat(undefined, {
     hour: "numeric",
     minute: "2-digit",
