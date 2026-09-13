@@ -407,6 +407,7 @@ describe("cold transcript storage workers", () => {
     const observeWorker = (worker: Worker) => workers.push(worker);
     process.on("worker", observeWorker);
     try {
+      closeOpenClawAgentDatabasesForTest();
       await expect(runSessionColdStorageMaintenance({ config: fixture.config })).resolves.toEqual({
         archivedTranscripts: 2,
         externalizedTranscripts: 0,
@@ -415,7 +416,9 @@ describe("cold transcript storage workers", () => {
       expect(
         readSessionColdTranscript(fixture.database(), fixture.secondScope.sessionId),
       ).toBeDefined();
+      closeOpenClawAgentDatabasesForTest();
       await restoreSessionColdTranscript(fixture.scope);
+      closeOpenClawAgentDatabasesForTest();
       await restoreSessionColdTranscript(fixture.secondScope);
       expect(fixture.snapshot()).toEqual(fixture.original);
       await flushLogger();

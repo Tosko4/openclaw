@@ -11,6 +11,12 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawAgentDatabaseClaim } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "../../state/openclaw-agent-db-lease.js";
 import {
+  getOpenClawAgentDatabaseValidation,
+  invalidateOpenClawAgentDatabaseValidation,
+  setOpenClawAgentDatabaseValidation,
+  type OpenClawAgentDatabaseValidation,
+} from "../../state/openclaw-agent-db-validation-cache.js";
+import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
@@ -24,17 +30,19 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
-import { replaceSessionEntry } from "./session-accessor.js";
+import { loadTranscriptEvents, replaceSessionEntry } from "./session-accessor.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { loadSessionEntryReadOnly } from "./session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
+import { withWorkerSqliteIntegrityCounter } from "./session-accessor.sqlite-integrity-counter.test-support.js";
 import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
 import {
   createLifecycleArtifactReclamationPlan,
   runSqliteSessionReclamation,
 } from "./session-accessor.sqlite-reclamation.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 
@@ -47,42 +55,12 @@ vi.mock("node:worker_threads", async (importOriginal) => {
     ...actual,
     Worker: class extends actual.Worker {
       constructor(filename: string | URL, options: WorkerOptions = {}) {
-        let workerOptions = options;
-        if (options.workerData?.operation === "reclaim") {
-          const preload = `
-            import { realpathSync } from 'node:fs';
-            import { DatabaseSync } from 'node:sqlite';
-            import { workerData } from 'node:worker_threads';
-            const checks = new Int32Array(workerData.reclamationValidationChecks);
-            const databasePath = realpathSync(workerData.databaseOptions.path);
-            const prepare = DatabaseSync.prototype.prepare;
-            DatabaseSync.prototype.prepare = function (sql) {
-              const statement = prepare.call(this, sql);
-              if (sql !== 'PRAGMA integrity_check;') return statement;
-              const target = prepare.call(this, 'PRAGMA database_list').all().some(
-                (row) => row.name === 'main' && row.file && realpathSync(row.file) === databasePath,
-              );
-              if (!target) return statement;
-              const all = statement.all.bind(statement);
-              statement.all = (...args) => {
-                const result = all(...args);
-                Atomics.add(checks, 0, 1);
-                return result;
-              };
-              return statement;
-            };
-          `;
-          workerOptions = {
-            ...options,
-            workerData: { ...options.workerData, reclamationValidationChecks: validation.checks },
-            execArgv: [
-              ...(options.execArgv ?? []),
-              "--import",
-              `data:text/javascript,${encodeURIComponent(preload)}`,
-            ],
-          };
-        }
-        super(filename, workerOptions);
+        super(
+          filename,
+          options.workerData?.operation === "reclaim"
+            ? withWorkerSqliteIntegrityCounter(options, validation.checks)
+            : options,
+        );
       }
     },
   };
@@ -146,6 +124,78 @@ function leasesFor(fixture: ReturnType<typeof createFixture>) {
     .all(fixture.database.path);
 }
 
+test("retained reclamation operations share the first full scan until the Gateway owner invalidates it", async () => {
+  const { options, database, scopes } = createFixture(["parent", "child"]);
+  const databaseOptions = { ...options, path: database.path };
+  const plan = reclamation.createHistoryEvictionReclamationPlan({
+    databaseOptions,
+    diskBudget: {},
+    materializedPlans: [],
+    protectedSessionIds: new Set(scopes.map((scope) => scope.sessionId)),
+    sessionId: "already-removed-history",
+  });
+  for (const scope of scopes) {
+    expect(appendTranscriptEventSync(scope, { type: "integrity-proof-survivor" })).toEqual({
+      ok: true,
+      value: true,
+    });
+  }
+  closeOpenClawAgentDatabasesForTest(databaseOptions.env.OPENCLAW_STATE_DIR);
+  const workerIds = new Set<number>();
+  for (let pass = 0; pass < 3; pass += 1) {
+    if (pass === 2) {
+      await closeOpenClawAgentDatabasesAsync(databaseOptions.env.OPENCLAW_STATE_DIR);
+      closeOpenClawAgentDatabasesForTest(databaseOptions.env.OPENCLAW_STATE_DIR);
+    }
+    const diagnostics: SqliteSessionReclamationDiagnostics = {};
+    await expect(
+      runSqliteSessionReclamation({ forceInProcess: false, plan, diagnostics }),
+    ).resolves.toMatchObject({ kind: "history-eviction", value: { deleted: true } });
+    expect(fullChecks()).toBe(pass === 2 ? 2 : 1);
+    expect(diagnostics.workerThreadId).toBeGreaterThan(0);
+    workerIds.add(diagnostics.workerThreadId!);
+    for (const scope of scopes) {
+      expect(loadSessionEntryReadOnly(scope)?.sessionId).toBe(scope.sessionId);
+      expect(await loadTranscriptEvents(scope)).toContainEqual({
+        type: "integrity-proof-survivor",
+      });
+    }
+  }
+  expect(workerIds.size).toBe(2);
+});
+
+test("warm Worker results cannot revive proof invalidated after a competing parent verification", async () => {
+  const { database, plans } = createFixture();
+  invalidateOpenClawAgentDatabaseValidation(database.path);
+  const observed: {
+    worker?: OpenClawAgentDatabaseValidation;
+    parent?: OpenClawAgentDatabaseValidation;
+  } = {};
+  const spawned = observeReclamationWorkers((worker) => {
+    worker.prependListener(
+      "message",
+      (message: reclamationWorker.SqliteReclamationWorkerMessage) => {
+        if (message.type === "reclaimed" && message.operationId === 1) {
+          observed.worker = message.validation;
+          // A concurrent canonical opener can finish before the first Worker result is adopted.
+          observed.parent = setOpenClawAgentDatabaseValidation(database);
+        }
+      },
+    );
+  });
+  await runSqliteSessionReclamation({ forceInProcess: false, plan: plans[0]! });
+  expect(observed.worker).toBeDefined();
+  expect(observed.parent).toBeDefined();
+  expect(getOpenClawAgentDatabaseValidation(database)).toBe(observed.parent);
+
+  invalidateOpenClawAgentDatabaseValidation(database.path);
+  expect(Atomics.load(new Int32Array(observed.worker!.valid), 0)).toBe(1);
+  expect(Atomics.load(new Int32Array(observed.parent!.valid), 0)).toBe(0);
+  await runSqliteSessionReclamation({ forceInProcess: false, plan: plans[1]! });
+  expect(spawned).toHaveLength(1);
+  expect(getOpenClawAgentDatabaseValidation(database)).toBeUndefined();
+});
+
 test.each([
   { cold: false, agentId: "main" },
   { cold: true, agentId: "main" },
@@ -155,6 +205,7 @@ test.each([
   async ({ cold, agentId }) => {
     const fixture = createFixture(undefined, agentId);
     const { options, database, plans, scopes } = fixture;
+    invalidateOpenClawAgentDatabaseValidation(database.path);
     const spawned = observeReclamationWorkers();
     const context = new AsyncLocalStorage<number>();
     const diagnostics: SqliteSessionReclamationDiagnostics[] = [{}, {}];
@@ -182,7 +233,7 @@ test.each([
         expect(loadSessionEntryReadOnly(scopes[index]!)).toBeUndefined();
       }
       expect(spawned).toHaveLength(cold ? 2 : 1);
-      expect(fullChecks()).toBe(cold ? 2 : 1);
+      expect(fullChecks()).toBe(1);
       expect(diagnostics[0]?.workerThreadId).toBeGreaterThan(0);
       if (cold) {
         expect(diagnostics[1]?.workerThreadId).not.toBe(diagnostics[0]?.workerThreadId);
@@ -321,6 +372,8 @@ test.each(["path", "root"] as const)(
 test("retires the previous database before opening a different agent store", async () => {
   const first = createFixture();
   const second = createFixture();
+  invalidateOpenClawAgentDatabaseValidation(first.database.path);
+  invalidateOpenClawAgentDatabaseValidation(second.database.path);
   const spawned = observeReclamationWorkers();
   await runSqliteSessionReclamation({ forceInProcess: false, plan: first.plans[0]! });
   expect(leasesFor(first)).toHaveLength(2);
@@ -336,6 +389,7 @@ test("retires the previous database before opening a different agent store", asy
 
 test("retires after sixty idle seconds and opens a new Worker for the next request", async () => {
   const fixture = createFixture(["first", "second", "third"]);
+  invalidateOpenClawAgentDatabaseValidation(fixture.database.path);
   const spawned = observeReclamationWorkers();
   await runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[0]! });
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"], shouldClearNativeTimers: true });
@@ -354,7 +408,7 @@ test("retires after sixty idle seconds and opens a new Worker for the next reque
   expect(leasesFor(fixture)).toHaveLength(1);
   await runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[2]! });
   expect(spawned).toHaveLength(2);
-  expect(fullChecks()).toBe(2);
+  expect(fullChecks()).toBe(1);
   expect(loadSessionEntryReadOnly(fixture.scopes[2]!)).toBeUndefined();
 });
 

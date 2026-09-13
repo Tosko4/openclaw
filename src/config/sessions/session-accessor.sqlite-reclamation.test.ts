@@ -700,6 +700,7 @@ test.each([false, true])(
   "file warnings retain distinct native admission releases without attributing them to a successor (rejected: %s)",
   async (rejected) => {
     const { databaseOptions, plan } = createFixture();
+    closeOpenClawAgentDatabasesForTest(databaseOptions.env.OPENCLAW_STATE_DIR);
     const file = path.join(tempDirs.make("openclaw-writer-log-"), "writer.log");
     const diagnostics: SqliteSessionReclamationDiagnostics = {};
     const workers: Array<{ worker: Worker; id: number }> = [];
@@ -900,6 +901,7 @@ test.each([
   "records the joined reclamation lifetime outside writers (elapsed=$elapsedMs, rejected=$rejected, log failure=$failLog)",
   async ({ elapsedMs, rejected, failLog }) => {
     const { databaseOptions, plan } = createFixture();
+    closeOpenClawAgentDatabasesForTest(databaseOptions.env.OPENCLAW_STATE_DIR);
     const file = path.join(tempDirs.make("openclaw-reclamation-log-"), "reclamation.log");
     await fs.writeFile(file, "");
     setLoggerOverride({ level: "info", consoleLevel: "silent", file });

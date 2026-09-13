@@ -32,6 +32,7 @@ import { revokeSqliteReclamationCommit } from "./session-accessor.sqlite-reclama
 import {
   runSqliteMutationWorkerRequest,
   type SqliteMutationWorkerMessage,
+  type SqliteMutationWorkerValidationOwner,
 } from "./session-accessor.sqlite-worker-request.js";
 
 type DatabaseOptions = SqliteSessionReclamationPlan["databaseOptions"];
@@ -181,6 +182,7 @@ class SqliteReclamationWorker {
 
   run(params: {
     claim: OpenClawAgentDatabaseClaim;
+    validationOwner?: SqliteMutationWorkerValidationOwner;
     diagnostics?: SqliteSessionReclamationDiagnostics;
     plan: SqliteSessionReclamationPlan;
     commitGate: SharedArrayBuffer;
@@ -219,6 +221,7 @@ class SqliteReclamationWorker {
         }
       },
       withWriteAdmission: params.withWriteAdmission,
+      validationOwner: params.validationOwner,
       dispatch: () =>
         worker.postMessage(
           {

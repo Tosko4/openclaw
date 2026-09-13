@@ -427,6 +427,7 @@ export async function runSqliteSessionReclamation(params: {
               (authorize) =>
                 worker.run({
                   claim,
+                  validationOwner: { database, isCurrent: claim.isCurrent },
                   commitGate,
                   plan,
                   diagnostics: params.diagnostics,

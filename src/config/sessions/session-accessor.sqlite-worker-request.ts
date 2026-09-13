@@ -3,6 +3,12 @@ import type { Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-lifecycle.js";
+import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
+import {
+  adoptOpenClawAgentDatabaseValidation,
+  getOpenClawAgentDatabaseValidation,
+  type OpenClawAgentDatabaseValidation,
+} from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   registerOpenClawStateDatabaseAsyncResource,
@@ -69,10 +75,21 @@ export type SqliteWorkerWriteAdmission<Result> = (
   diagnostics: SqliteSessionReclamationAdmissionDiagnostics,
 ) => Promise<void>;
 
+export type SqliteMutationWorkerValidationOwner = {
+  database: OpenClawAgentReadOnlyDatabase;
+  isCurrent: () => boolean;
+};
+
 export type SqliteMutationWorkerMessage<Result> =
   | { type: "commit-request"; operationId: number }
   | { type: "admission-request" | "admission-release"; operationId: number; admissionId: number }
-  | { type: "reclaimed"; operationId: number; result: Result; settled: true };
+  | {
+      type: "reclaimed";
+      operationId: number;
+      result: Result;
+      settled: true;
+      validation?: OpenClawAgentDatabaseValidation;
+    };
 
 /** Share request authority, not connection lifetime: cold mutations join exit; sweeps join each result. */
 export function runSqliteMutationWorkerRequest<Result>(params: {
@@ -81,6 +98,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
   completion: "result" | "exit";
   onCommitRequest: () => void;
   withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
+  validationOwner?: SqliteMutationWorkerValidationOwner;
   dispatch?: () => void;
   getFailure?: () => Error | undefined;
   onExit?: (code: number) => void;
@@ -88,6 +106,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
   const { worker, operationId } = params;
   return new Promise((resolve, reject) => {
     let result: Result | undefined;
+    let validation: OpenClawAgentDatabaseValidation | undefined;
     let workerError: Error | undefined;
     let transportError: Error | undefined;
     let admission:
@@ -125,18 +144,23 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
       worker.off("exit", exit);
       worker.off("error", error);
       worker.off("messageerror", messageError);
-      void Promise.all(admissionTasks).then(() => {
-        const failure = workerError ?? transportError ?? params.getFailure?.();
-        if (failure) {
-          reject(failure);
-        } else if (code !== undefined && code !== 0) {
-          reject(new Error(`SQLite transcript archive worker exited with code ${code}`));
-        } else if (result === undefined) {
-          reject(new Error("SQLite session reclamation Worker exited without results"));
-        } else {
-          resolve(result);
-        }
-      }, reject);
+      void Promise.all(admissionTasks)
+        .then(() => {
+          const failure = workerError ?? transportError ?? params.getFailure?.();
+          if (failure) {
+            reject(failure);
+          } else if (code !== undefined && code !== 0) {
+            reject(new Error(`SQLite transcript archive worker exited with code ${code}`));
+          } else if (result === undefined) {
+            reject(new Error("SQLite session reclamation Worker exited without results"));
+          } else {
+            if (validation && params.validationOwner?.isCurrent()) {
+              adoptOpenClawAgentDatabaseValidation(params.validationOwner.database, validation);
+            }
+            resolve(result);
+          }
+        })
+        .catch(reject);
     };
     const exit = (code: number) => {
       params.onExit?.(code);
@@ -177,12 +201,17 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
             if (refusal) {
               workerError ??= toStringifiedError(refusal.error);
             }
+            const allowed = refusal === undefined && workerError === undefined;
             worker.postMessage(
               {
                 type: "admission",
                 operationId,
                 admissionId: requested.id,
-                allowed: refusal === undefined && workerError === undefined,
+                allowed,
+                validation:
+                  allowed && params.validationOwner?.isCurrent()
+                    ? getOpenClawAgentDatabaseValidation(params.validationOwner.database)
+                    : undefined,
               },
               [],
             );
@@ -232,6 +261,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
           return;
         }
         result = message.result;
+        validation = message.validation;
         if (params.completion === "result") {
           finish();
         }

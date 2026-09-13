@@ -13,6 +13,10 @@ import {
 } from "../../state/openclaw-agent-db-lease.js";
 import { readOpenClawAgentDatabaseWorkerLeaseReceipt } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
+  getOpenClawAgentDatabaseValidation,
+  type OpenClawAgentDatabaseValidation,
+} from "../../state/openclaw-agent-db-validation-cache.js";
+import {
   borrowOpenClawAgentDatabase,
   settleOpenClawAgentDatabaseWorkerClose,
   withOpenClawAgentDatabaseAdmission,
@@ -68,12 +72,16 @@ function withWorkerWriteAdmission<T>(
   let finalAdmission = false;
   const withAdmission: OpenClawAgentDatabaseWriteAdmission = async (run) => {
     const requestedId = ++admissionId;
-    const allowed = await new Promise<boolean>((resolve, reject) => {
+    const admission = await new Promise<{
+      allowed: boolean;
+      validation?: OpenClawAgentDatabaseValidation;
+    }>((resolve, reject) => {
       const receive = (admissionMessage: {
         type: string;
         operationId: number;
         admissionId: number;
         allowed: boolean;
+        validation?: OpenClawAgentDatabaseValidation;
       }) => {
         cleanup();
         if (
@@ -84,7 +92,7 @@ function withWorkerWriteAdmission<T>(
           reject(new Error("SQLite reclamation Worker received invalid write admission"));
           return;
         }
-        resolve(admissionMessage.allowed);
+        resolve(admissionMessage);
       };
       const closed = () => {
         cleanup();
@@ -103,10 +111,10 @@ function withWorkerWriteAdmission<T>(
       });
     });
     const value = await run(() => {
-      if (!allowed) {
+      if (!admission.allowed) {
         throw new Error("SQLite reclamation database admission was revoked");
       }
-    });
+    }, admission.validation);
     if (!finalAdmission) {
       port.postMessage({
         type: "admission-release",
@@ -136,31 +144,42 @@ export async function runColdMutationWorkerPort(
       : undefined;
   const commitGate = data.commitGate;
   let result: SessionColdMutationResult;
+  let validation: OpenClawAgentDatabaseValidation | undefined;
   try {
-    result = await withWorkerWriteAdmission(port, 0, data.plan.databaseOptions, async () => {
-      let transactionDatabase: DatabaseSync | undefined;
-      try {
-        const changed = mutateSessionColdTranscriptInWorker(data.plan, coldRecords, (database) => {
-          transactionDatabase = database.db;
-          waitForSqliteReclamationCommit(commitGate, () =>
-            port.postMessage({ type: "commit-request", operationId: 0 }),
+    result = await withWorkerWriteAdmission(
+      port,
+      0,
+      data.plan.databaseOptions,
+      async (openedDatabase) => {
+        let transactionDatabase: DatabaseSync | undefined;
+        try {
+          const changed = mutateSessionColdTranscriptInWorker(
+            data.plan,
+            coldRecords,
+            (database) => {
+              transactionDatabase = database.db;
+              waitForSqliteReclamationCommit(commitGate, () =>
+                port.postMessage({ type: "commit-request", operationId: 0 }),
+              );
+            },
           );
-        });
-        // The parent joins the cold transaction, not the subsequent bounded page drain.
-        markSqliteReclamationSettled(commitGate);
-        if (data.plan.kind !== "cold-restore") {
-          await reclaimSqliteFreePages(data.plan.databaseOptions, undefined, { maxPasses: 64 });
-        }
-        return changed;
-      } finally {
-        if (
-          transactionDatabase &&
-          (!transactionDatabase.isOpen || !transactionDatabase.isTransaction)
-        ) {
+          // The parent joins the cold transaction, not the subsequent bounded page drain.
           markSqliteReclamationSettled(commitGate);
+          if (data.plan.kind !== "cold-restore") {
+            await reclaimSqliteFreePages(data.plan.databaseOptions, undefined, { maxPasses: 64 });
+          }
+          return changed;
+        } finally {
+          validation = getOpenClawAgentDatabaseValidation(openedDatabase);
+          if (
+            transactionDatabase &&
+            (!transactionDatabase.isOpen || !transactionDatabase.isTransaction)
+          ) {
+            markSqliteReclamationSettled(commitGate);
+          }
         }
-      }
-    });
+      },
+    );
   } catch (error) {
     const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
     if (cleanup.settled) {
@@ -185,6 +204,7 @@ export async function runColdMutationWorkerPort(
     operationId: 0,
     result: workerResult,
     settled: true,
+    validation: cleanup.settled ? validation : undefined,
   } satisfies SqliteMutationWorkerMessage<typeof workerResult>);
   port.close();
 }
@@ -223,11 +243,13 @@ export async function runReclamationWorkerPort(
         throw new Error("SQLite session reclamation database owner is no longer current");
       }
       claim?.assertCurrent();
+      let validation: OpenClawAgentDatabaseValidation | undefined;
       const result = await withWorkerWriteAdmission(
         port,
         operationId,
         databaseOptions,
         (database) => {
+          const openedForRequest = !claim;
           if (!claim) {
             const borrowed = borrowOpenClawAgentDatabase(databaseOptions);
             claim = createOpenClawAgentDatabaseClaim(database, borrowed.release);
@@ -244,7 +266,7 @@ export async function runReclamationWorkerPort(
           }
           assertOpenClawAgentDatabaseLease(lease.leaseId, databaseOptions);
           try {
-            return reclaimSqliteSessionInTransaction(request.plan, {
+            const reclaimed = reclaimSqliteSessionInTransaction(request.plan, {
               beforeMutation: claim.assertCurrent,
               onCommit: () =>
                 waitForSqliteReclamationCommit(request.commitGate, () =>
@@ -254,6 +276,11 @@ export async function runReclamationWorkerPort(
                   } satisfies SqliteReclamationWorkerMessage),
                 ),
             });
+            // Warm results must not revive proof invalidated by the parent between requests.
+            if (openedForRequest) {
+              validation = getOpenClawAgentDatabaseValidation(database);
+            }
+            return reclaimed;
           } finally {
             if (!database.db.isOpen || !database.db.isTransaction) {
               markSqliteReclamationSettled(commitGate);
@@ -269,6 +296,7 @@ export async function runReclamationWorkerPort(
         operationId,
         result,
         settled: true,
+        validation,
       } satisfies SqliteReclamationWorkerMessage);
       commitGate = undefined;
     }

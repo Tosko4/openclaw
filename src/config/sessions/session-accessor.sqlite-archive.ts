@@ -19,6 +19,7 @@ import {
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import {
   runSqliteMutationWorkerRequest,
+  type SqliteMutationWorkerValidationOwner,
   type SqliteWorkerWriteAdmission,
 } from "./session-accessor.sqlite-worker-request.js";
 import type { SessionColdWorkerData } from "./session-cold-storage-worker.js";
@@ -107,6 +108,7 @@ type TranscriptArchiveWorkerOperation<Result> =
       diagnostics?: SqliteSessionReclamationDiagnostics;
       onCommitRequest: () => void;
       withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
+      validationOwner?: SqliteMutationWorkerValidationOwner;
     };
 
 function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
@@ -133,6 +135,7 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
       completion: "exit",
       onCommitRequest: params.onCommitRequest,
       withWriteAdmission: params.withWriteAdmission,
+      validationOwner: params.validationOwner,
       onExit: (code) => {
         exitCode = code;
       },

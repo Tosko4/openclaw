@@ -133,8 +133,10 @@ native owner's authority after any awaited admission.
 
 Session reclamation keeps its deletion transaction on a worker connection.
 The worker opens its database under the session writer, then releases that writer
-while full integrity and foreign-key checks run on the same connection. Unrelated
-session writes can continue during those checks. It reacquires the writer and
+while any required first full integrity and foreign-key checks run on the same
+connection. Unrelated session writes can continue during those checks. Workers
+can borrow the Gateway's remembered verification for the same physical agent
+database under live write admission. The worker reacquires the writer and
 revalidates current authority before index repair, schema work, or deletion.
 The process retains at most one validated reclamation worker connection and lease,
 with a 60-second idle retirement. Each deletion keeps its own transaction, retained
@@ -148,8 +150,9 @@ Switching databases, deletion, quarantine, maintenance, root retirement, and shu
 revoke reuse and join native worker exit before releasing the database owner. Pending
 commit requests are rejected before synchronous close can wait on their writer lock.
 Crash cleanup can release only the exact admitted lease receipt, after native exit;
-uncertain cleanup remains an error and never causes mutation replay. A fresh physical
-connection always repeats full checks. These lifetimes are documented in the
+uncertain cleanup remains an error and never causes mutation replay. The parent
+adopts newly established integrity verification only after operation cleanup and
+while its database claim remains current. These connection lifetimes are documented in the
 [accepted reclamation design](https://github.com/openclaw/openclaw/pull/140897#issuecomment-5647899202).
 Archive materialization, file publication, and cold mutations retain their separate
 one-shot workers; cold mutations join their existing page maintenance and native exit.
@@ -158,9 +161,9 @@ Disk-budget cleanup rechecks protection after archive materialization. A candida
 already excluded by that fresh protection set is canceled before worker admission
 and is not counted as reclaimed. After releasing its lifecycle holds, cleanup
 remeasures physical usage before considering another candidate, so space freed by
-a peer does not cause unnecessary eviction. Every physical worker connection open
-still performs the full integrity and foreign-key checks; every victim revalidates
-current ownership and protection.
+a peer does not cause unnecessary eviction. Every admitted worker still performs
+current-owner and schema checks; integrity reuse follows the Gateway-lifetime
+policy described in [Integrity checks](/reference/database-schemas/integrity-and-recovery#integrity-checks).
 
 Archive publication and cascading deletion remain atomic. Before COMMIT, the
 worker publishes its authorization request in shared memory and waits for the
