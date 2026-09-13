@@ -49,7 +49,6 @@ type ChatModelControlsProps = {
   accountSelection?: ChatAccountSelection | null;
   renderAccountSection?: (model: string) => ChatModelAccountSection | undefined;
   activeRunId: string | null;
-  agentDefaultModel?: string;
   connected: boolean;
   gatewayAvailable: boolean;
   loading: boolean;
@@ -245,7 +244,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     options: selectOptions,
   } = resolveChatModelSelectState({
     activeSession: props.selectedSession,
-    agentDefaultModel: props.agentDefaultModel,
     chatModelCatalog: props.modelCatalog,
     modelOverrides: props.modelOverrides ?? {},
     sessionKey: props.sessionKey,
@@ -353,29 +351,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       value: defaultModel,
       label: formatPickerModelLabel(pickerDefaultLabel),
       provider: catalog.provider(defaultModel, defaultProviderHint),
-    });
-  }
-  const currentCatalogEntry = catalog.entry(currentOverride);
-  if (
-    currentOverride &&
-    modelOptions.length > 0 &&
-    !modelOptions.some((option) => option.value === currentOverride)
-  ) {
-    modelOptions.push({
-      commitValue: currentOverride,
-      ...(currentCatalogEntry?.contextWindow
-        ? { contextWindow: currentCatalogEntry.contextWindow }
-        : {}),
-      ...(typeof currentCatalogEntry?.supportsTools === "boolean"
-        ? { supportsTools: currentCatalogEntry.supportsTools }
-        : {}),
-      ...(currentCatalogEntry?.available === false
-        ? { disabled: true, unavailableReason: currentCatalogEntry.unavailableReason }
-        : {}),
-      isDefault: false,
-      value: currentOverride,
-      label: currentCatalogEntry?.name.trim() || currentOverride,
-      provider: catalog.provider(currentOverride, currentProviderHint),
     });
   }
   // A persisted pin can match a changed default; equality cannot establish inheritance.

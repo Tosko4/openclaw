@@ -5,10 +5,7 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
-import type {
-  ModelAuthAvailabilityEvaluation,
-  ModelAuthAvailabilityRef,
-} from "./model-auth-availability.js";
+import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import { compareModelCatalogEntries } from "./model-catalog-order.js";
 import {
   type ModelCatalogRoutePolicy,
@@ -26,11 +23,6 @@ import {
 import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 
 type ModelCatalogVisibilityView = "default" | "configured" | "all";
-export type ModelCatalogAuthChecker = (
-  provider: string,
-  ref?: ModelAuthAvailabilityRef,
-) => boolean | Promise<boolean>;
-
 type LogicalModelCatalogEntryState = {
   authBacked: boolean;
   compatible: boolean;
@@ -266,8 +258,10 @@ export async function prepareLogicalVisibleModelCatalog(
       );
     });
     // Selected physical routes must lead dedupe so sibling metadata cannot win.
-    return projectEntries([...preferred, ...kept, ...retained, ...routeBacked]).filter((entry) =>
-      isPickerVisibleCatalogEntry(entry, configuredKeys),
+    return projectEntries([...preferred, ...kept, ...retained, ...routeBacked]).filter(
+      (entry) =>
+        policy.allows({ provider: entry.provider, model: entry.id }) &&
+        isPickerVisibleCatalogEntry(entry, configuredKeys),
     );
   };
 }

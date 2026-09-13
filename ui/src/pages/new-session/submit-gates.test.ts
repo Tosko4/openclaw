@@ -44,15 +44,12 @@ describe("DraftSubmissionFlow submit gates", () => {
           ],
         }),
       });
-      place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
+      place.modelControl.load(context, "main", true);
       await vi.waitFor(() =>
         expect(
-          renderControl(
-            place.modelControl,
-            context,
-            "main",
-            place.selectedAgent(),
-          ).querySelectorAll("[data-chat-model-option]"),
+          renderControl(place.modelControl, context, "main").querySelectorAll(
+            "[data-chat-model-option]",
+          ),
         ).toHaveLength(1),
       );
       flow.setMessage("Start this session");
@@ -80,11 +77,9 @@ describe("DraftSubmissionFlow submit gates", () => {
           ],
         }),
       });
-      place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
+      place.modelControl.load(context, "main", true);
       await vi.waitFor(() =>
-        expect(place.modelControl.modelUnavailableReason(place.selectedAgent())).toBe(
-          "missing-auth",
-        ),
+        expect(place.modelControl.modelUnavailableReason()).toBe("missing-auth"),
       );
       const createParams = flow.pendingPlacement.stageCreate({
         agentId: "main",
@@ -269,6 +264,17 @@ describe("DraftSubmissionFlow submit gates", () => {
     const fixture = createDraftFixture({
       methods: ["environments.list", "sessions.create", "sessions.dispatch"],
       scopes: ["operator.admin", "operator.read", "operator.write"],
+      defaults: {
+        model: "gpt-5.6-sol",
+        modelProvider: "openai",
+        contextTokens: null,
+        agentRuntime: {
+          id: "cloud-only",
+          cloudPlacementSupported: true,
+          devicePlacementSupported: false,
+          source: "model",
+        },
+      },
       agents: [
         {
           id: "main",
@@ -300,6 +306,10 @@ describe("DraftSubmissionFlow submit gates", () => {
             }
           : {},
     });
+    fixture.place.modelControl.load(fixture.context, "main", true);
+    await vi.waitFor(() =>
+      expect(fixture.place.modelControl.resolveAgentRuntime()?.id).toBe("cloud-only"),
+    );
     await fixture.gateway.refreshCloudProfiles();
     await vi.waitFor(() => expect(fixture.place.devices()).toHaveLength(1));
     fixture.place.selectDevice("build-mac");

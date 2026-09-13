@@ -73,7 +73,6 @@ export function readChatPaneMutationAccess(
 export function renderChatPaneComposerControls(params: {
   state: ChatPageHost;
   selectedSession: GatewaySessionRow | undefined;
-  agentDefaultModel: string | undefined;
   agentDefaultPermissionMode?: ChatPermissionPickerProps["defaultMode"];
   modelAccess: SessionMethodAccess;
   effortAccess: SessionMethodAccess;
@@ -89,7 +88,6 @@ export function renderChatPaneComposerControls(params: {
   const {
     state,
     selectedSession,
-    agentDefaultModel,
     agentDefaultPermissionMode,
     modelAccess,
     effortAccess,
@@ -186,7 +184,6 @@ export function renderChatPaneComposerControls(params: {
               onRequestUpdate: () => state.requestUpdate?.(),
             }),
           activeRunId: state.chatRunId,
-          agentDefaultModel,
           connected: state.connected,
           gatewayAvailable: Boolean(state.client),
           loading: state.chatLoading,

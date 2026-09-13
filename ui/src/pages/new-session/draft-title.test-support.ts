@@ -18,6 +18,7 @@ export function createDraftTitleFixture(
     data,
     methods: ["sessions.create", "sessions.title.prepare", "worktrees.branches"],
     scopes: ["operator.read", "operator.write", "operator.admin"],
+    defaults: { model: "primary", modelProvider: "test", contextTokens: null },
     agents: [
       {
         id: "main",

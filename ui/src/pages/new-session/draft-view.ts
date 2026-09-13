@@ -62,7 +62,6 @@ export function renderNewSessionDraftView(options: {
     >
       ${renderTargetBar()} ${renderNewSessionDraftErrors(place, submission, isCatalogTarget)}
       ${renderNewSessionDraftComposer({
-        agent: place.selectedAgent(),
         agentId: place.agentId,
         attachmentDraft: submission.attachmentDraft,
         canSubmit: !submission.submitting && !dictationLocked && submission.canSubmit(),

@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import type { SessionsListResult } from "../../api/types.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { registerChatAttachmentPayload } from "../chat/attachment-payload-store.ts";
@@ -7,6 +8,7 @@ import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import { stubSessionDefaults } from "./model-control.test-support.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 type FixtureOptions = {
@@ -19,6 +21,7 @@ type FixtureOptions = {
   data?: NewSessionRouteData;
   request?: (method: string, params?: unknown) => Promise<unknown>;
   modelCatalog?: (params?: unknown) => Promise<unknown>;
+  defaults?: SessionsListResult["defaults"];
 };
 
 export function createDraftFixture(options: FixtureOptions = {}) {
@@ -72,7 +75,18 @@ export function createDraftFixture(options: FixtureOptions = {}) {
         },
       },
     },
-    sessions: { state: { result: null }, createResult: vi.fn() },
+    sessions: {
+      state: { result: null },
+      createResult: vi.fn(),
+      observeList: stubSessionDefaults(
+        () =>
+          options.defaults ?? {
+            model: "gpt-5.6-luna",
+            modelProvider: "openai",
+            contextTokens: null,
+          },
+      ),
+    },
     placementStartup: {
       get: vi.fn(() => undefined),
       hasPendingTurn: vi.fn(() => false),

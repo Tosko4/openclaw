@@ -18,7 +18,6 @@ import {
 
 type ChatModelSelectStateInput = {
   activeSession?: GatewaySessionRow;
-  agentDefaultModel?: string;
   chatModelCatalog: ModelCatalogEntry[];
   modelOverrides: Readonly<Record<string, string | null | undefined>>;
   sessionKey: string;
@@ -102,14 +101,6 @@ export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput):
 }
 
 function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
-  const agentDefault = resolvePreferredServerChatModelValue(
-    state.agentDefaultModel,
-    undefined,
-    state.chatModelCatalog ?? [],
-  );
-  if (agentDefault) {
-    return agentDefault;
-  }
   return resolvePreferredServerChatModelValue(
     state.sessionsResult?.defaults?.model,
     state.sessionsResult?.defaults?.modelProvider,

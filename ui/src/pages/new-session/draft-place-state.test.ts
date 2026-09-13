@@ -8,6 +8,7 @@ import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import { stubSessionDefaults } from "./model-control.test-support.ts";
 import type { NewSessionPreference } from "./preferences.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
@@ -53,7 +54,7 @@ function createRepositoryFixture(
         },
       },
     },
-    sessions: { state: { result: null } },
+    sessions: { state: { result: null }, observeList: stubSessionDefaults() },
   } as unknown as ApplicationContext;
   const gateway = {
     cloudProfiles: [{ id: "aws", providerId: "crabbox" }],

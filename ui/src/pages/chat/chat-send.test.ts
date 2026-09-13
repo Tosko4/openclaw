@@ -597,7 +597,6 @@ describe("refreshChat", () => {
     const controls = renderChatPaneComposerControls({
       state: asChatPageHost(host),
       selectedSession: undefined,
-      agentDefaultModel: undefined,
       modelAccess: { allowed: true, requiredScope: "operator.write" },
       effortAccess: { allowed: true, requiredScope: "operator.write" },
       contextWindowAccess: { allowed: true, requiredScope: "operator.admin" },

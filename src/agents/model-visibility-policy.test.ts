@@ -131,32 +131,6 @@ describe("explicit model visibility policy", () => {
     expect(policy.allows({ provider: "anthropic", model: "claude-sonnet-4-6" })).toBe(false);
   });
 
-  it("keeps configured fallbacks failover-only while retaining the configured primary", () => {
-    const policy = createPolicy({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.5",
-            fallbacks: ["external/sensitive"],
-          },
-          modelPolicy: { allow: ["openai/safe"] },
-        },
-      },
-    });
-
-    expect(policy.allows({ provider: "openai", model: "gpt-5.5" })).toBe(true);
-    expect(policy.allows({ provider: "openai", model: "safe" })).toBe(true);
-    expect(policy.allows({ provider: "external", model: "sensitive" })).toBe(false);
-    expect(
-      policy.allowedCatalog.some(
-        (entry) => entry.provider === "external" && entry.id === "sensitive",
-      ),
-    ).toBe(false);
-    expect(policy.retainedKeys).toEqual(
-      new Set(['["openai","gpt-5.5"]', '["external","sensitive"]']),
-    );
-  });
-
   it("allows a configured fallback when the explicit policy also allows it", () => {
     const policy = createPolicy({
       agents: {

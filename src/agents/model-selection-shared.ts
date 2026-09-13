@@ -1103,7 +1103,9 @@ function buildAllowedModelSetFromPrepared(
 
   if (
     defaultKey &&
-    ((visibility.exactModelRefs.length > 0 && wildcardModelKeys.size === 0) ||
+    ((visibility.configPath === LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH &&
+      visibility.exactModelRefs.length > 0 &&
+      wildcardModelKeys.size === 0) ||
       isModelKeyAllowedBySet(wildcardModelKeys, defaultKey))
   ) {
     allowedKeys.add(defaultKey);
@@ -1567,6 +1569,7 @@ function resolveAllowedModelSelection(
 
 export type ModelVisibilityPolicy = {
   allowAny: boolean;
+  effectiveDefault: ModelRef | null;
   configuredCatalog: readonly ModelCatalogEntry[];
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
@@ -1622,6 +1625,7 @@ export function createModelVisibilityPolicyWithFallbacks(
     raw: string | undefined,
     retained: boolean,
     aliasIndex: ModelAliasIndex,
+    defaultProvider = params.defaultProvider,
   ): ModelRef | undefined => {
     if (!raw?.trim() || parseModelPolicyWildcardRef(raw)) {
       return undefined;
@@ -1630,7 +1634,7 @@ export function createModelVisibilityPolicyWithFallbacks(
       cfg: params.cfg,
       agentId: params.agentId,
       raw,
-      defaultProvider: params.defaultProvider,
+      defaultProvider,
       aliasIndex,
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
@@ -1659,14 +1663,56 @@ export function createModelVisibilityPolicyWithFallbacks(
   for (const raw of params.additionalConfiguredModelRefs ?? []) {
     addConfiguredRef(raw, false, selectionAliasIndex);
   }
-  addConfiguredRef(params.defaultModel, true, selectionAliasIndex);
+  const configuredDefault = params.defaultModel
+    ? resolveConfiguredModelRef({ ...params, defaultModel: params.defaultModel })
+    : null;
+  if (configuredDefault) {
+    const key = resolveModelCatalogIdentityKey({
+      provider: configuredDefault.provider,
+      id: configuredDefault.model,
+    });
+    configuredKeys.add(key);
+    retainedKeys.add(key);
+  }
+  const fallbackRefs: ModelRef[] = [];
   for (const fallback of params.fallbackModels) {
     // Configured fallbacks remain available for automatic failover and catalog
     // retention, but are not user-selectable overrides unless policy also allows them.
-    addConfiguredRef(fallback, true, selectionAliasIndex);
+    const defaultProvider = fallback.includes("/")
+      ? params.defaultProvider
+      : resolveBareModelDefaultProvider({
+          cfg: params.cfg,
+          catalog: prepared.catalog,
+          model: fallback,
+          defaultProvider: params.defaultProvider,
+          agentId: params.agentId,
+          manifestPlugins: params.manifestPlugins,
+        });
+    const ref = addConfiguredRef(fallback, true, selectionAliasIndex, defaultProvider);
+    if (ref) {
+      fallbackRefs.push(ref);
+    }
   }
+  const cataloged = (ref: ModelRef) =>
+    findModelCatalogEntry(prepared.catalog, { provider: ref.provider, modelId: ref.model });
+  const effectiveDefault = configuredDefault
+    ? allowed.allows(configuredDefault)
+      ? findModelCatalogEntry(allowed.allowedCatalog, {
+          provider: configuredDefault.provider,
+          modelId: configuredDefault.model,
+        })
+        ? configuredDefault
+        : (fallbackRefs.find(cataloged) ?? null)
+      : resolveAllowedModelSelection({
+          ...params,
+          ...configuredDefault,
+          allows: allowed.allows,
+          allowedCatalog: allowed.allowedCatalog,
+        })
+    : null;
   const policy: ModelVisibilityPolicy = {
     allowAny: allowed.allowAny,
+    effectiveDefault,
     configuredCatalog,
     allowedCatalog: allowed.allowedCatalog,
     allowedKeys: allowed.allowedKeys,

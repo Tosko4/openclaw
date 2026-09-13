@@ -189,3 +189,147 @@ it.each([
   },
   60_000,
 );
+
+it("models.list and sessions.list follow config.patch policy changes without offering automatic fallbacks", async () => {
+  const state = await createOpenClawTestState({
+    label: "picker-policy",
+    env: {
+      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+      OPENCLAW_SKIP_CRON: "1",
+      OPENCLAW_SKIP_CANVAS_HOST: "1",
+      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    },
+  });
+  const token = "picker-policy-token";
+  const cfg = {
+    agents: {
+      defaults: {
+        model: { primary: "picker/primary", fallbacks: ["picker/fallback"] },
+        modelPolicy: { allow: ["picker/primary", "picker/alternate"] },
+      },
+      entries: { main: { workspace: state.workspaceDir } },
+    },
+    models: {
+      catalogRefresh: { enabled: false },
+      providers: {
+        picker: {
+          baseUrl: "http://127.0.0.1:9/v1",
+          api: "openai-completions" as const,
+          apiKey: "picker-fake-key",
+          models: [
+            { id: "primary", name: "Primary" },
+            { id: "alternate", name: "Alternate" },
+            { id: "fallback", name: "Fallback" },
+          ],
+        },
+        spare: {
+          baseUrl: "http://127.0.0.1:9/v1",
+          api: "openai-completions" as const,
+          apiKey: "spare-fake-key",
+          models: [{ id: "recovery", name: "Recovery" }],
+        },
+        router: {
+          baseUrl: "http://127.0.0.1:9/v1",
+          api: "openai-completions" as const,
+          apiKey: "router-fake-key",
+          models: [{ id: "other/nested", name: "Nested model" }],
+        },
+      },
+    },
+    plugins: { enabled: false },
+    gateway: { mode: "local", auth: { mode: "token", token } },
+  };
+  await state.writeConfig(cfg);
+  try {
+    const { client, server } = await startGatewayWithClient({
+      cfg,
+      configPath: state.configPath,
+      token,
+      scopes: ["operator.admin"],
+    });
+    try {
+      await server.startupSettled;
+      const list = async () => {
+        const result = await client.request<ModelsListResult>("models.list", {
+          agentId: "main",
+          view: "configured",
+        });
+        return result.models.map((row) => row.id).toSorted();
+      };
+      expect.soft(await list()).toEqual(["alternate", "primary"]);
+      const config = await client.request<{ hash: string }>("config.get", {});
+      await client.request("config.patch", {
+        baseHash: config.hash,
+        replacePaths: ["agents.defaults.modelPolicy.allow"],
+        raw: JSON.stringify({
+          agents: { defaults: { modelPolicy: { allow: ["picker/alternate"] } } },
+        }),
+      });
+      await expect.poll(list, { timeout: 15_000 }).toEqual(["alternate"]);
+      const sessions = await client.request<{ defaults: { model: string; modelProvider: string } }>(
+        "sessions.list",
+        { agentId: "main" },
+      );
+      expect(sessions.defaults).toMatchObject({ model: "alternate", modelProvider: "picker" });
+      const currentConfig = await client.request<{ hash: string }>("config.get", {});
+      await client.request("config.patch", {
+        baseHash: currentConfig.hash,
+        replacePaths: ["agents.defaults.model.fallbacks", "agents.defaults.modelPolicy.allow"],
+        raw: JSON.stringify({
+          agents: {
+            defaults: {
+              model: { primary: "picker/retired", fallbacks: ["recovery"] },
+              modelPolicy: { allow: ["picker/*"] },
+            },
+          },
+        }),
+      });
+      await expect
+        .poll(
+          async () => {
+            const result = await client.request<{
+              defaults: { model: string; modelProvider: string };
+            }>("sessions.list", { agentId: "main" });
+            return result.defaults;
+          },
+          { timeout: 15_000 },
+        )
+        .toMatchObject({ model: "recovery", modelProvider: "spare" });
+      expect(await list()).toEqual(["alternate", "fallback", "primary"]);
+      const beforeNested = await client.request<{ hash: string }>("config.get", {});
+      await client.request("config.patch", {
+        baseHash: beforeNested.hash,
+        replacePaths: ["agents.defaults.model.fallbacks", "agents.defaults.modelPolicy.allow"],
+        raw: JSON.stringify({
+          agents: {
+            defaults: {
+              model: { primary: "router/other/nested", fallbacks: [] },
+              models: { "spare/recovery": { alias: "other/nested" } },
+              modelPolicy: { allow: [] },
+            },
+          },
+        }),
+      });
+      await expect
+        .poll(
+          async () => {
+            const result = await client.request<{
+              defaults: { model: string; modelProvider: string };
+            }>("sessions.list", { agentId: "main" });
+            return result.defaults;
+          },
+          { timeout: 15_000 },
+        )
+        .toMatchObject({ model: "other/nested", modelProvider: "router" });
+      expect(await list()).toContain("other/nested");
+    } finally {
+      await disconnectGatewayClient(client);
+      await server.close({ reason: "picker policy test complete" });
+    }
+  } finally {
+    await state.cleanup();
+  }
+}, 60_000);

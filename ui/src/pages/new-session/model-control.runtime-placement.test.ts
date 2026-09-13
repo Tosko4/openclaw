@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayAgentRow } from "../../api/types.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import { contextWith } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
@@ -152,7 +151,7 @@ describe("new-session model runtime placement", () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     await vi.waitFor(() => {
       control.selected = "openai/gpt-5.6-luna";
-      expect(control.resolveAgentRuntime({ context })).toEqual({
+      expect(control.resolveAgentRuntime()).toEqual({
         id: "codex",
         cloudPlacementSupported: true,
         source: "model",
@@ -160,28 +159,17 @@ describe("new-session model runtime placement", () => {
     });
   });
 
-  it("falls back to the selected agent runtime for its default model", () => {
-    const { context } = contextWith([]);
-    const agent = {
-      id: "main",
-      agentRuntime: { id: "claude-cli", cloudPlacementSupported: false, source: "agent" },
-    } satisfies GatewayAgentRow & {
-      agentRuntime: { id: string; cloudPlacementSupported: boolean; source: "agent" };
-    };
+  it("leaves runtime unknown before scoped defaults load", () => {
     const control = new NewSessionModelControl(() => undefined);
 
-    expect(control.resolveAgentRuntime({ agent, context })).toEqual({
-      id: "claude-cli",
-      cloudPlacementSupported: false,
-      source: "agent",
-    });
+    expect(control.resolveAgentRuntime()).toBeUndefined();
   });
 
   it("falls back to the session defaults runtime capability", () => {
     const { context } = contextWith([], "codex", [], true);
     const control = new NewSessionModelControl(() => undefined);
-
-    expect(control.resolveAgentRuntime({ context })).toEqual({
+    control.load(context, "main", true);
+    expect(control.resolveAgentRuntime()).toEqual({
       id: "codex",
       cloudPlacementSupported: true,
       source: "defaults",
@@ -193,8 +181,8 @@ describe("new-session model runtime placement", () => {
     (runtime) => {
       const { context } = contextWith([], runtime);
       const control = new NewSessionModelControl(() => undefined);
-
-      expect(control.resolveAgentRuntime({ context })).toBeUndefined();
+      control.load(context, "main", true);
+      expect(control.resolveAgentRuntime()).toBeUndefined();
     },
   );
 
@@ -207,6 +195,6 @@ describe("new-session model runtime placement", () => {
     control.load(context, "main", true);
     control.selected = "anthropic/sonnet-4.6";
 
-    await vi.waitFor(() => expect(control.resolveAgentRuntime({ context })).toBeUndefined());
+    await vi.waitFor(() => expect(control.resolveAgentRuntime()).toBeUndefined());
   });
 });

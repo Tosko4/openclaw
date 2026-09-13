@@ -254,10 +254,7 @@ export class DraftPlaceState {
   }
 
   devicePlacementRuntime() {
-    return this.modelControl.resolveAgentRuntime({
-      agent: this.selectedAgent(),
-      context: this.read().context,
-    });
+    return this.modelControl.resolveAgentRuntime();
   }
 
   devices() {
@@ -395,7 +392,6 @@ export class DraftPlaceState {
       this.repositoryState.forceWorktree(true);
     }
     this.modelControl.load(snapshot.context, this.agentIdValue, !catalog.isTarget(snapshot.data), {
-      agent: this.selectedAgent(),
       preference,
     });
     if (this.preferredProjectRestore) {

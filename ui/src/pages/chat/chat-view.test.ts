@@ -7618,9 +7618,13 @@ describe("chat model controls", () => {
         },
       ],
     });
+    state.sessionsResult!.defaults = {
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+      contextTokens: null,
+    };
     const onModelSetup = vi.fn();
     const container = renderModelControls(state, {
-      agentDefaultModel: "openai/gpt-5.6-sol",
       onModelSetup,
     });
 
@@ -8328,7 +8332,6 @@ describe("chat model controls", () => {
         session.modelSelectionLocked = true;
         session.agentRuntime = runtimeId ? { id: runtimeId, source: "model" } : undefined;
         const container = renderModelControls(state, {
-          agentDefaultModel: "openai/gpt-5.6-luna",
           modelCatalogState: {
             hasSnapshot: catalog !== "empty" || !loading,
             status: loading ? "loading" : "ready",
@@ -8855,7 +8858,7 @@ describe("chat model controls", () => {
     },
   );
 
-  it("synthesizes a selectable row for a persisted override missing from the catalog", () => {
+  it("does not offer a persisted override removed from the published picker catalog", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.2-retired",
       modelProvider: "openai",
@@ -8866,12 +8869,8 @@ describe("chat model controls", () => {
     const optionValues = Array.from(
       container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
     ).map((option) => option.getAttribute("data-chat-model-option"));
-    const overrideValue = optionValues.find((value) => value?.includes("gpt-5.2-retired"));
-    expect(overrideValue).toBeDefined();
-    const overrideOption = container.querySelector<HTMLButtonElement>(
-      `[data-chat-model-option="${overrideValue}"]`,
-    );
-    expect(overrideOption?.querySelector(".chat-controls__inline-select-check")).not.toBeNull();
+    expect(optionValues).not.toContain("openai/gpt-5.2-retired");
+    expect(optionValues).toContain("openai/gpt-5.6-sol");
   });
 
   it("distinguishes model rows that use different agent runtimes", () => {
@@ -9181,7 +9180,6 @@ describe("chat model controls", () => {
     selectedSession.effectiveFastMode = true;
 
     const container = renderModelControls(state, {
-      agentDefaultModel: "openai/gpt-default",
       sessionKey: "agent:work:main",
       selectedSession,
     });

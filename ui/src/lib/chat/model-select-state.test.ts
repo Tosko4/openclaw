@@ -731,9 +731,8 @@ describe("chat-model-select-state", () => {
     ]);
   });
 
-  it("uses the active agent model for the default label", () => {
+  it("uses the server default instead of the selected session model", () => {
     const state = createChatModelState({
-      agentDefaultModel: "anthropic/claude-opus-4-5",
       chatModelCatalog: createModelCatalog(
         {
           id: "gpt-5.5",
@@ -755,13 +754,16 @@ describe("chat-model-select-state", () => {
     });
 
     const resolved = resolveChatModelSelectState(state);
-    expect(resolved.defaultModel).toBe("anthropic/claude-opus-4-5");
-    expect(resolved.defaultLabel).toBe("Default (Claude Opus 4.5)");
+    expect(resolved.defaultModel).toBe("openai/gpt-5.5");
+    expect(resolved.defaultLabel).toBe("Default (GPT-5.5)");
   });
 
   it("keeps a canonical agent default as one named picker option", () => {
     const state = createChatModelState({
-      agentDefaultModel: "openai/gpt-5.6-sol",
+      sessionsResult: createSessionsListResult({
+        defaultsModel: "gpt-5.6-sol",
+        defaultsProvider: "openai",
+      }),
       chatModelCatalog: createModelCatalog({
         id: "gpt-5.6-sol",
         name: "GPT-5.6 Sol",
@@ -783,7 +785,6 @@ describe("chat-model-select-state", () => {
     { name: "automatic fallback", source: "auto" as const, expected: "auto" },
   ])("resolves $expected from provenance for $name", ({ source, expected }) => {
     const state = createChatModelState({
-      agentDefaultModel: "openai/gpt-5.6-sol",
       chatModelCatalog: createModelCatalog({
         id: "gpt-5.6-sol",
         name: "GPT-5.6 Sol",

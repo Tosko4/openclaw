@@ -11,7 +11,7 @@ import {
 import { resolveAgentConfig, resolveSessionAgentId } from "../agents/agent-scope.js";
 import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import {
   findModelCatalogEntry,
   type ModelCatalogEntry,
@@ -22,10 +22,10 @@ import {
   findNormalizedProviderValue,
   isCliProvider,
   parseModelRef,
-  resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
 import { resolveThinkingDefaultCore } from "../agents/model-thinking-default-core.js";
+import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../agents/prepared-model-catalog-owner.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
@@ -342,23 +342,25 @@ export function getSessionDefaults(
   const agentId = normalizeAgentId(
     options?.agentId ?? tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID,
   );
-  const resolved = options?.agentId
-    ? resolveDefaultModelForAgent({
-        cfg,
-        agentId,
-        allowPluginNormalization: options.allowPluginNormalization,
-      })
-    : resolveConfiguredModelRef({
-        cfg,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-        allowPluginNormalization: options?.allowPluginNormalization,
-      });
-  const displayModel = resolveSessionDisplayModelIdentityRef({
+  const configuredDefault = resolveDefaultModelForAgent({
     cfg,
-    provider: resolved.provider,
-    model: resolved.model,
+    agentId: options?.agentId ? agentId : undefined,
+    allowPluginNormalization: options?.allowPluginNormalization,
   });
+  const resolved = modelCatalog
+    ? createModelVisibilityPolicy({
+        cfg,
+        catalog: modelCatalog,
+        defaultProvider: configuredDefault.provider,
+        defaultModel: configuredDefault.model,
+        agentId,
+        allowPluginNormalization: options?.allowPluginNormalization,
+      }).effectiveDefault
+    : configuredDefault;
+  if (!resolved) {
+    return { modelProvider: null, model: null, contextTokens: null };
+  }
+  const displayModel = resolveSessionDisplayModelIdentityRef({ cfg, ...resolved });
   const catalogEntry = modelCatalog
     ? findModelCatalogEntry(modelCatalog, {
         provider: resolved.provider,

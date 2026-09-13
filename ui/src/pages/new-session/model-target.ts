@@ -1,4 +1,4 @@
-import type { GatewayAgentRow, ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
+import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import {
   buildQualifiedChatModelValue,
   normalizeChatModelProviderId,
@@ -16,17 +16,11 @@ type DraftModelTarget = {
   provider: string | null;
 };
 
-export function resolveDraftThinkingTarget(
-  target: DraftModelTarget | null,
-  agent?: GatewayAgentRow,
-): ChatThinkingTarget {
+export function resolveDraftThinkingTarget(target: DraftModelTarget | null): ChatThinkingTarget {
   return {
-    model: target?.model ?? agent?.model?.primary,
+    model: target?.model,
     modelProvider: target?.provider ?? undefined,
-    agentRuntime: agent?.agentRuntime ?? target?.entry?.agentRuntime,
-    thinkingLevels: agent?.thinkingLevels,
-    thinkingOptions: agent?.thinkingOptions,
-    thinkingDefault: agent?.thinkingDefault,
+    agentRuntime: target?.entry?.agentRuntime,
   };
 }
 
@@ -67,7 +61,6 @@ export function resolveDraftModelTarget(
 export function reconcileDraftModelSelection(params: {
   model: string;
   thinkingLevel: string;
-  agent?: GatewayAgentRow;
   defaults?: SessionsListResult["defaults"];
   catalog: ModelCatalogEntry[];
 }): { model: string; thinkingLevel: string; repaired: boolean } {
@@ -84,20 +77,16 @@ export function reconcileDraftModelSelection(params: {
   if (!params.thinkingLevel) {
     return { model: selected, thinkingLevel: "", repaired: false };
   }
-  const agentDefaultModel = params.agent?.model?.primary;
   const defaultTarget = selected
     ? null
     : resolveDraftModelTarget(
-        agentDefaultModel ?? params.defaults?.model,
-        agentDefaultModel ? undefined : params.defaults?.modelProvider,
+        params.defaults?.model,
+        params.defaults?.modelProvider,
         params.catalog,
       );
   const targetEntry = selectedTarget?.entry ?? defaultTarget?.entry;
   const thinkingProfile = resolveThinkingProfileForSession(
-    resolveDraftThinkingTarget(
-      selectedTarget ?? defaultTarget,
-      selected ? undefined : params.agent,
-    ),
+    resolveDraftThinkingTarget(selectedTarget ?? defaultTarget),
     selected ? undefined : params.defaults,
     params.catalog,
   );

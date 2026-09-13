@@ -19,6 +19,7 @@ import {
   stubObjectUrls,
 } from "./draft-submission-flow.test-support.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
+import { stubSessionDefaults } from "./model-control.test-support.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 import * as terminalStart from "./terminal-start.ts";
 
@@ -654,7 +655,7 @@ describe("DraftSubmissionFlow", () => {
         },
       },
       agentSelection: { state: { selectedId: "cloud" }, set: selectAgent },
-      sessions: { state: { result: null }, createResult },
+      sessions: { state: { result: null }, createResult, observeList: stubSessionDefaults() },
       placementStartup: {
         start,
         get: vi.fn(() => undefined),

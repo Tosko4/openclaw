@@ -1,9 +1,38 @@
 import { render } from "lit";
 import { vi } from "vitest";
-import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
+import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { NewSessionModelControl } from "./model-control.ts";
+
+export function stubSessionDefaults(
+  readDefaults: () => SessionsListResult["defaults"] = () => ({
+    model: null,
+    modelProvider: null,
+    contextTokens: null,
+  }),
+): ApplicationContext["sessions"]["observeList"] {
+  return (scope, listener) => {
+    let active = true;
+    const publish = () => {
+      if (active) {
+        listener({
+          agentId: scope.agentId ?? null,
+          loading: false,
+          error: null,
+          result: { ts: 1, path: "", count: 0, sessions: [], defaults: readDefaults() },
+        });
+      }
+    };
+    publish();
+    return {
+      refresh: async () => publish(),
+      dispose: () => {
+        active = false;
+      },
+    };
+  };
+}
 
 export function contextWith(
   models: ModelCatalogEntry[],
@@ -35,6 +64,7 @@ export function contextWith(
       },
     },
     sessions: {
+      observeList: stubSessionDefaults(() => context.sessions.state.result!.defaults),
       state: {
         result: {
           defaults: {
@@ -69,16 +99,10 @@ export function renderControl(
   control: NewSessionModelControl,
   context: ApplicationContext,
   agentId = "main",
-  agent: GatewayAgentRow | null = {
-    id: "main",
-    model: { primary: "openai/gpt-5.6-luna" },
-    thinkingDefault: "medium",
-  },
 ) {
   const container = document.createElement("div");
   render(
     control.render({
-      ...(agent ? { agent } : {}),
       agentId,
       context,
       sending: false,

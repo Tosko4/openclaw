@@ -61,7 +61,6 @@ describe("chat pane model-setting permissions", () => {
       const controls = renderChatPaneComposerControls({
         state: state as unknown as ChatPageHost,
         selectedSession,
-        agentDefaultModel: undefined,
         modelAccess: access.model,
         effortAccess: access.effort,
         contextWindowAccess: access.contextWindow,

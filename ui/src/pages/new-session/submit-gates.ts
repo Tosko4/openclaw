@@ -264,7 +264,7 @@ export function resolveNewSessionSubmitBlock(
       : { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
   }
   const modelUnavailableMessage =
-    kind === "session" && place.modelControl.modelSelectionBlockedReason(place.selectedAgent());
+    kind === "session" && place.modelControl.modelSelectionBlockedReason();
   if (modelUnavailableMessage) {
     return { gate: "model-unavailable", reason: modelUnavailableMessage };
   }

@@ -257,7 +257,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       : renderChatPaneComposerControls({
           state,
           selectedSession,
-          agentDefaultModel,
           agentDefaultPermissionMode: selectedAgent?.defaultPermissionMode,
           modelAccess: mutationAccess.model,
           effortAccess: mutationAccess.effort,

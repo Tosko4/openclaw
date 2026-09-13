@@ -239,7 +239,6 @@ describe("chat pane composer controls", () => {
     const controls = renderChatPaneComposerControls({
       state: state as unknown as ChatPageHost,
       selectedSession: state.sessionsResult?.sessions[0],
-      agentDefaultModel: "openai/gpt-5.6-luna",
       modelAccess: { allowed: true, requiredScope: "operator.write" },
       effortAccess: { allowed: true, requiredScope: "operator.write" },
       contextWindowAccess: { allowed: true, requiredScope: "operator.admin" } as const,
@@ -310,7 +309,6 @@ describe("chat pane composer controls", () => {
       const controls = renderChatPaneComposerControls({
         state,
         selectedSession: undefined,
-        agentDefaultModel: undefined,
         agentDefaultPermissionMode: "guarded",
         modelAccess: { allowed: true, requiredScope: "operator.write" },
         effortAccess: { allowed: true, requiredScope: "operator.write" },
@@ -452,7 +450,6 @@ describe("chat pane composer controls", () => {
         permissionMode: "full",
         sessionId: "permission-test-session",
       },
-      agentDefaultModel: undefined,
       agentDefaultPermissionMode: "guarded",
       modelAccess: { allowed: true, requiredScope: "operator.write" },
       effortAccess: { allowed: true, requiredScope: "operator.write" },
@@ -534,7 +531,6 @@ describe("chat pane composer controls", () => {
     const controls = renderChatPaneComposerControls({
       state,
       selectedSession,
-      agentDefaultModel: undefined,
       modelAccess: { allowed: true, requiredScope: "operator.write" },
       effortAccess: { allowed: true, requiredScope: "operator.write" },
       contextWindowAccess: { allowed: true, requiredScope: "operator.admin" } as const,
@@ -642,7 +638,6 @@ describe("chat pane composer controls", () => {
         hasActiveRun: true,
         sessionId: "lifecycle-session",
       },
-      agentDefaultModel: undefined,
       modelAccess: { allowed: true, requiredScope: "operator.write" },
       effortAccess: { allowed: true, requiredScope: "operator.write" },
       contextWindowAccess: { allowed: true, requiredScope: "operator.admin" } as const,
@@ -704,7 +699,6 @@ describe("chat pane composer controls", () => {
     const controlParams = {
       state,
       selectedSession,
-      agentDefaultModel: undefined,
       modelAccess: { allowed: true, requiredScope: "operator.write" } as const,
       effortAccess: { allowed: true, requiredScope: "operator.write" } as const,
       contextWindowAccess: { allowed: true, requiredScope: "operator.admin" } as const,
@@ -803,7 +797,6 @@ describe("chat pane composer controls", () => {
     await renderChatPaneComposerControls({
       state,
       selectedSession,
-      agentDefaultModel: undefined,
       modelAccess: { allowed: true, requiredScope: "operator.write" },
       effortAccess: { allowed: true, requiredScope: "operator.write" },
       contextWindowAccess: { allowed: true, requiredScope: "operator.admin" } as const,
@@ -874,7 +867,6 @@ describe("chat pane composer controls", () => {
     const params = {
       state,
       selectedSession,
-      agentDefaultModel: undefined,
       modelAccess: { allowed: true, requiredScope: "operator.write" } as const,
       effortAccess: { allowed: true, requiredScope: "operator.write" } as const,
       contextWindowAccess: { allowed: true, requiredScope: "operator.admin" } as const,
@@ -938,7 +930,6 @@ describe("chat pane composer controls", () => {
     const params = {
       state,
       selectedSession,
-      agentDefaultModel: undefined,
       modelAccess: { allowed: true, requiredScope: "operator.write" } as const,
       effortAccess: { allowed: true, requiredScope: "operator.write" } as const,
       contextWindowAccess: { allowed: true, requiredScope: "operator.admin" } as const,
@@ -997,7 +988,6 @@ describe("chat pane composer controls", () => {
       const controlParams = {
         state,
         selectedSession: undefined,
-        agentDefaultModel: undefined,
         modelAccess: { allowed: true, requiredScope: "operator.write" } as const,
         effortAccess: { allowed: true, requiredScope: "operator.write" } as const,
         contextWindowAccess: { allowed: true, requiredScope: "operator.admin" } as const,

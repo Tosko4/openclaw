@@ -1,5 +1,4 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { GatewayAgentRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
@@ -216,7 +215,6 @@ function renderNewSessionSubmission(
 }
 
 export function renderNewSessionDraftComposer(options: {
-  agent?: GatewayAgentRow;
   agentId: string;
   attachmentDraft: NewSessionAttachmentDraft;
   canSubmit: boolean;
@@ -299,7 +297,6 @@ export function renderNewSessionDraftComposer(options: {
     modelControl: options.isCatalogTarget
       ? nothing
       : options.modelControl.render({
-          agent: options.agent,
           agentId: options.agentId,
           context: options.context,
           sending: options.submitting,

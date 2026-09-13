@@ -326,17 +326,21 @@ describe("handleModelsCommand", () => {
           expect(menu?.reply?.text).toContain(`${provider}: ${label}. ${recovery}`);
           expect(menu?.reply?.channelData).toMatchObject({
             telegram: {
-              buttons: expect.arrayContaining([
-                [{ text: provider, callback_data: `models:${provider}` }],
-              ]),
+              buttons:
+                catalog === "known"
+                  ? [[{ text: provider, callback_data: `models:${provider}` }]]
+                  : [],
             },
           });
 
           params.command.commandBodyNormalized = `/models ${provider}`;
           const page = await handleModelsCommand(params, true);
           expect(page?.reply?.text).toContain(
-            `${label} — ${catalog === "known" ? "Claude Opus" : "claude-opus-4-5"}`,
+            catalog === "known" ? `${label} — Claude Opus` : label,
           );
+          if (catalog === "missing") {
+            expect(page?.reply?.text).not.toContain("claude-opus-4-5");
+          }
           expect(page?.reply?.text).toContain(recovery);
           if (reason === "cooldown") {
             expect(page?.reply?.text).not.toContain("/login");
@@ -604,14 +608,11 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).not.toMatch(/^- codex-cli \(/m);
   });
 
-  it("sources CLI runtime provider model lists from the catalog", async () => {
+  it("applies the shared legacy policy to CLI runtime catalog rows", async () => {
     modelCatalogMocks.loadModelCatalog.mockReturnValue([
       { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
       { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
       { provider: "claude-cli", id: "claude-opus-4-6", name: "Claude Opus 4.6" },
-      { provider: "claude-cli", id: "claude-opus-4-5", name: "Claude Opus 4.5" },
-      { provider: "claude-cli", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
-      { provider: "claude-cli", id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
     ]);
     modelProviderAuthMocks.authenticatedProviders = new Set(["claude-cli"]);
 
@@ -619,8 +620,6 @@ describe("handleModelsCommand", () => {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-7" },
-          // User only declared 2 of claude-cli's 6 supported models.
-          // For claude-cli this narrowing must be ignored.
           models: {
             "claude-cli/claude-opus-4-6": {},
             "claude-cli/claude-sonnet-4-6": {},
@@ -630,11 +629,7 @@ describe("handleModelsCommand", () => {
     } as OpenClawConfig);
 
     expect([...(data.byProvider.get("claude-cli") ?? [])].toSorted()).toEqual([
-      "claude-haiku-4-5",
-      "claude-opus-4-5",
       "claude-opus-4-6",
-      "claude-opus-4-7",
-      "claude-sonnet-4-5",
       "claude-sonnet-4-6",
     ]);
   });
@@ -679,27 +674,27 @@ describe("handleModelsCommand", () => {
       expected: [],
     },
     {
-      name: "configured CLI fallback retention under exact refs",
+      name: "an excluded CLI fallback under exact refs",
       allow: ["anthropic/claude-sonnet-4-6"],
       fallbacks: ["claude-cli/claude-sonnet-4-6"],
-      expected: ["claude-sonnet-4-6"],
+      expected: [],
     },
     { name: "an agent restriction", allow: [], agentAllow: ["anthropic/*"], expected: [] },
     {
       name: "an unrestricted agent override",
       allow: ["anthropic/*"],
       agentAllow: [],
-      expected: ["claude-opus-4-6", "claude-sonnet-4-6"],
+      expected: ["claude-sonnet-4-6"],
     },
     {
       name: "an empty explicit allowlist",
       allow: [],
-      expected: ["claude-opus-4-6", "claude-sonnet-4-6"],
+      expected: ["claude-sonnet-4-6"],
     },
     {
       name: "legacy provider wildcards",
       legacyAllow: ["anthropic/*"],
-      expected: ["claude-opus-4-6", "claude-sonnet-4-6"],
+      expected: [],
     },
     {
       name: "explicit all browse",
@@ -988,6 +983,7 @@ describe("handleModelsCommand", () => {
     const cfg = {
       agents: {
         defaults: {
+          modelPolicy: { allow: [] },
           model: {
             primary: "openai/gpt-5.4",
             fallbacks: ["deepseek-v4-flash", "deepseek-v4-pro"],

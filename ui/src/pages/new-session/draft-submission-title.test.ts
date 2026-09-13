@@ -63,8 +63,8 @@ function accountTitleFixture(preview?: Promise<ModelCatalogResult>) {
   );
   const { context, place } = fixture;
   Object.assign(context.gateway.snapshot, { selfUser: { id: "person-a", name: "Person A" } });
-  place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
-  const draw = () => renderControl(place.modelControl, context, "main", place.selectedAgent());
+  place.modelControl.load(context, "main", true);
+  const draw = () => renderControl(place.modelControl, context, "main");
   const select = (value: string) =>
     draw().querySelector<HTMLButtonElement>(`[data-chat-account-option="${value}"]`)!.click();
   return {
