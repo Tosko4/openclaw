@@ -1,5 +1,6 @@
 /** Worker entrypoint for SQLite transcript archive materialization off the gateway event loop. */
 import { randomUUID } from "node:crypto";
+import { on } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -20,6 +21,10 @@ import {
   publishEncodedSessionTranscriptArchive,
   resolveSqliteTranscriptArchivePath,
 } from "./session-accessor.sqlite-archive-artifact.js";
+import type {
+  SqliteArchiveSessionRequest,
+  SqliteArchiveSessionResponse,
+} from "./session-accessor.sqlite-archive-session.js";
 import type {
   TranscriptArchivePublishPlan,
   TranscriptArchivePublishResult,
@@ -280,6 +285,7 @@ async function encodeStagedTranscriptArchive(params: {
 
 export async function materializeTranscriptArchiveInWorker(
   plan: TranscriptArchiveWorkerPlan,
+  env?: NodeJS.ProcessEnv,
 ): Promise<TranscriptArchiveWorkerResult> {
   fs.mkdirSync(plan.archiveDirectory, { recursive: true, mode: 0o700 });
   const stagedPath = `${resolveSqliteTranscriptArchivePath({
@@ -314,7 +320,7 @@ export async function materializeTranscriptArchiveInWorker(
           throw error;
         }
       },
-      { agentId: plan.agentId, path: plan.databasePath },
+      { agentId: plan.agentId, path: plan.databasePath, env },
     );
     if (!opened.found) {
       throw new Error(
@@ -345,6 +351,7 @@ export async function materializeTranscriptArchiveInWorker(
 
 export function publishTranscriptArchiveInWorker(
   plan: TranscriptArchivePublishPlan,
+  env?: NodeJS.ProcessEnv,
 ): TranscriptArchivePublishResult {
   try {
     const opened = withFreshOpenClawAgentDatabaseReadOnly(
@@ -359,7 +366,7 @@ export function publishTranscriptArchiveInWorker(
             .where("generation", "=", plan.generation),
         ).rows[0];
       },
-      { agentId: plan.agentId, path: plan.databasePath },
+      { agentId: plan.agentId, path: plan.databasePath, env },
     );
     if (!opened.found || !opened.value) {
       throw new Error(`Canonical SQLite transcript archive is missing for ${plan.sessionId}`);
@@ -413,12 +420,78 @@ function runPublishWorkerPort(
   port.close();
 }
 
+async function runArchiveSession(
+  port: NonNullable<typeof parentPort>,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  let operationId = 0;
+  for await (const [message] of on(port, "message")) {
+    // SAFETY: only the paired scoped archive owner sends this private port's requests.
+    const request = message as SqliteArchiveSessionRequest | { type: "close" };
+    if (request.type === "close") {
+      break;
+    }
+    if (request.type !== "archive-operation" || request.operationId !== ++operationId) {
+      throw new Error("SQLite archive Worker received an invalid operation identity");
+    }
+    let response: SqliteArchiveSessionResponse;
+    if (request.operation === "materialize") {
+      const plans = parseWorkerPlans(request);
+      if (!plans) {
+        throw new Error("SQLite transcript archive worker requires valid materialization data");
+      }
+      const results: TranscriptArchiveWorkerResult[] = [];
+      let bytes = 0;
+      for (const plan of plans) {
+        const result = await materializeTranscriptArchiveInWorker(plan, env);
+        bytes += result.archive?.bytes.byteLength ?? 0;
+        if (bytes > MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES) {
+          throw new Error(
+            `Archive batch exceeds ${MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES} bytes; use fewer sessions`,
+          );
+        }
+        results.push(result);
+      }
+      response = { type: "done", operationId, settled: true, results };
+    } else if (request.operation === "publish") {
+      const plans = parsePublishWorkerPlans(request);
+      if (!plans) {
+        throw new Error("SQLite transcript archive worker requires valid publication data");
+      }
+      response = {
+        type: "published",
+        operationId,
+        settled: true,
+        results: plans.map((plan) => publishTranscriptArchiveInWorker(plan, env)),
+      };
+    } else {
+      throw new Error("SQLite archive Worker received an unsupported operation");
+    }
+    // Each callee has closed its fresh database, streams, file descriptors and staging files.
+    // Failed publication still requires native exit in case its error came from native close.
+    port.postMessage(response);
+    const failed =
+      response.type === "published" &&
+      response.results.some((result) => result.error !== undefined);
+    response.results.length = 0;
+    request.plans = [];
+    if (failed) {
+      break;
+    }
+  }
+  port.close();
+}
+
 if (isSqliteTranscriptArchiveWorkerData(workerData)) {
   if (!parentPort) {
     throw new Error("SQLite transcript archive worker requires a parent port");
   }
   const operation = (workerData as { operation?: unknown }).operation;
-  if (operation === "materialize") {
+  if (operation === "archive-session") {
+    // SAFETY: the parent captures the state root before entering the scoped FIFO.
+    const data = workerData as { env: NodeJS.ProcessEnv };
+    await runArchiveSession(parentPort, data.env);
+  } else if (operation === "materialize") {
     const plans = parseWorkerPlans(workerData);
     if (!plans) {
       throw new Error("SQLite transcript archive worker requires valid materialization data");

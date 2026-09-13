@@ -8,6 +8,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { runScopedSqliteArchiveOperation } from "./session-accessor.sqlite-archive-session.js";
 import type {
   SessionLifecycleArchivedTranscript,
   SqliteSessionReclamationDiagnostics,
@@ -222,6 +223,19 @@ export function runSqliteTranscriptArchiveWorkerOperation<Result>(
 function runSqliteTranscriptArchiveWorker(
   plans: readonly TranscriptArchiveWorkerPlan[],
 ): Promise<TranscriptArchiveWorkerResult[]> {
+  const scoped = runScopedSqliteArchiveOperation(
+    { operation: "materialize", plans },
+    createSqliteTranscriptArchiveWorker,
+    runExclusiveSqliteTranscriptArchiveWorker,
+  );
+  if (scoped) {
+    return scoped.then((result) => {
+      if (result.type !== "done") {
+        throw new Error("SQLite archive Worker returned another operation's result");
+      }
+      return result.results;
+    });
+  }
   return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchiveWorkerResult>({
     expectedMessageType: "done",
     workerData: { operation: "materialize", type: "sqlite-transcript-archive-v2", plans },
@@ -231,6 +245,19 @@ function runSqliteTranscriptArchiveWorker(
 export function runSqliteTranscriptArchivePublishWorker(
   plans: readonly TranscriptArchivePublishPlan[],
 ): Promise<TranscriptArchivePublishResult[]> {
+  const scoped = runScopedSqliteArchiveOperation(
+    { operation: "publish", plans },
+    createSqliteTranscriptArchiveWorker,
+    runExclusiveSqliteTranscriptArchiveWorker,
+  );
+  if (scoped) {
+    return scoped.then((result) => {
+      if (result.type !== "published") {
+        throw new Error("SQLite archive Worker returned another operation's result");
+      }
+      return result.results;
+    });
+  }
   return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchivePublishResult>({
     expectedMessageType: "published",
     workerData: { operation: "publish", type: "sqlite-transcript-archive-v2", plans },

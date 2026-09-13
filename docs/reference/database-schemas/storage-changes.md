@@ -154,8 +154,23 @@ uncertain cleanup remains an error and never causes mutation replay. The parent
 adopts newly established integrity verification only after operation cleanup and
 while its database claim remains current. These connection lifetimes are documented in the
 [accepted reclamation design](https://github.com/openclaw/openclaw/pull/140897#issuecomment-5647899202).
-Archive materialization, file publication, and cold mutations retain their separate
-one-shot workers; cold mutations join their existing page maintenance and native exit.
+
+Pressure sweeps and explicit deletion reuse one archive worker within their operation
+scope. The shared archive queue admits each materialization or publication separately;
+every request opens a fresh read-only database and closes its database and file handles
+before acknowledging completion. No archive database connection or lease survives
+between requests. Each victim still commits and publishes before the next victim is
+deleted. A preparation or publication failure retires the worker and joins its native
+exit before returning the existing error. Scope completion and database retirement
+revoke queued requests, drain dispatched work, and join native exit. The process keeps
+at most one reusable archive worker; competing scopes retire the previous idle worker.
+Cold preparation and mutations retain their separate one-shot workers; cold mutations
+join their existing page maintenance and native exit.
+
+Single-candidate reference checks narrow which node metadata reaches JavaScript.
+Rows with optional historical references still use the canonical entry parser, and
+ambiguous SQLite text or JSON retains the full read path. Each check reads current rows
+in its existing planning phase or deletion transaction; no reference cache is introduced.
 
 Disk-budget cleanup rechecks protection after archive materialization. A candidate
 already excluded by that fresh protection set is canceled before worker admission
