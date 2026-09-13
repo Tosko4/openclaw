@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,11 +9,16 @@ vi.mock("./systemd-exec.js", async (original) => ({
   ...(await original<typeof import("./systemd-exec.js")>()),
   execBusctlUser: busctl,
   bindSystemdManagerOwner: vi.fn(),
-  systemdInspectionError: (_result: unknown, message: string) => new Error(message),
+}));
+vi.mock("./systemd-peer-native.js", async (original) => ({
+  ...(await original<typeof import("./systemd-peer-native.js")>()),
+  openSystemdUserManager: vi.fn(),
 }));
 
 import { createSystemdCommandQuery } from "./systemd-command-query.js";
+import { openSystemdUserManager } from "./systemd-peer-native.js";
 import { readSystemdServiceExecStart } from "./systemd-service-files.js";
+import { systemdOperatorBusFixtures } from "./systemd-user-bus.test-support.js";
 
 const queryEnv = { XDG_RUNTIME_DIR: "/run/user/1234" };
 const unitName = "openclaw-gateway.service";
@@ -31,7 +37,60 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+describe("ordinary private-manager inspection", () => {
+  const dirs = useAutoCleanupTempDirTracker(afterEach);
+  it.each(["absent", "disconnected"])(
+    "closes the captured private connection when %s",
+    async (result) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(process, "geteuid").mockReturnValue(1000);
+      const home = dirs.make("openclaw-private-manager-");
+      const runtime = path.join(home, "runtime");
+      const socket = path.posix.join(runtime, "systemd/private");
+      vi.spyOn(fsSync, "existsSync").mockImplementation((file) => file === socket);
+      const close = vi.fn(async () => {});
+      vi.mocked(openSystemdUserManager).mockResolvedValue({
+        close,
+        verify: () => {},
+        query: async () => {
+          if (result === "disconnected") {
+            throw new Error("native-error-secret-canary");
+          }
+          return null;
+        },
+      });
+      busctl.mockResolvedValue(failure(systemdOperatorBusFixtures.stale.getUnitFileState));
+      const inspected = readSystemdServiceExecStart(
+        {
+          HOME: home,
+          XDG_RUNTIME_DIR: runtime,
+          DBUS_SESSION_BUS_ADDRESS: systemdOperatorBusFixtures.stale.address,
+        },
+        { requireEffective: true },
+      );
+      if (result === "absent") {
+        await expect(inspected).resolves.toBeNull();
+      } else {
+        await expect(inspected).rejects.toMatchObject({ reason: "systemd-user-bus-unavailable" });
+      }
+      expect(close).toHaveBeenCalledOnce();
+      expect(busctl).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe("systemd command query legacy compatibility", () => {
+  it("distinguishes the operator's manager exit transcript from an absent unit", async () => {
+    const args = [...callArgs];
+    args[4] = "GetUnitFileState";
+    busctl.mockResolvedValue(failure(systemdOperatorBusFixtures.stale.getUnitFileState));
+    await expect((await reader()).query(args, ["s"])).rejects.toMatchObject({
+      reason: "systemd-user-bus-unavailable",
+    });
+    busctl.mockResolvedValue(failure(systemdOperatorBusFixtures.runtime.getUnitFileState));
+    await expect((await reader()).query(args, ["s"])).resolves.toBeNull();
+  });
+
   it("retains legacy mode only for this reader", async () => {
     busctl.mockResolvedValueOnce(unsupported).mockResolvedValue(success('o "/unitName"'));
     const legacy = await reader();

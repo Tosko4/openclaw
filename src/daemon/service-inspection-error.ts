@@ -1,7 +1,7 @@
 /** Native probe facts are diagnostic only; they never grant lifecycle authority. */
 const SERVICE_INSPECTION_MESSAGES = {
   "systemd-user-bus-unavailable":
-    "The systemd user session bus is unavailable. Check XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS for the service account. On Debian/Ubuntu, install dbus-user-session and run systemctl --user start dbus.socket. For SSH sessions, enable lingering with sudo loginctl enable-linger <user>. Verify systemctl --user status and busctl --user list, then retry.",
+    "The systemd user session bus is unavailable. Check XDG_RUNTIME_DIR for the service account. Log in once or enable the user manager with sudo loginctl enable-linger <user>, then verify systemctl --user status. On Debian/Ubuntu, install dbus-user-session and run systemctl --user start dbus.socket if the runtime bus is missing. Verify busctl --user list with DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus, then retry.",
   "systemd-busctl-unavailable":
     "The busctl executable is unavailable. Install the systemd package providing busctl and verify busctl --user list from the service account, then retry.",
   "service-manager-access-denied":

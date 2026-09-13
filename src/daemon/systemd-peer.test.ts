@@ -1,4 +1,7 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { openSystemdBroker, openSystemdPrivatePeer } from "./systemd-peer-native.js";
 import { admitSystemdServiceReadBinding } from "./systemd-peer.js";
@@ -17,6 +20,7 @@ vi.mock("./systemd-peer-native.js", () => ({
 const query = vi.fn<Awaited<ReturnType<typeof openSystemdBroker>>["query"]>();
 const closeBroker = vi.fn(async () => {});
 const closePeer = vi.fn(async () => {});
+const dirs = useAutoCleanupTempDirTracker(afterEach);
 const env = {
   HOME: "/home/test",
   XDG_RUNTIME_DIR: "/custom/runtime",
@@ -75,6 +79,21 @@ it("does not admit another route when the authored broker is unavailable", async
   expect(await admitSystemdServiceReadBinding(env, performance.now() + 1000)).toBeUndefined();
   expect(openSystemdBroker).toHaveBeenCalledOnce();
   expect(openSystemdPrivatePeer).not.toHaveBeenCalled();
+});
+
+it("authenticates through the runtime bus instead of a stale shell address", async () => {
+  const runtime = dirs.make("openclaw-broker-route-,");
+  await fs.writeFile(path.join(runtime, "bus"), "");
+  const binding = await admitSystemdServiceReadBinding(
+    { ...env, XDG_RUNTIME_DIR: runtime },
+    performance.now() + 1000,
+  );
+  expect(openSystemdBroker).toHaveBeenCalledExactlyOnceWith(
+    `unix:path=${path.posix.join(runtime, "bus").replaceAll(",", "%2C")}`,
+    expect.any(Number),
+  );
+  expect(binding).toBeDefined();
+  await binding?.close();
 });
 
 it("refuses broker loss between credential observations without reconnecting", async () => {

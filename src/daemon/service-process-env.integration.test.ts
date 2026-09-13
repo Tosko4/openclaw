@@ -10,6 +10,7 @@ import {
   buildSystemdManagerPropertyOutput,
   buildSystemdUnitPropertyOutput,
 } from "./service.test-helpers.js";
+import { systemdOperatorBusFixtures } from "./systemd-user-bus.test-support.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -78,19 +79,26 @@ try {
     },
   );
 
-  it.each([false, true])(
-    "keeps systemctl and busctl routing with machine fallback %s",
-    async (fallback) => {
+  it.each(["direct", "stale", "machine"])(
+    "keeps systemctl and busctl routing for %s sessions",
+    async (session) => {
       await withTempDir("openclaw-manager-route-", async (temp) => {
         const home = await fs.realpath(temp);
-        const bus = fallback ? undefined : `unix:path=${home}/bus`;
+        const fallback = session === "machine";
+        const bus = fallback
+          ? undefined
+          : systemdOperatorBusFixtures.runtime.address.replace("$XDG_RUNTIME_DIR", home);
+        if (session === "stale") {
+          await fs.writeFile(path.join(home, "bus"), "");
+        }
         const source = {
           HOME: home,
           PATH: home,
           USER: "target",
           LOGNAME: "target",
           XDG_RUNTIME_DIR: fallback ? path.join(home, "missing-runtime") : home,
-          DBUS_SESSION_BUS_ADDRESS: bus,
+          DBUS_SESSION_BUS_ADDRESS:
+            session === "stale" ? systemdOperatorBusFixtures.stale.address : bus,
           BOUNDARY_PARENT_ONLY: "synthetic-parent",
         };
         const callsPath = path.join(home, "calls.jsonl");

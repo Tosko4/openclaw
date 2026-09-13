@@ -28,7 +28,7 @@ type ExecFileMock = (
 ) => unknown;
 
 const execFileMock = vi.hoisted(() => vi.fn<ExecFileMock>());
-const existsSyncMock = vi.hoisted(() => vi.fn(() => false));
+const existsSyncMock = vi.hoisted(() => vi.fn<typeof import("node:fs").existsSync>(() => false));
 const assertNoSystemSystemdOwnershipMock = vi.hoisted(() =>
   vi.fn<(unitName: string, timeoutMs?: number) => Promise<void>>(async () => {}),
 );
@@ -387,27 +387,37 @@ describe("systemd availability", () => {
     await expect(isSystemdUserServiceAvailable()).resolves.toBe(true);
   });
 
-  it("repairs missing user bus environment when the runtime bus exists", async () => {
-    mockEffectiveUid(1000);
-    existsSyncMock.mockReturnValue(true);
-    execFileMock.mockImplementation((_cmd, args, opts, cb) => {
-      assertUserSystemctlArgs(args, "status");
-      if (!opts.env) {
-        throw new Error("expected systemctl env");
-      }
-      expect(opts.env.XDG_RUNTIME_DIR).toBe("/run/user/1000");
-      expect(opts.env.DBUS_SESSION_BUS_ADDRESS).toBe("unix:path=/run/user/1000/bus");
-      cb(null, "", "");
-    });
+  it.each([
+    { socket: "bus", runtime: undefined, sessionAddress: undefined },
+    { socket: "bus", runtime: "/run/user/1000", sessionAddress: "unix:path=/tmp/dbus-stale" },
+    { socket: "systemd/private", runtime: undefined, sessionAddress: "unix:path=/tmp/dbus-stale" },
+    { socket: "systemd/private", runtime: "/run/user/1000", sessionAddress: undefined },
+  ])(
+    "uses runtime $socket despite session address $sessionAddress",
+    async ({ socket, runtime, sessionAddress }) => {
+      mockEffectiveUid(1000);
+      existsSyncMock.mockImplementation((file) => file === `/run/user/1000/${socket}`);
+      execFileMock.mockImplementation((_cmd, args, opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        if (!opts.env) {
+          throw new Error("expected systemctl env");
+        }
+        expect(opts.env.XDG_RUNTIME_DIR).toBe("/run/user/1000");
+        expect(opts.env.DBUS_SESSION_BUS_ADDRESS).toBe(
+          socket === "bus" ? "unix:path=/run/user/1000/bus" : sessionAddress,
+        );
+        cb(null, "", "");
+      });
 
-    await expect(
-      isSystemdUserServiceAvailable({
-        USER: "debian",
-        XDG_RUNTIME_DIR: undefined,
-        DBUS_SESSION_BUS_ADDRESS: undefined,
-      }),
-    ).resolves.toBe(true);
-  });
+      await expect(
+        isSystemdUserServiceAvailable({
+          USER: "debian",
+          XDG_RUNTIME_DIR: runtime,
+          DBUS_SESSION_BUS_ADDRESS: sessionAddress,
+        }),
+      ).resolves.toBe(true);
+    },
+  );
 
   it("returns false when systemd user bus is unavailable", async () => {
     execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {

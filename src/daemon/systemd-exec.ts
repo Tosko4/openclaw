@@ -23,7 +23,7 @@ async function execSystemdCommand(
   timeoutMs?: number,
 ): Promise<ExecResult> {
   return await execFileUtf8(command, args, {
-    env: env ? resolveSystemctlProcessEnv(env) : process.env,
+    env: env ? resolveSystemdUserEnvironment(env) : process.env,
     // A wedged systemd socket can leave manager commands blocked forever; the timeout
     // kills the child so status reads fail soft instead of hanging the command.
     ...(timeoutMs && timeoutMs > 0 ? { timeout: timeoutMs, killSignal: "SIGKILL" as const } : {}),
@@ -168,12 +168,8 @@ function readSystemctlEffectiveUid(): number | null {
   }
 }
 
-function resolveSystemctlProcessEnv(env: GatewayServiceEnv): NodeJS.ProcessEnv {
+export function resolveSystemdUserEnvironment(env: GatewayServiceEnv): NodeJS.ProcessEnv {
   const processEnv = { ...process.env, ...env };
-  if (processEnv.XDG_RUNTIME_DIR?.trim() && processEnv.DBUS_SESSION_BUS_ADDRESS?.trim()) {
-    return processEnv;
-  }
-
   const uid = readSystemctlEffectiveUid();
   if (uid === null || uid === 0) {
     return processEnv;
@@ -181,16 +177,18 @@ function resolveSystemctlProcessEnv(env: GatewayServiceEnv): NodeJS.ProcessEnv {
 
   const runtimeDir = processEnv.XDG_RUNTIME_DIR?.trim() || `/run/user/${uid}`;
   const busPath = path.posix.join(runtimeDir, "bus");
-  if (!fsSync.existsSync(busPath)) {
+  const hasBus = fsSync.existsSync(busPath);
+  if (!hasBus && !fsSync.existsSync(path.posix.join(runtimeDir, "systemd/private"))) {
     return processEnv;
   }
 
-  // In non-login shells the bus socket can exist while DBUS_SESSION_BUS_ADDRESS
-  // is missing. Fill it so systemctl --user reaches the right user manager.
+  // SSH, su, and tmux can retain another session's bus address.
   return {
     ...processEnv,
     XDG_RUNTIME_DIR: runtimeDir,
-    DBUS_SESSION_BUS_ADDRESS: processEnv.DBUS_SESSION_BUS_ADDRESS?.trim() || `unix:path=${busPath}`,
+    DBUS_SESSION_BUS_ADDRESS: hasBus
+      ? `unix:path=${encodeURIComponent(busPath).replaceAll("%2F", "/")}`
+      : processEnv.DBUS_SESSION_BUS_ADDRESS,
   };
 }
 

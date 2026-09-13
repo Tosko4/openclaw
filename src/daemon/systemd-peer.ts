@@ -2,6 +2,7 @@
 import path from "node:path";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import type { GatewayServiceEnv, SystemdServiceReadBinding } from "./service-types.js";
+import { resolveSystemdUserEnvironment } from "./systemd-exec.js";
 import { openSystemdBroker, openSystemdPrivatePeer } from "./systemd-peer-native.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 
@@ -55,7 +56,7 @@ export async function admitSystemdServiceReadBinding(
 ): Promise<SystemdServiceReadBinding | undefined> {
   // Capture ambient selectors once; neither subsequent env mutation nor the
   // legacy machine fallback may change the broker authenticated here.
-  const route = { ...process.env, ...env };
+  const route = resolveSystemdUserEnvironment(env);
   const uid = process.geteuid?.();
   // Do not alter root/sudo, remote, or system-manager selection. Existing native
   // adapters remain responsible when no same-account private peer is available.
