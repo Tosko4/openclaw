@@ -2,7 +2,7 @@
 
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { ApplicationGatewaySnapshot } from "../app/context.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import {
@@ -20,7 +20,7 @@ const requireRecord = createRequireRecord("object", "expected-label");
 describe("AppSidebar catalog scope replacement", () => {
   it("loads the newly selected agent after an old scope's automatic catalog read settles", async () => {
     vi.useFakeTimers();
-    const previous = createDeferred<ReturnType<typeof catalogPage>>();
+    const previous = deferred<ReturnType<typeof catalogPage>>();
     const reads: string[] = [];
     const client = createTestGatewayClient(async (method, params) => {
       expect(method).toBe("sessions.catalog.list");
