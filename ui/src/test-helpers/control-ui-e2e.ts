@@ -2070,7 +2070,12 @@ function installControlUiMockGateway(
               ? "killed"
               : undefined;
       if (status) {
-        sessions.trackRun(payload.sessionKey, payload.runId, status);
+        sessions.trackRun(
+          payload.sessionKey,
+          payload.runId,
+          status,
+          typeof payload.errorMessage === "string" ? payload.errorMessage : undefined,
+        );
       }
     }
     const approval = /^(exec|plugin|openclaw)\.approval\.(requested|resolved)$/u.exec(event);

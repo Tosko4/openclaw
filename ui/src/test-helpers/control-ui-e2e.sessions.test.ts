@@ -799,6 +799,7 @@ it.for([
   "retains $event before a started ACK (other active run: $otherRun)",
   async ({ event, outcome, otherRun }, { connect }) => {
     const key = "agent:main:fast-completion";
+    const diagnostic = "Provider request failed: session store unavailable. Retry after recovery.";
     const initial = {
       key,
       status: otherRun ? "running" : "queued",
@@ -813,7 +814,12 @@ it.for([
     const params = { sessionKey: key, message: "Complete quickly", idempotencyKey: "fast-run" };
     const id = await send("chat.send", params);
     expect(response(id)).toBeUndefined();
-    controls.emit("chat", { sessionKey: key, runId: "fast-run", state: event });
+    controls.emit("chat", {
+      sessionKey: key,
+      runId: "fast-run",
+      state: event,
+      ...(event === "error" ? { errorMessage: diagnostic } : {}),
+    });
     expect((await request("sessions.list")).payload.sessions).toEqual([
       expect.objectContaining(initial),
     ]);
@@ -827,8 +833,16 @@ it.for([
         hasActiveRun: otherRun,
         activeRunIds: otherRun ? ["other-run"] : [],
         abortedLastRun: !otherRun && outcome === "killed",
+        ...(!otherRun && outcome === "failed" ? { lastRunError: diagnostic } : {}),
       }),
     ]);
+    if (!otherRun && outcome === "failed") {
+      await request("sessions.patch", { key, unread: false });
+      expect((await request("chat.startup", { sessionKey: key })).payload.sessionInfo).toMatchObject({
+        status: "failed",
+        lastRunError: diagnostic,
+      });
+    }
     expect((await request("chat.abort", { sessionKey: key, runId: "fast-run" })).payload).toEqual({
       aborted: false,
       runIds: [],
@@ -848,6 +862,20 @@ it.for([
     controls.resolveDeferred("chat.send");
     await flush();
     expect((await request("sessions.list")).payload.sessions).toEqual(beforeReplay);
+    if (!otherRun && outcome === "failed") {
+      controls.setMethodResponse("chat.send", { runId: "next-run", status: "started" });
+      controls.deferNext("chat.send");
+      await send("chat.send", { ...params, idempotencyKey: "next-run" });
+      controls.resolveDeferred("chat.send");
+      await flush();
+      const next = (await request("chat.startup", { sessionKey: key })).payload.sessionInfo;
+      expect(next).toMatchObject({ status: "running", activeRunIds: ["next-run"] });
+      expect(next).not.toHaveProperty("lastRunError");
+      controls.emit("chat", { sessionKey: key, runId: "next-run", state: "final" });
+      const completed = (await request("chat.startup", { sessionKey: key })).payload.sessionInfo;
+      expect(completed).toMatchObject({ status: "done", activeRunIds: [] });
+      expect(completed).not.toHaveProperty("lastRunError");
+    }
   },
 );
 

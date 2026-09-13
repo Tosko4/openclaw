@@ -190,7 +190,7 @@ export function createControlUiSessionFixtures(input: {
     return { ok: true, key: next.key, entry: read(key) };
   };
   type RunStatus = Extract<SessionRunStatus, "running" | "done" | "failed" | "killed">;
-  const trackedRuns = new Map<string, Map<string, { status: RunStatus; acknowledged: boolean }>>();
+  const trackedRuns = new Map<string, Map<string, { status: RunStatus; acknowledged: boolean; errorMessage?: string }>>();
   const runsFor = (key: string) => {
     let runs = trackedRuns.get(key);
     if (!runs) {
@@ -199,11 +199,12 @@ export function createControlUiSessionFixtures(input: {
     }
     return runs;
   };
-  const trackRun = (inputKey: string, runId: string, status: RunStatus) => {
+  const trackRun = (inputKey: string, runId: string, status: RunStatus, errorMessage?: string) => {
     const key = canonicalKey(inputKey);
     const runs = runsFor(key);
     const previous = runs.get(runId);
     const outcome = status === "running" ? (previous?.status ?? status) : status;
+    const diagnostic = status === "running" ? previous?.errorMessage : errorMessage;
     const value = record(inputKey);
     const activeRunIds = Array.isArray(value.row.activeRunIds)
       ? value.row.activeRunIds.filter((id): id is string => typeof id === "string")
@@ -213,13 +214,13 @@ export function createControlUiSessionFixtures(input: {
       if (previous?.acknowledged) {
         return;
       }
-      runs.set(runId, { status: outcome, acknowledged: true });
+      runs.set(runId, { status: outcome, acknowledged: true, errorMessage: diagnostic });
     } else {
       if (previous && previous.status !== "running") {
         return;
       }
       const acknowledged = previous?.acknowledged || activeRunIds.includes(runId);
-      runs.set(runId, { status, acknowledged });
+      runs.set(runId, { status, acknowledged, errorMessage: diagnostic });
       // Unrelated terminal events do not mutate a row until its send ACK arrives.
       if (!acknowledged) {
         return;
@@ -234,6 +235,7 @@ export function createControlUiSessionFixtures(input: {
       hasActiveRun: remaining.length > 0,
       status: remaining.length > 0 ? "running" : outcome,
       abortedLastRun: remaining.length === 0 && outcome === "killed",
+      lastRunError: remaining.length === 0 && outcome === "failed" ? diagnostic : undefined,
       updatedAt: Date.now(),
     };
     value.row = { ...value.row, ...fields };
@@ -266,6 +268,7 @@ export function createControlUiSessionFixtures(input: {
       hasActiveRun: remaining.length > 0,
       status: remaining.length > 0 ? "running" : "killed",
       abortedLastRun: remaining.length === 0,
+      lastRunError: undefined,
       updatedAt: Date.now(),
     };
     value.row = { ...value.row, ...fields };
