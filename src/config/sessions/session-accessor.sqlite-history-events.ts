@@ -34,6 +34,7 @@ import {
   parseStoredTranscriptEvent,
   readHistoricalHistoryAnchorPage,
   resolveHistoricalHistoryEventById,
+  resolveHistoryAnchorPageRange,
 } from "./session-accessor.sqlite-history-interval.js";
 import {
   assertVisibleMessageRangeJson,
@@ -386,9 +387,18 @@ function resolveHistoryMessageSequence(
   if (logicalPosition < 0) {
     return undefined;
   }
-  const precedingBoundaries = history.boundaries.filter(
-    (candidate) => candidate.messagePosition <= logicalPosition,
-  ).length;
+  // Boundaries follow active order; equal positions all precede this message.
+  let precedingBoundaries = 0;
+  let end = history.boundaries.length;
+  while (precedingBoundaries < end) {
+    const middle = Math.floor((precedingBoundaries + end) / 2);
+    // The half-open search range stays inside the dense boundary projection.
+    if (history.boundaries[middle]!.messagePosition <= logicalPosition) {
+      precedingBoundaries = middle + 1;
+    } else {
+      end = middle;
+    }
+  }
   return logicalPosition + 1 + precedingBoundaries;
 }
 
@@ -686,22 +696,12 @@ export function readSessionTranscriptHistoryAnchorPage(
         }
       );
     }
-    const pageSize = Math.max(
-      1,
-      Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 1),
-    );
-    const anchorPosition = anchor.seq - 1;
-    const newerMessages = Math.floor(pageSize / 2);
-    const olderMessages = pageSize - newerMessages - 1;
-    const latestStart = Math.max(0, history.total - pageSize);
-    const start = Math.min(Math.max(0, anchorPosition - olderMessages), latestStart);
-    const endExclusive = Math.min(history.total, start + pageSize);
-    const readStart = Math.max(0, start - 1);
+    const range = resolveHistoryAnchorPageRange(history.total, anchor.seq - 1, options.maxMessages);
     return {
-      events: readVisibleHistoryRange(projection, readStart, endExclusive, history),
+      events: readVisibleHistoryRange(projection, range.readStart, range.endExclusive, history),
       found: true,
-      hasOverreadContext: readStart < start,
-      offset: history.total - endExclusive,
+      hasOverreadContext: range.hasOverreadContext,
+      offset: range.offset,
       displaySource: history.displaySource,
       totalMessages: history.total,
     };

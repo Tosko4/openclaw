@@ -16,6 +16,7 @@ import {
 } from "../../../test/e2e/qa-lab/runtime/quota-reset.test-support.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.js";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.js";
+import { reportQuotaStatusFailure } from "./quota-reset-status.diagnostics.test-support.js";
 
 type QuotaFixture = Awaited<ReturnType<typeof createQuotaResetFixture>>;
 type SavedState = {
@@ -151,9 +152,17 @@ async function captureFinalStatus(
       const card = page.locator('[data-provider-id="openai"]');
       await card.waitFor({ state: "visible" });
       const badge = card.locator(".model-providers__head .settings-status");
-      await expect
-        .poll(async () => (await badge.textContent())?.trim(), { timeout: 60_000 })
-        .toBe("Ready");
+      let observedBadge: string | undefined;
+      try {
+        await expect
+          .poll(async () => (observedBadge = (await badge.textContent())?.trim()), {
+            timeout: 60_000,
+          })
+          .toBe("Ready");
+      } catch (error) {
+        reportQuotaStatusFailure(observations, observedBadge);
+        throw error;
+      }
       observations.push({
         action: "control-ui-provider-status",
         status: (await badge.textContent())?.trim(),

@@ -293,16 +293,19 @@ function applyChatModelCatalog(host: ChatPageHost, result: ModelCatalogResult) {
 }
 
 function applyCachedChatModelCatalog(host: ChatPageHost, binding: ChatMetadataBinding): boolean {
-  const result = peekModelCatalog(binding.client, binding.scope);
+  const fresh = peekModelCatalog(binding.client, binding.scope);
+  const result = fresh ?? peekModelCatalog(binding.client, binding.scope, { allowStale: true });
   if (!result || !binding.isCurrent()) {
     return false;
   }
-  binding.catalogRequest?.controller.abort();
-  binding.catalogRequest = undefined;
+  if (fresh) {
+    binding.catalogRequest?.controller.abort();
+    binding.catalogRequest = undefined;
+  }
   applyChatModelCatalog(host, result);
   host.chatModelsLoading = false;
   host.requestUpdate?.();
-  return true;
+  return Boolean(fresh);
 }
 
 export function applyChatModelCatalogSnapshot(host: ChatPageHost): void {
