@@ -8,7 +8,7 @@ import { EmptyResultSchema, JSONRPCRequestSchema } from "@modelcontextprotocol/s
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { OwnedStdioCleanupError, type OwnedStdioProcess } from "../process/owned-stdio.js";
-import { disposeMcpClient } from "./mcp-client-lifecycle.js";
+import { connectMcpClient, disposeMcpClient } from "./mcp-client-lifecycle.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 
@@ -273,6 +273,7 @@ describe("OpenClawStdioClientTransport", () => {
   it("keeps failed owner cleanup uncertain through repeated disposal", async () => {
     const fixture = createChild();
     const failure = new Error("cleanup owner lost");
+    const cleanupErrors: unknown[] = [];
     const cleanupScope = createAgentCleanupScope();
     const transport = createTransport({ command: "node" });
     await transport.start();
@@ -285,13 +286,72 @@ describe("OpenClawStdioClientTransport", () => {
         disposeMcpClient({
           transport,
           transportType: "stdio",
-          client: { close: () => transport.close() },
+          client: {
+            close: async () => {
+              throw new Error("later client cleanup failure");
+            },
+          },
+          onCleanupError: (error) => {
+            cleanupErrors.push(error);
+            throw new Error("diagnostic observer failed");
+          },
         }),
       ).resolves.toBe("uncertain");
       await expect(transport.close()).rejects.toBe(failure);
     });
     expect(cleanupScope.outcome).toBe("uncertain");
+    expect(cleanupErrors).toEqual([failure]);
   });
+
+  it.each(["initialize-error", "aborted"] as const)(
+    "contains SDK %s cleanup rejection without certifying closure",
+    async (trigger) => {
+      const fixture = createChild();
+      const failure = new Error(
+        "service child cleanup identity lost: anchor channel closed without a matching closing receipt",
+      );
+      const transport = createTransport({ command: "node" });
+      const client = new Client({ name: "doctor-mcp-proof", version: "1" });
+      const cleanupScope = createAgentCleanupScope();
+      await cleanupScope.run(async () => {
+        const controller = new AbortController();
+        const connecting = connectMcpClient({
+          client,
+          transport,
+          timeoutMs: 5_000,
+          signal: controller.signal,
+        });
+        const rejected = expect(connecting).rejects.toThrow("fixture initialization failed");
+        await vi.waitFor(() => expect(fixture.stdin.readableLength).toBeGreaterThan(0));
+        const initialize = JSONRPCRequestSchema.parse(
+          JSON.parse(fixture.stdin.read().toString("utf8")),
+        );
+        if (trigger === "aborted") {
+          controller.abort(new Error("fixture initialization failed"));
+        } else {
+          fixture.stdout.write(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: initialize.id,
+              error: { code: -32603, message: "fixture initialization failed" },
+            }) + "\n",
+          );
+        }
+        await rejected;
+        fixture.root.resolve({ code: 1, signal: null });
+        fixture.extinction.reject(failure);
+        // Let the SDK's discarded close promise settle before explicit disposal.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        await expect(disposeMcpClient({ client, transport, transportType: "stdio" })).resolves.toBe(
+          "uncertain",
+        );
+        await expect(transport.close()).rejects.toBe(failure);
+      });
+      expect(cleanupScope.outcome).toBe("uncertain");
+    },
+  );
 
   it.each([
     { confirmed: true, outcome: "closed" },

@@ -168,6 +168,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:github-projects",
       label: "GitHub projects",
+      updatePolicy: "standalone",
       run: runGitHubProjectHealth,
     }),
     createDoctorHealthContribution({
@@ -291,6 +292,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:bootstrap-size",
       label: "Bootstrap size",
+      updatePolicy: "standalone",
       healthCheckIds: ["core/doctor/bootstrap-size"],
       run: runBootstrapSizeHealth,
     }),
@@ -371,6 +373,9 @@ export function resolveFinalDoctorHealthContributions(params: {
         async detect(ctx) {
           const { collectWhatsappResponsivenessHealthFindings } =
             await import("../commands/doctor-whatsapp-responsiveness.js");
+          const { bindAgentToolGatewayRequest } =
+            await import("../agents/tools/in-process-gateway.js");
+          const requestGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
           let status: import("../status/types.js").StatusSummary | undefined;
           if (
             !(
@@ -378,14 +383,16 @@ export function resolveFinalDoctorHealthContributions(params: {
               ctx.allowExecSecretRefs !== true
             )
           ) {
-            const { callGateway } = await import("../gateway/call.js");
-            status = await callGateway<import("../status/types.js").StatusSummary>({
+            const request = {
               method: "status",
               params: { includeChannelSummary: false },
               timeoutMs: 3000,
               config: ctx.cfg,
               deviceIdentity: null,
-            }).catch(() => undefined);
+            };
+            status = await requestGateway<import("../status/types.js").StatusSummary>(
+              request,
+            ).catch(() => undefined);
           }
           return collectWhatsappResponsivenessHealthFindings({ cfg: ctx.cfg, status });
         },

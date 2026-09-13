@@ -22,6 +22,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
   createModelGenerationFixture,
@@ -633,6 +634,7 @@ const resolveConfiguredImageModelForTest: NonNullable<
     (candidate) => candidate.id === model || candidate.id === `${provider}/${model}`,
   );
   return {
+    logicalRef: { provider, model },
     model: {
       ...configuredModel,
       id: model,
@@ -1668,11 +1670,7 @@ describe("image tool implicit imageModel config", () => {
       await writeAuthProfiles(agentDir, {
         version: 1,
         profiles: {
-          "amazon-bedrock:default": {
-            type: "api_key",
-            provider: "amazon-bedrock",
-            key: "sk-test",
-          },
+          "amazon-bedrock:default": createApiKeyCredential("amazon-bedrock", "sk-test"),
         },
       });
       const cfg: OpenClawConfig = {
@@ -3404,6 +3402,7 @@ describe("image compression policy", () => {
   it("keeps runtime Anthropic media limits for dated model variants", async () => {
     testing.setProviderDepsForTest({
       resolveModelAsync: async (_provider, model) => ({
+        logicalRef: { provider: _provider, model },
         model: {
           mediaInput: {
             image: model.includes("opus")
@@ -3440,6 +3439,7 @@ describe("image compression policy", () => {
   it("merges partial configured Anthropic media policy with runtime side limits", async () => {
     testing.setProviderDepsForTest({
       resolveModelAsync: async (_provider, _model, _agentDir, _cfg, options) => ({
+        logicalRef: { provider: _provider, model: _model },
         model: {
           mediaInput: {
             image: options?.skipProviderRuntimeHooks

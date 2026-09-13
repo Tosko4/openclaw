@@ -5,7 +5,10 @@ import {
 } from "../../../config/sessions.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
-import { runExclusiveSessionLifecycleMutation } from "../../../sessions/session-lifecycle-admission.js";
+import {
+  isSessionLifecycleMutationActive,
+  runExclusiveSessionLifecycleMutation,
+} from "../../../sessions/session-lifecycle-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
 import {
   finalizeTaskRunByRunId,
@@ -29,7 +32,6 @@ import {
 import {
   loadSubagentSessionEntry,
   resolveCompletionFromSessionEntry,
-  type SubagentSessionStoreCache,
 } from "./subagent-session-reconciliation.js";
 
 function findNextSubagentRunCreatedAt(
@@ -201,9 +203,14 @@ export async function reconcileDurableSubagentKillIntent(params: {
   ) {
     return await completeRetiredKill();
   }
+  const identities = [params.entry.childSessionKey, killIntent.sessionId];
+  // A live mutation owns this cancellation; reconcile other rows without waiting behind it.
+  if (isSessionLifecycleMutationActive(storePath, identities)) {
+    return false;
+  }
   try {
     const runtime = await params.loadKillRuntime();
-    if (!ownsCurrentGeneration()) {
+    if (!ownsCurrentGeneration() || isSessionLifecycleMutationActive(storePath, identities)) {
       return false;
     }
     if (!ownsSessionIncarnation()) {
@@ -211,7 +218,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
     }
     return await runExclusiveSessionLifecycleMutation({
       scope: storePath,
-      identities: [params.entry.childSessionKey, killIntent.sessionId],
+      identities,
       run: async () => {
         if (!ownsCurrentGeneration()) {
           return false;
@@ -297,7 +304,6 @@ export async function reconcileProvisionalSubagentKill(params: {
   entry: SubagentRunRecord;
   now: number;
   runs: Map<string, SubagentRunRecord>;
-  storeCache: SubagentSessionStoreCache;
   completeSubagentRunWithRecovery: (
     completion: SubagentCompletionRequest,
     source: string,
@@ -356,7 +362,6 @@ export async function reconcileProvisionalSubagentKill(params: {
   }
   const sessionEntry = loadSubagentSessionEntry({
     childSessionKey: entry.childSessionKey,
-    storeCache: params.storeCache,
   });
   const completion = resolveCompletionFromSessionEntry(sessionEntry, now, {
     notBeforeMs: entry.execution.startedAt ?? entry.createdAt,

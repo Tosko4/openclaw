@@ -22,6 +22,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import {
   MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
   MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
@@ -34,18 +35,7 @@ import { findUndeclaredBundlerHelperDtsExports } from "./lib/sanitize-bundler-he
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
-const nativePreviewPackageJsonPath = resolve(
-  repoRoot,
-  "node_modules/@typescript/native-preview/package.json",
-);
-const nativePreviewPackageJson = JSON.parse(readFileSync(nativePreviewPackageJsonPath, "utf8")) as {
-  bin?: { tsgo?: string };
-};
-const nativePreviewTsgoBin = nativePreviewPackageJson.bin?.tsgo;
-if (!nativePreviewTsgoBin) {
-  throw new Error("@typescript/native-preview does not declare the tsgo binary");
-}
-const tsgoPath = resolve(dirname(nativePreviewPackageJsonPath), nativePreviewTsgoBin);
+const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd: repoRoot });
 const forbiddenPublicDeclarationSpecifiers = ["@openclaw/llm-core"];
 const FORBIDDEN_PUBLIC_PROTOCOL_REGISTRY_RE = /\bdeclare\s+const\s+ProtocolSchemas(?:\$\d+)?\b/u;
 const RELATIVE_DECLARATION_SPECIFIER_RE = /\b(?:from|import)\s*(?:\(\s*)?["']([^"']+)["']/gu;
@@ -87,6 +77,11 @@ let missing = 0;
       join(consumerRoot, "index.ts"),
       `import { buildChannelConfigSchema, DmPolicySchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import type {
+  EmbeddingBatchChunk,
+  EmbeddingBatchOptions,
+  EmbeddingProviderBatchRuntime,
+} from "openclaw/plugin-sdk/embedding-provider-runtime-contract";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 import { identityEntryAuthenticationClassifier, meetsIdentifierAuthentication } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type {
@@ -139,6 +134,23 @@ const classifyEntryAuthentication = identityEntryAuthenticationClassifier({
 const entryAuthentication: IdentifierAuthentication | undefined = classifyEntryAuthentication("provider-user-id");
 void entryAuthentication;
 
+const batchEmbed: EmbeddingProviderBatchRuntime["batchEmbed"] = async (options: EmbeddingBatchOptions) => {
+  const chunks: EmbeddingBatchChunk[] = options.chunks;
+  return chunks.map(() => [1]);
+};
+const batchRuntimes: EmbeddingProviderBatchRuntime[] = [
+  { batchEmbed },
+  { batchEmbed, sourceWideBatchEmbed: true },
+  { batchEmbed, sourceWideBatchEmbed: false },
+];
+const batchRuntimeWithInternalPolicy = {
+  batchEmbed,
+  // @ts-expect-error Cache identity is not part of the public batch contract.
+  cacheKeyData: {},
+} satisfies EmbeddingProviderBatchRuntime;
+void batchRuntimes;
+void batchRuntimeWithInternalPolicy;
+
 const runtimeStore = createPluginRuntimeStore<PluginRuntime>({
   pluginId: "package-consumer",
   errorMessage: "package consumer runtime not initialized",
@@ -188,8 +200,8 @@ export default defineChannelPluginEntry({
     );
 
     const result = spawnSync(
-      process.execPath,
-      [tsgoPath, "-p", join(consumerRoot, "tsconfig.json"), "--pretty", "false"],
+      tsgoPath,
+      ["-p", join(consumerRoot, "tsconfig.json"), "--pretty", "false"],
       { cwd: consumerRoot, encoding: "utf8" },
     );
     if (result.error) {

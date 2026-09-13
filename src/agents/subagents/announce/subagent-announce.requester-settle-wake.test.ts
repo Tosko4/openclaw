@@ -20,6 +20,7 @@ let sessionStore: Record<string, { sessionId?: string; lastChannel?: string; las
 
 const { registryRuntimeMock } = vi.hoisted(() => ({
   registryRuntimeMock: {
+    getLatestLiveSubagentRunByChildSessionKey: vi.fn(() => undefined),
     countActiveDescendantRuns: vi.fn((_rootSessionKey: string) => 0),
     countPendingDescendantRuns: vi.fn((_rootSessionKey: string) => 0),
     isSubagentSessionRunActive: vi.fn((_childSessionKey: string) => true),
@@ -40,7 +41,7 @@ const { registryRuntimeMock } = vi.hoisted(() => ({
 vi.mock("../registry/subagent-registry-read.js", () => registryRuntimeMock);
 
 vi.mock("./subagent-announce.runtime.js", () => ({
-  callGateway: vi.fn(async () => ({})),
+  callSubagentLifecycleGateway: vi.fn(async () => ({})),
   dispatchGatewayMethodInProcess: vi.fn(async () => ({})),
   isEmbeddedAgentRunActive: vi.fn(() => false),
   getRuntimeConfig: () => ({ session: { mainKey: "main", scope: "per-sender" } }),

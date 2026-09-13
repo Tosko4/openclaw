@@ -8,6 +8,7 @@ import type {
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import type { AgentsPanel } from "../../lib/agents/panels.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import type { CronState } from "../../lib/cron/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { AgentsRouteData } from "./route.ts";
@@ -75,16 +76,6 @@ export function setPageGateway(
   page.gateway.applySnapshot(snapshot(client, connected), { initial: false, sourceChanged });
 }
 
-export function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((next, fail) => {
-    resolve = next;
-    reject = fail;
-  });
-  return { promise, resolve, reject };
-}
-
 export function snapshot(
   client: GatewayBrowserClient | null,
   connected = true,
@@ -108,6 +99,10 @@ const eventListeners = new WeakMap<
 >();
 
 export function emitCatalogChanged(currentGateway: ApplicationContext["gateway"]) {
+  const client = currentGateway.snapshot.client;
+  if (client) {
+    invalidateChatMetadataStore(client);
+  }
   for (const listener of eventListeners.get(currentGateway) ?? []) {
     listener({ type: "event", event: "chat.metadata.changed", payload: {} });
   }

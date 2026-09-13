@@ -1,5 +1,6 @@
 // Doctor runtime checks inspect tool names, browser residue, and runtime state.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { formatUnsupportedNodeVersionMessage } from "../../node-version.mjs";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "../agents/agent-bundle-mcp-names.js";
 import { loadSessionMcpConfig } from "../agents/agent-bundle-mcp-runtime-config.js";
@@ -39,7 +40,10 @@ import {
   GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
   gatewayConnectErrorWasRateLimited,
 } from "../commands/gateway-health-auth-diagnostic.js";
+import { formatSqliteWalHealthWarning } from "../commands/sqlite-wal-health.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isNodeRuntime } from "../daemon/runtime-binary.js";
+import { resolveNodeRuntimeInfo } from "../daemon/runtime-paths.js";
 import {
   getSystemdCgroupHygieneSummary,
   type GatewayServiceRuntime,
@@ -159,14 +163,23 @@ export async function collectGatewayHealthFindings(
       tlsFingerprint: probeDetails.tlsFingerprint,
       preauthHandshakeTimeoutMs: probeDetails.preauthHandshakeTimeoutMs,
     });
-    return projectDoctorSecretRuntimeDegradations(status).map((owner) => ({
-      checkId: "core/doctor/gateway-health",
-      severity: "warning",
-      message: `Secret runtime degradation: ${owner.message}`,
-      path: owner.path,
-      target: owner.target,
-      fixHint: `Retry: ${owner.retryHint}`,
-    }));
+    const findings: HealthFinding[] = projectDoctorSecretRuntimeDegradations(status).map(
+      (owner) => ({
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: `Secret runtime degradation: ${owner.message}`,
+        path: owner.path,
+        target: owner.target,
+        fixHint: `Retry: ${owner.retryHint}`,
+      }),
+    );
+    const sqliteWalWarning = formatSqliteWalHealthWarning(status.sqliteWal);
+    if (sqliteWalWarning) {
+      findings.push(
+        warning(`SQLite WAL: ${sqliteWalWarning}`, "Inspect openclaw status --deep output."),
+      );
+    }
+    return findings;
   } catch (error) {
     if (!probeDetails) {
       return [
@@ -233,6 +246,33 @@ export async function collectGatewayDaemonFindings(
       fixHint: "Run `openclaw gateway install` to install the service.",
     });
     return findings;
+  }
+  const nodePath = state.command?.programArguments[0];
+  if (nodePath && isNodeRuntime(nodePath)) {
+    const runtime = await resolveNodeRuntimeInfo(nodePath, state.env);
+    const message =
+      runtime.status === "probe-failed"
+        ? runtime.error.message
+        : (runtime.capabilityError ?? runtime.note);
+    if (message) {
+      findings.push({
+        checkId: "core/doctor/gateway-daemon",
+        severity: runtime.status === "supported" ? "info" : "warning",
+        message,
+        path: state.command?.sourcePath,
+        target: nodePath,
+        ...(runtime.status !== "supported"
+          ? {
+              fixHint: [
+                ...(runtime.status === "unsupported"
+                  ? [formatUnsupportedNodeVersionMessage(runtime.version)]
+                  : []),
+                "Repair the Node runtime, then run `openclaw gateway install`.",
+              ].join("\n"),
+            }
+          : {}),
+      });
+    }
   }
   if (state.loadState.status === "not-loaded") {
     findings.push({
@@ -1297,7 +1337,21 @@ export async function collectRuntimeToolSchemaFindings(
       }
     }
   } finally {
-    await Promise.all([...bundleRuntimeByContext.values()].map((runtime) => runtime.dispose()));
+    const cleanup = await Promise.allSettled(
+      [...bundleRuntimeByContext.values()].map(async (runtime) => await runtime.dispose()),
+    );
+    for (const outcome of cleanup) {
+      if (outcome.status === "rejected") {
+        findings.push({
+          checkId: "core/doctor/runtime-tool-schemas",
+          severity: "error",
+          message: "Configured MCP tool schema inspection could not confirm child-process cleanup.",
+          path: "mcp.servers",
+          requirement: formatErrorMessage(outcome.reason),
+          fixHint: "Inspect or stop the configured MCP server processes, then rerun doctor.",
+        });
+      }
+    }
   }
   return findings;
 }

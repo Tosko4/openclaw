@@ -17,7 +17,7 @@ import {
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 
 export const SESSION_CATALOG_CHANGED_REFRESH_MS = 5_000;
-const SESSION_CATALOG_STABLE_REFRESH_MS = 30_000;
+export const SESSION_CATALOG_STABLE_REFRESH_MS = 30_000;
 
 function sessionCatalogMaterialSnapshot(catalogs: readonly SessionCatalog[]): string {
   // Fast follow-up polls cover catalog/host/session identity sets, labels, connectivity,
@@ -88,6 +88,7 @@ function isSessionsCatalogHostEvent(value: unknown): value is SessionsCatalogHos
 
 /** Tracks one sidebar's progressive list streams and adaptive refresh lifecycle. */
 export class SessionCatalogLiveState {
+  refreshScope = {};
   timer: ReturnType<typeof globalThis.setTimeout> | null = null;
   requestGeneration: number | null = null;
   sawChange = false;
@@ -114,6 +115,7 @@ export class SessionCatalogLiveState {
   }
 
   clear() {
+    this.refreshScope = {};
     this.cancelScheduledRefreshes();
     this.requestGeneration = null;
     this.requestOwner = null;

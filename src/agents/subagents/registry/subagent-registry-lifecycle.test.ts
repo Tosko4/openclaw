@@ -1018,7 +1018,7 @@ describe("subagent registry lifecycle hardening", () => {
 
     expect(entry).toMatchObject({
       endedReason: SUBAGENT_ENDED_REASON_KILLED,
-      killReconciliation: { killedAt: 4_001 },
+      killReconciliation: { killedAt: 4_001, taskCancellationAccepted: true },
       execution: {
         status: "terminal",
         endedAt: 4_001,
@@ -1066,6 +1066,7 @@ describe("subagent registry lifecycle hardening", () => {
       },
     });
     expect(entry.killIntent).toBeUndefined();
+    expect(entry.killReconciliation?.taskCancellationAccepted).toBeUndefined();
   });
 
   it("keeps a natural completion that predates the durable kill intent", async () => {
@@ -1353,7 +1354,7 @@ describe("subagent registry lifecycle hardening", () => {
     }
   });
 
-  it("does not reject completion when task finalization throws", async () => {
+  it("does not reject completion when optional task tracking is absent and finalization throws", async () => {
     const persist = vi.fn();
     const persistOrThrow = vi.fn();
     const warn = vi.fn();
@@ -2799,6 +2800,9 @@ describe("subagent registry lifecycle hardening", () => {
   });
 
   it("updates replacement task delivery through the durable task run id", async () => {
+    taskExecutorMocks.completeTaskRunByRunId.mockReturnValueOnce([
+      { taskId: "task-before-replacement", status: "succeeded" },
+    ]);
     const entry = createRunEntry({ runId: "run-after-replacement" });
     const controller = createLifecycleController({
       entry,
@@ -3547,6 +3551,7 @@ describe("subagent registry lifecycle hardening", () => {
           expectedLifecycleRevision: "child-lifecycle-revision",
         },
         timeoutMs: 10_000,
+        assertDispatchCurrent: expect.any(Function),
       }),
     );
     await waitForLifecycleState(() =>
@@ -3679,6 +3684,7 @@ describe("subagent registry lifecycle hardening", () => {
           expectedLifecycleRevision: "child-lifecycle-revision",
         },
         timeoutMs: 10_000,
+        assertDispatchCurrent: expect.any(Function),
       }),
     );
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();

@@ -42,7 +42,7 @@ function createRequest(): WorkerTranscriptCommitParams {
 
 async function createFixture() {
   // Every stateful fixture API must share the freshly imported owner's module generation.
-  const [sessions, accessor, state, ledger, config, owner, agentState, reconcile] =
+  const [sessions, accessor, state, ledger, config, owner, agentState, reconcile, stateCache] =
     await Promise.all([
       import("../../agents/sessions/session-manager.js"),
       import("../../config/sessions/session-accessor.js"),
@@ -52,6 +52,7 @@ async function createFixture() {
       import("./transcript-commit.js"),
       import("../../state/openclaw-agent-db.js"),
       import("../../config/sessions/session-transcript-reconcile.js"),
+      import("../../state/openclaw-state-db-cache.js"),
     ]);
   const root = await fs.mkdtemp(
     path.join(await fs.realpath(os.tmpdir()), "openclaw-transcript-load-"),
@@ -82,7 +83,7 @@ async function createFixture() {
       config.clearRuntimeConfigSnapshot();
       await reconcile.waitForSessionTranscriptIndexReconcilesInStateDir(root);
       await agentState.closeOpenClawAgentDatabasesAsync(root);
-      state.closeOpenClawStateDatabaseByPath(database.path);
+      stateCache.closeOpenClawStateDatabaseByPath(database.path);
       await fs.rm(root, { recursive: true, force: true });
     },
   };

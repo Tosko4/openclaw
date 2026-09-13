@@ -2,30 +2,16 @@ import {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   resolveGatewayStartupRetryAfterMs,
 } from "@openclaw/gateway-client/browser";
-import type {
-  ChatMetadataParams,
-  CommandsListResult,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import type { ChatMetadataParams } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-
-export type ChatMetadataResult = CommandsListResult;
-
-type ChatMetadataUpdate =
-  | { type: "invalidated" }
-  | { type: "loading" }
-  | { type: "result"; result: ChatMetadataResult }
-  | { type: "error"; error: unknown };
-type ChatMetadataEntry = {
-  scope: ChatMetadataParams;
-  result?: ChatMetadataResult;
-  loadPending?: Promise<ChatMetadataResult>;
-  revalidationPending?: Promise<ChatMetadataResult>;
-  writer?: object;
-  listeners: Set<(update: ChatMetadataUpdate) => void>;
-  release: () => void;
-};
-
-const chatMetadataCache = new WeakMap<GatewayBrowserClient, Map<string, ChatMetadataEntry>>();
+import {
+  chatMetadataCache,
+  notifyChatMetadataListeners,
+  type ChatMetadataEntry,
+  type ChatMetadataResult,
+  type ChatMetadataUpdate,
+  type ChatMetadataWriter,
+} from "./chat-metadata-cache.ts";
 
 function metadataScopeKey(scope: ChatMetadataParams): string {
   return JSON.stringify([
@@ -73,16 +59,6 @@ function waitForMetadataRetry(delayMs: number): Promise<void> {
   });
 }
 
-function notifyChatMetadataListeners(entry: ChatMetadataEntry, update: ChatMetadataUpdate): void {
-  for (const listener of Array.from(entry.listeners)) {
-    try {
-      listener(update);
-    } catch (error) {
-      console.error("[chat-metadata] listener error:", error);
-    }
-  }
-}
-
 async function requestChatMetadata(
   client: GatewayBrowserClient,
   params: ChatMetadataParams,
@@ -127,16 +103,15 @@ async function requestChatMetadata(
   }
 }
 
-function beginPublication(entry: ChatMetadataEntry) {
-  const writer = {};
+function beginPublication(entry: ChatMetadataEntry, revalidating = false) {
+  const writer: ChatMetadataWriter = { revalidating };
   entry.writer = writer;
-  entry.loadPending = undefined;
-  entry.revalidationPending = undefined;
   const isCurrent = () => entry.writer === writer;
-  notifyChatMetadataListeners(entry, { type: "loading" });
   return {
+    writer,
     isCurrent,
     publish: (result: ChatMetadataResult & { models?: unknown; accountSelection?: unknown }) => {
+      writer.pending = undefined;
       // Legacy/startup responses can carry models. The direct catalog is their only UI owner.
       const { models: _models, accountSelection: _accountSelection, ...metadata } = result;
       if (isCurrent()) {
@@ -147,36 +122,25 @@ function beginPublication(entry: ChatMetadataEntry) {
       return metadata;
     },
     fail: (error: unknown) => {
+      writer.pending = undefined;
       if (isCurrent()) {
         notifyChatMetadataListeners(entry, { type: "error", error });
       }
       entry.release();
+      throw error;
     },
   };
 }
 
 function beginChatMetadataRequest(
   entry: ChatMetadataEntry,
-  pendingKey: "loadPending" | "revalidationPending",
   request: Promise<ChatMetadataResult>,
+  revalidating = false,
 ): Promise<ChatMetadataResult> {
-  const publication = beginPublication(entry);
-  const pending = request
-    .then(
-      (result) => {
-        return publication.publish(result);
-      },
-      (error: unknown) => {
-        publication.fail(error);
-        throw error;
-      },
-    )
-    .finally(() => {
-      if (entry[pendingKey] === pending) {
-        entry[pendingKey] = undefined;
-      }
-    });
-  entry[pendingKey] = pending;
+  const { writer, publish, fail } = beginPublication(entry, revalidating);
+  const pending = request.then(publish, fail);
+  writer.pending = pending;
+  notifyChatMetadataListeners(entry, { type: "loading" });
   return pending;
 }
 
@@ -208,11 +172,11 @@ export function loadChatMetadata(
   if (entry.result) {
     return Promise.resolve(entry.result);
   }
-  const pending = entry.loadPending ?? entry.revalidationPending;
+  const pending = entry.writer?.pending;
   if (pending) {
     return pending;
   }
-  return beginChatMetadataRequest(entry, "loadPending", requestChatMetadata(client, entry.scope));
+  return beginChatMetadataRequest(entry, requestChatMetadata(client, entry.scope));
 }
 
 export function revalidateChatMetadata(
@@ -221,47 +185,19 @@ export function revalidateChatMetadata(
   opts?: { startupRetryWindowMs?: number },
 ): Promise<ChatMetadataResult> {
   const entry = metadataEntryFor(client, scope);
-  if (entry.revalidationPending) {
-    return entry.revalidationPending;
+  const writer = entry.writer;
+  if (writer?.revalidating && writer.pending) {
+    return writer.pending;
   }
-  return beginChatMetadataRequest(
-    entry,
-    "revalidationPending",
-    requestChatMetadata(client, entry.scope, opts),
-  );
+  return beginChatMetadataRequest(entry, requestChatMetadata(client, entry.scope, opts), true);
 }
 
 export function beginChatMetadataPublication(
   client: GatewayBrowserClient,
   scope: ChatMetadataParams,
 ) {
-  const { isCurrent, publish } = beginPublication(metadataEntryFor(client, scope));
+  const entry = metadataEntryFor(client, scope);
+  const { isCurrent, publish } = beginPublication(entry);
+  notifyChatMetadataListeners(entry, { type: "loading" });
   return { isCurrent, publish };
-}
-
-export function invalidateChatMetadataStore(
-  client: GatewayBrowserClient,
-  scope?: ChatMetadataParams,
-): void {
-  const entries = chatMetadataCache.get(client)?.values();
-  if (!entries) {
-    return;
-  }
-  const invalidated = Array.from(entries).filter(
-    (entry) =>
-      (!scope?.agentId || entry.scope.agentId === scope.agentId) &&
-      (!scope?.sessionKey || entry.scope.sessionKey === scope.sessionKey) &&
-      (!scope?.authProfileId || entry.scope.authProfileId === scope.authProfileId),
-  );
-  // Retire every affected writer before subscribers can synchronously start replacements.
-  for (const entry of invalidated) {
-    entry.result = undefined;
-    entry.loadPending = undefined;
-    entry.revalidationPending = undefined;
-    entry.writer = undefined;
-  }
-  for (const entry of invalidated) {
-    notifyChatMetadataListeners(entry, { type: "invalidated" });
-    entry.release();
-  }
 }

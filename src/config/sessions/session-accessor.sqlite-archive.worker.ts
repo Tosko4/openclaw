@@ -13,6 +13,10 @@ import {
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import {
+  getOpenClawAgentDatabaseValidation,
+  type OpenClawAgentDatabaseValidation,
+} from "../../state/openclaw-agent-db-validation-cache.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   settleOpenClawAgentDatabaseWorkerClose,
@@ -44,8 +48,16 @@ import {
 import {
   reclaimSqliteSessionInTransaction,
   type SqliteSessionReclamationWorkerData,
-  type SqliteSessionReclamationWorkerResult,
 } from "./session-accessor.sqlite-reclamation.js";
+import {
+  mutateSessionColdTranscriptInWorker,
+  prepareSessionColdBatchInWorker,
+  prepareSessionColdRestoreInWorker,
+  type SessionColdPreparationWorkerData,
+  type SessionColdMutationResult,
+  type SessionColdWorkerData,
+} from "./session-cold-storage-worker.js";
+import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 
 type TranscriptArchiveDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -181,6 +193,8 @@ function parseWorkerPlans(value: unknown): TranscriptArchiveWorkerPlan[] | undef
   return parsed;
 }
 
+const TRANSCRIPT_ARCHIVE_WRITE_BUFFER_BYTES = 64 * 1024;
+
 function stageTranscriptArchiveContent(
   database: DatabaseSync,
   sessionId: string,
@@ -188,6 +202,16 @@ function stageTranscriptArchiveContent(
 ): number {
   const fd = fs.openSync(stagedPath, "wx", 0o600);
   let rowCount = 0;
+  const bufferedParts: string[] = [];
+  let bufferedBytes = 0;
+  const flush = () => {
+    if (bufferedBytes === 0) {
+      return;
+    }
+    fs.writeFileSync(fd, bufferedParts.join(""));
+    bufferedParts.length = 0;
+    bufferedBytes = 0;
+  };
   try {
     const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database);
     for (const row of iterateSqliteQuerySync(
@@ -201,10 +225,20 @@ function stageTranscriptArchiveContent(
       if (typeof row.event_json !== "string") {
         throw new Error(`Invalid transcript event row for ${sessionId}`);
       }
-      fs.writeFileSync(fd, row.event_json);
-      fs.writeFileSync(fd, "\n");
+      const rowBytes = Buffer.byteLength(row.event_json, "utf8") + 1;
+      if (bufferedBytes + rowBytes > TRANSCRIPT_ARCHIVE_WRITE_BUFFER_BYTES) {
+        flush();
+      }
+      if (rowBytes >= TRANSCRIPT_ARCHIVE_WRITE_BUFFER_BYTES) {
+        fs.writeFileSync(fd, row.event_json);
+        fs.writeFileSync(fd, "\n");
+      } else {
+        bufferedParts.push(row.event_json, "\n");
+        bufferedBytes += rowBytes;
+      }
       rowCount += 1;
     }
+    flush();
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
@@ -423,22 +457,35 @@ function runPublishWorkerPort(
 
 async function runReclamationWorkerPort(
   port: NonNullable<typeof parentPort>,
-  data: SqliteSessionReclamationWorkerData,
+  data: SqliteSessionReclamationWorkerData | SessionColdWorkerData,
 ): Promise<void> {
-  let result: ReturnType<typeof reclaimSqliteSessionInTransaction>;
+  let result: ReturnType<typeof reclaimSqliteSessionInTransaction> | SessionColdMutationResult;
+  let validation: OpenClawAgentDatabaseValidation | undefined;
+  const coldRecords =
+    data.operation === "cold-mutate" && data.plan.kind === "cold-restore"
+      ? await prepareSessionColdRestoreInWorker(data.plan)
+      : undefined;
   const commitGate = data.commitGate;
   let admissionId = 0;
   let finalAdmission = false;
   const withAdmission: OpenClawAgentDatabaseWriteAdmission = async (run) => {
     const requestedId = ++admissionId;
-    const allowed = await new Promise<boolean>((resolve, reject) => {
-      const receive = (message: { type: string; admissionId: number; allowed: boolean }) => {
+    const admission = await new Promise<{
+      allowed: boolean;
+      validation?: OpenClawAgentDatabaseValidation;
+    }>((resolve, reject) => {
+      const receive = (message: {
+        type: string;
+        admissionId: number;
+        allowed: boolean;
+        validation?: OpenClawAgentDatabaseValidation;
+      }) => {
         cleanup();
         if (message.type !== "admission" || message.admissionId !== requestedId) {
           reject(new Error("SQLite reclamation Worker received invalid write admission"));
           return;
         }
-        resolve(message.allowed);
+        resolve(message);
       };
       const closed = () => {
         cleanup();
@@ -453,10 +500,10 @@ async function runReclamationWorkerPort(
       port.postMessage({ type: "admission-request", admissionId: requestedId });
     });
     const value = await run(() => {
-      if (!allowed) {
+      if (!admission.allowed) {
         throw new Error("SQLite reclamation database admission was revoked");
       }
-    });
+    }, admission.validation);
     if (!finalAdmission) {
       port.postMessage({ type: "admission-release", admissionId: requestedId });
     }
@@ -466,21 +513,31 @@ async function runReclamationWorkerPort(
     result = await withOpenClawAgentDatabaseAdmission(
       data.plan.databaseOptions,
       withAdmission,
-      () => {
+      async (openedDatabase) => {
         finalAdmission = true;
         let transactionDatabase: DatabaseSync | undefined;
         try {
-          return reclaimSqliteSessionInTransaction(data.plan, {
-            onCommit: commitGate
-              ? (database) => {
-                  transactionDatabase = database.db;
-                  waitForSqliteReclamationCommit(commitGate, () =>
-                    port.postMessage({ type: "commit-request" }),
-                  );
-                }
-              : undefined,
-          });
+          const onCommit = (
+            database: import("../../state/openclaw-agent-db.js").OpenClawAgentDatabase,
+          ) => {
+            transactionDatabase = database.db;
+            if (commitGate) {
+              waitForSqliteReclamationCommit(commitGate, () =>
+                port.postMessage({ type: "commit-request" }),
+              );
+            }
+          };
+          if (data.operation === "cold-mutate") {
+            const changed = mutateSessionColdTranscriptInWorker(data.plan, coldRecords, onCommit);
+            markSqliteReclamationSettled(commitGate);
+            if (data.plan.kind !== "cold-restore") {
+              await reclaimSqliteFreePages(data.plan.databaseOptions, undefined, { maxPasses: 64 });
+            }
+            return changed;
+          }
+          return reclaimSqliteSessionInTransaction(data.plan, { onCommit });
         } finally {
+          validation = getOpenClawAgentDatabaseValidation(openedDatabase);
           if (
             transactionDatabase &&
             (!transactionDatabase.isOpen || !transactionDatabase.isTransaction)
@@ -504,12 +561,16 @@ async function runReclamationWorkerPort(
     throw error;
   }
   const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
-  const workerResult: SqliteSessionReclamationWorkerResult = {
+  const workerResult = {
     result,
     ...(cleanup.cleanupWarnings.length > 0 ? { cleanupWarnings: cleanup.cleanupWarnings } : {}),
     ...(!cleanup.settled ? { cleanupIncomplete: true } : {}),
   };
-  port.postMessage({ type: "reclaimed", results: [workerResult] });
+  port.postMessage({
+    type: "reclaimed",
+    results: [workerResult],
+    validation: cleanup.settled ? validation : undefined,
+  });
   port.close();
 }
 
@@ -530,6 +591,15 @@ if (isSqliteTranscriptArchiveWorkerData(workerData)) {
       throw new Error("SQLite transcript archive worker requires valid publication data");
     }
     runPublishWorkerPort(parentPort, plans);
+  } else if (operation === "cold-prepare") {
+    // SAFETY: the paired parent constructs this internal payload with SessionColdPreparationWorkerData.
+    const data = workerData as SessionColdPreparationWorkerData;
+    const result = await prepareSessionColdBatchInWorker(data.input);
+    parentPort.postMessage({ type: "done", results: [result] }, []);
+    parentPort.close();
+  } else if (operation === "cold-mutate") {
+    // SAFETY: the paired parent constructs this internal payload with SessionColdWorkerData; commit revalidates its rows.
+    await runReclamationWorkerPort(parentPort, workerData as SessionColdWorkerData);
   } else if (operation === "reclaim") {
     // SAFETY: the parent creates this internal structured-clone payload from the typed plan.
     await runReclamationWorkerPort(parentPort, workerData as SqliteSessionReclamationWorkerData);

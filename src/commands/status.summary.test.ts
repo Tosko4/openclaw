@@ -11,7 +11,10 @@ import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
 import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { registerStatusSummarySessionRowCases } from "./status.summary.test-support.js";
+import {
+  registerStatusSummarySessionRowCases,
+  registerStatusSummaryWalCases,
+} from "./status.summary.test-support.js";
 
 const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
@@ -304,6 +307,7 @@ describe("getStatusSummary", () => {
     setSessions: (store) =>
       statusSummaryMocks.listSessionEntriesCore.mockReturnValue(toSessionEntrySummaries(store)),
   });
+  registerStatusSummaryWalCases((options) => getStatusSummary(options));
 
   it.each(["per-sender", "global"] as const)(
     "summarizes every configured agent's pending events without an ambient owner (%s)",
@@ -1065,9 +1069,10 @@ describe("getStatusSummary", () => {
 
   it("resolves aggregate selected models from each row's agent", async () => {
     const models: Record<string, string> = { ops: "ops", research: "research" };
-    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockImplementation(
-      (_cfg, _entry, id) => ({ provider: "openai", model: models[id ?? ""] ?? "global" }),
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockImplementation(
+      ({ agentId }) => ({ provider: "openai", model: models[agentId ?? ""] ?? "global" }),
     );
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockImplementation((model) => model);
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         "agent:ops:main": { sessionId: "ops-session", updatedAt: 3 },

@@ -33,7 +33,8 @@ exposing it in message context fields. The standalone public builder is not an
 authoritative substitute. Never reconstruct evidence from sender, route, room,
 account, thread, message, transport, or session values. Legacy adapters can explicitly pass
 `channelIngress: "unsupported"` only when the path is source-proven to lack an
-authoritative Phase 0 integration. Supported paths must pass the exact result;
+authoritative ingress-resolver integration. Supported paths must pass the exact
+result;
 omission is invalid production wiring. Missing, fake, stale, reused, or mixed
 supported evidence projects as unknown, never as an allow signal.
 
@@ -136,6 +137,10 @@ Bind `createRuntimeConfigReader` when the account starts, and derive a coherent
 policy snapshot at each new admission. Keep resolved-name caches with that
 account owner and recheck the current revision after asynchronous resolution.
 Do not retain startup-only allowlists in another message or interaction path.
+For asynchronous `shouldSupersedePending` authorization, return a synchronous
+guard that verifies the prepared policy is still current. The drain invokes this
+guard immediately before cancelling pre-adoption work; boolean decisions remain
+supported for predicates without asynchronous authority resolution.
 
 Keep credentials, transport settings, and account lifecycle changes on the
 restart path. Do not declare an entire `accounts` subtree dynamic merely to cover

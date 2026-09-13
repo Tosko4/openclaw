@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { createApiKeyCredential } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
@@ -447,7 +448,7 @@ describe("agents add command", () => {
     },
   );
 
-  it("uses the explicit agent target and skips catalog validation", async () => {
+  it("uses the explicit agent target for auth checks and creation", async () => {
     setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
     const prompter = {
       intro: vi.fn(),
@@ -470,7 +471,6 @@ describe("agents add command", () => {
       expect.any(Object),
       expect.objectContaining({
         agentId: "jon",
-        validateCatalog: false,
       }),
     );
     expect(checkAgentCreationGateMock).toHaveBeenCalledWith("jon");
@@ -558,11 +558,7 @@ describe("agents add command", () => {
         const sourceStore: AuthProfileStore = {
           version: AUTH_STORE_VERSION,
           profiles: {
-            "openai:api-key": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-test",
-            },
+            "openai:api-key": createApiKeyCredential("openai", "sk-test"),
             "openai:oauth": {
               type: "oauth",
               provider: "openai",
@@ -705,16 +701,8 @@ describe("agents add command", () => {
       await seedAgentAuthStore(root, "main", {
         version: AUTH_STORE_VERSION,
         profiles: {
-          "openai:api-key": {
-            type: "api_key",
-            provider: "openai",
-            key: "portable-conflict",
-          },
-          "openai:portable": {
-            type: "api_key",
-            provider: "openai",
-            key: "portable-retained",
-          },
+          "openai:api-key": createApiKeyCredential("openai", "portable-conflict"),
+          "openai:portable": createApiKeyCredential("openai", "portable-retained"),
         },
         order: { openai: ["openai:api-key", "openai:portable"] },
       });

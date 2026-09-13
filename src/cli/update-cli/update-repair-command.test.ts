@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +15,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
+import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { registerUpdateCli } from "../update-cli.js";
@@ -63,10 +65,24 @@ const tempDirs = createTempDirTracker();
 const now = Date.now();
 
 function seedRun(
-  params: { phase?: UpdateRunRecord["phase"]; liveDriver?: boolean; ageMs?: number } = {},
+  params: {
+    phase?: UpdateRunRecord["phase"];
+    driver?: "live" | "exited" | "reused";
+    ageMs?: number;
+  } = {},
 ) {
   vi.mocked(Date.now).mockReturnValue(now - (params.ageMs ?? 3_600_000));
-  const driver = params.liveDriver ? readUpdateRunDriver() : undefined;
+  let driver = params.driver ? readUpdateRunDriver() : undefined;
+  if (params.driver && !driver) {
+    throw new Error("Test process identity is unavailable");
+  }
+  if (driver && params.driver === "exited") {
+    const child = spawnSync(process.execPath, ["-e", ""], { timeout: 5_000 });
+    expect(child.status).toBe(0);
+    driver = { ...driver, pid: child.pid };
+  } else if (driver && params.driver === "reused") {
+    driver = { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) };
+  }
   const run = createUpdateRun({
     trigger: "control-ui",
     before: { version: "2026.9.2" },
@@ -110,6 +126,101 @@ afterEach(() => {
 });
 
 describe("update repair ledger recovery", () => {
+  it.each(["self", "parent"] as const)(
+    "continues repair within its owning %s run",
+    async (owner) => {
+      const run = seedRun({ phase: "validating", driver: "live", ageMs: 60_000 });
+      if (owner === "parent") {
+        const driver = readUpdateRunDriver();
+        const start = getFileLockProcessStartTime(process.ppid);
+        if (!driver || start === null) {
+          throw new Error("Controlling parent identity is unavailable");
+        }
+        recordUpdateRunPhase(run.runId, "validating", {
+          origin: { driver: { ...driver, pid: process.ppid, startIdentity: String(start) } },
+        });
+      }
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+
+      await updateRepairCommand({});
+
+      expect(mocks.finalize).toHaveBeenCalledExactlyOnceWith({}, []);
+      expect(getUpdateRun(run.runId)).toMatchObject({
+        status: "running",
+        phase: "validating",
+        steps: expect.arrayContaining([
+          expect.objectContaining({ step: "finalize:repair-continuation", status: "completed" }),
+        ]),
+      });
+      expect(mocks.reachable).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["live", "unobserved"] as const)(
+    "names the %s owner when repair is refused",
+    async (owner) => {
+      const run = seedRun({ phase: "validating", driver: "live" });
+      const driver = run.origin.driver!;
+      if (owner === "unobserved") {
+        recordUpdateRunPhase(run.runId, "validating", {
+          origin: { driver: { ...driver, host: "other-host.invalid" } },
+        });
+      }
+      const current = getUpdateRun(run.runId)!;
+      const pending = updateRepairCommand({});
+      await expect(pending).rejects.toThrow(
+        `Update ${run.runId} is still in progress (validating)`,
+      );
+      for (const detail of [
+        `PID ${driver.pid}`,
+        current.origin.driver!.host,
+        owner === "live" ? "liveness: alive" : "liveness: not observed",
+        `started ${new Date(run.createdAtMs).toISOString()}`,
+        "age 3600s",
+        `last activity ${new Date(current.updatedAtMs).toISOString()}`,
+        "stop that driver",
+        "openclaw update repair",
+      ]) {
+        await expect(pending).rejects.toThrow(detail);
+      }
+      expect(getUpdateRun(run.runId)).toEqual(current);
+      expect(mocks.finalize).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not continue an unrelated run merely because its ID was inherited", async () => {
+    const run = seedRun({ phase: "validating", driver: "live" });
+    recordUpdateRunPhase(run.runId, "validating", {
+      origin: { driver: { ...run.origin.driver!, host: "other-host.invalid" } },
+    });
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+
+    await expect(updateRepairCommand({})).rejects.toThrow("still in progress");
+    expect(mocks.finalize).not.toHaveBeenCalled();
+  });
+
+  it("preserves an unrecorded adopter while its known parent requests continuation", async () => {
+    const run = seedRun({ phase: "validating", driver: "live" });
+    recordUpdateRunStep(run.runId, { step: "driver:identity-unavailable", status: "completed" });
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+
+    await expect(updateRepairCommand({})).rejects.toThrow("unrecorded adopter");
+
+    expect(mocks.finalize).not.toHaveBeenCalled();
+    expect(getUpdateRun(run.runId)?.steps).not.toContainEqual(
+      expect.objectContaining({ step: "finalize:repair-continuation" }),
+    );
+  });
+
+  it("repairs an old validating run after its driver exits", async () => {
+    const run = seedRun({ phase: "validating", driver: "exited" });
+
+    await updateRepairCommand({});
+
+    expect(getUpdateRun(run.runId)).toMatchObject({ status: "failed", reason: "abandoned" });
+    expect(mocks.finalize).not.toHaveBeenCalled();
+  });
+
   it.each([undefined, "staging"] as const)(
     "repairs an abandoned %s row through the public command without maintenance",
     async (phase) => {
@@ -132,22 +243,50 @@ describe("update repair ledger recovery", () => {
     },
   );
 
-  it("exits successfully when the Gateway already reconciled the abandoned row", async () => {
-    const run = seedRun();
-    finishUpdateRun(run.runId, { status: "failed", reason: "abandoned" });
+  it.each(["exited", "reused"] as const)(
+    "repairs a young requested row with a dead driver (%s) without maintenance",
+    async (driver) => {
+      const run = seedRun({ driver, ageMs: 60_000 });
 
-    await updateRepairCommand({});
+      await runRegisteredCli({ register: registerUpdateCli, argv: ["update", "repair"] });
 
-    expect(getUpdateRun(run.runId)).toMatchObject({
-      status: "failed",
-      reason: "abandoned",
-      steps: expect.arrayContaining([
-        expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
-      ]),
-    });
-    expect(mocks.finalize).not.toHaveBeenCalled();
-    expect(mocks.runtime.log).toHaveBeenCalledWith(expect.stringContaining("already reconciled"));
-  });
+      expect(getUpdateRun(run.runId)).toMatchObject({
+        status: "failed",
+        phase: "finished",
+        reason: "abandoned",
+        steps: expect.arrayContaining([
+          expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
+        ]),
+      });
+      expect(listUpdateRuns({ active: true })).toEqual([]);
+      expect(listUpdateRuns()).toHaveLength(1);
+      expect(mocks.finalize).not.toHaveBeenCalled();
+      expect(mocks.runtime.log).toHaveBeenCalledWith(
+        "Gateway is healthy. Reconciled 1 abandoned update run. No maintenance or service restart was needed.",
+      );
+      expect(mocks.runtime.exit).not.toHaveBeenCalledWith(1);
+    },
+  );
+
+  it.each(["abandoned", "legacy-driver-expired"])(
+    "exits successfully when the Gateway already reconciled the %s row",
+    async (reason) => {
+      const run = seedRun();
+      finishUpdateRun(run.runId, { status: "failed", reason });
+
+      await updateRepairCommand({});
+
+      expect(getUpdateRun(run.runId)).toMatchObject({
+        status: "failed",
+        reason,
+        steps: expect.arrayContaining([
+          expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
+        ]),
+      });
+      expect(mocks.finalize).not.toHaveBeenCalled();
+      expect(mocks.runtime.log).toHaveBeenCalledWith(expect.stringContaining("already reconciled"));
+    },
+  );
 
   it.each(["repair", "gateway"] as const)(
     "runs full repair on the next invocation after acknowledging %s reconciliation",
@@ -181,11 +320,14 @@ describe("update repair ledger recovery", () => {
 
   it.each([
     { label: "recent request", ageMs: 60_000 },
-    { label: "live driver", phase: "staging" as const, liveDriver: true },
+    { label: "live driver", phase: "staging" as const, driver: "live" as const },
+    { label: "young live driver", ageMs: 60_000, driver: "live" as const },
   ])("leaves a $label alone without entering maintenance", async (fixture) => {
     const run = seedRun(fixture);
 
-    await expect(updateRepairCommand({})).rejects.toThrow("still in progress");
+    await expect(updateRepairCommand({})).rejects.toThrow(
+      `Update ${run.runId} is still in progress (${run.phase});`,
+    );
 
     expect(getUpdateRun(run.runId)).toEqual(run);
     expect(mocks.finalize).not.toHaveBeenCalled();

@@ -2,8 +2,7 @@ import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
-import { fireFirstReplyConfetti } from "../../components/confetti.ts";
-import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import {
   isHiddenAssistantStreamText,
@@ -43,6 +42,7 @@ import {
 import { recordChatSendServerTiming } from "./chat-send-timing.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { applyChatModelCatalogSnapshot } from "./chat-state-refresh.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { handleBackgroundTasksEvent } from "./components/chat-background-tasks.ts";
@@ -524,6 +524,10 @@ export function handlePageGatewayEvent(
   event: GatewayEventFrame,
   isPresented: ChatPanePresentation = () => true,
 ): void {
+  if (event.event === "models.snapshot") {
+    applyChatModelCatalogSnapshot(state);
+    return;
+  }
   if (event.event === "session.approval") {
     const payload = asNullableRecord(event.payload);
     if (!payload || typeof payload.sessionKey !== "string") {
@@ -575,15 +579,12 @@ export function handlePageGatewayEvent(
       if (payload?.state === "delta" && typeof payload.deltaText === "string" && sessionMatches) {
         refreshPullRequestsForStreamedLinks(state, payload.runId, payload.deltaText);
       }
-      const shouldCelebrateFirstReply = hasVisibleFinalAssistantReply(state, payload);
       const shouldRefreshPullRequests =
-        shouldCelebrateFirstReply && finalAssistantReplyHasPullRequestLink(state, payload);
-      const result = handleChatGatewayEvent(state, payload);
+        hasVisibleFinalAssistantReply(state, payload) &&
+        finalAssistantReplyHasPullRequestLink(state, payload);
+      handleChatGatewayEvent(state, payload);
       if (terminalPayload && sessionMatches) {
         clearPendingQueueItemsForRun(state, terminalPayload.runId);
-      }
-      if (shouldCelebrateFirstReply && result === "final") {
-        fireFirstReplyConfetti();
       }
       if (shouldRefreshPullRequests && payload) {
         refreshPullRequestsForFinalReply(state, payload.runId, payload.message);

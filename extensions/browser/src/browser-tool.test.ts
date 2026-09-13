@@ -426,6 +426,59 @@ function registerBrowserToolAfterEachReset() {
   });
 }
 
+describe("dashboard Gateway lifetime owner", () => {
+  registerBrowserToolAfterEachReset();
+
+  it.each(["open", "close", "snapshot"] as const)(
+    "routes %s through the Gateway owner with the caller's cancellation",
+    async (action) => {
+      const signal = new AbortController().signal;
+      const dashboard = {
+        sessionKey: "agent:main:dashboard-test",
+        name: "service",
+        instanceId: "widget-one",
+        revision: 1,
+        paused: action !== "open",
+        stopping: false,
+        url: "http://service.example/",
+        ...(action === "open"
+          ? { browserTab: { target: "host", profile: "openclaw", targetId: "GATEWAY-TAB" } }
+          : {}),
+      };
+      gatewayMocks.callGatewayTool.mockResolvedValueOnce(dashboard);
+      const tool = createBrowserTool({ agentSessionKey: dashboard.sessionKey, agentId: "main" });
+      const result = tool.execute(
+        "dashboard-call",
+        { action, dashboard: "service", timeoutMs: 45_000 },
+        signal,
+      );
+      if (action === "snapshot") {
+        await expect(result).rejects.toThrow(/paused/);
+      } else {
+        expect((await result).details).toEqual({ browserDashboard: dashboard });
+      }
+      expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+        "browser.request",
+        { timeoutMs: 45_000 },
+        {
+          target: "host",
+          method: action === "close" ? "DELETE" : "POST",
+          path: "/dashboard",
+          body: {
+            sessionKey: dashboard.sessionKey,
+            agentId: "main",
+            name: "service",
+            ...(action === "open" ? { resume: true } : {}),
+          },
+        },
+        { scopes: ["operator.admin"], signal },
+      );
+      expect(browserClientMocks.browserOpenTab).not.toHaveBeenCalled();
+      expect(browserClientMocks.browserCloseTab).not.toHaveBeenCalled();
+    },
+  );
+});
+
 async function runSnapshotToolCall(params: {
   snapshotFormat?: "ai" | "aria";
   refs?: "aria" | "dom";
@@ -3634,7 +3687,7 @@ describe("browser tool act compatibility", () => {
     });
 
     const { options, request } = lastNodeInvokeCall();
-    expect(options.timeoutMs).toBe(80_000);
+    expect(options.timeoutMs).toBe(126_250);
     expect(request.params?.path).toBe("/act");
     expect(request.params?.body).toEqual({
       kind: "wait",
@@ -3642,7 +3695,7 @@ describe("browser tool act compatibility", () => {
       text: "ready",
       timeoutMs: "45000",
     });
-    expect(request.params?.timeoutMs).toBe(70_000);
+    expect(request.params?.timeoutMs).toBe(116_250);
   });
 
   it("sizes node proxy calls for recursively nested batch execution", async () => {

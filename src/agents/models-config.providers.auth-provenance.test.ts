@@ -5,7 +5,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 
 const discovery = vi.hoisted(() => ({ providers: new Array<ProviderPlugin>() }));
@@ -57,7 +59,6 @@ vi.mock("./provider-auth-aliases.js", () => ({
 
 type ProviderRuntimeModule = typeof import("../plugins/provider-runtime.js");
 
-let NON_ENV_SECRETREF_MARKER: typeof import("./model-auth-markers.js").NON_ENV_SECRETREF_MARKER;
 let CUSTOM_LOCAL_AUTH_MARKER: typeof import("./model-auth-markers.js").CUSTOM_LOCAL_AUTH_MARKER;
 let resolveApiKeyFromCredential: typeof import("./models-config.providers.secret-helpers.js").resolveApiKeyFromCredential;
 let createProviderApiKeyResolver: typeof import("./models-config.providers.secrets.js").createProviderApiKeyResolver;
@@ -84,7 +85,6 @@ async function loadProviderAuthModules() {
     providerRuntimeModule.resolveProviderSyntheticAuthWithPlugin,
   );
   CUSTOM_LOCAL_AUTH_MARKER = markersModule.CUSTOM_LOCAL_AUTH_MARKER;
-  NON_ENV_SECRETREF_MARKER = markersModule.NON_ENV_SECRETREF_MARKER;
   resolveApiKeyFromCredential = helperModule.resolveApiKeyFromCredential;
   createProviderApiKeyResolver = secretsModule.createProviderApiKeyResolver;
   createProviderAuthResolver = secretsModule.createProviderAuthResolver;
@@ -363,11 +363,10 @@ describe("models-config provider auth provenance", () => {
         async (fixture) => {
           const { SecretSurfaceUnavailableError } =
             await import("../secrets/runtime-degraded-state.js");
-          fixture.store.profiles["openai:other"] = {
-            type: "api_key",
-            provider: "openai",
-            key: "wrong-account-key",
-          };
+          fixture.store.profiles["openai:other"] = createApiKeyCredential(
+            "openai",
+            "wrong-account-key",
+          );
           const profile = expectDefined(
             fixture.published.profiles[fixture.profileId],
             "published profile",
@@ -446,11 +445,10 @@ describe("models-config provider auth provenance", () => {
           throw new Error("expected token profile");
         }
         selected.expires = 1;
-        fixture.store.profiles["openai:fallback"] = {
-          type: "api_key",
-          provider: "openai",
-          key: "eligible-fallback-key",
-        };
+        fixture.store.profiles["openai:fallback"] = createApiKeyCredential(
+          "openai",
+          "eligible-fallback-key",
+        );
 
         await fixture.discover();
 
@@ -560,11 +558,10 @@ describe("models-config provider auth provenance", () => {
     async (callback) => {
       await withDiscoveryFixture("api_key", callback, async (fixture) => {
         const backupProfileId = "openai:stored-first";
-        fixture.store.profiles[backupProfileId] = {
-          type: "api_key",
-          provider: "openai",
-          key: "stored-order-key",
-        };
+        fixture.store.profiles[backupProfileId] = createApiKeyCredential(
+          "openai",
+          "stored-order-key",
+        );
         fixture.store.order = {
           openai: [backupProfileId, fixture.profileId],
         };

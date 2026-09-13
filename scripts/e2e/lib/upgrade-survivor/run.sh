@@ -113,8 +113,10 @@ restart_inference=""
 survival_assert_stage="survival"
 baseline_spec=""
 baseline_version=""
+baseline_plugin_version=""
 baseline_version_expected="0"
 candidate_version=""
+candidate_contract=""
 candidate_tarball=""
 restart_fixture_version=""
 restart_fixture_evidence=""
@@ -663,6 +665,8 @@ assert_prepublish_plugin_install() {
   local consent_supported=0 pending_args=()
   if [ "$SCENARIO" = "legacy-operator-state" ]; then
     plugin_id="discord"
+  elif [ "$SCENARIO" = "msteams-polls" ]; then
+    plugin_id="msteams"
   elif configured_plugin_installs_enabled; then
     plugin_id="matrix"
   fi
@@ -688,16 +692,27 @@ configure_plugin_registry() {
   local tarball="$fixture_root/openclaw-brave-plugin-${candidate_version}.tgz"
   local registry_args=()
   local registry_dist_tags="${OPENCLAW_NPM_REGISTRY_DIST_TAGS-}"
+  local baseline_plugin="discord"
+  [ "$SCENARIO" != "msteams-polls" ] || baseline_plugin="msteams"
 
-  if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  if [ "$SCENARIO" = "legacy-operator-state" ] || [ "$SCENARIO" = "msteams-polls" ]; then
     if [ "$stage" = "baseline" ]; then
       mkdir -p "$fixture_root/baseline"
       # A moving selector preserves ordinary plugin updates; an exact spec is a pin.
+      # Numeric core corrections retain the base release's plugin cohort, as
+      # declared by release-version.ts and the shipped correction manifests.
+      baseline_plugin_version="$(node --input-type=module - "$baseline_version" <<'NODE'
+import { parseReleaseVersion } from "./scripts/lib/release-version.mjs";
+const release = parseReleaseVersion(process.argv[2]);
+if (!release) throw new Error("Invalid baseline release version");
+process.stdout.write(release.correctionNumber === undefined ? release.version : release.baseVersion);
+NODE
+      )"
       local baseline_tarball
-      baseline_tarball="$(npm pack "@openclaw/discord@$baseline_version" \
+      baseline_tarball="$(npm pack "@openclaw/$baseline_plugin@$baseline_plugin_version" \
         --registry=https://registry.npmjs.org --pack-destination "$fixture_root/baseline" --silent)"
-      registry_args+=("@openclaw/discord" "$baseline_version" "$fixture_root/baseline/$baseline_tarball")
-      registry_dist_tags="latest=$baseline_version,beta=$baseline_version"
+      registry_args+=("@openclaw/$baseline_plugin" "$baseline_plugin_version" "$fixture_root/baseline/$baseline_tarball")
+      registry_dist_tags="latest=$baseline_plugin_version,beta=$baseline_plugin_version"
     else
       registry_dist_tags="latest=$candidate_version,beta=$candidate_version"
     fi
@@ -768,7 +783,7 @@ NODE
     [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] || return 0
   fi
 
-  if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  if [ "$SCENARIO" = "legacy-operator-state" ] || [ "$SCENARIO" = "msteams-polls" ]; then
     export OPENCLAW_NPM_REGISTRY_DIST_TAGS="$registry_dist_tags"
   fi
   openclaw_prepublish_plugin_registry_start \
@@ -939,9 +954,10 @@ apply_baseline_config_recipe() {
 }
 
 install_companion_plugins() {
+  local plugin="${1:-discord}"
   openclaw_e2e_fixture_plugin_command openclaw -- \
-    plugins install "@openclaw/discord@latest"
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-baseline-plugin "$baseline_version"
+    plugins install "@openclaw/$plugin@latest"
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-baseline-plugin "$baseline_plugin_version" "$plugin"
 }
 
 seed_legacy_operator_gateway() {
@@ -1238,17 +1254,28 @@ resolve_candidate_version() {
     echo "missing OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC" >&2
     return 1
   fi
+  candidate_contract=""
   case "$CANDIDATE_KIND" in
     tarball)
-      candidate_version="$(
+      candidate_contract="$(
         node -e '
+          const assert = require("node:assert/strict");
           const { execFileSync } = require("node:child_process");
           const packageJson = execFileSync("tar", ["-xOf", process.argv[1], "package/package.json"], {
             encoding: "utf8",
           });
-          process.stdout.write(JSON.parse(packageJson).version);
-        ' "$CANDIDATE_SPEC"
-      )"
+          const manifest = JSON.parse(packageJson);
+          assert(typeof manifest.version === "string" && manifest.version.length > 0, "candidate package version is missing");
+          const contract = { version: manifest.version };
+          if (process.argv[2] === "2026.9.2" && manifest.version === "2026.9.3") {
+            const stateVersion = manifest.openclaw?.schemaVersions?.state;
+            assert(Number.isSafeInteger(stateVersion) && stateVersion >= 0, "invalid candidate state schema version");
+            contract.stateSchemaVersion = stateVersion;
+          }
+          process.stdout.write(JSON.stringify(contract));
+        ' "$CANDIDATE_SPEC" "$baseline_version"
+      )" || return "$?"
+      candidate_version="$(node -p 'JSON.parse(process.argv[1]).version' "$candidate_contract")" || return "$?"
       ;;
     npm)
       candidate_version="$(npm view "$CANDIDATE_SPEC" version --silent)"
@@ -1707,7 +1734,20 @@ assert_survival() {
     node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state || return "$?"
   installed_version="$(read_installed_version)" || return "$?"
   if [ "$baseline_version" = "2026.9.2" ] && [ "$candidate_version" = "2026.9.3" ]; then
-    node scripts/e2e/lib/external-package-transition.mjs schema 16 \
+    local expected_state_schema
+    if [ "$CANDIDATE_KIND" = "tarball" ]; then
+      expected_state_schema="$(node --input-type=module - "$candidate_contract" "$candidate_version" <<'NODE'
+import assert from "node:assert/strict";
+const contract = JSON.parse(process.argv[2]);
+assert.equal(contract.version, process.argv[3], "schema contract belongs to another candidate");
+process.stdout.write(String(contract.stateSchemaVersion));
+NODE
+)" || return "$?"
+    else
+      # Published openclaw@2026.9.3 declares state schema 16.
+      expected_state_schema=16
+    fi
+    node scripts/e2e/lib/external-package-transition.mjs schema "$expected_state_schema" \
       >"$ARTIFACT_ROOT/schema-after-update.json" || return "$?"
   fi
   local expected_version="${restart_fixture_version:-$candidate_version}"
@@ -1852,6 +1892,18 @@ phase validate-update-restart-mode validate_update_restart_mode
 phase reset-run-state reset_run_state
 phase install-baseline install_baseline
 phase initialize-state initialize_state
+if [ "$SCENARIO" = "custom-plugin-siblings" ]; then
+  phase seed-sibling-plugin node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs seed
+  phase validate-baseline-config validate_baseline_config
+  phase baseline-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs baseline
+  phase resolve-sibling-candidate resolve_candidate_version
+  phase update-sibling-candidate update_candidate
+  phase canary-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs assert-canary
+  phase candidate-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs candidate
+  run_completed="1"
+  echo "Upgrade survivor Docker E2E passed baseline=${baseline_spec} scenario=${SCENARIO} candidate=${candidate_version}."
+  exit 0
+fi
 if [ "$SCENARIO" = "abandoned-update" ]; then
   source scripts/e2e/lib/upgrade-survivor/abandoned-update.sh
   run_abandoned_update_survivor
@@ -1874,6 +1926,11 @@ phase prepare-update-restart-probe prepare_update_restart_probe
 phase bootstrap-mobile-pairing bootstrap_mobile_pairing
 # Start the published baseline before adding migration specimens: its startup
 # guards correctly reject them, and baseline Doctor would consume candidate proof.
+if [ "$SCENARIO" = "msteams-polls" ]; then
+  phase configure-baseline-teams-registry configure_plugin_registry baseline
+  phase install-baseline-teams install_companion_plugins msteams
+  openclaw_e2e_stop_process "$plugin_registry_pid"
+fi
 phase seed-state seed_state
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase configure-baseline-plugin-registry configure_plugin_registry baseline
@@ -1957,6 +2014,13 @@ if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
 fi
 phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable
 run_plugin_fixture_phase assert-package-local-dependency-cleanup assert_legacy_plugin_dependency_debris_cleaned
+if [ "$SCENARIO" = "msteams-polls" ]; then
+  # The updater may migrate the first specimen before refreshing external plugins.
+  # Check candidate bytes before seeding a distinct specimen for its explicit Doctor.
+  phase fixture-plugin-consent repair_fixture_plugin_consent
+  phase assert-candidate-teams-artifact assert_prepublish_plugin_install
+  phase seed-candidate-teams-doctor node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-msteams-doctor
+fi
 if [ "$SCENARIO" != "sqlite-volume" ] && [ "$SCENARIO" != "recovery-cleanup" ] && [ "$SCENARIO" != "legacy-operator-state" ]; then
   phase doctor run_doctor
 fi
@@ -1964,7 +2028,9 @@ run_plugin_fixture_phase assert-legacy-plugin-dependency-debris-cleaned assert_l
 run_plugin_fixture_phase assert-legacy-runtime-deps-symlink-repaired assert_legacy_runtime_deps_symlink_repaired
 phase validate-post-doctor-config validate_post_doctor_config
 phase assert-survival assert_survival
-run_plugin_fixture_phase fixture-plugin-consent repair_fixture_plugin_consent
+if [ "$SCENARIO" != "msteams-polls" ]; then
+  run_plugin_fixture_phase fixture-plugin-consent repair_fixture_plugin_consent
+fi
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase fixture-plugin-consent repair_fixture_plugin_consent
 fi

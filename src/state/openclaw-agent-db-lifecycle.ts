@@ -21,11 +21,12 @@ import {
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-helpers.js";
+import type { OpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 
 // Target 64 cached handles (roughly three WAL FDs each). Live borrowers,
 // transactions and incognito sessions keep their handles until owner release.
-export const OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP = 64;
+const OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP = 64;
 const agentDbLog = createSubsystemLogger("state/agent-db");
 const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
 // Native and transformed SDK graphs must share the complete owner lifecycle;
@@ -51,6 +52,7 @@ export type PendingAgentDatabaseOpen = {
   assertHeld?: () => void;
   operations: number;
   releaseBorrow?: () => void;
+  validation?: OpenClawAgentDatabaseValidation;
 };
 type RetainedAgentDatabaseClose = { agentId: string; path: string; close: () => void };
 const cache = resolveGlobalSingleton<AgentDatabaseLifecycle>(
@@ -62,7 +64,9 @@ const cache = resolveGlobalSingleton<AgentDatabaseLifecycle>(
     generation: 0,
     failures: new Map(),
     leases: new Map(),
-    terminal: createSqliteTerminalOpenLatch({ closeByPath: closeOpenClawAgentDatabaseByPath }),
+    terminal: createSqliteTerminalOpenLatch({
+      closeByPath: (pathname) => closeOpenClawAgentDatabaseByPath(pathname),
+    }),
     unregisterExitClose: null,
     pending: new Map(),
     activePending: new Set(),

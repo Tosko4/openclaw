@@ -34,6 +34,7 @@ import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { createTestPreparedRunAdmission } from "../admitted-run-context.test-support.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
+import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
 import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
@@ -1445,11 +1446,17 @@ describe("CLI attempt execution", () => {
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(firstRunCliAgentArg().cliSessionId).toBe("stale-cli-session");
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe("session-cli");
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      "session-cli",
+    );
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
     const persisted = readSessionStore();
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
-    expect(persisted[sessionKey]?.claudeCliSessionId).toBe("session-cli");
+    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      "session-cli",
+    );
+    expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
   it("preserves and resumes a valid Claude CLI binding after format failover", async () => {
@@ -1659,7 +1666,7 @@ describe("CLI attempt execution", () => {
       forkedCliSessionId,
     );
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe(forkedCliSessionId);
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe(forkedCliSessionId);
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe(cliSessionId);
 
     const persisted = readSessionStore();
     expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
@@ -2024,14 +2031,14 @@ describe("CLI attempt execution", () => {
       sessionId: "session-cli",
     });
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe("session-cli");
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
     const persisted = readSessionStore();
     expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
       sessionId: "session-cli",
     });
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
-    expect(persisted[sessionKey]?.claudeCliSessionId).toBe("session-cli");
+    expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
   it("keeps the bound claude-cli session id as the reuse candidate when the native transcript is missing (so reseed can recover)", async () => {
@@ -2300,11 +2307,7 @@ describe("CLI attempt execution", () => {
       {
         version: 1,
         profiles: {
-          "google:api-key": {
-            type: "api_key",
-            provider: "google",
-            key: "gemini-api-key",
-          },
+          "google:api-key": createApiKeyCredential("google", "gemini-api-key"),
         },
       },
       agentDir,
@@ -2348,11 +2351,7 @@ describe("CLI attempt execution", () => {
       {
         version: 1,
         profiles: {
-          "vercel-ai-gateway:default": {
-            type: "api_key",
-            provider: "vercel-ai-gateway",
-            key: "vercel-key",
-          },
+          "vercel-ai-gateway:default": createApiKeyCredential("vercel-ai-gateway", "vercel-key"),
         },
       },
       agentDir,
@@ -2402,11 +2401,7 @@ describe("CLI attempt execution", () => {
             refresh: "openai-refresh",
             expires: Date.now() + 60_000,
           },
-          "google:api-key": {
-            type: "api_key",
-            provider: "google",
-            key: "gemini-api-key",
-          },
+          "google:api-key": createApiKeyCredential("google", "gemini-api-key"),
         },
       },
       agentDir,
@@ -2453,11 +2448,7 @@ describe("CLI attempt execution", () => {
       {
         version: 1,
         profiles: {
-          "google:api-key": {
-            type: "api_key",
-            provider: "google",
-            key: "gemini-api-key",
-          },
+          "google:api-key": createApiKeyCredential("google", "gemini-api-key"),
         },
       },
       agentDir,
@@ -3070,11 +3061,7 @@ describe("CLI attempt execution", () => {
       {
         version: 1,
         profiles: {
-          "anthropic:work": {
-            type: "api_key",
-            provider: "anthropic",
-            key: "test-key",
-          },
+          "anthropic:work": createApiKeyCredential("anthropic", "test-key"),
         },
       },
       agentDir,
@@ -3592,6 +3579,7 @@ describe("CLI attempt execution", () => {
     const handoffToCli = vi.fn();
     const deferredLifecycle: NonNullable<RunAgentAttemptParams["deferredLifecycle"]> = {
       signal: controller.signal,
+      beginRetryWait: () => undefined,
       abort: vi.fn(),
       adopt: vi.fn(),
       handoffToCli,
@@ -3715,61 +3703,6 @@ describe("CLI attempt execution", () => {
       },
       senderId: "sender-embedded",
       toolOverrides: { webSearch: false },
-    });
-  });
-
-  it("adds Git attribution only to provider-bound CLI and plugin prompts", async () => {
-    const attribution =
-      "Git commit attribution for this turn:\nCo-authored-by: octocat <583231+octocat@users.noreply.github.com>";
-    const sessionKey = "agent:main:direct:coauthor-runtime-prompts";
-    const sessionEntry = makeSessionEntry("coauthor-runtime-prompts");
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await writeSessionStoreSeed(sessionStore);
-    runCliAgentMock.mockResolvedValueOnce(makeCliResult("cli result"));
-
-    await runStoredAttempt({
-      providerOverride: "claude-cli",
-      modelOverride: "opus",
-      sessionEntry,
-      sessionKey,
-      body: "commit from CLI",
-      runId: "run-cli-coauthor-prompt",
-      opts: { gitCoauthorAttribution: attribution },
-      sessionStore,
-    });
-
-    const cliArg = firstRunCliAgentArg();
-    const attributionSuffix = `\n\n${attribution}`;
-    expect(cliArg.prompt).toEqual(expect.stringContaining("commit from CLI"));
-    expect(String(cliArg.prompt).endsWith(attributionSuffix)).toBe(true);
-    expect(cliArg.transcriptPrompt).toBe(String(cliArg.prompt).slice(0, -attributionSuffix.length));
-
-    const codexSessionKey = "agent:main:direct:coauthor-codex-prompt";
-    const codexSessionEntry = makeSessionEntry("coauthor-codex-prompt");
-    const codexSessionStore: Record<string, SessionEntry> = {
-      [codexSessionKey]: codexSessionEntry,
-    };
-    await writeSessionStoreSeed(codexSessionStore);
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      meta: { durationMs: 1 },
-    } satisfies EmbeddedAgentRunResult);
-
-    await runStoredAttempt({
-      agentHarnessRuntimeOverride: "codex",
-      body: "commit from Codex",
-      sessionEntry: codexSessionEntry,
-      sessionKey: codexSessionKey,
-      runId: "run-codex-coauthor-prompt",
-      opts: { gitCoauthorAttribution: attribution },
-      sessionStore: codexSessionStore,
-    });
-
-    const codexArg = firstEmbeddedAgentArg();
-    expectRecordFields(codexArg, {
-      agentHarnessId: undefined,
-      agentHarnessRuntimeOverride: "codex",
-      prompt: `commit from Codex\n\n${attribution}`,
-      transcriptPrompt: "commit from Codex",
     });
   });
 
@@ -4211,11 +4144,7 @@ describe("CLI attempt execution", () => {
       {
         version: 1,
         profiles: {
-          "openai:backup": {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-test",
-          },
+          "openai:backup": createApiKeyCredential("openai", "sk-test"),
         },
       },
       agentDir,
