@@ -6,7 +6,10 @@ import { readUpdateRunDriver, type UpdateRunDriver } from "../src/infra/update-r
 import { createUpdateRun, finishUpdateRun } from "../src/infra/update-run-ledger.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../src/infra/update-run-timeouts.js";
 import { closeOpenClawStateDatabaseByPath } from "../src/state/openclaw-state-db-cache.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS, OPENCLAW_STATE_SCHEMA_VERSION } from "../src/state/openclaw-state-db-contract.js";
+import {
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+} from "../src/state/openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
 import { withEnv } from "../src/test-utils/env.js";
 import {
