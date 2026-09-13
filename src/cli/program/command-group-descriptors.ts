@@ -1,6 +1,7 @@
 // Descriptor-to-lazy-command-group adapters used by core and sub-CLI registration.
 import type { Command } from "commander";
 import type { MachineOutputResolver } from "../machine-output-argv.js";
+import type { CommandGroupEntry } from "./register-command-groups.js";
 
 /** Descriptor for one root command placeholder. */
 export type NamedCommandDescriptor = {
@@ -18,19 +19,15 @@ export type CommandGroupDescriptorSpec<TArgs extends unknown[] = []> = readonly 
   register: (program: Command, ...args: TArgs) => Promise<void> | void,
 ];
 
-type CommandGroupEntryLike = {
-  placeholders: NamedCommandDescriptor[];
-  register: (program: Command) => Promise<void> | void;
-};
-
 /** Bind descriptors and registration arguments without importing the command modules. */
 export function buildCommandGroupEntries<TArgs extends unknown[]>(
   descriptors: readonly NamedCommandDescriptor[],
   specs: readonly CommandGroupDescriptorSpec<TArgs>[],
   ...args: TArgs
-): CommandGroupEntryLike[] {
+): CommandGroupEntry[] {
   const descriptorsByName = new Map(descriptors.map((descriptor) => [descriptor.name, descriptor]));
   return specs.map(([commandNames, register]) => ({
+    names: commandNames,
     placeholders: commandNames.map((name) => {
       const descriptor = descriptorsByName.get(name);
       if (!descriptor) {
