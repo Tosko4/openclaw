@@ -73,6 +73,43 @@ function publicResourceRegistry(
 }
 
 describe("MCP App sandbox HTTP origin", () => {
+  it.each(["GET", "HEAD"] as const)(
+    "binds %s caching to the selected public shell and rejects stale cache identities",
+    async (method) => {
+      await withSandboxHost(async (origin) => {
+        const selected = new URL(
+          buildMcpAppSandboxPath({ connectDomains: ["https://api.example.com"] }),
+          origin,
+        );
+        const response = await fetch(selected, { method });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe(
+          selected.searchParams.has("v") ? "public, max-age=31536000, immutable" : "no-store",
+        );
+        expect(response.headers.get("set-cookie")).toBeNull();
+        const body = await response.text();
+        for (const version of [null, "wrong-generation"]) {
+          const stale = new URL(selected);
+          if (version === null) {
+            stale.searchParams.delete("v");
+          } else {
+            stale.searchParams.set("v", version);
+          }
+          const uncached = await fetch(stale, { method });
+          expect(uncached.status).toBe(200);
+          expect(uncached.headers.get("cache-control")).toBe("no-store");
+          expect(uncached.headers.get("content-security-policy")).toBe(
+            response.headers.get("content-security-policy"),
+          );
+          expect(await uncached.text()).toBe(body);
+        }
+        expect(
+          (await fetch(new URL("/__openclaw__/mcp-app/view", origin), { method })).status,
+        ).toBe(404);
+      });
+    },
+  );
+
   it("serves only explicitly public registered assets without Gateway credentials", async () => {
     const read = vi.fn(async () => ({
       body: Buffer.from("window.rendererReady=true"),

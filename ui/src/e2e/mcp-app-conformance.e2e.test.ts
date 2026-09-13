@@ -11,6 +11,7 @@ import { disposeAllSessionMcpRuntimes } from "../../../src/agents/agent-bundle-m
 import { getOrCreateSessionMcpRuntime } from "../../../src/agents/agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "../../../src/agents/agent-bundle-mcp-materialize.js";
 import { getMcpAppViewLease } from "../../../src/agents/mcp-ui-resource.js";
+import { buildSandboxHostPath, decodeSandboxHostCsp } from "../../../src/agents/sandbox-host.js";
 import { readConfigFileSnapshotWithPluginMetadata } from "../../../src/config/config.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { startGatewayServer } from "../../../src/gateway/server.js";
@@ -846,7 +847,8 @@ suite.define(() => {
             ).toHaveLength(initializations);
 
             // Playwright does not support BFCache restoration; use its supported history flow.
-            // Production no-store headers stay unchanged, and ordinary history is not BFCache proof.
+            // Private responses remain no-store; only the versioned public shell is cacheable.
+            // Ordinary history is not BFCache proof.
             const historyContext = await newProofContext();
             const historyPage = await historyContext.newPage();
             const historyStates: Array<Record<string, unknown>> = [];
@@ -871,11 +873,17 @@ suite.define(() => {
                   shown.push({ persisted: event.persisted, atMs: Date.now() }),
                 );
               });
-              const responses: Array<Record<string, unknown>> = [];
+              const responses: Array<{
+                url: string;
+                pathname: string;
+                status: number;
+                cacheControl: string | undefined;
+              }> = [];
               historyObservations.responses = responses;
               historyPage.on("response", (response) => {
                 if (response.url().includes("mcp-app")) {
                   responses.push({
+                    url: response.url(),
                     pathname: new URL(response.url()).pathname,
                     status: response.status(),
                     cacheControl: response.headers()["cache-control"],
@@ -917,16 +925,43 @@ suite.define(() => {
               expect(
                 historyEvents.filter((event) => event.event === "response-written"),
               ).toMatchObject([{ id: historyCallId, isError: false }]);
-              for (const pathname of [
-                "/__openclaw__/mcp-app",
-                "/__openclaw__/mcp-app/view",
-                "/mcp-app-sandbox",
-              ]) {
+              for (const pathname of ["/__openclaw__/mcp-app", "/__openclaw__/mcp-app/view"]) {
                 expect(responses.filter((response) => response.pathname === pathname)).toEqual(
                   expect.arrayContaining([
                     expect.objectContaining({ status: 200, cacheControl: "no-store" }),
                   ]),
                 );
+              }
+              const shells = responses.filter(
+                (response) => response.pathname === "/mcp-app-sandbox",
+              );
+              expect(shells.length).toBeGreaterThan(0);
+              for (const shell of shells) {
+                const url = new URL(shell.url);
+                const selected = new URL(
+                  buildSandboxHostPath(decodeSandboxHostCsp(url.searchParams.get("csp"))),
+                  url.origin,
+                );
+                // Bind the browser response to this source generation's public shell,
+                // not merely to the presence of an arbitrary version query parameter.
+                expect(url.href).toBe(selected.href);
+                expect(shell.status).toBe(200);
+                expect(shell.cacheControl).toBe(
+                  selected.searchParams.has("v")
+                    ? "public, max-age=31536000, immutable"
+                    : "no-store",
+                );
+              }
+              const shellUrl = new URL(shells[0]!.url);
+              for (const version of [null, "wrong-generation"]) {
+                if (version === null) {
+                  shellUrl.searchParams.delete("v");
+                } else {
+                  shellUrl.searchParams.set("v", version);
+                }
+                const response = await historyContext.request.get(shellUrl.href);
+                expect(response.status()).toBe(200);
+                expect(response.headers()["cache-control"]).toBe("no-store");
               }
               historyObservations.phase = "complete";
             } finally {
