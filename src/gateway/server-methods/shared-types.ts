@@ -45,6 +45,7 @@ import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-
 import type {
   ChannelAccountStartOutcome,
   ChannelRuntimeSnapshot,
+  ChannelRuntimeSnapshotOptions,
   StartChannelOptions,
 } from "../server-channel-runtime.types.js";
 import type { ChatRunEntry, ChatRunRegistration, ChatRunState } from "../server-chat-state.js";
@@ -344,7 +345,7 @@ type GatewayResidentBridgeContext = {
   sessionViewerPresence?: ReturnType<
     typeof import("../session-viewer-presence.js").createSessionViewerPresenceDeclarations
   >;
-  notifyPluginMetadataChanged: () => void;
+  applyPluginLifecycleChange?: import("../../plugins/lifecycle.js").PluginLifecycleRuntimeApply;
   refreshHealthSnapshot: (opts?: {
     probe?: boolean;
     includeSensitive?: boolean;
@@ -374,7 +375,7 @@ type GatewayResidentBridgeContext = {
   modelAccountConnectService?: ReturnType<
     typeof import("../model-account-connect.js").createModelAccountConnectService
   >;
-  getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
+  getRuntimeSnapshot: (options?: ChannelRuntimeSnapshotOptions) => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
   getDeferredChannelReloads?: () => readonly GatewayDeferredChannelReload[];

@@ -8,7 +8,6 @@ import { createPackageIntegrityReader } from "../../infra/package-update-integri
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
-import { defaultRuntime } from "../../runtime.js";
 import { parsePackageOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import {
   inspectGatewayRestart,
@@ -19,7 +18,7 @@ import {
   checkTargetDatabaseSchemasForContexts,
   hasSchemaRefusal,
 } from "./schema-preflight.js";
-import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
+import { readPackageVersion, UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { captureUpdateCommandExecutorAuthority } from "./update-command-executor.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 import type {
@@ -116,14 +115,7 @@ export async function observeOriginalManagedServiceRuntime(
   before?: PreManagedServiceStop,
 ): Promise<OriginalManagedServiceRuntime | undefined> {
   const verdict = before?.serviceUpdateVerdict;
-  if (
-    !before?.running ||
-    before.stopped ||
-    !before.serviceNodeRunner ||
-    !before.serviceEnv ||
-    verdict?.kind !== "owned" ||
-    !params.opts.run?.executorFence
-  ) {
+  if (!before?.running || before.stopped || verdict?.kind !== "owned") {
     return undefined;
   }
   const assertCurrent = originalServiceAuthority(params.opts.run);
@@ -132,6 +124,9 @@ export async function observeOriginalManagedServiceRuntime(
     const root = await fs.realpath(verdict.root);
     if (root === (await fs.realpath(params.root))) {
       return undefined;
+    }
+    if (!before.serviceNodeRunner || !before.serviceEnv) {
+      throw new Error("Original service Node or manager environment is unavailable.");
     }
     const original: OriginalManagedServiceRuntime = {
       root,
@@ -162,6 +157,9 @@ export async function observeOriginalManagedServiceRuntime(
       run: undefined,
     });
     assertCurrent();
+    if (!original.verified || !original.schemaVersions) {
+      throw new Error("Original service readiness or schema support was not verified.");
+    }
     await revalidateOriginalManagedServiceRuntime(
       original,
       assertCurrent,
@@ -170,10 +168,11 @@ export async function observeOriginalManagedServiceRuntime(
     return original;
   } catch (error) {
     assertCurrent();
-    defaultRuntime.error(
-      `Original service compensation could not be certified: ${String(error)}. Forward update remains available.`,
+    throw new UpdatePreMutationError(
+      "original-service-unverified",
+      `Cannot safely stop the retained Gateway: original service compensation could not be certified (${String(error)}). The running Gateway was not stopped; inspect its runtime before retrying the update.`,
+      { cause: error },
     );
-    return undefined;
   }
 }
 

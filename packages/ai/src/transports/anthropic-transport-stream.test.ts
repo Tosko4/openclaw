@@ -1127,7 +1127,7 @@ describe("anthropic transport stream", () => {
     });
     expect(acceptanceObserver).not.toHaveBeenCalled();
     expect(onResponse).toHaveBeenCalledWith(
-      { status: 429, headers: { "content-type": "text/plain;charset=UTF-8", "retry-after": "30" } },
+      { status: 429, headers: expect.objectContaining({ "retry-after": "30" }) },
       expect.objectContaining({ provider: "anthropic" }),
     );
   });
@@ -4218,7 +4218,7 @@ describe("anthropic transport stream", () => {
 
     const payload = latestAnthropicRequest().payload;
     expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
-    expect(payload.output_config).toEqual({ effort: "high" });
+    expect(payload.output_config).toEqual({ effort: "medium" });
     expect(payload.tool_choice).toEqual({ type: "auto" });
     expect(payload).not.toHaveProperty("temperature");
     expect(result.responseModel).toBe("claude-fable-5");

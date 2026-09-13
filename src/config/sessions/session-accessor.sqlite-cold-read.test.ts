@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
+import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
+import { visitSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -7,6 +10,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
@@ -132,6 +136,16 @@ async function prepareRace(state: OpenClawTestState) {
       if (!matches(query)) {
         return statement;
       }
+      const nativeGet = statement.get.bind(statement);
+      vi.spyOn(statement, "get").mockImplementation(
+        new Proxy(nativeGet, {
+          apply(get, _receiver, args) {
+            const row = get(...args);
+            commitArchive();
+            return row;
+          },
+        }),
+      );
       const iterate = statement.iterate.bind(statement);
       vi.spyOn(statement, "iterate").mockImplementation(function* (...args) {
         yield* iterate(...args);
@@ -216,6 +230,50 @@ it("checks a cached identity reader when invoked after another connection archiv
   });
 });
 
+it("identifies a slow transcript matcher while retaining its hot read snapshot", async () => {
+  await withOpenClawTestState({ label: "hot-read-attribution" }, async (state) => {
+    const race = await prepareRace(state);
+    const file = state.path("hot-read.log");
+    setLoggerOverride({ level: "info", consoleLevel: "silent", file });
+    let clock = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    try {
+      const found = findTranscriptEventInDatabase(race.database, race.scope.sessionId, () => {
+        expect(race.database.db.isTransaction).toBe(true);
+        clock += 1_200;
+        race.commitArchive();
+        return true;
+      });
+      expect(found).toMatchObject({ event: { id: "answer" } });
+      expect(race.database.db.isTransaction).toBe(false);
+      expect(() => loadTranscriptHeaderSync(race.scope)).toThrow(/cold storage/);
+      await flushLogger();
+      const holds = (await fs.readFile(file, "utf8"))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((record) => record.message === "slow SQLite transaction hold")
+        .map((record) => record["1"]);
+      expect(holds).toEqual([
+        {
+          async: false,
+          elapsedMs: 1_200,
+          isMainThread,
+          operation: "session transcript match read",
+          pid: process.pid,
+          threadId,
+          thresholdMs: 1_000,
+        },
+      ]);
+    } finally {
+      vi.restoreAllMocks();
+      race.writer.close();
+      await flushLogger();
+      setLoggerOverride(null);
+    }
+  });
+});
+
 it.each(["stats", "search"] as const)(
   "keeps %s coherent when another connection archives",
   async (kind) => {
@@ -262,13 +320,43 @@ it("restores once more when a peer archives between async preparation and the at
   });
 });
 
+it("retries Gateway visitation when a peer archives after async restoration", async () => {
+  await withOpenClawTestState({ label: "cold-gateway-visitor-race" }, async (state) => {
+    const race = await prepareRace(state);
+    try {
+      const visited: Array<{ message: unknown; seq: number }> = [];
+      race.commitAfterMarkerRead();
+      const count = await visitSessionMessagesAsync(
+        { ...race.scope, storePath: race.database.path },
+        (message, seq) => {
+          expect(race.database.db.isTransaction).toBe(true);
+          visited.push({ message, seq });
+        },
+      );
+      expect(race.committed()).toBe(true);
+      expect(count).toBe(2);
+      expect(visited).toEqual([
+        { message: { role: "user", content: "Original question" }, seq: 1 },
+        { message: { role: "assistant", content: "Original answer" }, seq: 2 },
+      ]);
+      expect(race.database.db.isTransaction).toBe(false);
+      expect(race.database.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
+        busy: 0,
+      });
+    } finally {
+      vi.restoreAllMocks();
+      race.writer.close();
+    }
+  });
+});
+
 it("copies one source snapshot when a peer archives during cross-store canonical repair", async () => {
   await withOpenClawTestState({ label: "cold-canonical-copy-snapshot" }, async (state) => {
     const race = await prepareRace(state);
     const destinationOptions = {
       agentId: "main",
       env: state.env,
-      path: state.path("destination.sqlite"),
+      path: state.statePath("destination.sqlite"),
     };
     const entry = { sessionId: race.scope.sessionId, updatedAt: 1 };
     await replaceSessionEntry({ ...race.scope, storePath: destinationOptions.path }, entry);

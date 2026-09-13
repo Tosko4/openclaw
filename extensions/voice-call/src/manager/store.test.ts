@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerVoiceCallLogs } from "../cli-call-log.js";
 import {
   createTestStorePath,
+  createVoiceCallStateRuntimeForTests,
   makePersistedCall,
   writeLegacyCallsJsonl,
 } from "../manager.test-harness.js";
@@ -45,15 +46,16 @@ function installStateRuntime({
   bulkReads?: boolean;
   beforeOperation?: (
     namespace: string,
-    operation: "register" | "entries",
+    operation: "register" | "entries" | "count",
     key?: string,
   ) => Promise<void>;
 } = {}): void {
+  const state = createVoiceCallStateRuntimeForTests();
   setVoiceCallStateRuntime({
     state: {
-      resolveStateDir: () => "",
+      ...state,
       openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
-        const backingStore = createPluginStateKeyedStoreForTests<T>("voice-call", options);
+        const backingStore = state.openKeyedStore<T>(options);
         const store = beforeOperation
           ? {
               ...backingStore,
@@ -65,20 +67,18 @@ function installStateRuntime({
                 await beforeOperation(options.namespace, "entries");
                 return backingStore.entries();
               },
+              async count() {
+                await beforeOperation(options.namespace, "count");
+                return (await backingStore.count?.()) ?? (await backingStore.entries()).length;
+              },
             }
           : backingStore;
         if (bulkReads) {
           return store;
         }
-        const { lookupMany: _lookupMany, ...legacy } = store;
+        const { lookupMany: _lookupMany, count: _count, ...legacy } = store;
         return legacy;
       },
-      openChannelIngressQueue: (() => {
-        throw new Error("openChannelIngressQueue is not used by voice-call store tests");
-      }) as never,
-      openChannelIngressDrain: (() => {
-        throw new Error("openChannelIngressDrain is not used by voice-call store tests");
-      }) as never,
     },
   });
 }
@@ -172,16 +172,10 @@ describe("voice-call call record store", () => {
     writeLegacyCallsJsonl(storePath, [call]);
     setVoiceCallStateRuntime({
       state: {
-        resolveStateDir: () => "",
-        openKeyedStore: (() => {
+        ...createVoiceCallStateRuntimeForTests(),
+        openKeyedStore: () => {
           throw new Error("sqlite unavailable");
-        }) as never,
-        openChannelIngressQueue: (() => {
-          throw new Error("openChannelIngressQueue is not used by voice-call store tests");
-        }) as never,
-        openChannelIngressDrain: (() => {
-          throw new Error("openChannelIngressDrain is not used by voice-call store tests");
-        }) as never,
+        },
       },
     });
 
@@ -242,6 +236,62 @@ describe("voice-call call record store", () => {
       await expect(findCallInStore(storePath, good.callId)).rejects.toThrowError(
         expect.objectContaining({ code: "PLUGIN_STATE_CORRUPT" }),
       );
+    },
+  );
+
+  it.each([1, 2])(
+    "stops at failed chunk write %s without publishing metadata",
+    async (failedWrite) => {
+      const call = CallRecordSchema.parse(
+        makePersistedCall({
+          transcript: [{ timestamp: 1, speaker: "user", text: "x".repeat(100_000), isFinal: true }],
+        }),
+      );
+      const failure = new Error("chunk write failed");
+      let writes = 0;
+      const beforeWrite = vi.fn((_namespace: string) => {
+        if (++writes === failedWrite) {
+          throw failure;
+        }
+      });
+      installStateRuntime({
+        beforeOperation: async (namespace, operation) => {
+          if (operation === "register") {
+            beforeWrite(namespace);
+          }
+        },
+      });
+      const storePath = createTestStorePath();
+      const toString = vi.spyOn(Buffer.prototype, "toString");
+      try {
+        await expect(persistCallRecord(storePath, call)).rejects.toBe(failure);
+        expect(beforeWrite.mock.calls).toEqual(
+          Array.from({ length: failedWrite }, () => [CALL_RECORD_EVENT_CHUNKS_NAMESPACE]),
+        );
+        expect(toString.mock.calls.filter(([encoding]) => encoding === "base64")).toHaveLength(
+          failedWrite,
+        );
+        toString.mockRestore();
+        const { db } = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: storePath } });
+        expect(
+          db
+            .prepare(
+              "SELECT namespace, json_extract(value_json, '$.index') AS chunk_index FROM plugin_state_entries WHERE plugin_id = ? ORDER BY entry_key",
+            )
+            .all("voice-call"),
+        ).toEqual(
+          Array.from({ length: failedWrite - 1 }, (_, index) => ({
+            namespace: CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
+            chunk_index: index,
+          })),
+        );
+        resetPluginStateStoreForTests();
+        expect((await loadActiveCallsFromStore(storePath)).activeCalls.size).toBe(0);
+      } finally {
+        toString.mockRestore();
+        resetPluginStateStoreForTests();
+        fs.rmSync(storePath, { recursive: true, force: true });
+      }
     },
   );
 
@@ -377,11 +427,11 @@ describe("voice-call call record store", () => {
   it("propagates pruning rejection and preserves restore versus status read errors", async () => {
     const storePath = createTestStorePath();
     const call = CallRecordSchema.parse(makePersistedCall({ callId: "call-read-error" }));
-    const failure = new Error("delayed SQLite listing rejected");
+    const failure = new Error("delayed SQLite read rejected");
     installStateRuntime({
       beforeOperation: async (_namespace, operation) => {
         await Promise.resolve();
-        if (operation === "entries") {
+        if (operation === "entries" || operation === "count") {
           throw failure;
         }
       },

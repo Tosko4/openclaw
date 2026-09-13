@@ -19,8 +19,10 @@ import {
 import { createPackageRuntimeRecovery } from "./update-command-node-runtime.js";
 import { preflightConfiguredNpmPluginTargets } from "./update-command-plugin-preflight.js";
 import { finishUpdate } from "./update-command-post-update.js";
+import type { RefuseUpdate } from "./update-command-result.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
+  collectServiceInspectionFailureFacts,
   GatewayServiceUpdateOwnershipError,
   resolvePackageRuntimePreflight,
   type ManagedServiceRootRedirect,
@@ -55,7 +57,7 @@ export async function finishAlreadyCurrentUpdate(
     legacyConfigPlan?: LegacyConfigUpdatePlan;
     runtimeTarget?: { version: string; nodeEngine: string | null };
     stop: () => void;
-    refuseUpdate: (reason: string, message?: string) => Promise<void>;
+    refuseUpdate: RefuseUpdate;
   },
 ): Promise<void> {
   await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () => {
@@ -110,7 +112,9 @@ export async function finishAlreadyCurrentUpdate(
           : undefined,
     });
     if (!runtime.ok) {
-      throw new UpdatePreMutationError("node-runtime-preflight", runtime.error);
+      throw new UpdatePreMutationError("node-runtime-preflight", runtime.error, {
+        failureFacts: runtime.failureFacts,
+      });
     }
     const packageUpdateNodeRunner = runtime.value.nodeRunner;
     const context = admission.contexts.at(-1)!;
@@ -171,6 +175,7 @@ export async function finishAlreadyCurrentUpdate(
           stopState.blockMessage ??
             "Run openclaw update from a terminal outside the Gateway service before changing installed plugins.",
         ),
+        { failureFacts: collectServiceInspectionFailureFacts(stopState.serviceUpdateVerdict) },
       );
     }
     await assertOpenClawStateWriteAllowedAtPath({
@@ -237,6 +242,7 @@ export async function finishAlreadyCurrentUpdate(
       await params.refuseUpdate(
         error instanceof UpdatePreMutationError ? error.reason : "managed-service-preflight",
         error.message,
+        error.failureFacts,
       );
       return;
     }

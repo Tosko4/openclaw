@@ -15,6 +15,7 @@ import {
 } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync,
   isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
@@ -37,6 +38,7 @@ import {
   deleteExpiredPluginStateEntries,
   allocatePluginStateNamespaceCreatedAt,
   countLivePluginStateEntries,
+  countLivePluginStateNamespaceEntries,
   readPluginStateRetention,
   enforcePostRegisterLimits,
   assertCanInsertPluginStateEntry,
@@ -888,6 +890,36 @@ export function pluginStateDoctorEntriesInKeyRange(params: {
   );
 }
 
+export function pluginStateCount(params: {
+  pluginId: string;
+  namespace: string;
+  env?: NodeJS.ProcessEnv;
+}): number {
+  const pathname = resolveOpenClawStateSqlitePath(params.env ?? process.env);
+  try {
+    return (
+      withPluginStateDatabaseReadOnly(
+        "count",
+        ({ db }) =>
+          countLivePluginStateNamespaceEntries(db, {
+            pluginId: params.pluginId,
+            namespace: params.namespace,
+            now: Date.now(),
+          }),
+        envOptions(params.env),
+      ) ?? 0
+    );
+  } catch (error) {
+    throw wrapPluginStateError(
+      error,
+      "count",
+      "PLUGIN_STATE_READ_FAILED",
+      "Failed to count plugin state entries.",
+      pathname,
+    );
+  }
+}
+
 export function pluginStateEntries(params: {
   pluginId: string;
   namespace: string;
@@ -1202,6 +1234,10 @@ function probePluginStateStore(): PluginStateStoreProbeResult {
 
 export function closePluginStateDatabase(): void {
   closeOpenClawStateDatabase();
+}
+
+export async function closePluginStateDatabaseAsync(): Promise<void> {
+  await closeOpenClawStateDatabaseAsync();
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

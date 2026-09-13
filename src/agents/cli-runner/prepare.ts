@@ -51,6 +51,7 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
@@ -156,7 +157,11 @@ import {
   type BundledCliBackendAuthPolicy,
 } from "./cli-backend-auth-policy.js";
 import { getCliLiveSessionGeneration } from "./cli-live-session-registry.js";
-import { createCliRunCurrentAssertion, resolveCliExecutionTarget } from "./execution-target.js";
+import {
+  createCliRunCurrentAssertion,
+  resolveCliExecutionTarget,
+  retainCliPluginExecutionConsumer,
+} from "./execution-target.js";
 import { buildCliAgentSystemPrompt, isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
@@ -1736,13 +1741,21 @@ async function prepareCliRunContextWithinReadFence(
       }
       throw error;
     }
+    const pluginExecutionConsumer = retainCliPluginExecutionConsumer(preparedExecution?.execute);
     const preparedBackendCleanup =
-      cleanupPreparedBackend || preparedExecution?.cleanup
+      cleanupPreparedBackend || preparedExecution?.cleanup || pluginExecutionConsumer
         ? async () => {
             try {
-              await preparedExecution?.cleanup?.();
+              const cleanupExecution = () => preparedExecution?.cleanup?.();
+              await (pluginExecutionConsumer
+                ? pluginExecutionConsumer.run(cleanupExecution)
+                : cleanupExecution());
             } finally {
-              await cleanupPreparedBackend?.();
+              try {
+                await cleanupPreparedBackend?.();
+              } finally {
+                pluginExecutionConsumer?.release();
+              }
             }
           }
         : undefined;
@@ -2242,6 +2255,7 @@ async function prepareCliRunContextWithinReadFence(
         backendResolved,
         preparedBackend: preparedBackendFinal,
         executionTarget,
+        ...(pluginExecutionConsumer ? { pluginExecutionConsumer } : {}),
         reusableCliSession,
         hadSessionFile: false,
         contextEngineConfig: runConfig,
@@ -2273,6 +2287,8 @@ async function prepareCliRunContextWithinReadFence(
       capabilities: backendResolved.contextEngineHostCapabilities,
     });
     let resolvedContextEngine;
+    let deferContextEngineDisposalUntil: PreparedCliRunContext["deferContextEngineDisposalUntil"] =
+      params.contextEngineLogicalTurnLease?.deferDisposalUntil;
     if (params.contextEngineLogicalTurnLease) {
       selectContextEngineForTranscriptHost({
         lease: params.contextEngineLogicalTurnLease,
@@ -2289,10 +2305,38 @@ async function prepareCliRunContextWithinReadFence(
       });
       resolvedContextEngine = params.contextEngineLogicalTurnLease.begin().engine;
     } else {
-      resolvedContextEngine = await resolveContextEngine(runConfig, {
+      const trackDisposal = captureAsyncWorkTracker();
+      const ownedEngine = await resolveContextEngine(runConfig, {
         agentDir: contextEngineAgentDir,
         workspaceDir,
       });
+      resolvedContextEngine = ownedEngine;
+      const previousCleanup = cleanupPreparedResources;
+      const disposalHolds = new Set<Promise<void>>();
+      deferContextEngineDisposalUntil = (promise: Promise<void>) => {
+        disposalHolds.add(promise);
+        void promise.finally(() => disposalHolds.delete(promise)).catch(() => {});
+      };
+      cleanupPreparedResources = async () => {
+        try {
+          if (disposalHolds.size > 0) {
+            // Queued maintenance may need this foreground turn to release its lane first.
+            void trackDisposal(async () => {
+              await Promise.allSettled(disposalHolds);
+              await runCliCleanup(params, "cli-context-engine-release", async () => {
+                await ownedEngine.dispose?.();
+              });
+            }).catch((error: unknown) => {
+              cliBackendLog.warn(`CLI context engine cleanup failed: ${String(error)}`);
+            });
+          } else {
+            await ownedEngine.dispose?.();
+          }
+        } finally {
+          await previousCleanup?.();
+        }
+      };
+      preparedBackendFinal.cleanup = cleanupPreparedResources;
     }
     const contextEngine =
       resolvedContextEngine.info.id !== "legacy" ? resolvedContextEngine : undefined;
@@ -2365,6 +2409,7 @@ async function prepareCliRunContextWithinReadFence(
       backendResolved,
       preparedBackend: preparedBackendFinal,
       executionTarget,
+      ...(pluginExecutionConsumer ? { pluginExecutionConsumer } : {}),
       reusableCliSession,
       ...(managedClaudeLiveSessionGeneration
         ? { requiredClaudeLiveSessionGeneration: managedClaudeLiveSessionGeneration }
@@ -2372,6 +2417,7 @@ async function prepareCliRunContextWithinReadFence(
       hadSessionFile,
       contextEngineConfig: runConfig,
       contextEngine,
+      deferContextEngineDisposalUntil,
       contextEngineTurnPrompt,
       ...(promptContext ? { promptContext, promptForHooks } : {}),
       modelId,

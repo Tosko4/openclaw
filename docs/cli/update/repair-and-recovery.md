@@ -206,11 +206,12 @@ prove that a migration advanced. Output and heartbeats do not extend the phase
 deadline. These diagnostics do not establish that every descendant has stopped,
 and must not be used as rollback authorization.
 
-Shared CLI disposers have individual five-second deadlines. If the finalizer
-remains alive ten seconds after its terminal JSON, stderr and the ledger
-record active resource types and unsettled disposer names, then the process
-exits with its recorded outcome. A retained handle cannot withhold the
-supervisor's result indefinitely.
+Shared CLI disposers have individual five-second deadlines. Failure diagnostics
+and any interactive recovery finish before the ten-second exit grace starts.
+If the finalizer remains alive after that grace, stderr and the ledger record
+active resource types and unsettled disposer names, then the process exits with
+its recorded outcome. A retained handle cannot withhold the supervisor's result
+indefinitely.
 Both stall diagnostics also include `childProcesses`: up to eight descendant
 processes with `pid`, `parentPid`, and an executable name (`command`). Arguments,
 environment values, and executable paths are omitted. `childProcessesTruncated`
@@ -219,17 +220,19 @@ process list could not be read. A null `command` means that process's executable
 name was unavailable. Inspection runs only after a stall and adds at
 most one second to the exit bound. Phase-failure JSON includes the same fields.
 Preserve these diagnostics and the phase receipts when reporting a blocked child.
-Human repair can still wait for a recovery choice or repair agent; its exit grace
-starts after recovery finishes. Completion-cache refresh remains best effort
-when its child can be stopped within the phase budget. A phase that exceeds its
-overall deadline still fails finalization.
+Completion-cache refresh remains best effort when its child can be stopped within
+the phase budget. A phase that exceeds its overall deadline still fails finalization.
 
 Plugin artifacts that require capability consent are not installed without an
 interactive review or explicit `--accept-capabilities`. `--yes` alone does not
 accept capability changes, and JSON mode does not prompt. An unresolved review
-preserves the previous plugin, exits non-zero, and blocks any requested Gateway
-restart. This also applies when a bundled plugin moves to an external package or
-a missing configured plugin has no install record yet. Automatic repair can
+preserves the previous plugin payload and appears in `postUpdate.plugins.warnings`
+with a `PLUGIN_CAPABILITY_CONSENT_REQUIRED` outcome. When required checks pass,
+`openclaw update` can complete the core update and requested Gateway restart with
+`status: "ok"`; `update repair` reports `status: "warning"` and never restarts the
+Gateway. Both commands exit successfully. This also applies when a bundled plugin
+moves to an external package or a missing configured plugin has no install record
+yet; the unreviewed replacement is not installed. Automatic repair can
 report a deferred replacement as a notice when a usable, enabled artifact remains
 installed; that retained artifact still undergoes payload validation.
 

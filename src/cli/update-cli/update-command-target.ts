@@ -42,7 +42,7 @@ import {
   captureUpdateCommandExecutorAuthority,
   type UpdateCommandExecutor,
 } from "./update-command-executor.js";
-import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
+import { UnreportedUpdateAdmissionOutcome, type RefuseUpdate } from "./update-command-result.js";
 import {
   failUpdateCommandRun,
   assertUpdatePackageActivationAdmission,
@@ -75,12 +75,13 @@ export async function resolveUpdateCommandTarget(
   let { devTarget } = prepared;
   let root = discoveredRoot;
   let updateInstallKind = installKind;
-  const refuseUpdate = async (reason: string, message?: string) => {
+  const refuseUpdate: RefuseUpdate = async (reason, message, failureFacts) => {
     const report = {
       root,
       installKind: updateInstallKind,
       reason,
       message,
+      failureFacts,
       opts,
       controlPlaneUpdateSentinelMeta,
     };

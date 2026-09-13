@@ -52,6 +52,9 @@ results. See
 The canary uses a temporary loopback Gateway port and suppresses background
 listeners, including the MCP Apps sandbox, browser control, and channel services.
 This lets validation run while the serving Gateway keeps its configured ports.
+It preserves non-secret Gateway auth settings such as `gateway.auth.rateLimit`
+for policy checks, while using a temporary token and disabling Tailscale identity
+authentication.
 The activated Gateway retains your normal listener settings.
 
 Package updates also check npm availability for enabled configured plugins before
@@ -133,6 +136,12 @@ not a self-contained package artifact. Use `openclaw update --channel dev` to
 switch to the supported checkout and build flow. Other explicit package specs
 keep their package-manager behavior.
 
+On source installs, Doctor and plugin updates keep plugins built with the host.
+A registry plugin with the same version string can target a different SDK, so
+it does not replace the source build without matching SDK build evidence.
+Existing registry generations remain on disk; convergence reports the bundled
+selection and skips their refresh. `OPENCLAW_DEV_SOURCE_ROOT` is not required.
+
 Managed npm plugins on the beta channel use the same newest-of-beta/latest
 selection, including official plugins such as `@openclaw/codex`. An older beta
 tag cannot hold a plugin behind the current stable release. Startup repair
@@ -184,17 +193,15 @@ starting the Gateway.
 
 ### From chat
 
-Send `/update` to update OpenClaw from Discord or another connected chat. This
-owner-only command works with the default tool profiles; it does not require
-adding the `gateway` tool to an allowlist.
+Ask the agent to update OpenClaw, or send `/update` from Discord or another
+connected chat. Natural-language requests use the existing `gateway` tool's
+`update.run` action. The minimal, coding, and messaging profiles expose that update
+action without granting configuration reads or other Gateway controls. Explicit tool
+restrictions still apply.
 
-A direct request such as "update OpenClaw" offers an **Update now** button where
-the channel supports buttons, with `/update` as the text fallback. Offering the
-button does not start an update. Clicking it runs the same command under the
-clicking user's current permissions. A rejected click does not invalidate the
-button; every click is a fresh owner-checked command. For other wording, the agent can guide you
-to `/update`; agents explicitly granted the `gateway` tool can also use
-`update.run` for a user-requested update.
+`/update` is the model-independent fallback: it works without a functioning model
+or access to the `gateway` tool. The tool, slash command, and Control UI all use
+the same Gateway update handler and current authorization checks.
 
 The candidate validates while the old Gateway serves, and an already-current
 update restarts it only when plugins change. Update runs can send these notices
@@ -204,6 +211,18 @@ in that chat as the Gateway observes the recorded milestones:
 2. `⏳ Restarting the gateway now (v<from> → v<to>)…` when activation is recorded before the Gateway stops.
 3. `🔁 Back on v<to>, verifying…` when the new Gateway starts verification.
 4. The final report, including successful updates.
+
+External update and restart notices go only to destinations listed in
+`commands.ownerAllowFrom`. Selecting a non-owner chat in the Control UI does not
+authorize notices to that contact. If no owner destination resolves, OpenClaw
+logs the skipped notice and keeps the update outcome in the run record and
+Control UI; it does not redirect the notice to another chat or wake the rejected
+session with diagnostics.
+
+Update lifecycle notices also honor the destination account's `actions.sendMessage`
+policy. An explicit account setting overrides the channel default; when neither
+sets the flag, notices are allowed. Disabled sends are recorded as skipped notices
+without preventing the update or its Control UI report.
 
 Managed systemd or launchd updates can stop the Gateway before an intermediate
 notice is delivered. The complete four-message sequence is not guaranteed for
@@ -233,8 +252,9 @@ Being allowed to chat does not grant owner permissions. If your account is not
 an owner, the reply explains how the Gateway operator can connect it. Channel
 setup and [pairing](/channels/pairing) distinguish owner access from chat access;
 existing allowed users are not automatically promoted.
-`/update` also requires `commands.restart` (enabled by default), and command
-access restrictions still apply. Chat updates use the hosting installation's
+External-chat updates through `/update` or the tool require `commands.restart`
+(enabled by default), including managed installations. The slash command also
+follows command-access restrictions; tool calls follow tool policy. Chat updates use the hosting installation's
 configured update channel and install method.
 Agents must never run `npm install -g openclaw` or stop the Gateway service
 from a chat shell; use `/update` or the update action so restart and notification

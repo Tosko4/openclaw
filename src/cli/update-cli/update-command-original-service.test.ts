@@ -9,6 +9,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { GatewayServiceState } from "../../daemon/service.js";
+import * as packageIntegrity from "../../infra/package-update-integrity.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
@@ -239,7 +240,6 @@ it.each([
   "package-changed",
   "authority-lost",
   "no-restart",
-  "unverified",
   "readiness-failed",
 ] as const)("keeps B facts and current data through split-root failure: %s", async (scenario) => {
   mocks.windows = scenario.startsWith("windows-autostart");
@@ -324,9 +324,6 @@ it.each([
       durationMs: 1,
     };
   });
-  if (scenario === "unverified") {
-    mocks.inspect.mockResolvedValue({ healthy: false, runtime: { status: "running" } });
-  }
   if (scenario === "readiness-failed" || scenario === "windows-autostart-health-failed") {
     mocks.health.mockResolvedValue({
       healthy: false,
@@ -437,11 +434,11 @@ it.each([
       ? 1
       : 0,
   );
-  if (scenario !== "authority-lost") {
+  if (scenario !== "authority-lost" && scenario !== "no-restart") {
     expect(execution?.originalManagedServiceRuntime).toMatchObject({
       root: rootA,
       version: "2026.9.3",
-      verified: scenario !== "unverified",
+      verified: true,
     });
   }
   if (healthy) {
@@ -533,4 +530,160 @@ it("refuses B ledger admission independently from compatible service A state", a
     expect(await fs.readFile(resolveOpenClawStateSqlitePath(parentEnv))).toEqual(parentBytes);
   });
   expect(mocks.restart).not.toHaveBeenCalled();
+});
+
+// Component regression: an unavailable A certificate must stop preparation, not A.
+it.each([
+  "fingerprint-timeout",
+  "missing-node",
+  "unverified-health",
+  "definition-raced",
+  "authority-revoked",
+  "no-restart",
+  "certified-doctor-failure",
+] as const)("pre-stop qualification keeps retained A recoverable: %s", async (scenario) => {
+  const run = {
+    runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
+    env: state.env,
+  };
+  const opts: UpdateCommandOptions = { json: true, run };
+  const configSnapshot = await readConfigFileSnapshot();
+  const packageBefore = await fs.readFile(path.join(rootB, "package.json"));
+  const configBefore = await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!);
+  let activated = false;
+  const failure = new Error("write EPIPE: delegated Doctor exited before input");
+  if (scenario === "missing-node") {
+    before.serviceNodeRunner = undefined;
+  }
+  if (scenario === "unverified-health") {
+    mocks.inspect.mockResolvedValue({ healthy: false, runtime: { status: "running" } });
+  }
+  const createReader = packageIntegrity.createPackageIntegrityReader;
+  vi.spyOn(packageIntegrity, "createPackageIntegrityReader").mockImplementation((timeout) => {
+    const reader = createReader(timeout);
+    return {
+      ...reader,
+      tree: async (root, originalRoot) => {
+        if (root === rootA && ["fingerprint-timeout", "no-restart"].includes(scenario)) {
+          throw new packageIntegrity.PackageIntegrityTimeoutError(30_000);
+        }
+        const fingerprint = await reader.tree(root, originalRoot);
+        if (root === rootA && scenario === "definition-raced") {
+          serviceState.command!.programArguments.push("--port", "19998");
+        }
+        if (root === rootA && scenario === "authority-revoked") {
+          opts.run = { ...run };
+        }
+        return fingerprint;
+      },
+    };
+  });
+  mocks.package.mockImplementation(async (params) => {
+    expect(params.honorPackageRoot).toBe(true);
+    await params.beforeActivate();
+    activated = true;
+    return {
+      status: "error",
+      mode: "npm",
+      root: rootB,
+      reason: "doctor-failed",
+      before: { version: "2026.9.4", buildId: "build-B" },
+      after: { version: "2026.9.5", buildId: "candidate-B" },
+      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      steps: [
+        {
+          name: "doctor",
+          command: "doctor",
+          cwd: rootB,
+          durationMs: 1,
+          exitCode: 97,
+          stderrTail: failure.message,
+        },
+      ],
+      durationMs: 1,
+    };
+  });
+  await withUpdateCommandExecutor(run.runId, async (executor) => {
+    const fence = await executor.enter(rootB, { serviceRoot: rootA });
+    opts.run = { ...run, executorFence: fence };
+    const execution = await executeMutableUpdate({
+      root: rootB,
+      installKind: "package",
+      updateInstallKind: "package",
+      switchToGit: false,
+      timeoutMs: 30000,
+      updateStepTimeoutMs: 30000,
+      startedAt: Date.now(),
+      progress: {},
+      stop: () => {},
+      channel: "stable",
+      tag: "2026.9.5",
+      opts,
+      shouldRestart: scenario !== "no-restart",
+      packageInstallSpec: "openclaw@2026.9.5",
+      packageTargetVersion: "2026.9.5",
+      managedServiceRootRedirect: null,
+      managedServiceRoot: rootA,
+      recoveryState: { triageTarget: { env: state.env } },
+      prepareMutableUpdate: async () => {
+        fence.assertCurrent();
+      },
+    });
+    expect(execution).not.toBeNull();
+    if (scenario === "certified-doctor-failure") {
+      expect(activated).toBe(true);
+      expect(stopped).toBe(true);
+      expect(execution!.originalManagedServiceRuntime).toMatchObject({
+        root: rootA,
+        verified: true,
+      });
+      const final = await finishUpdate({
+        ...execution!,
+        root: rootB,
+        installKindChanged: false,
+        configSnapshot,
+        requestedChannel: null,
+        storedChannel: "stable",
+        channel: "stable",
+        downgradeRisk: false,
+        shouldRestart: true,
+        opts,
+        ownedManagedUpdateEnv: state.env,
+        controlPlaneUpdateSentinelMeta: null,
+        preUpdatePluginInstallRecords: {},
+        startedAt: Date.now(),
+        updateStepTimeoutMs: 30000,
+      }).catch((error: unknown) => error);
+      expect(final).toMatchObject({
+        result: {
+          status: "error",
+          root: rootB,
+          reason: "doctor-failed",
+          recovery: { serviceRestartSafe: false },
+        },
+      });
+      expect(mocks.restart).toHaveBeenCalledTimes(1);
+      expect(mocks.health).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expectedVersion: "2026.9.3",
+          expectedBuildId: "build-A",
+        }),
+      );
+      expect(mocks.running).toBe(true);
+    } else if (scenario === "no-restart") {
+      expect(activated).toBe(true);
+      expect(stopped).toBe(false);
+    } else {
+      expect(activated).toBe(false);
+      expect(stopped).toBe(false);
+      expect(execution!.result.status).toBe("error");
+      if (scenario !== "authority-revoked") {
+        expect(execution!.result.reason).toBe("original-service-unverified");
+      }
+      expect(mocks.restart).not.toHaveBeenCalled();
+      expect(mocks.running).toBe(true);
+    }
+  });
+  expect(await fs.readFile(path.join(rootB, "package.json"))).toEqual(packageBefore);
+  expect(await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!)).toEqual(configBefore);
 });

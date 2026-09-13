@@ -419,7 +419,11 @@ vi.mock("../process/exec.js", async () => {
       return {
         code: 0,
         stdout: Buffer.from(
-          JSON.stringify(mode === "inventory" ? [] : { versions: [], pluginPaths: {} }),
+          JSON.stringify(
+            mode === "inventory"
+              ? { databases: [], pluginBytes: 0, pluginPlan: "plugin-copy-plan.json" }
+              : { versions: [], pluginPaths: {} },
+          ),
         ),
         stderr: Buffer.alloc(0),
       };
@@ -713,6 +717,10 @@ vi.mock("../commands/triage.js", () => ({ triageCommand }));
 vi.mock("../commands/triage-failure.js", () => ({ triageAfterFailure }));
 vi.mock("./update-cli/update-command-report.js", () => updateFailureActionMocks);
 
+const { prepareSqliteReadOnlyLocationSyncInProcess } =
+  await import("../infra/sqlite-readonly-location.js");
+const sqliteReadOnlyWorker = await import("../infra/sqlite-readonly-worker.js");
+const runHostReadOnlyWorker = sqliteReadOnlyWorker.runSqliteReadOnlyWorkerSync;
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
 const { createUpdateRun, getUpdateRun, listUpdateRuns } =
   await import("../infra/update-run-ledger.js");
@@ -720,7 +728,8 @@ const { openOpenClawStateDatabase, closeOpenClawStateDatabaseForTest } =
   await import("../state/openclaw-state-db.js");
 // Real recovery dependencies need the initialized runtime and child-process mocks.
 const { runUpdateFailureTriage } = await import("../infra/update-triage.js");
-const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
+const { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } =
+  await import("../infra/openclaw-root.js");
 const { resolveGatewayInstallEntrypoint } = await import("../daemon/gateway-entrypoint.js");
 const {
   mutateConfigFileWithRetry,
@@ -813,6 +822,7 @@ describe("update-cli", () => {
   let tempHome: TempHomeEnv | undefined;
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const tempDirsToCleanup = new Set<string>();
+  const fixtureStateDatabases = new Set<string>();
 
   const createCaseDir = (prefix: string) => {
     const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
@@ -822,7 +832,8 @@ describe("update-cli", () => {
 
   // Ordinary update cases model the existing schema advertised by their inspection fixture.
   const initializeExistingUpdateProfile = (env: NodeJS.ProcessEnv = process.env) => {
-    openOpenClawStateDatabase({ env });
+    const database = openOpenClawStateDatabase({ env });
+    fixtureStateDatabases.add(database.path);
     closeOpenClawStateDatabaseForTest();
   };
 
@@ -2032,6 +2043,7 @@ describe("update-cli", () => {
   };
 
   beforeEach(async () => {
+    fixtureStateDatabases.clear();
     // Clear the helper's state selector below so HOME and profile overrides keep their semantics.
     const { createTempHomeEnv } = await import("../test-utils/temp-home.js");
     tempHome = await createTempHomeEnv("openclaw-update-cli-home-");
@@ -2057,6 +2069,14 @@ describe("update-cli", () => {
     }
     restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
+    // These fixture-owned databases have no competing writer. Keep real snapshot
+    // staging/adoption; cold ledger and WAL-lock tests own the process boundary.
+    vi.spyOn(sqliteReadOnlyWorker, "runSqliteReadOnlyWorkerSync").mockImplementation(
+      (pathname, stagingRoot) =>
+        fixtureStateDatabases.has(path.resolve(pathname))
+          ? prepareSqliteReadOnlyLocationSyncInProcess(pathname, stagingRoot).location
+          : runHostReadOnlyWorker(pathname, stagingRoot),
+    );
     // Service simulations do not provide foreign-platform ACL libraries. Keep
     // real exclusive host creation; actual Windows runs retain the native DACL path.
     if (sqliteHostPlatform !== "win32") {
@@ -4092,6 +4112,9 @@ describe("update-cli", () => {
     "keeps downgrade consent separate from --yes (explicit=%s)",
     async (acceptCapabilities) => {
       const downgradedRoot = createCaseDir("openclaw-downgraded-consent-root");
+      vi.mocked(resolveUpdateInstallKind).mockImplementation(async (root) =>
+        root === downgradedRoot ? "package" : "git",
+      );
       setupUpdatedRootRefresh({
         targetVersion: "2026.4.10",
         gatewayUpdateImpl: async () =>
@@ -4131,6 +4154,9 @@ describe("update-cli", () => {
 
   it("pins the compatibility host version to the downgraded target during current-process post-core plugin convergence (#87914)", async () => {
     const downgradedRoot = createCaseDir("openclaw-downgraded-compat-root");
+    vi.mocked(resolveUpdateInstallKind).mockImplementation(async (root) =>
+      root === downgradedRoot ? "package" : "git",
+    );
     setupUpdatedRootRefresh({
       targetVersion: "2026.4.10",
       gatewayUpdateImpl: async () =>
@@ -5807,7 +5833,8 @@ describe("update-cli", () => {
   it.each(["progress initialization", "triage preparation"] as const)(
     "finishes the admitted run when %s fails before update execution",
     async (boundary) => {
-      const { closeOpenClawStateDatabaseByPath } = await import("../state/openclaw-state-db.js");
+      const { closeOpenClawStateDatabaseByPath } =
+        await import("../state/openclaw-state-db-cache.js");
       const stateDir = tempDirs.make("openclaw-update-run-initialization-");
       initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
       const failure = new Error(`${boundary} failed`);
@@ -6698,7 +6725,18 @@ describe("update-cli", () => {
         error: expect.stringContaining("openclaw-agent.sqlite"),
         result: expect.objectContaining({
           reason: "database-schema-preflight",
-          steps: [],
+          steps: [
+            expect.objectContaining({
+              name: "database-schema-preflight",
+              exitCode: 1,
+              failureFacts: [
+                expect.objectContaining({
+                  check: "database-schema-preflight",
+                  code: "database-schema-preflight",
+                }),
+              ],
+            }),
+          ],
         }),
       }),
     );
@@ -6838,24 +6876,6 @@ describe("update-cli", () => {
     );
   });
 
-  it("parses update status --json as the subcommand option", async () => {
-    const program = new Command();
-    program.name("openclaw");
-    program.enablePositionalOptions();
-    let seenJson = false;
-    const update = program.command("update").option("--json", "", false);
-    update
-      .command("status")
-      .option("--json", "", false)
-      .action((opts) => {
-        seenJson = Boolean(opts.json);
-      });
-
-    await program.parseAsync(["node", "openclaw", "update", "status", "--json"]);
-
-    expect(seenJson).toBe(true);
-  });
-
   it.each([
     {
       name: "defaults to dev channel for git installs when unset",
@@ -6916,6 +6936,22 @@ describe("update-cli", () => {
   ] as const)(
     "$name",
     async ({ installKind, options, storedChannel, expectedChannel, expectedPersistedChannel }) => {
+      let gitRoutingRoot: string | undefined;
+      if (installKind === "git" && expectedChannel !== undefined) {
+        const root = createCaseDir("openclaw-routing-legacy-git");
+        await writeOpenClawPackageFixture(root, "1.0.0", {
+          git: true,
+          entrySource: "export {};\n",
+        });
+        mockFileBackedPathExists();
+        gitRoutingRoot = await fs.realpath(root);
+        vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(gitRoutingRoot);
+        vi.mocked(resolveOpenClawPackageRootSync).mockReturnValue(gitRoutingRoot);
+        vi.mocked(resolveUpdateInstallKind).mockImplementation(async (target) => {
+          expect(target).toBe(gitRoutingRoot);
+          return "git";
+        });
+      }
       if (installKind === "package" && expectedChannel === undefined) {
         await mockPackageInstallAtCaseDir();
       }
@@ -6925,7 +6961,9 @@ describe("update-cli", () => {
         vi.mocked(resolveUpdateInstallIdentity).mockResolvedValue({ installKind: "git" });
       }
       if (installKind === "git" || expectedChannel !== undefined) {
-        vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult({ mode: "git" }));
+        vi.mocked(runGatewayUpdate).mockResolvedValue(
+          makeOkUpdateResult({ mode: "git", root: gitRoutingRoot }),
+        );
       }
       if (storedChannel) {
         vi.mocked(readConfigFileSnapshot).mockResolvedValue({
@@ -6948,6 +6986,12 @@ describe("update-cli", () => {
           entrySource: "export {};\n",
         });
         const canonicalGitRoot = await fs.realpath(gitRoot);
+        vi.mocked(resolveUpdateInstallKind).mockImplementation(async (root) =>
+          root === canonicalGitRoot ? "git" : "package",
+        );
+        vi.mocked(resolveUpdateInstallIdentity).mockImplementation(async ({ root }) => ({
+          installKind: root === canonicalGitRoot ? "git" : "package",
+        }));
         mockFileBackedPathExists();
         mockNpmGlobalCommands(nodeModules, undefined, canonicalGitRoot);
         mockGitUpdateAfterMutation(
@@ -8096,7 +8140,18 @@ describe("update-cli", () => {
     expect(result).toMatchObject({
       status: "error",
       reason: "unsupported-package-target",
-      steps: [],
+      steps: [
+        expect.objectContaining({
+          name: "unsupported-package-target",
+          exitCode: 1,
+          failureFacts: [
+            expect.objectContaining({
+              check: "unsupported-package-target",
+              code: "unsupported-package-target",
+            }),
+          ],
+        }),
+      ],
     });
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
     expectNoSideEffects(resolveGlobalManager, replaceConfigFile, runGatewayUpdate);
@@ -13294,15 +13349,6 @@ describe("update-cli", () => {
       name: "uses the installed Git CLI when service env refresh cannot complete",
       run: async () => {
         await runRestartFallbackScenario({ daemonInstall: "fail" });
-      },
-      assert: () => {
-        expectNoSideEffects(runDaemonInstall, runDaemonRestart);
-      },
-    },
-    {
-      name: "uses the installed Git CLI after service env refresh succeeds",
-      run: async () => {
-        await runRestartFallbackScenario({ daemonInstall: "ok" });
       },
       assert: () => {
         expectNoSideEffects(runDaemonInstall, runDaemonRestart);

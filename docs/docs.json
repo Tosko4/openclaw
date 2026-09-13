@@ -1856,6 +1856,7 @@
                       "plugins/geolocation",
                       "plugins/logbook",
                       "plugins/oc-path",
+                      "plugins/session-share",
                       "plugins/webhooks",
                       "plugins/workboard",
                       "plugins/zalouser"
@@ -2336,6 +2337,7 @@
                   "platforms/index",
                   "platforms/macos",
                   "platforms/linux",
+                  "platforms/omarchy",
                   "platforms/windows",
                   "platforms/android",
                   "platforms/chromeos",
