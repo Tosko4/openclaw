@@ -200,7 +200,8 @@ vi.mock("./agent-scope-config.js", async (importOriginal) => ({
   resolveAgentWorkspaceDir: () => "/tmp/prepared-static-workspace",
 }));
 
-vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
+vi.mock("./auth-profiles/runtime-snapshots.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-profiles/runtime-snapshots.js")>()),
   getPreparedRuntimeAuthProfileStoreSnapshotCore: () => undefined,
   getRuntimeAuthProfileStoreCredentialsRevision: () => 0,
   registerRuntimeAuthProfileStoreMutationListener: (
