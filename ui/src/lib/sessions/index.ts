@@ -3,7 +3,6 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import type { SessionCreateOutcome } from "./create.ts";
-import type { SessionChangedResult, SessionReconcileOptions } from "./reconcile.ts";
 import type { SessionCapability, SessionGateway, SessionState } from "./session-capability.ts";
 import { createSessionDeletions } from "./session-deletions.ts";
 import { createSessionEventSubscriptionOwner } from "./session-event-subscription.ts";
@@ -325,16 +324,14 @@ export function createSessionCapability(
     );
   };
 
-  const reconcileChanged = (
-    payload: unknown,
-    options?: SessionReconcileOptions,
-  ): SessionChangedResult => {
+  const reconcileChanged: SessionCapability["reconcileChanged"] = (payload, options, retained) => {
     const eventObservation = roster.captureEvent(payload);
     const {
       reconciled: base,
+      retained: retainedResult,
       claimChanged,
       notifyManaged,
-    } = reconcileChangedEvent(payload, options, eventObservation);
+    } = reconcileChangedEvent(payload, options, eventObservation, retained);
     const result = decorateRows(base.result);
     const reconciled =
       result === base.result
@@ -360,9 +357,24 @@ export function createSessionCapability(
     }
     notifyManaged?.(primaryPublished);
     if (eventObservation.scope && !connection.isCurrent(eventObservation.scope)) {
-      return { applied: false, result: state.result };
+      return { applied: false, result: retained ? retained.result : state.result };
     }
-    return reconciled;
+    if (!retained || !retainedResult) {
+      return reconciled;
+    }
+    // This pane copy is not a registered list; authoritative reads restore rollback rows.
+    const retainedRows = decorateRows(retainedResult.result, {
+      scope: { agentId: retained.agentId, archivedFilter: retained.archivedFilter },
+    });
+    return retainedRows === retainedResult.result
+      ? retainedResult
+      : {
+          ...retainedResult,
+          result: retainedRows,
+          row: retainedResult.row
+            ? retainedRows?.sessions.find((row) => row.key === retainedResult.row?.key)
+            : undefined,
+        };
   };
 
   const reconcileRunTerminal = (terminal: SessionRunTerminal): boolean => {

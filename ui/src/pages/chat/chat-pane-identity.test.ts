@@ -3,7 +3,7 @@ import type { ProgressCard, ProgressCardChangedEvent } from "@openclaw/gateway-p
 import { html, render } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
@@ -417,10 +417,7 @@ function createGlobalFeaturePane(
     cancelChatStreamRenderFrame(state);
   });
   const emit = (payload: ProgressCardChangedEvent) => {
-    const gateway = context.gateway as ApplicationContext["gateway"] & {
-      emitTestEvent: (event: GatewayEventFrame) => void;
-    };
-    gateway.emitTestEvent({ type: "event", event: "progressCard.changed", payload, seq: 1 });
+    live.publishGatewayEvent({ type: "event", event: "progressCard.changed", payload, seq: 1 });
   };
   return { pane, select, emit };
 }

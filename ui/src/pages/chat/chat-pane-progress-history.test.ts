@@ -4,9 +4,8 @@ import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionProgressCardController } from "../../components/session-progress-card-controller.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
@@ -44,7 +43,7 @@ function progressCard(revision = 1): ProgressCard {
 
 function createHistoryProgressPane(request: GatewayRequestHandler) {
   const client = createGatewayBrowserClientFixture({ request });
-  const { pane, state, sessions } = createTestChatPane({ client });
+  const { pane, state, sessions, publishGatewayEvent } = createTestChatPane({ client });
   const hello = gatewayHelloForMethods(["chat.history", "progressCard.get", "progressCard.put"]);
   pane.context.gateway.snapshot.hello = hello;
   state.hello = hello;
@@ -62,10 +61,7 @@ function createHistoryProgressPane(request: GatewayRequestHandler) {
     .progressCard;
   onTestFinished(() => progress.hostDisconnected());
   const emit = (card: ProgressCard) => {
-    const gateway = pane.context.gateway as ApplicationContext["gateway"] & {
-      emitTestEvent: (event: GatewayEventFrame) => void;
-    };
-    gateway.emitTestEvent({
+    publishGatewayEvent({
       type: "event",
       event: "progressCard.changed",
       payload: { sessionKey: card.sessionKey, revision: card.revision },

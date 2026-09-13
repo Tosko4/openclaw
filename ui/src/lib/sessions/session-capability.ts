@@ -228,7 +228,16 @@ export type SessionCapability = {
   ) => GatewaySessionRow;
   /** Projects held field observations without changing the input rows' keys or membership. */
   projectRows: (rows: readonly GatewaySessionRow[]) => GatewaySessionRow[];
-  reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
+  /** A retained projection receives the same event admission without replacing the shared roster. */
+  reconcileChanged: (
+    payload: unknown,
+    options?: SessionReconcileOptions,
+    retained?: {
+      result: SessionsListResult | null;
+      agentId: string;
+      archivedFilter?: SessionArchivedFilter;
+    },
+  ) => SessionChangedResult;
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
   /** Schedules background list refreshes without replacing queued foreground queries. */

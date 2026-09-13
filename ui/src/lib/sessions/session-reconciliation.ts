@@ -378,6 +378,7 @@ export function createSessionReconciliation(host: Host) {
     payload: unknown,
     options?: SessionReconcileOptions,
     eventObservation = host.roster.captureEvent(payload),
+    retained?: Parameters<SessionCapability["reconcileChanged"]>[2],
   ) => {
     const {
       roster,
@@ -393,7 +394,13 @@ export function createSessionReconciliation(host: Host) {
       !eventObservation.scope || connection.isCurrent(eventObservation.scope);
     const staleEvent = () => {
       const reconciled: SessionChangedResult = { applied: false, result: host.readState().result };
-      return { eventInfo: null, reconciled, claimChanged: false, notifyManaged: undefined };
+      return {
+        eventInfo: null,
+        reconciled,
+        retained: retained ? { ...reconciled, result: retained.result } : undefined,
+        claimChanged: false,
+        notifyManaged: undefined,
+      };
     };
     if (!eventIsCurrent()) {
       return staleEvent();
@@ -487,6 +494,17 @@ export function createSessionReconciliation(host: Host) {
       return result;
     };
     const reconciled = reconcileResult(previous, reconcileOptions, state.agentId);
+    const retainedResult = retained
+      ? reconcileResult(
+          retained.result,
+          {
+            resultAgentId: retained.agentId,
+            selectedGlobalAgentId: retained.agentId,
+            archivedFilter: retained.archivedFilter,
+          },
+          retained.agentId,
+        )
+      : undefined;
     const managedAdmissions: Array<{ row: GatewaySessionRow; revision: number }> = [];
     const staged = roster.stageManagedResults(
       eventObservation.scope,
@@ -549,20 +567,21 @@ export function createSessionReconciliation(host: Host) {
           ? [{ row: reconciled.admittedRow, revision: eventObservation.revision }]
           : [],
       );
+    const deleted = retainedResult?.deletedKey ? retainedResult : reconciled;
     const claimChanged = thinkingClaims.observeEvent(
-      eventInfo?.reason === "delete" ? reconciled : (acceptedResult ?? reconciled),
+      eventInfo?.reason === "delete" ? deleted : (acceptedResult ?? reconciled),
       eventInfo,
     );
     if (
       eventInfo &&
-      (eventInfo.reason !== "delete" || reconciled.deletedKey || !eventInfo.sessionId)
+      (eventInfo.reason !== "delete" || deleted.deletedKey || !eventInfo.sessionId)
     ) {
       deletions.observe(eventInfo);
     }
     if (!eventIsCurrent()) {
       return staleEvent();
     }
-    return { eventInfo, reconciled, claimChanged, notifyManaged };
+    return { eventInfo, reconciled, retained: retainedResult, claimChanged, notifyManaged };
   };
 
   return {

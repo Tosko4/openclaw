@@ -314,6 +314,7 @@ export function createSessionContext(
   client: GatewayBrowserClient,
   sessions?: SessionCapability,
 ): ApplicationContext & {
+  publishGatewayEvent: (event: GatewayEventFrame) => void;
   publishGatewaySnapshot: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void;
 } {
   const eventListeners = new Set<GatewayEventListener>();
@@ -322,6 +323,11 @@ export function createSessionContext(
   const snapshotListeners = new Set<
     (snapshot: ApplicationContext["gateway"]["snapshot"]) => void
   >();
+  const publishGatewayEvent = (event: GatewayEventFrame) => {
+    for (const listener of eventListeners) {
+      listener(event);
+    }
+  };
   let snapshot: ApplicationContext["gateway"]["snapshot"] = {
     client,
     phase: "connected",
@@ -357,11 +363,6 @@ export function createSessionContext(
       setSessionKey: vi.fn(),
       start: vi.fn(),
       stop: vi.fn(),
-      emitTestEvent: (event: GatewayEventFrame) => {
-        for (const listener of eventListeners) {
-          listener(event);
-        }
-      },
     },
     agentSelection: {
       state: agentSelectionState,
@@ -392,6 +393,7 @@ export function createSessionContext(
   });
   return {
     ...context,
+    publishGatewayEvent,
     publishGatewaySnapshot(next) {
       snapshot = next;
       for (const listener of snapshotListeners) {
@@ -491,16 +493,12 @@ export function createTestChatPane(params: {
   });
   return {
     pane,
+    publishGatewayEvent: context.publishGatewayEvent,
     sessions: context.sessions,
     requestUpdate,
     state,
     emitGatewayEvent: (event: string, payload: unknown) => {
-      const emit = (
-        pane.context.gateway as ApplicationContext["gateway"] & {
-          emitTestEvent: (event: GatewayEventFrame) => void;
-        }
-      ).emitTestEvent;
-      emit({ type: "event", event, payload, seq: 1 });
+      context.publishGatewayEvent({ type: "event", event, payload, seq: 1 });
     },
   };
 }

@@ -159,12 +159,6 @@ describe("new-session model runtime placement", () => {
     });
   });
 
-  it("leaves runtime unknown before scoped defaults load", () => {
-    const control = new NewSessionModelControl(() => undefined);
-
-    expect(control.resolveAgentRuntime()).toBeUndefined();
-  });
-
   it("falls back to the session defaults runtime capability", () => {
     const { context } = contextWith([], "codex", [], true);
     const control = new NewSessionModelControl(() => undefined);

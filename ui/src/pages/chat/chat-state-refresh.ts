@@ -1,5 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelCatalogResult } from "../../api/types.ts";
+import type { ModelCatalogResult, SessionsListResult } from "../../api/types.ts";
 import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-cache.ts";
 import {
   loadChatMetadata,
@@ -15,7 +15,9 @@ import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
 import {
   isUiSelectedGlobalSessionKey,
+  normalizeAgentId,
   parseAgentSessionKey,
+  resolveUiDefaultAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
@@ -57,6 +59,19 @@ type ChatMetadataBinding = {
   unsubscribe: () => void;
 };
 const metadataBindings = new WeakMap<ChatPageHost, ChatMetadataBinding>();
+
+export function adoptChatSessionsResult(
+  host: ChatPageHost,
+  { result, agentId }: { result: SessionsListResult | null; agentId: string | null },
+): boolean {
+  const resultAgentId = agentId ? normalizeAgentId(agentId) : resolveUiDefaultAgentId(host);
+  if (result && resultAgentId !== resolveChatAgentId(host)) {
+    return false;
+  }
+  host.sessionsResult = result;
+  host.sessionsResultAgentId = result ? resultAgentId : null;
+  return true;
+}
 
 export function retireChatMetadataRequests(host: ChatPageHost): void {
   metadataBindings.get(host)?.catalogRequest?.controller.abort();
@@ -364,7 +379,9 @@ async function refreshChat(
       return;
     }
     const admitted = history.observation.reconcile(history.sessionInfo, history.defaults, {
-      resultAgentId: host.sessions.state.agentId ?? refreshedAgentId,
+      resultAgentId:
+        host.sessions.state.agentId ??
+        (host.sessions.state.result ? resolveUiDefaultAgentId(host) : refreshedAgentId),
       selectedGlobalAgentId: refreshedAgentId,
       // The routed chat remains visible after archive even though the active
       // roster excludes it. Keep its descriptor in shared session state until
@@ -375,28 +392,24 @@ async function refreshChat(
     if (!admitted || !ownsRefresh()) {
       return;
     }
-    // The shared roster may belong to another agent. Keep this pane's accepted
-    // global history separate rather than relabeling or borrowing that roster.
-    const scopedHistory =
-      isUiSelectedGlobalSessionKey(host, refreshedSessionKey) &&
-      host.sessions.state.agentId !== refreshedAgentId;
-    host.sessionsResult = scopedHistory
-      ? reconcileSessionHistory(
-          host.sessionsResultAgentId === refreshedAgentId ? host.sessionsResult : null,
-          history.sessionInfo,
-          history.defaults,
-          {
-            resultAgentId: refreshedAgentId,
-            selectedGlobalAgentId: refreshedAgentId,
-            archivedFilter: "all",
-          },
-          // Only this pane's changed projection proves a newer same-agent row;
-          // a later Main list cannot freeze Work history or block a missing row.
-          host.sessionsResultAgentId === refreshedAgentId &&
-            host.sessionsResult !== previousSessionsResult,
-        )
-      : host.sessions.state.result;
-    host.sessionsResultAgentId = scopedHistory ? refreshedAgentId : host.sessions.state.agentId;
+    // History remains pane-owned when the shared roster belongs to another agent.
+    if (!adoptChatSessionsResult(host, host.sessions.state)) {
+      host.sessionsResult = reconcileSessionHistory(
+        host.sessionsResultAgentId === refreshedAgentId ? host.sessionsResult : null,
+        history.sessionInfo,
+        history.defaults,
+        {
+          resultAgentId: refreshedAgentId,
+          selectedGlobalAgentId: refreshedAgentId,
+          archivedFilter: "all",
+        },
+        // Only this pane's changed projection proves a newer same-agent row;
+        // a later Main list cannot freeze Work history or block a missing row.
+        host.sessionsResultAgentId === refreshedAgentId &&
+          host.sessionsResult !== previousSessionsResult,
+      );
+      host.sessionsResultAgentId = refreshedAgentId;
+    }
     const sessionInfo = selectedChatSessionRow(host);
     const rosterRow = sessionInfo ?? history.sessionInfo;
     if (sessionInfo) {

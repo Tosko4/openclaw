@@ -2725,7 +2725,6 @@ describe("canonical session message recovery", () => {
   });
 
   it("retires current checkout presentation for a structural event", () => {
-    const listBranches = vi.fn(() => new Promise<never>(() => {}));
     const { state } = createSessionEventState({
       chatBranches: [
         {
@@ -2737,12 +2736,10 @@ describe("canonical session message recovery", () => {
       ],
       chatBranchesConnectionEpoch: 1,
       chatBranchesSessionKey: "agent:main:main",
-      sessions: {
-        listBranches,
-        reconcileChanged: vi.fn().mockReturnValue({ applied: false }),
-        refresh: vi.fn().mockResolvedValue(undefined),
-      } as never,
     });
+    const listBranches = vi
+      .mocked(state.sessions.listBranches)
+      .mockImplementation(() => new Promise<never>(() => {}));
 
     handlePageGatewayEvent(state, {
       type: "event",

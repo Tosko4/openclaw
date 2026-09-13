@@ -39,6 +39,7 @@ import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import {
+  adoptChatSessionsResult,
   refreshChatModelAuthStatus,
   refreshPageChat,
   retireChatMetadataRequests,
@@ -197,14 +198,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     for (const { key, agentId } of stateValue.deletedSessions) {
       clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key, agentId });
     }
-    // A list for another agent must not overwrite this pane's global history.
-    if (
-      !isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
-      stateValue.agentId === resolveChatAgentId(state)
-    ) {
-      state.sessionsResult = stateValue.result;
-      state.sessionsResultAgentId = stateValue.agentId;
-    }
+    adoptChatSessionsResult(state, stateValue);
     state.sessionsLoading = stateValue.loading;
     state.sessionsError = stateValue.error;
     this.refreshSwarmRoster();

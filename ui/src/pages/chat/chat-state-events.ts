@@ -42,7 +42,7 @@ import {
 import { recordChatSendServerTiming } from "./chat-send-timing.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { applyChatModelCatalogSnapshot } from "./chat-state-refresh.ts";
+import { adoptChatSessionsResult, applyChatModelCatalogSnapshot } from "./chat-state-refresh.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { handleBackgroundTasksEvent } from "./components/chat-background-tasks.ts";
@@ -103,14 +103,25 @@ function globalSessionEventMatchesChat(
 
 function reconcileSessionEvent(state: ChatPageHost, payload: unknown): SessionChangedResult {
   const selectedAgentId = resolveChatAgentId(state);
-  const reconciled = state.sessions.reconcileChanged(payload, {
-    resultAgentId: state.sessionsResultAgentId ?? selectedAgentId,
-    selectedGlobalAgentId: selectedAgentId,
-    archivedFilter: state.sessionsArchivedFilter,
-  });
+  const sharedAgentId = state.sessions.state.agentId ?? resolveUiDefaultAgentId(state);
+  const reconciled = state.sessions.reconcileChanged(
+    payload,
+    {
+      resultAgentId: sharedAgentId,
+      selectedGlobalAgentId: sharedAgentId,
+      archivedFilter: state.sessionsArchivedFilter,
+    },
+    {
+      result:
+        (state.sessionsResultAgentId ?? resolveUiDefaultAgentId(state)) === selectedAgentId
+          ? state.sessionsResult
+          : null,
+      agentId: selectedAgentId,
+      archivedFilter: "all",
+    },
+  );
   if (reconciled.applied) {
-    state.sessionsResult = state.sessions.state.result;
-    state.sessionsResultAgentId = state.sessions.state.agentId;
+    adoptChatSessionsResult(state, { result: reconciled.result, agentId: selectedAgentId });
     state.sessionsError = state.sessions.state.error;
     reconcileChatRunAfterSessionStatePublication(state);
   }

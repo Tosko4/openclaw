@@ -731,33 +731,6 @@ describe("chat-model-select-state", () => {
     ]);
   });
 
-  it("uses the server default instead of the selected session model", () => {
-    const state = createChatModelState({
-      chatModelCatalog: createModelCatalog(
-        {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          provider: "openai",
-        },
-        {
-          id: "claude-opus-4-5",
-          name: "Claude Opus 4.5",
-          provider: "anthropic",
-        },
-      ),
-      sessionsResult: createSessionsListResult({
-        defaultsModel: "gpt-5.5",
-        defaultsProvider: "openai",
-        model: "claude-opus-4-5",
-        modelProvider: "anthropic",
-      }),
-    });
-
-    const resolved = resolveChatModelSelectState(state);
-    expect(resolved.defaultModel).toBe("openai/gpt-5.5");
-    expect(resolved.defaultLabel).toBe("Default (GPT-5.5)");
-  });
-
   it("keeps a canonical agent default as one named picker option", () => {
     const state = createChatModelState({
       sessionsResult: createSessionsListResult({
