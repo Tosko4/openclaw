@@ -16,12 +16,13 @@ import {
 } from "./redact-edit-composition.js";
 import { modelVisibleToolTextRedactionState } from "./redact-internal-state.js";
 import { isFullContextToolPayloadRedaction } from "./redact-internal.js";
-import type { RedactionField, RedactionOrigins } from "./redact-json-tokens.js";
 import {
   redactJsonRecord,
   getPatternRedactionEdits,
   type RedactionMessage,
   type RedactionTarget,
+  type RedactionField,
+  type RedactionOrigins,
 } from "./redact-json.js";
 import {
   iterateRedactMatches,

@@ -20,6 +20,8 @@ import {
   type ResolvedRedactPattern,
 } from "./redact-pattern-runtime.js";
 
+export type { RedactionField, RedactionOrigins } from "./redact-json-tokens.js";
+
 export type RedactionTarget = {
   start: number;
   end: number;
