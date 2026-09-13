@@ -258,6 +258,65 @@ describe("chat metadata store", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it.each(
+    ["load", "revalidate"].flatMap((method) =>
+      [new Error("metadata read failed"), undefined].map((failure) => ({ method, failure })),
+    ),
+  )(
+    "retries $method from a synchronous error observer after $failure",
+    async ({ method, failure }) => {
+      const current = metadata("recovered");
+      const request = vi.fn().mockRejectedValueOnce(failure).mockResolvedValue(current);
+      const client = clientWith(request);
+      const scope = { agentId: "main" };
+      const read = method === "load" ? loadChatMetadata : revalidateChatMetadata;
+      let retry: Promise<ChatMetadataResult> | undefined;
+      const release = subscribeChatMetadata(client, scope, (update) => {
+        if (update.type === "error" && !retry) {
+          retry = read(client, scope);
+        }
+      });
+      const first = read(client, scope);
+      try {
+        await expect(first).rejects.toBe(failure);
+        expect(request).toHaveBeenCalledTimes(2);
+        await expect(retry).resolves.toEqual(current);
+        expect(peekChatMetadata(client, scope)).toEqual(current);
+      } finally {
+        await Promise.allSettled([first, retry]);
+        release();
+      }
+    },
+  );
+
+  it("starts a fresh revalidation requested by a result observer", async () => {
+    const next = deferred<ChatMetadataResult>();
+    const older = metadata("older");
+    const current = metadata("current");
+    const request = vi.fn().mockResolvedValueOnce(older).mockReturnValue(next.promise);
+    const client = clientWith(request);
+    const scope = { agentId: "main" };
+    let following: Promise<ChatMetadataResult> | undefined;
+    const release = subscribeChatMetadata(client, scope, (update) => {
+      if (update.type === "result" && !following) {
+        following = revalidateChatMetadata(client, scope);
+      }
+    });
+    const first = revalidateChatMetadata(client, scope);
+    try {
+      await expect(first).resolves.toEqual(older);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(peekChatMetadata(client, scope)).toEqual(older);
+      next.resolve(current);
+      await expect(following).resolves.toEqual(current);
+      expect(peekChatMetadata(client, scope)).toEqual(current);
+    } finally {
+      next.resolve(current);
+      await Promise.allSettled([first, following]);
+      release();
+    }
+  });
+
   it("uses remembered startup metadata as the current snapshot", async () => {
     const result = metadata("startup-model");
     const request = vi.fn();

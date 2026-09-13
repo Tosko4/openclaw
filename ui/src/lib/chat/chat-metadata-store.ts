@@ -191,22 +191,23 @@ function beginChatMetadataRequest(
       const activePublication = request.publication;
       void (async () => {
         try {
-          resolve(
-            activePublication.publish(
-              await requestChatMetadata(client, entry.scope, retryDeadlineAt),
-            ),
+          const result = await requestChatMetadata(client, entry.scope, retryDeadlineAt).finally(
+            () => {
+              // Observers may retry synchronously; retire the settled request before notifying them.
+              entry.activeRequest = undefined;
+              const next = entry.queuedRequest;
+              entry.queuedRequest = undefined;
+              if (next) {
+                entry.activeRequest = next;
+                next.start();
+              }
+            },
           );
+          resolve(activePublication.publish(result));
         } catch (error) {
           activePublication.fail(error);
           reject(error);
         } finally {
-          entry.activeRequest = undefined;
-          const next = entry.queuedRequest;
-          entry.queuedRequest = undefined;
-          if (next) {
-            entry.activeRequest = next;
-            next.start();
-          }
           entry.release();
         }
       })();
