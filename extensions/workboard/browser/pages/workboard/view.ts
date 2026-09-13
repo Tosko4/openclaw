@@ -14,7 +14,6 @@ import {
   WORKBOARD_PRIORITIES,
   type WorkboardCard,
   type WorkboardStatus,
-  type WorkboardUiState,
 } from "../../lib/workboard/index.ts";
 import {
   agentDisplayName,
@@ -46,38 +45,14 @@ import {
   formatPriorityLabel,
   workboardErrorMessage,
   renderPriorityIcon,
-  formatRefreshTime,
+  dispatchSummaryMessage,
+  refreshStatusLabel,
   matchesFilter,
   type WorkboardProps,
 } from "./view-helpers.ts";
 import { workboardPopoverRef } from "./view-popover.ts";
 import { boardScrollEdgesRef } from "./view-scroll-fade.ts";
 import type { WorkboardSelectOption } from "./workboard-select.ts";
-
-function dispatchSummaryMessage(state: WorkboardUiState) {
-  const summary = state.lastDispatchSummary;
-  if (!summary) {
-    return "";
-  }
-  const total = Object.values(summary).reduce((sum, count) => sum + count, 0);
-  return t(total === 0 ? "workboard.dispatchSummaryEmpty" : "workboard.dispatchSummary", {
-    started: String(summary.started),
-    failures: String(summary.failures),
-    promoted: String(summary.promoted),
-    blocked: String(summary.blocked),
-    reclaimed: String(summary.reclaimed),
-    orchestrated: String(summary.orchestrated),
-  });
-}
-
-function refreshStatusLabel(state: WorkboardUiState) {
-  if (state.lastRefreshAt) {
-    return state.lastRefreshError
-      ? t("workboard.refreshError")
-      : t("workboard.lastRefreshed", { time: formatRefreshTime(state.lastRefreshAt) });
-  }
-  return state.lastRefreshError ? t("workboard.refreshError") : "";
-}
 
 const workboardFilterPopoverId = "workboard-filter-popover";
 

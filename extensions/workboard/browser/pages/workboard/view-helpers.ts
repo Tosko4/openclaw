@@ -328,6 +328,31 @@ const priorityIcons = {
 
 export const renderPriorityIcon = (priority: WorkboardPriority) => priorityIcons[priority];
 
+export function dispatchSummaryMessage(state: WorkboardUiState) {
+  const summary = state.lastDispatchSummary;
+  if (!summary) {
+    return "";
+  }
+  const total = Object.values(summary).reduce((sum, count) => sum + count, 0);
+  return t(total === 0 ? "workboard.dispatchSummaryEmpty" : "workboard.dispatchSummary", {
+    started: String(summary.started),
+    failures: String(summary.failures),
+    promoted: String(summary.promoted),
+    blocked: String(summary.blocked),
+    reclaimed: String(summary.reclaimed),
+    orchestrated: String(summary.orchestrated),
+  });
+}
+
+export function refreshStatusLabel(state: WorkboardUiState) {
+  if (state.lastRefreshAt) {
+    return state.lastRefreshError
+      ? t("workboard.refreshError")
+      : t("workboard.lastRefreshed", { time: formatRefreshTime(state.lastRefreshAt) });
+  }
+  return state.lastRefreshError ? t("workboard.refreshError") : "";
+}
+
 export function workboardErrorMessage(
   state: {
     error: string | null;
