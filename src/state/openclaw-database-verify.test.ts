@@ -8,6 +8,7 @@ import { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.
 import { readMainDatabasePosixLocks } from "../infra/sqlite-posix-locks.test-support.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-resources.js";
 import * as agentDatabase from "./openclaw-agent-db.js";
 import {
   clearOpenClawAgentDatabaseOpenFailure,
@@ -16,7 +17,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   recordOpenClawAgentDatabaseOpenFailure,
-  registerOpenClawAgentDatabaseAsyncResource,
 } from "./openclaw-agent-db.js";
 import {
   applyOpenClawDatabaseVerificationResults,

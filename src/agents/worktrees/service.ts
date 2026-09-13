@@ -677,11 +677,6 @@ export class ManagedWorktreeService {
           }),
         )
       : 0;
-    this.requireAllocationSpace(
-      worktreePath,
-      repository,
-      2 * (gitBytes + provisionedBytes) + setupBytes,
-    );
     params.signal?.throwIfAborted();
     params.commitGuard?.();
     await fs.mkdir(root, { recursive: true });
@@ -700,6 +695,12 @@ export class ManagedWorktreeService {
         destination: worktreePath,
         branch,
         base: gitBase,
+        requireSpace: (cloneBytes) =>
+          this.requireAllocationSpace(
+            worktreePath,
+            repository,
+            (cloneBytes ?? 2 * gitBytes) + 2 * provisionedBytes + setupBytes,
+          ),
         signal: params.signal,
         commitGuard: () => params.commitGuard?.(),
       });
@@ -1065,7 +1066,6 @@ export class ManagedWorktreeService {
       signal: params.signal,
       assertCurrent: params.commitGuard,
     });
-    this.requireAllocationSpace(record.path, repository, 2 * (gitBytes + provisionedBytes));
     let parent: string;
     try {
       parent = await requireGit(record.repoRoot, ["rev-parse", `${record.snapshotRef}^`]);
@@ -1100,6 +1100,12 @@ export class ManagedWorktreeService {
       worktreeRoot: path.dirname(path.dirname(record.path)),
       destination: record.path,
       base: record.snapshotRef,
+      requireSpace: (cloneBytes) =>
+        this.requireAllocationSpace(
+          record.path,
+          repository,
+          (cloneBytes ?? 2 * gitBytes) + 2 * provisionedBytes,
+        ),
       signal: params.signal,
       commitGuard: () => params.commitGuard?.(),
     });

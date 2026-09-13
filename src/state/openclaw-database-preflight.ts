@@ -120,10 +120,6 @@ export async function assertOpenClawDatabasesReady(
 ): Promise<void> {
   const schemas = await preflightOpenClawDatabaseSchemas({
     env: options.env,
-    supportedVersions: {
-      state: OPENCLAW_STATE_SCHEMA_VERSION,
-      agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-    },
     verifyCurrentSchemaShape: true,
     ...(options.config
       ? {
@@ -342,7 +338,8 @@ export async function preflightOpenClawDatabaseSchemas(options: {
   env: NodeJS.ProcessEnv;
   scope?: "state";
   signal?: AbortSignal;
-  supportedVersions: OpenClawSchemaVersions;
+  /** Omit for current-runtime checks; updates pass their complete target pair. */
+  supportedVersions?: OpenClawSchemaVersions;
   verifyCurrentSchemaShape?: boolean;
   requireStartupMigrationReadiness?: boolean;
   configuredAgentDatabaseTargets?:
@@ -354,6 +351,12 @@ export async function preflightOpenClawDatabaseSchemas(options: {
   agentAdmissionConfig?: OpenClawConfig;
 }): Promise<OpenClawDatabaseSchemaPreflight> {
   options.signal?.throwIfAborted();
+  const {
+    supportedVersions = {
+      state: OPENCLAW_STATE_SCHEMA_VERSION,
+      agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+    },
+  } = options;
   const result: OpenClawDatabaseSchemaPreflight = { incompatible: [], indeterminate: [] };
   const statePath = path.resolve(resolveOpenClawStateSqlitePath(options.env));
   let registeredDatabases: ReturnType<typeof readRegisteredAgentDatabases> = [];
@@ -393,28 +396,28 @@ export async function preflightOpenClawDatabaseSchemas(options: {
       stateDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
       const stateVersion = readSqliteUserVersion(stateDatabase);
       const contentVersion =
-        stateVersion > options.supportedVersions.state
+        stateVersion > supportedVersions.state
           ? stateVersion
           : readStateSchemaContentVersion(stateDatabase);
       const migrationVersion =
-        contentVersion > options.supportedVersions.state
+        contentVersion > supportedVersions.state
           ? contentVersion
           : readStateSchemaMigrationVersion(stateDatabase);
-      if (migrationVersion < options.supportedVersions.state) {
+      if (migrationVersion < supportedVersions.state) {
         (result.pendingMigrations ??= []).push({
           kind: "state",
           path: statePath,
           foundVersion: stateVersion,
-          supportedVersion: options.supportedVersions.state,
+          supportedVersion: supportedVersions.state,
         });
       }
-      if (contentVersion > options.supportedVersions.state) {
+      if (contentVersion > supportedVersions.state) {
         const writerAppVersion = readWriterAppVersion(stateDatabase);
         result.incompatible.push({
           kind: "state",
           path: statePath,
           foundVersion: contentVersion,
-          supportedVersion: options.supportedVersions.state,
+          supportedVersion: supportedVersions.state,
           ...(writerAppVersion ? { writerAppVersion } : {}),
         });
       }
@@ -576,9 +579,7 @@ export async function preflightOpenClawDatabaseSchemas(options: {
       if (!options.requireStartupMigrationReadiness && !options.verifyCurrentSchemaShape) {
         const header = await inspectSqliteSchemaHeader(realAgentPath, {
           signal: options.signal,
-          ...(inspectOwnership
-            ? { agentSchemaVersionForOwnership: options.supportedVersions.agent }
-            : {}),
+          ...(inspectOwnership ? { agentSchemaVersionForOwnership: supportedVersions.agent } : {}),
         });
         options.signal?.throwIfAborted();
         agentVersion = header.userVersion;
@@ -594,11 +595,11 @@ export async function preflightOpenClawDatabaseSchemas(options: {
         agentDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
         agentVersion = readSqliteUserVersion(agentDatabase);
         writerAppVersion = readWriterAppVersion(agentDatabase);
-        if (inspectOwnership && agentVersion <= options.supportedVersions.agent) {
+        if (inspectOwnership && agentVersion <= supportedVersions.agent) {
           agentSchemaMeta = readExistingAgentSchemaMeta(agentDatabase);
         }
       }
-      if (agentVersion <= options.supportedVersions.agent && inspectOwnership && row.agentId) {
+      if (agentVersion <= supportedVersions.agent && inspectOwnership && row.agentId) {
         const refusal = inspectAgentDatabaseAdmission({
           agentId: row.agentId,
           path: agentPath,
@@ -609,22 +610,22 @@ export async function preflightOpenClawDatabaseSchemas(options: {
           continue;
         }
       }
-      if (agentVersion < options.supportedVersions.agent) {
+      if (agentVersion < supportedVersions.agent) {
         (result.pendingMigrations ??= []).push({
           kind: "agent",
           path: agentPath,
           ...(row.agentId !== undefined ? { agentId: row.agentId } : {}),
           foundVersion: agentVersion,
-          supportedVersion: options.supportedVersions.agent,
+          supportedVersion: supportedVersions.agent,
         });
       }
-      if (agentVersion > options.supportedVersions.agent) {
+      if (agentVersion > supportedVersions.agent) {
         result.incompatible.push({
           kind: "agent",
           path: agentPath,
           ...(row.agentId !== undefined ? { agentId: row.agentId } : {}),
           foundVersion: agentVersion,
-          supportedVersion: options.supportedVersions.agent,
+          supportedVersion: supportedVersions.agent,
           ...(writerAppVersion ? { writerAppVersion } : {}),
         });
       } else if (agentDatabase && agentSnapshot) {
