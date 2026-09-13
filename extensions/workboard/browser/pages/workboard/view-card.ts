@@ -35,11 +35,7 @@ import {
 } from "./view-card-content.ts";
 import { openCardDetails, workboardCardDetailDrawerId } from "./view-card-details.ts";
 import { openCreateModal, workboardCardModalId } from "./view-card-modal.ts";
-import {
-  canMutate,
-  formatStatusLabel,
-  type WorkboardProps,
-} from "./view-helpers.ts";
+import { canMutate, formatStatusLabel, type WorkboardProps } from "./view-helpers.ts";
 import { closeWorkboardPopoverOnAction, workboardPopoverRef } from "./view-popover.ts";
 import { workboardScrollFadeRef } from "./view-scroll-fade.ts";
 import { getSessionStatus } from "./view-session-status.ts";
