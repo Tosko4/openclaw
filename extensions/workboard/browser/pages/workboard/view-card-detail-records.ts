@@ -3,7 +3,11 @@ import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
-import type { WorkboardCard, WorkboardDependencyState, WorkboardTaskSummary } from "../../lib/workboard/index.ts";
+import type {
+  WorkboardCard,
+  WorkboardDependencyState,
+  WorkboardTaskSummary,
+} from "../../lib/workboard/index.ts";
 import { formatStatusLabel, formatUpdatedTime } from "./view-helpers.ts";
 
 export function renderDependencyDetailList(dependencies: WorkboardDependencyState) {
@@ -263,48 +267,44 @@ export function renderTechnicalDetails(
     return nothing;
   }
   return html`<section
-                    class="workboard-detail__tabpanel workboard-detail__technical"
-                    id="workboard-detail-panel-details"
-                    role="tabpanel"
-                    aria-labelledby="workboard-detail-tab-details"
-                    tabindex="0"
-                    ?hidden=${!active}
-                  >
-                    <h3>${t("workboard.detailTechnical")}</h3>
-                    <div class="workboard-detail__technical-properties">
-                      ${renderDetailRow(t("workboard.detailTask"), task?.taskId ?? card.taskId)}
-                      ${renderDetailRow(t("workboard.fieldSession"), linkedSessionKey)}
-                      ${renderDetailRow(
-                        t("workboard.detailRun"),
-                        card.runId ?? card.execution?.runId,
-                      )}
-                      ${renderDetailRow(t("workboard.detailTenant"), automation?.tenant)}
-                      ${metadataFields.map(([label, value]) => renderDetailRow(label, value))}
-                    </div>
-                    ${
-                      task
-                        ? renderDetailList(t("workboard.detailTask"), [
-                            t(`workboard.taskStatus.${task.status}`),
-                            formatUiExternalText(task.progressSummary),
-                            formatUiExternalText(task.terminalSummary),
-                            formatUiExternalText(task.error),
-                          ])
-                        : nothing
-                    }
-                    ${
-                      notifications.length
-                        ? html`<section class="workboard-detail__section">
-                            <h3>${t("workboard.detailNotifications")}</h3>
-                            <ol class="workboard-detail__list">
-                              ${notifications.map(
-                                (notification) =>
-                                  html`<li>${formatUiExternalText(notification.message)}</li>`,
-                              )}
-                            </ol>
-                          </section>`
-                        : nothing
-                    }
-                    ${renderAttemptDetails(attempts)} ${renderProofDetails(proof)}
-                    ${detailSections.map(([title, values]) => renderDetailList(title, values))}
-                  </section>`;
+    class="workboard-detail__tabpanel workboard-detail__technical"
+    id="workboard-detail-panel-details"
+    role="tabpanel"
+    aria-labelledby="workboard-detail-tab-details"
+    tabindex="0"
+    ?hidden=${!active}
+  >
+    <h3>${t("workboard.detailTechnical")}</h3>
+    <div class="workboard-detail__technical-properties">
+      ${renderDetailRow(t("workboard.detailTask"), task?.taskId ?? card.taskId)}
+      ${renderDetailRow(t("workboard.fieldSession"), linkedSessionKey)}
+      ${renderDetailRow(t("workboard.detailRun"), card.runId ?? card.execution?.runId)}
+      ${renderDetailRow(t("workboard.detailTenant"), automation?.tenant)}
+      ${metadataFields.map(([label, value]) => renderDetailRow(label, value))}
+    </div>
+    ${
+      task
+        ? renderDetailList(t("workboard.detailTask"), [
+            t(`workboard.taskStatus.${task.status}`),
+            formatUiExternalText(task.progressSummary),
+            formatUiExternalText(task.terminalSummary),
+            formatUiExternalText(task.error),
+          ])
+        : nothing
+    }
+    ${
+      notifications.length
+        ? html`<section class="workboard-detail__section">
+            <h3>${t("workboard.detailNotifications")}</h3>
+            <ol class="workboard-detail__list">
+              ${notifications.map(
+                (notification) => html`<li>${formatUiExternalText(notification.message)}</li>`,
+              )}
+            </ol>
+          </section>`
+        : nothing
+    }
+    ${renderAttemptDetails(attempts)} ${renderProofDetails(proof)}
+    ${detailSections.map(([title, values]) => renderDetailList(title, values))}
+  </section>`;
 }

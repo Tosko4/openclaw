@@ -200,7 +200,12 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
   const board = state.boards.find((entry) => entry.id === boardId);
   const events = (card.events ?? []).toReversed();
   const dependencies = getWorkboardDependencyState(card, state.cards);
-  const technicalDetails = renderTechnicalDetails(card, task, linkedSessionKey, state.detailTab === "details");
+  const technicalDetails = renderTechnicalDetails(
+    card,
+    task,
+    linkedSessionKey,
+    state.detailTab === "details",
+  );
   const hasTechnicalDetails = technicalDetails !== nothing;
   const tabs = [
     { id: "overview", label: t("workboard.detailTabOverview") },
