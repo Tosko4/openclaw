@@ -230,6 +230,7 @@ export async function runCronIsolatedAgentTurn(
             const executionParams: Parameters<typeof executeCronRun>[0] = {
               cfg: params.cfg,
               cfgWithAgentDefaults: prepared.context.cfgWithAgentDefaults,
+              isSkillCollectionReview: prepared.context.isSkillCollectionReview,
               job: params.job,
               agentId: prepared.context.agentId,
               agentDir: prepared.context.agentDir,

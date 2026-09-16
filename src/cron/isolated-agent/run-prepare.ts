@@ -30,6 +30,7 @@ import type { CronDeliveryPlan } from "../delivery-plan.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { isDetachedCronSessionTarget } from "../session-target.js";
+import { SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX } from "../system-owned-declaration.js";
 import type { CronJob, CronRunDiagnostics } from "../types.js";
 import {
   resolveCronModelSelection,
@@ -55,6 +56,7 @@ import {
   type RunCronAgentTurnParams,
   type WithRunSession,
 } from "./run-prepare-runtime.js";
+import { resolveCronRuntimeOverride } from "./run-runtime-selection.js";
 import {
   CronSessionLifecycleClaimError,
   createCronRunContinuationSession,
@@ -95,6 +97,7 @@ import { loadCronSessionEntryLatest, resolveCronSession } from "./session.js";
 export type PreparedCronRunContext = {
   input: RunCronAgentTurnParams;
   cfgWithAgentDefaults: OpenClawConfig;
+  isSkillCollectionReview: boolean;
   agentId: string;
   agentCfg: AgentDefaultsConfig;
   agentDir: string;
@@ -177,6 +180,10 @@ export async function prepareCronRunContext(params: {
       : {}),
   });
   const { agentId, agentDir } = modelOwner;
+  const isSkillCollectionReview = Boolean(
+    input.executionRoot &&
+    input.job.declarationKey === `${SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX}${agentId}`,
+  );
   const agentConfigOverride = requiredAgentId
     ? resolveAgentConfig(modelOwner.config, agentId)
     : undefined;
@@ -419,14 +426,25 @@ export async function prepareCronRunContext(params: {
       hookThinking: isGmailHook ? runtimeCfg.hooks?.gmail?.thinking : undefined,
       sessionThinking: cronSession.sessionEntry.thinkingLevel,
     });
-    const effectiveAgentRuntime = resolveEffectiveAgentRuntime({
-      cfg: cfgWithAgentDefaults,
-      provider,
-      modelId: model,
-      agentId: modelOwner.agentId,
-      sessionKey: agentSessionKey,
-      sessionEntry: cronSession.sessionEntry,
-    });
+    const resolveRuntimeOverride = (candidateProvider: string, modelId: string) =>
+      resolveCronRuntimeOverride({
+        config: cfgWithAgentDefaults,
+        agentId,
+        provider: candidateProvider,
+        modelId,
+        sessionEntry: cronSession.sessionEntry,
+        isSkillCollectionReview,
+      });
+    const effectiveAgentRuntime =
+      resolveRuntimeOverride(provider, model) ??
+      resolveEffectiveAgentRuntime({
+        cfg: cfgWithAgentDefaults,
+        provider,
+        modelId: model,
+        agentId,
+        sessionKey: agentSessionKey,
+        sessionEntry: cronSession.sessionEntry,
+      });
     let requestedThinkLevel = thinkingSelection.requestedThinkLevel;
     if (!requestedThinkLevel) {
       requestedThinkLevel = resolveThinkingDefault({
@@ -471,11 +489,7 @@ export async function prepareCronRunContext(params: {
         workspaceDir,
         allowGatewaySubagentBinding: true,
         runtimePluginSelections: runtimePluginCandidates.map((candidate) => {
-          const runtime = resolveSessionRuntimeOverrideForProvider({
-            provider: candidate.provider,
-            entry: cronSession.sessionEntry,
-            cfg: cfgWithAgentDefaults,
-          });
+          const runtime = resolveRuntimeOverride(candidate.provider, candidate.model);
           return runtime
             ? { provider: candidate.provider, modelId: candidate.model, runtime, agentId }
             : { provider: candidate.provider, modelId: candidate.model, agentId };
@@ -665,6 +679,7 @@ export async function prepareCronRunContext(params: {
       context: {
         input,
         cfgWithAgentDefaults,
+        isSkillCollectionReview,
         agentId,
         agentCfg,
         agentDir,
