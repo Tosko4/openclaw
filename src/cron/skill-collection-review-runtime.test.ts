@@ -64,7 +64,7 @@ describe("collection review runtime override", () => {
 
   it.each(["codex", "claude-cli", "openclaw"])("preserves explicit provider policy %s", (id) => {
     const original = config();
-    original.models!.providers!.openai.agentRuntime = { id };
+    original.models!.providers!.openai!.agentRuntime = { id };
     expect(reviewRuntime(original)).toBeUndefined();
   });
 
@@ -75,20 +75,20 @@ describe("collection review runtime override", () => {
       original.agents!.defaults = { models: { [ref]: { agentRuntime: { id: "codex" } } } };
       expect(reviewRuntime(original)).toBeUndefined();
       original.agents!.defaults = {};
-      original.agents!.entries!.main.models = { [ref]: { agentRuntime: { id: "codex" } } };
+      original.agents!.entries!.main!.models = { [ref]: { agentRuntime: { id: "codex" } } };
       expect(reviewRuntime(original)).toBeUndefined();
     },
   );
 
   it.each(["auto", "default"])("supports an authored %s model runtime", (id) => {
     const original = config();
-    original.agents!.entries!.main.models = { "gpt-primary": { agentRuntime: { id } } };
+    original.agents!.entries!.main!.models = { "gpt-primary": { agentRuntime: { id } } };
     expect(reviewRuntime(original)).toBe("openclaw");
   });
 
   it("preserves an explicit provider-catalog model runtime", () => {
     const original = config();
-    original.models!.providers!.openai.models = [
+    original.models!.providers!.openai!.models = [
       { ...model("gpt-primary"), agentRuntime: { id: "codex" } },
     ];
     expect(reviewRuntime(original)).toBeUndefined();
@@ -156,8 +156,8 @@ describe("collection review runtime override", () => {
 
   it("keeps custom endpoint and non-OpenAI runtime selections unchanged", () => {
     const original = config();
-    original.models!.providers!.openai.baseUrl = "https://relay.example.test/v1";
-    original.agents!.entries!.main.models = {
+    original.models!.providers!.openai!.baseUrl = "https://relay.example.test/v1";
+    original.agents!.entries!.main!.models = {
       "anthropic/*": { agentRuntime: { id: "claude-cli" } },
     };
     expect(reviewRuntime(original)).toBeUndefined();

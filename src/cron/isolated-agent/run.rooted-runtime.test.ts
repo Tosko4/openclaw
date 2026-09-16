@@ -211,7 +211,7 @@ describe("runCronIsolatedAgentTurn — rooted runtime fallback", () => {
           sessionRoot: executionRoot,
         }),
       );
-      expect(original.agents?.entries?.main.models).toBeUndefined();
+      expect(original.agents?.entries?.main?.models).toBeUndefined();
     },
   );
 
