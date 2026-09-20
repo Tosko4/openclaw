@@ -516,6 +516,7 @@ export function maybeEmitFailureRecovery(
   const route = params.alertConfig;
   if (
     params.replay ||
+    state.deps.cronConfig?.failureAlert?.notifyOnRecovery === false ||
     !incident.signature ||
     !route ||
     (params.job.delivery?.bestEffort === true && !params.job.failureAlert)
