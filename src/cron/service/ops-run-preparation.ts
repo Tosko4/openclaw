@@ -6,8 +6,8 @@ import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import {
   finishCronRunReceiptInDatabase,
   releaseLocalCronRunReceiptOwnership,
-  type CronRunReceiptHandle,
 } from "../store/run-receipt-store.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type {
   CronFailureNotificationDetail,
   CronJob,
@@ -29,8 +29,9 @@ import {
   releaseQueuedCronRun,
   reserveQueuedCronRun,
 } from "./run-admission.js";
-import { recomputeUnownedCronSchedules } from "./run-recovery.js";
+import { createCronRunHandle, finishCronRun } from "./run-history.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
+import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import type {
   CronEvent,
   CronRunMode,
@@ -39,7 +40,6 @@ import type {
 } from "./state.js";
 import { cronFailureNotificationEventContext, emit, isImmediateCronRunMode } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications, warnIfDisabled } from "./store.js";
-import { tryCreateCronTaskRunHandle, tryFinishCronTaskRun } from "./task-runs.js";
 import { applyJobResult, armTimer, type CronTriggerEvalOutcome } from "./timer.js";
 
 export type PreparedManualRun =
@@ -55,6 +55,7 @@ export type PreparedManualRun =
       runId?: string;
       terminalTracker?: ManualRunTerminalTracker;
       owningCronLaneTaskMarker?: CommandLaneTaskMarker;
+      commitGuard?: () => void;
       reservationAt: number;
       scheduleOwnershipAtMs: number;
       reservationIdentity: object;
@@ -72,8 +73,6 @@ export type PreparedManualRun =
 export type ActivatedManualRun = Extract<PreparedManualRun, { ran: true }> & {
   startedAt: number;
   taskRunId?: string;
-  taskId?: string;
-  flowId?: string;
   activeJobMarker?: CronActiveJobMarker;
   admittedJob: CronJob;
   executionJob: CronJob;
@@ -106,7 +105,7 @@ export type ManualRunOptions = {
 
 export type ManualRunTerminalTracker = { emitted: boolean };
 
-export function emitCronRunFinished(
+export async function emitCronRunFinished(
   state: CronServiceState,
   evt: CronEvent & { action: "finished" },
   tracker?: ManualRunTerminalTracker,
@@ -117,14 +116,14 @@ export function emitCronRunFinished(
     errorClassification?: CronRunErrorClassification;
     failureNotificationDetail?: CronFailureNotificationDetail;
   },
-): void {
+): Promise<void> {
   const event = {
     ...evt,
     completionStatus:
       evt.completionStatus ??
       resolveCronCompletionStatus({ status: evt.status, deliveryStatus: evt.deliveryStatus }),
   };
-  tryFinishCronTaskRun(state, {
+  await finishCronRun(state, {
     taskRunId,
     job: evt.job,
     event,
@@ -167,7 +166,7 @@ function admitsStreamSourceRun(
   );
 }
 
-function skipInvalidPersistedManualRun(params: {
+async function skipInvalidPersistedManualRun(params: {
   state: CronServiceState;
   job: CronJob;
   mode?: CronRunMode;
@@ -223,7 +222,7 @@ function skipInvalidPersistedManualRun(params: {
   // Subscribers may close caller authority or edit the job synchronously.
   // Publish only after the terminal state is durably committed.
   applyCronRuntimeRowsToState(params.state, [committedJob]);
-  emitCronRunFinished(
+  await emitCronRunFinished(
     params.state,
     {
       jobId: params.job.id,
@@ -246,13 +245,15 @@ function skipInvalidPersistedManualRun(params: {
   armTimer(params.state);
 }
 
-function recomputeManualRunPreflight(state: CronServiceState, id: string, mode?: CronRunMode) {
-  const maintenance = recomputeUnownedCronSchedules(state, {
+async function recomputeManualRunPreflight(
+  state: CronServiceState,
+  id: string,
+  mode?: CronRunMode,
+) {
+  await recomputeUnownedCronSchedules(state, {
     ...(isImmediateCronRunMode(mode) ? { preserveExpiredPacedNextRunJobId: id } : {}),
     skipScheduleErrorHandling: true,
   });
-  runPostPersistCronNotifications(state, maintenance.notifications);
-  applyCronRuntimeRowsToState(state, maintenance.jobs);
 }
 
 // The caller holds the store lock through preflight and any reservation.
@@ -263,15 +264,18 @@ async function inspectManualRunPreflight(
   opts?: ManualRunOptions,
 ): Promise<ManualRunPreflightResult> {
   warnIfDisabled(state, "run");
-  await ensureLoaded(state, { skipRecompute: true });
+  await ensureLoaded(state);
   opts?.commitGuard?.();
   if (state.stopped) {
     return { ok: true, ran: false, reason: "stopped" };
   }
   // Normalize stale tick state before eligibility checks (#17554). Revalidate
   // after notifications too: synchronous owner callbacks can close the caller.
-  recomputeManualRunPreflight(state, id, mode);
+  await recomputeManualRunPreflight(state, id, mode);
   opts?.commitGuard?.();
+  if (state.stopped) {
+    return { ok: true, ran: false, reason: "stopped" };
+  }
   const job = opts?.onExit
     ? state.store?.jobs.find((entry) => entry.id === id)
     : findJobOrThrow(state, id);
@@ -290,7 +294,7 @@ async function inspectManualRunPreflight(
   try {
     assertSupportedJobSpec(job);
   } catch (error) {
-    skipInvalidPersistedManualRun({
+    await skipInvalidPersistedManualRun({
       state,
       job,
       mode,
@@ -316,8 +320,8 @@ export async function inspectManualRunDisposition(
   mode?: CronRunMode,
   opts?: Pick<ManualRunOptions, "commitGuard">,
 ): Promise<ManualRunDisposition | { ok: false }> {
-  // Queue callers need a cheap eligibility check before entering the command
-  // lane; the real reservation happens later under lock in prepareManualRun.
+  // Reject ineligible requests before root admission; prepareManualRun rechecks
+  // under lock before reserving eligible work for the command lane.
   const result = await locked(state, () => inspectManualRunPreflight(state, id, mode, opts));
   if (!result.ok) {
     return result;
@@ -361,6 +365,7 @@ export async function prepareManualRun(
         ...(isImmediateCronRunMode(mode) ? { scheduleMode: "preserve" as const } : {}),
         manualRun: {
           runId: opts?.runId,
+          commitGuard: opts?.commitGuard,
           terminalTracker: internalTracker,
           scheduleOwnershipAtMs: opts?.scheduleOwnershipAtMs,
           ...(onExit
@@ -424,6 +429,7 @@ export async function prepareManualRun(
       runId: opts?.runId,
       terminalTracker: opts?.terminalTracker,
       owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
+      commitGuard: opts?.commitGuard,
       reservationAt,
       scheduleOwnershipAtMs: opts?.scheduleOwnershipAtMs ?? reservationAt,
       reservationIdentity,
@@ -451,7 +457,8 @@ export async function activatePreparedManualRun(
   return await locked(state, async () => {
     // Reservations can wait behind another cron run. Reload under the service
     // lock so disabling, rescheduling, or removing the job wins that wait.
-    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    await ensureLoaded(state, { forceReload: true });
+    prepared.commitGuard?.();
     prepared.onExit?.commitGuard();
     if (state.stopped) {
       await releasePreparedManualReservationWithRetry(state, prepared);
@@ -461,6 +468,10 @@ export async function activatePreparedManualRun(
     if (!job) {
       await releasePreparedManualReservationWithRetry(state, prepared);
       return { ok: true, ran: false, reason: "not-due" } as const;
+    }
+    if (mode === "if-enabled" && (!isJobEnabled(job) || job.state.autoDisabled)) {
+      await releasePreparedManualReservationWithRetry(state, prepared);
+      return { ok: true, ran: false, reason: "disabled" } as const;
     }
     if (
       !isQueuedCronRunReservationCurrent(state, prepared.jobId, prepared.reservationIdentity) ||
@@ -472,10 +483,6 @@ export async function activatePreparedManualRun(
     if (prepared.onExit && !matchesOnExitSchedule(job, prepared.onExit.schedule)) {
       await releasePreparedManualReservationWithRetry(state, prepared);
       return { ok: true, ran: false, reason: "not-due" };
-    }
-    if (mode === "if-enabled" && (!isJobEnabled(job) || job.state.autoDisabled)) {
-      await releasePreparedManualReservationWithRetry(state, prepared);
-      return { ok: true, ran: false, reason: "disabled" } as const;
     }
     if (!admitsStreamSourceRun(job, prepared.streamScheduleKey, prepared.streamSourceIdentity)) {
       // This is reservation identity, not watcher ownership: a force run can
@@ -497,7 +504,7 @@ export async function activatePreparedManualRun(
     try {
       assertSupportedJobSpec(job);
     } catch (error) {
-      skipInvalidPersistedManualRun({
+      await skipInvalidPersistedManualRun({
         state,
         job,
         mode,
@@ -505,7 +512,7 @@ export async function activatePreparedManualRun(
         terminalTracker: prepared.terminalTracker,
         error,
       });
-      releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
+      await releasePreparedManualReservationWithRetry(state, prepared);
       return { ok: true, ran: false, reason: "invalid-spec" } as const;
     }
 
@@ -513,7 +520,7 @@ export async function activatePreparedManualRun(
       state,
       job,
       reservationIdentity: prepared.reservationIdentity,
-      commitGuard: prepared.onExit?.commitGuard,
+      commitGuard: prepared.commitGuard ?? prepared.onExit?.commitGuard,
       onExitSchedule: prepared.onExit?.schedule,
       onUnavailableRollbackError: async () => {
         await releasePreparedManualReservationWithRetry(state, prepared);
@@ -535,7 +542,7 @@ export async function activatePreparedManualRun(
       job: activatedJob,
       runAtMs: startedAt,
     });
-    const taskRun = tryCreateCronTaskRunHandle({
+    const taskRun = createCronRunHandle({
       state,
       job: activatedJob,
       startedAt,
@@ -543,7 +550,7 @@ export async function activatePreparedManualRun(
       publicRunId: prepared.runId,
     });
     const taskRunId = taskRun?.runId;
-    const activeJobMarker = markManualCronJobActive(state, job);
+    const activeJobMarker = markManualCronJobActive(state, activatedJob, activation.runReceipt);
     // Immediate delivery belongs to the accepted request, not an old timed slot.
     // Keep execution overrides separate from the admitted cadence and trigger.
     const admittedJob = structuredClone(activatedJob);
@@ -565,8 +572,6 @@ export async function activatePreparedManualRun(
       startedAt,
       runId: prepared.runId ?? taskRunId,
       taskRunId,
-      taskId: taskRun?.taskId,
-      flowId: taskRun?.flowId,
       activeJobMarker,
       admittedJob,
       executionJob,
@@ -589,13 +594,14 @@ async function releasePreparedManualReservation(
     state,
     jobIds: [prepared.jobId],
     operationLabel: "cron.manual-reservation-cleanup",
-    mutate: ({ database, jobs }) => {
+    mutate: ({ database, jobs, receiptSchema }) => {
       const job = jobs.get(prepared.jobId);
       const ownership = state.queuedRunReservationsByJobId.get(prepared.jobId);
       if (ownership?.identity !== prepared.reservationIdentity) {
         return { value: undefined };
       }
       finishCronRunReceiptInDatabase({
+        receiptSchema,
         database,
         handle: ownership.runReceipt,
         status: "skipped",

@@ -16,6 +16,7 @@ import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./j
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   isCliProviderMock,
+  isThinkingLevelSupportedMock,
   acquirePreparedModelRuntimeMock,
   loadPublishedReplyDispatchRuntimeMock,
   loadRunCronIsolatedAgentTurn,
@@ -75,6 +76,12 @@ describe("runCronIsolatedAgentTurn — rooted runtime fallback", () => {
     );
     expect(result.status).toBe("ok");
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    expect(isThinkingLevelSupportedMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentRuntime: "openclaw" }),
+    );
+    expect(isThinkingLevelSupportedMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ agentRuntime: "codex" }),
+    );
     const admittedConfig = acquirePreparedModelRuntimeMock.mock.calls[0]?.[0].config;
     expect(admittedConfig.agents?.entries?.main.models).toBeUndefined();
     expect(

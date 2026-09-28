@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
+} from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
@@ -14,10 +17,22 @@ import { resolveSessionStorePathCore } from "./paths.js";
 import { listSessionEntriesReadOnly, replaceSessionEntry } from "./session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
+  isConfiguredSessionStoreAgentId,
   resolveExistingAgentSessionStoreTargetsSync,
   resolveSessionStoreTargets,
 } from "./targets.js";
 import { createAgentSessionStores, EXPLICIT_MAIN_CONFIG } from "./targets.test-support.js";
+
+async function withSessionStoreHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
+  return withTempHome(async (home) => {
+    try {
+      return await fn(home);
+    } finally {
+      // Fixed-store fixtures also open databases outside the default .openclaw directory.
+      await closeOpenClawAgentDatabasesAsync(home);
+    }
+  });
+}
 
 describe("resolveSessionStoreTargets", () => {
   it("resolves all configured agent stores", async () => {
@@ -88,6 +103,10 @@ describe("resolveSessionStoreTargets", () => {
           storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "opencode", env }),
         },
       ]);
+      for (const agentId of ["ops", "review", "claude", "gemini", "opencode"]) {
+        expect(isConfiguredSessionStoreAgentId(cfg, agentId)).toBe(true);
+      }
+      expect(isConfiguredSessionStoreAgentId(cfg, "unconfigured")).toBe(false);
     });
   });
 
@@ -126,7 +145,7 @@ describe("resolveSessionStoreTargets", () => {
   });
 
   it("lands colliding fixed-store writes in distinct owner databases", async () => {
-    await withTempHome(async (home) => {
+    const fixtureHome = await withSessionStoreHome(async (home) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
       const storePath = path.join(home, "ops.json");
 
@@ -149,6 +168,29 @@ describe("resolveSessionStoreTargets", () => {
           sessionKey: "agent:ops:main",
         },
         { sessionId: "ops-session", updatedAt: 2 },
+      );
+
+      const diagnostics: string[] = [];
+      expect(
+        resolveSessionStoreTargets(
+          {
+            session: { store: storePath },
+            agents: {
+              ownership: "explicit",
+              entries: { main: { default: true }, ops: {} },
+            },
+          },
+          { allAgents: true },
+          { env, diagnostics },
+        ),
+      ).toEqual([
+        { agentId: "main", storePath },
+        { agentId: "ops", storePath },
+      ]);
+      expect(diagnostics).toContainEqual(
+        expect.stringMatching(
+          /owner "main" selected by database-(?:registry|path); suffixed owner\(s\): "ops"\./,
+        ),
       );
 
       const mainPath = resolveSqliteTargetFromSessionStorePath(storePath, {
@@ -180,11 +222,13 @@ describe("resolveSessionStoreTargets", () => {
           storePath,
         }).map(({ sessionKey }) => sessionKey),
       ).toEqual(["agent:ops:main"]);
+      return home;
     });
+    await expect(fs.stat(fixtureHome)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("keeps a promoted default on its registered suffixed database", async () => {
-    await withTempHome(async (home) => {
+    await withSessionStoreHome(async (home) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
       const storePath = path.join(home, "shared.json");
       await replaceSessionEntry(
@@ -244,7 +288,7 @@ describe("resolveSessionStoreTargets", () => {
   });
 
   it("does not let durable metadata override ambiguous suffix registration", async () => {
-    await withTempHome(async (home) => {
+    await withSessionStoreHome(async (home) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
       const storePath = path.join(home, "shared.json");
       await replaceSessionEntry(
@@ -276,7 +320,7 @@ describe("resolveSessionStoreTargets", () => {
   });
 
   it("retains a shared-store claimant when the physical owner left the roster", async () => {
-    await withTempHome(async (home) => {
+    await withSessionStoreHome(async (home) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
       const storePath = path.join(home, "shared.sqlite");
       await replaceSessionEntry(
@@ -317,7 +361,7 @@ describe("resolveSessionStoreTargets", () => {
   });
 
   it("honors a registered owner over the configured default for a fixed-store collision", async () => {
-    await withTempHome(async (home) => {
+    await withSessionStoreHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storePath = path.join(home, "ops.json");
@@ -351,7 +395,7 @@ describe("resolveSessionStoreTargets", () => {
   });
 
   it("honors durable database ownership after its registry row is removed", async () => {
-    await withTempHome(async (home) => {
+    await withSessionStoreHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storePath = path.join(home, "ops.json");
@@ -404,7 +448,7 @@ describe("resolveSessionStoreTargets", () => {
   });
 
   it("does not let a scoped losing owner claim an unregistered fixed-store database", async () => {
-    await withTempHome(async (home) => {
+    await withSessionStoreHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storePath = path.join(home, "ops.json");

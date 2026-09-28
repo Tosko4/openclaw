@@ -1,6 +1,7 @@
 /** Session identity and context preparation for isolated cron runs. */
 import { isDeepStrictEqual } from "node:util";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
+import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -19,6 +20,7 @@ import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
@@ -30,13 +32,13 @@ import type { CronDeliveryPlan } from "../delivery-plan.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { isDetachedCronSessionTarget } from "../session-target.js";
-import { SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX } from "../system-owned-declaration.js";
 import type { CronJob, CronRunDiagnostics } from "../types.js";
 import {
   resolveCronModelSelection,
   resolveCronModelSelectionOwner,
   resolveCronThinkingSelection,
 } from "./model-selection.js";
+import { createCronCandidateExecutionResolver } from "./run-candidate-runtime.js";
 import { resolveCronCommandPromptPreflight } from "./run-command-preflight.js";
 import { resolveCronActiveRuntimeConfig, resolveCronAgentConfig } from "./run-config.js";
 import { buildCurrentConversationContextBlock } from "./run-current-context.js";
@@ -56,7 +58,6 @@ import {
   type RunCronAgentTurnParams,
   type WithRunSession,
 } from "./run-prepare-runtime.js";
-import { resolveCronRuntimeOverride } from "./run-runtime-selection.js";
 import {
   CronSessionLifecycleClaimError,
   createCronRunContinuationSession,
@@ -82,22 +83,18 @@ import {
   resolveAgentDir,
   resolveAgentTimeoutMs,
   resolveAgentWorkspaceDir,
-  resolveEffectiveAgentRuntime,
   resolveCronStyleNow,
   resolveHookExternalContentSource,
-  isThinkingLevelSupported,
-  resolveSupportedThinkingLevel,
   resolveSessionRuntimeOverrideForProvider,
-  resolveThinkingDefault,
+  resolveThinkingSelection,
 } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
-import { loadCronSessionEntryLatest, resolveCronSession } from "./session.js";
+import { loadCronSessionEntryLatest, prepareCronSession } from "./session.js";
 
 export type PreparedCronRunContext = {
   input: RunCronAgentTurnParams;
   cfgWithAgentDefaults: OpenClawConfig;
-  isSkillCollectionReview: boolean;
   agentId: string;
   agentCfg: AgentDefaultsConfig;
   agentDir: string;
@@ -111,6 +108,7 @@ export type PreparedCronRunContext = {
   workspaceDir: string;
   executionRoot?: RunCronAgentTurnParams["executionRoot"];
   commandBody: string;
+  inputProvenance?: InputProvenance;
   cronSession: MutableCronSession;
   sessionWorkAdmission: SessionWorkAdmissionLease;
   persistSessionEntry: PersistCronSessionEntry;
@@ -120,6 +118,10 @@ export type PreparedCronRunContext = {
   deliveryPlan: CronDeliveryPlan;
   resolvedDelivery: ResolvedCronDeliveryTarget;
   deliveryRequested: boolean;
+  /** Trusted delivery-channel formatting metadata; absent without a resolved chat delivery. */
+  deliverySystemPrompt?: string;
+  /** Message-tool formatting contract for a run without a reply route; applied once tools resolve. */
+  messageToolFormatPrompt?: string;
   sourceDelivery: SourceDeliveryPlan;
   suppressExecNotifyOnExit: boolean;
   skillsSnapshot: SkillSnapshot;
@@ -180,10 +182,6 @@ export async function prepareCronRunContext(params: {
       : {}),
   });
   const { agentId, agentDir } = modelOwner;
-  const isSkillCollectionReview = Boolean(
-    input.executionRoot &&
-    input.job.declarationKey === `${SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX}${agentId}`,
-  );
   const agentConfigOverride = requiredAgentId
     ? resolveAgentConfig(modelOwner.config, agentId)
     : undefined;
@@ -235,7 +233,7 @@ export async function prepareCronRunContext(params: {
   const isGmailHook = hookExternalContentSource === "gmail";
   const now = Date.now();
   const sandbox = resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor });
-  const cronSession = resolveCronSession({
+  const cronSession = await prepareCronSession({
     cfg: runtimeCfg,
     sessionKey: agentSessionKey,
     sourceSessionKey,
@@ -296,6 +294,11 @@ export async function prepareCronRunContext(params: {
         throw new CronSessionLifecycleClaimError(agentSessionKey, archivedSessionError);
       }
     },
+  });
+
+  clearBootstrapSnapshotOnSessionRollover({
+    sessionKey: agentSessionKey,
+    previousSessionId: cronSession.previousSessionId,
   });
 
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
@@ -417,66 +420,42 @@ export async function prepareCronRunContext(params: {
       };
     }
     const { provider, model, modelFallbacksOverride, runtimePluginCandidates } = preflight;
+    const runtimeSelection = createCronCandidateExecutionResolver({
+      cfgWithAgentDefaults,
+      agentId,
+      runSessionKey: agentSessionKey,
+      cronSession,
+      job: input.job,
+      executionRoot: input.executionRoot,
+    });
+    const { runtime: effectiveAgentRuntime } = runtimeSelection.resolveExecution(provider, model);
     const thinkingSelection = await resolveCronThinkingSelection({
       cfg: cfgWithAgentDefaults,
       owner: modelOwner,
       provider,
       model,
+      agentRuntime: effectiveAgentRuntime,
       jobThinking: input.job.payload.kind === "agentTurn" ? input.job.payload.thinking : undefined,
       hookThinking: isGmailHook ? runtimeCfg.hooks?.gmail?.thinking : undefined,
       sessionThinking: cronSession.sessionEntry.thinkingLevel,
     });
-    const resolveRuntimeOverride = (candidateProvider: string, modelId: string) =>
-      resolveCronRuntimeOverride({
-        config: cfgWithAgentDefaults,
-        agentId,
-        provider: candidateProvider,
-        modelId,
-        sessionEntry: cronSession.sessionEntry,
-        isSkillCollectionReview,
-      });
-    const effectiveAgentRuntime =
-      resolveRuntimeOverride(provider, model) ??
-      resolveEffectiveAgentRuntime({
-        cfg: cfgWithAgentDefaults,
-        provider,
-        modelId: model,
-        agentId,
-        sessionKey: agentSessionKey,
-        sessionEntry: cronSession.sessionEntry,
-      });
-    let requestedThinkLevel = thinkingSelection.requestedThinkLevel;
-    if (!requestedThinkLevel) {
-      requestedThinkLevel = resolveThinkingDefault({
-        cfg: cfgWithAgentDefaults,
-        agentId: modelOwner.agentId,
-        provider,
-        model,
-        catalog: thinkingSelection.catalog,
-        agentRuntime: effectiveAgentRuntime,
-      });
-    }
-    if (
-      !isThinkingLevelSupported({
-        provider,
-        model,
-        level: requestedThinkLevel,
-        catalog: thinkingSelection.catalog,
-        agentRuntime: effectiveAgentRuntime,
-      })
-    ) {
-      const fallbackThinkLevel = resolveSupportedThinkingLevel({
-        provider,
-        model,
-        level: requestedThinkLevel,
-        catalog: thinkingSelection.catalog,
-        agentRuntime: effectiveAgentRuntime,
-      });
-      if (fallbackThinkLevel !== requestedThinkLevel) {
-        logWarn(
-          `[cron:${input.job.id}] Thinking level "${requestedThinkLevel}" is not supported for ${provider}/${model}; using "${fallbackThinkLevel}" for this candidate.`,
-        );
-      }
+    const {
+      requestedLevel: requestedThinkLevel,
+      level: fallbackThinkLevel,
+      supported: thinkingLevelSupported,
+    } = resolveThinkingSelection({
+      cfg: cfgWithAgentDefaults,
+      agentId: modelOwner.agentId,
+      provider,
+      model,
+      level: thinkingSelection.requestedThinkLevel,
+      catalog: thinkingSelection.catalog,
+      agentRuntime: effectiveAgentRuntime,
+    });
+    if (!thinkingLevelSupported && fallbackThinkLevel !== requestedThinkLevel) {
+      logWarn(
+        `[cron:${input.job.id}] Thinking level "${requestedThinkLevel}" is not supported for ${provider}/${model}; using "${fallbackThinkLevel}" for this candidate.`,
+      );
     }
 
     preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime(
@@ -489,7 +468,10 @@ export async function prepareCronRunContext(params: {
         workspaceDir,
         allowGatewaySubagentBinding: true,
         runtimePluginSelections: runtimePluginCandidates.map((candidate) => {
-          const runtime = resolveRuntimeOverride(candidate.provider, candidate.model);
+          const runtime = runtimeSelection.resolveRuntimeOverride(
+            candidate.provider,
+            candidate.model,
+          );
           return runtime
             ? { provider: candidate.provider, modelId: candidate.model, runtime, agentId }
             : { provider: candidate.provider, modelId: candidate.model, agentId };
@@ -532,12 +514,18 @@ export async function prepareCronRunContext(params: {
       agentRuntime: effectiveAgentRuntime,
       toolsAllowProvenance: input.job.toolsAllowProvenance,
     });
-    const { deliveryPlan, deliveryRequested, resolvedDelivery, sourceDelivery } =
-      await resolveCronDeliveryContext({
-        cfg: cfgWithAgentDefaults,
-        job: input.job,
-        agentId,
-      });
+    const {
+      deliveryPlan,
+      deliveryRequested,
+      resolvedDelivery,
+      sourceDelivery,
+      deliverySystemPrompt,
+      messageToolFormatPrompt,
+    } = await resolveCronDeliveryContext({
+      cfg: cfgWithAgentDefaults,
+      job: input.job,
+      agentId,
+    });
 
     const { formattedTime, timeLine } = resolveCronStyleNow(runtimeCfg, now);
     // Current jobs stay detached; a bounded tail preserves context without transcript continuation.
@@ -553,7 +541,8 @@ export async function prepareCronRunContext(params: {
     const message = currentConversationContext
       ? `${currentConversationContext}\n\n${resolveCronAgentTurnMessage(input)}`
       : resolveCronAgentTurnMessage(input);
-    const base = `[cron:${input.job.id} ${input.job.name}] ${message}`.trim();
+    const sourcePromptPrefix = `[cron:${input.job.id} ${input.job.name}]`;
+    const base = `${sourcePromptPrefix} ${message}`.trim();
     const isExternalHook =
       hookExternalContentSource !== undefined || isExternalHookSession(baseSessionKey);
     const allowUnsafeExternalContent =
@@ -624,6 +613,7 @@ export async function prepareCronRunContext(params: {
       cronSession,
     });
     const authSelection = await resolveCronAuthSelection({
+      agentId,
       cfg: cfgWithAgentDefaults,
       provider,
       modelId: model,
@@ -666,6 +656,7 @@ export async function prepareCronRunContext(params: {
           toolsAllowExecTarget: input.job.toolsAllowExecTarget,
           toolsAllowExecTargetRequirement: input.job.toolsAllowExecTargetRequirement,
           cliSessionBindingFacts: {
+            extraSystemPromptStatic: deliverySystemPrompt,
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
           },
@@ -679,7 +670,6 @@ export async function prepareCronRunContext(params: {
       context: {
         input,
         cfgWithAgentDefaults,
-        isSkillCollectionReview,
         agentId,
         agentCfg,
         agentDir,
@@ -693,6 +683,17 @@ export async function prepareCronRunContext(params: {
         workspaceDir,
         executionRoot: input.executionRoot,
         commandBody,
+        inputProvenance:
+          agentPayload && !isExternalHook
+            ? {
+                kind: "internal_system",
+                sourceTool: "cron",
+                sourcePromptPrefix,
+                jobId: input.job.id,
+                runId: runSessionId,
+                sourceSessionKey: runSessionKey,
+              }
+            : undefined,
         cronSession,
         sessionWorkAdmission,
         persistSessionEntry,
@@ -702,6 +703,8 @@ export async function prepareCronRunContext(params: {
         deliveryPlan,
         resolvedDelivery,
         deliveryRequested,
+        deliverySystemPrompt,
+        messageToolFormatPrompt,
         sourceDelivery,
         suppressExecNotifyOnExit: deliveryPlan.mode === "none",
         skillsSnapshot,

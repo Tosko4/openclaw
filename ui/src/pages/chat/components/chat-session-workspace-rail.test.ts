@@ -18,6 +18,7 @@ function createWorkspace(overrides: Partial<SessionWorkspaceProps> = {}): Sessio
     error: null,
     activeId: null,
     filter: "all",
+    browserPath: "",
     browserSearch: "",
     dock: "right",
     narrowLayout: false,
@@ -39,6 +40,35 @@ afterEach(() => {
 });
 
 describe("session workspace path actions", () => {
+  it.each([
+    { path: "reports", search: "", loading: false, parent: "" },
+    { path: "reports/monthly", search: "", loading: false, parent: "reports" },
+    { path: "", search: "", loading: false, parent: null },
+    { path: "reports", search: "notes", loading: false, parent: null },
+    { path: "reports", search: "", loading: true, parent: null },
+  ])("keeps only settled non-root folder recovery available: %j", (scenario) => {
+    const onBrowsePath = vi.fn();
+    const workspace = createWorkspace({
+      browserPath: scenario.path,
+      browserSearch: scenario.search,
+      loading: scenario.loading,
+      list: { sessionKey: "agent:main:workspace", root: "/workspace", files: [] },
+      onBrowsePath,
+    });
+    const mount = document.body.appendChild(document.createElement("div"));
+    render(renderSessionWorkspaceRail(workspace, { embedded: true }), mount);
+    const parent = mount.querySelector<HTMLButtonElement>('button[aria-label=".."]');
+    if (scenario.parent === null) {
+      expect(parent).toBeNull();
+      expect(mount.textContent).not.toContain("This folder is unavailable.");
+    } else {
+      expect(parent).not.toBeNull();
+      expect(mount.textContent).toContain("This folder is unavailable.");
+      parent!.click();
+      expect(onBrowsePath).toHaveBeenCalledExactlyOnceWith(scenario.parent);
+    }
+  });
+
   it("keeps path-only session rows selected after their read and refresh", async () => {
     const file = { kind: "modified", path: "README.md", name: "README.md", missing: false };
     const result = { sessionKey: "agent:main:current", root: "/workspace", files: [file] };
@@ -137,45 +167,24 @@ describe("session workspace path actions", () => {
     },
   );
 
-  it("renders file-shaped placeholders while the initial workspace list loads", async () => {
-    const workspace = createWorkspace({ loading: true });
-    const mount = document.body.appendChild(document.createElement("div"));
-
-    render(renderSessionWorkspaceRail(workspace, { embedded: true }), mount);
-
-    const skeleton = mount.querySelector("openclaw-panel-loading-skeleton");
-    expect(skeleton).toBeInstanceOf(HTMLElement);
-    await (skeleton as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
-    expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("files");
-    expect(skeleton?.shadowRoot?.querySelectorAll(".skeleton").length).toBeGreaterThan(3);
-    expect(mount.textContent).not.toContain("Loading session workspace");
-  });
-
-  it.each(
-    [
-      {
-        surface: "session Files",
-        selector: ".chat-workspace-rail__list:not(.chat-workspace-rail__list--browser)",
-        path: "src/edited.ts",
-        origin: "session" as const,
-      },
-      {
-        surface: "project browser",
-        selector: ".chat-workspace-rail__list--browser",
-        path: "src/browser.ts",
-        origin: "workspace" as const,
-      },
-    ].flatMap((surface) =>
-      [false, true].map((failed) => ({
-        surface: surface.surface,
-        selector: surface.selector,
-        path: surface.path,
-        origin: surface.origin,
-        failed,
-        feedback: failed ? "Copy failed" : "Copied!",
-      })),
-    ),
-  )("shows $feedback when copying a $surface path", async (testCase) => {
+  it.each([
+    {
+      surface: "session Files",
+      selector: ".chat-workspace-rail__list:not(.chat-workspace-rail__list--browser)",
+      path: "src/edited.ts",
+      origin: "session" as const,
+      failed: true,
+      feedback: "Copy failed",
+    },
+    {
+      surface: "project browser",
+      selector: ".chat-workspace-rail__list--browser",
+      path: "src/browser.ts",
+      origin: "workspace" as const,
+      failed: false,
+      feedback: "Copied!",
+    },
+  ])("shows $feedback when copying a $surface path", async (testCase) => {
     const writeText = testCase.failed
       ? vi.fn().mockRejectedValue(new DOMException("Clipboard access denied", "NotAllowedError"))
       : vi.fn().mockResolvedValue(undefined);

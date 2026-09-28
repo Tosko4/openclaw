@@ -1,12 +1,16 @@
 import { createHash } from "node:crypto";
-import { constants as fsConstants, createReadStream, createWriteStream } from "node:fs";
+import { constants as fsConstants, createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { finished, pipeline } from "node:stream/promises";
 import { isDeepStrictEqual } from "node:util";
+import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { valid } from "semver";
 import * as tar from "tar";
+import {
+  collectPatchedMcpArtifactErrors,
+  PATCHED_MCP_NAME,
+} from "../../../scripts/lib/package-bundled-mcp.mjs";
 import {
   collectPackageDistImportErrors,
   collectPackageDistImports,
@@ -18,7 +22,8 @@ import {
 } from "../../../scripts/lib/package-lifecycle-marker.mjs";
 import { validateBundledPackageDependencyAlignment } from "../../../scripts/package-source-dependencies.mjs";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
-import { root as openFsRoot } from "../../infra/fs-safe.js";
+import { sha256File } from "../../infra/directory-durability.js";
+import { walkDirectory } from "../../infra/fs-safe.js";
 import {
   collectPackageDistInventory,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
@@ -27,10 +32,7 @@ import {
   composePackagePlugins,
   type DistributionPackageManifest,
 } from "../../infra/package-plugin-composition.js";
-import { collectPackageRootImports } from "../../infra/package-root-imports.js";
-import { readRuntimeDependencyOwnership } from "../../infra/runtime-dependency-ownership.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "../../shared/non-packaged-plugin-dirs.js";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
   readWorkerBundleArchiveManifest,
@@ -43,6 +45,11 @@ import {
 } from "../../shared/worker-bundle-hash.js";
 import { MAX_WORKER_BUNDLE_ARCHIVE_BYTES } from "../../shared/worker-bundle-limits.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import {
+  copyNodeBootstrapPrebuiltArchive,
+  NODE_BOOTSTRAP_PREBUILT_ARCHIVE,
+} from "./node-bootstrap-prebuilt.js";
+import { resolveNodeBootstrapRuntimeChunks } from "./node-bootstrap-runtime-chunks.js";
 
 const BOOTSTRAP_LAUNCHER_FILES = [
   "openclaw.mjs",
@@ -50,6 +57,11 @@ const BOOTSTRAP_LAUNCHER_FILES = [
   "node-sqlite.mjs",
   "node-runtime-update.mjs",
   "node-runtime-recovery.mjs",
+  "cli-root-options.mjs",
+  "gateway-run-argv.mjs",
+  "gateway-shutdown-budget.mjs",
+  "node-host-launcher.mjs",
+  "node-compile-cache.mjs",
 ];
 const READ_CONCURRENCY = 16;
 const IGNORED_PLUGIN_DIRECTORIES = new Set(["node_modules", "src", "test", "tests"]);
@@ -108,85 +120,6 @@ async function readPackageManifest(root: string): Promise<NodePackageManifest> {
   return value;
 }
 
-async function omitPrivateRuntimeChunks(packageRoot: string, files: string[]) {
-  const ownership = readRuntimeDependencyOwnership(packageRoot);
-  const privateChunks = new Map(
-    files.flatMap((file) => {
-      if (
-        !file.startsWith("dist/") ||
-        !/\.[cm]?js$/u.test(file) ||
-        file.startsWith("dist/extensions/")
-      ) {
-        return [];
-      }
-      const owner = ownership?.chunks[file.slice("dist/".length)];
-      return owner?.extensions.every((id) => NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id))
-        ? [[file, owner] as const]
-        : [];
-    }),
-  );
-  const sourceFacts = new Map<string, { sha256: string; imports: PackageDistImport[] }>();
-  if (privateChunks.size === 0) {
-    return { files, sourceFacts };
-  }
-  const root = await openFsRoot(packageRoot, {
-    hardlinks: "allow",
-    symlinks: "reject",
-    nonBlockingRead: true,
-  });
-  const fileSet = new Set(files);
-  const imports = new Map<string, string[]>();
-  // Parsing is synchronous; read one input at a time so buffers cannot multiply the byte bound.
-  for (const file of files.filter((candidate) => /\.[cm]?js$/u.test(candidate))) {
-    const { buffer } = await root.read(file, {
-      hardlinks: "allow",
-      symlinks: "reject",
-      maxBytes: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS.maxExpandedBytes,
-    });
-    const sha256 = createHash("sha256").update(buffer).digest("hex");
-    const owner = privateChunks.get(file);
-    if (owner && sha256 !== owner.sha256) {
-      throw new Error(`Runtime dependency ownership does not match ${file}; rebuild the Gateway`);
-    }
-    const source = buffer.toString("utf8");
-    const fileImports = collectPackageDistImports({
-      files: [file],
-      readText: () => source,
-    });
-    sourceFacts.set(file, { sha256, imports: fileImports });
-    const dependencies = new Set(fileImports.map(({ importedPath }) => importedPath));
-    const resolveImport = createRequire(path.join(packageRoot, file)).resolve;
-    for (const specifier of collectPackageRootImports(source)) {
-      if (!specifier.startsWith(".")) {
-        continue;
-      }
-      const specifierPath = specifier.replace(/[?#].*$/u, "");
-      const direct = path.posix.normalize(path.posix.join(path.posix.dirname(file), specifierPath));
-      if (fileSet.has(direct) && dependencies.has(direct)) {
-        continue;
-      }
-      try {
-        dependencies.add(
-          path.relative(packageRoot, resolveImport(specifierPath)).split(path.sep).join("/"),
-        );
-      } catch {
-        // The archive's closure check owns missing relative imports.
-      }
-    }
-    imports.set(file, [...dependencies]);
-  }
-  // Current root and shared imports override build ownership, including native require edges.
-  const retained = files.filter((file) => !privateChunks.has(file));
-  for (const file of retained) {
-    for (const dependency of imports.get(file) ?? []) {
-      if (privateChunks.delete(dependency)) {
-        retained.push(dependency);
-      }
-    }
-  }
-  return { files: files.filter((file) => !privateChunks.has(file)), sourceFacts };
-}
-
 function requireRunningBuild(options: ArtifactOptions, text: string, version: string): string {
   // SAFETY: fields remain unknown until matched against the process's immutable build identity below.
   const info = JSON.parse(text) as { buildId?: unknown; version?: unknown };
@@ -224,11 +157,42 @@ type BootstrapImportScope = {
   prefix: string;
   files: string[];
   imports: PackageDistImport[];
+  patchedMcp?: { manifest: NodePackageManifest; hashes: Map<string, string> };
 };
 
 type BootstrapEntry = {
   scope: BootstrapImportScope;
 } & ({ source: { root: string; relative: string } } | { contents: Buffer });
+
+async function collectInstalledBundledFiles(root: string): Promise<string[]> {
+  const included = ({ name }: { name: string }) => name !== "node_modules" && !name.startsWith(".");
+  const { entries, failedDirs, truncated } = await walkDirectory(root, {
+    maxEntries: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS.maxEntries,
+    symlinks: "include",
+    include: included,
+    descend: (entry) => {
+      if (entry.depth >= 64) {
+        throw new Error("Node bootstrap dependency exceeds its directory depth limit");
+      }
+      return included(entry);
+    },
+  });
+  if (failedDirs.length > 0) {
+    throw failedDirs[0]!.error;
+  }
+  if (truncated) {
+    throw new Error("Node bootstrap distribution exceeds its artifact limits");
+  }
+  return entries.flatMap((entry) => {
+    if (entry.kind === "directory" || entry.relativePath === "package.json") {
+      return [];
+    }
+    if (entry.kind !== "file") {
+      throw new Error(`Unsafe bundled node distribution path: ${entry.relativePath}`);
+    }
+    return [entry.relativePath.split(path.sep).join("/")];
+  });
+}
 
 async function resolvePlugins(options: ArtifactOptions, packageRoot: string) {
   const ids = new Set<string>();
@@ -273,6 +237,7 @@ async function resolvePlugins(options: ArtifactOptions, packageRoot: string) {
 async function prepareNodeBootstrapArtifact(
   options: ArtifactOptions,
   temporaryRoot: string,
+  usePrebuilt = true,
 ): Promise<NodeBootstrapArtifact> {
   const packageRoot = await fs.realpath(options.packageRoot);
   const sourcePackage = await readPackageManifest(packageRoot);
@@ -344,14 +309,10 @@ async function prepareNodeBootstrapArtifact(
         throw new Error(`Invalid node distribution file: ${relative}`);
       }
       reserveFile(destination, before.size);
-      const contents = await handle.readFile();
-      const after = await handle.stat();
+      const contents = await readFileHandleBounded(handle, before.size);
       const current = await fs.lstat(source);
       if (
         contents.byteLength !== before.size ||
-        before.size !== after.size ||
-        before.mtimeMs !== after.mtimeMs ||
-        before.ctimeMs !== after.ctimeMs ||
         current.isSymbolicLink() ||
         current.dev !== before.dev ||
         current.ino !== before.ino ||
@@ -382,7 +343,7 @@ async function prepareNodeBootstrapArtifact(
     (relative) =>
       relative.startsWith("scripts/") && !relative.includes("*") && !relative.endsWith("/"),
   );
-  const { files, sourceFacts } = await omitPrivateRuntimeChunks(
+  const { files, sourceFacts } = await resolveNodeBootstrapRuntimeChunks(
     packageRoot,
     [...BOOTSTRAP_LAUNCHER_FILES, ...publicFiles, ...scripts].filter(
       (relative) => relative !== LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
@@ -449,7 +410,14 @@ async function prepareNodeBootstrapArtifact(
     for (const [dependency, version] of dependencies) {
       packageJson.dependencies![dependency] = version;
     }
-    const bundledFiles = await collectPackageDistInventory(root);
+    // Linked workspaces can carry source and private files; installed npm bundles already
+    // own their published layout, including compiled directories and non-JavaScript assets.
+    const workspace =
+      sourcePackage.dependencies?.[name]?.startsWith("workspace:") ||
+      !root.endsWith(`${path.sep}node_modules${path.sep}${name.split("/").join(path.sep)}`);
+    const bundledFiles = workspace
+      ? await collectPackageDistInventory(root)
+      : await collectInstalledBundledFiles(root);
     if (bundledFiles.length === 0) {
       throw new Error(
         `Bundled node dependency ${name} needs its compiled distribution; rebuild the Gateway`,
@@ -460,6 +428,9 @@ async function prepareNodeBootstrapArtifact(
       prefix: `node_modules/${name}/`,
       files: [],
       imports: [],
+      ...(name === PATCHED_MCP_NAME
+        ? { patchedMcp: { manifest: bundled, hashes: new Map<string, string>() } }
+        : {}),
     };
     scopes.push(scope);
     addFiles(root, bundledFiles, scope.prefix, scope);
@@ -496,19 +467,26 @@ async function prepareNodeBootstrapArtifact(
       entry.scope.files.push(relative.slice(entry.scope.prefix.length));
     }
   }
-  const tarballPath = path.join(temporaryRoot, "node-runtime.tgz");
+  const tarballPath = path.join(temporaryRoot, NODE_BOOTSTRAP_PREBUILT_ARCHIVE);
+  const prebuiltManifest = usePrebuilt
+    ? await copyNodeBootstrapPrebuiltArchive(packageRoot, temporaryRoot)
+    : undefined;
   let entryConsumed = Promise.resolve();
-  const pack = new tar.Pack({
-    gzip: true,
-    noMtime: true,
-    portable: true,
-    strict: true,
-    onWriteEntry(entry) {
-      entryConsumed = finished(entry, { readable: true, writable: false, cleanup: true });
-      void entryConsumed.catch(() => undefined);
-    },
-  });
-  const archiveDone = pipeline(pack, createWriteStream(tarballPath, { flags: "wx" }));
+  const pack = prebuiltManifest
+    ? undefined
+    : new tar.Pack({
+        gzip: true,
+        noMtime: true,
+        portable: true,
+        strict: true,
+        onWriteEntry(entry) {
+          entryConsumed = finished(entry, { readable: true, writable: false, cleanup: true });
+          void entryConsumed.catch(() => undefined);
+        },
+      });
+  const archiveDone = pack
+    ? pipeline(pack, createWriteStream(tarballPath, { flags: "wx" }))
+    : Promise.resolve();
   // Observe output errors immediately, but join the pipeline after in-flight reads drain.
   void archiveDone.catch(() => undefined);
   const manifest: WorkerBundleHashEntry[] = [];
@@ -543,14 +521,21 @@ async function prepareNodeBootstrapArtifact(
         if (inspected && identity.sha256 !== inspected.sha256) {
           throw new Error(`Node distribution changed after import inspection: ${relative}`);
         }
-        entry.scope.imports.push(
-          ...(inspected?.imports ??
-            collectPackageDistImports({
-              files: [importerPath],
-              readText: () => contents.toString("utf8"),
-            })),
-        );
+        if (entry.scope.patchedMcp) {
+          entry.scope.patchedMcp.hashes.set(importerPath, identity.sha256);
+        } else {
+          entry.scope.imports.push(
+            ...(inspected?.imports ??
+              collectPackageDistImports({
+                files: [importerPath],
+                readText: () => contents.toString("utf8"),
+              })),
+          );
+        }
         manifest.push(identity);
+        if (!pack) {
+          continue;
+        }
         const input = new tar.ReadEntry(
           new tar.Header({
             path: identity.path,
@@ -566,10 +551,16 @@ async function prepareNodeBootstrapArtifact(
       }
     }
     for (const scope of [...scopes, mainScope]) {
-      const errors = collectPackageDistImportErrors(scope);
+      const errors = scope.patchedMcp
+        ? collectPatchedMcpArtifactErrors({
+            manifest: scope.patchedMcp.manifest,
+            files: new Set(scope.files),
+            sha256: (file) => scope.patchedMcp?.hashes.get(file),
+          })
+        : collectPackageDistImportErrors(scope);
       if (errors.length > 0) {
         throw new Error(
-          `Node distribution ${scope.label} has an incomplete built import closure; rebuild and restart the Gateway: ${errors.slice(0, 5).join("; ")}`,
+          `Node distribution ${scope.label} ${scope.patchedMcp ? "has an invalid patched dependency" : "has an incomplete built import closure"}; rebuild and restart the Gateway: ${errors.slice(0, 5).join("; ")}`,
         );
       }
     }
@@ -584,14 +575,14 @@ async function prepareNodeBootstrapArtifact(
         "Gateway build changed while preparing cloud bootstrap; restart the Gateway and retry",
       );
     }
-    pack.end();
+    pack?.end();
     await archiveDone;
   } catch (error) {
     // Minipass needs an error event; argumentless destroy does not settle Node's pipeline.
-    pack.destroy(
+    pack?.destroy(
       error instanceof Error ? error : new Error("Node bootstrap archive failed", { cause: error }),
     );
-    pack.zip?.destroy();
+    pack?.zip?.destroy();
     await archiveDone.catch(() => undefined);
     throw error;
   }
@@ -599,20 +590,23 @@ async function prepareNodeBootstrapArtifact(
   if (tarballBytes > MAX_WORKER_BUNDLE_ARCHIVE_BYTES) {
     throw new Error("Node bootstrap archive exceeds the transfer limit");
   }
-  const archiveManifest = await readWorkerBundleArchiveManifest(
-    tarballPath,
-    DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
-  );
+  const archiveManifest =
+    prebuiltManifest ??
+    (await readWorkerBundleArchiveManifest(tarballPath, DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS));
   if (hashWorkerBundleManifest(manifest) !== hashWorkerBundleManifest(archiveManifest)) {
+    if (prebuiltManifest) {
+      // Different builds or execution modes can select different plugin bytes. Re-enter the
+      // canonical builder once with fresh source checks; never trust an adjacent checksum.
+      await fs.rm(tarballPath);
+      return await prepareNodeBootstrapArtifact(options, temporaryRoot, false);
+    }
     throw new Error("Node bootstrap archive does not match the verified distribution");
   }
-  const hash = createHash("sha256");
-  for await (const chunk of createReadStream(tarballPath)) {
-    hash.update(chunk);
-  }
+  await using handle = await fs.open(tarballPath, "r");
+  const { digest: tarballSha256 } = await sha256File(handle);
   return Object.freeze({
     tarballPath,
-    tarballSha256: hash.digest("hex"),
+    tarballSha256,
     tarballBytes,
     openclawVersion: packageJson.version,
     buildId,

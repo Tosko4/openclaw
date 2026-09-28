@@ -1,9 +1,13 @@
 import type { WorkspaceHashMetrics } from "./workspace-hash-memo.js";
+import type { WorkspaceNode } from "./workspace-manifest-comparison.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
-import type { StagedWorkerWorkspaceInventory } from "./workspace-result-inventory.js";
+import type {
+  StagedWorkerWorkspaceInventory,
+  StagedWorkerWorkspaceReadEntry,
+} from "./workspace-result-inventory.js";
 
 export type WorkspaceComputationHashes = {
   owner: "gateway" | "worker";
@@ -61,6 +65,17 @@ export type WorkspaceManifestValueInputs = {
     root?: string;
     hashes?: WorkspaceComputationHashes;
   };
+  "workspace.manifest.nodes": {
+    root: string;
+    paths: string[];
+    hashes?: WorkspaceComputationHashes;
+  };
+  "workspace.manifest.tree-input": {
+    inputPath: string;
+    ref: string;
+    entries: readonly WorkerWorkspaceManifestEntry[];
+    source: { root: string; tree?: never } | { root: string; tree: string };
+  };
   "workspace.manifest.serialize": { manifest: WorkerWorkspaceManifest };
   "workspace.manifest.overlay": {
     source: WorkerWorkspaceManifest;
@@ -77,7 +92,37 @@ export type WorkspaceManifestValueInputs = {
 
 type WorkspaceManifestValueInput = { payload: Uint8Array<ArrayBuffer> };
 
+export type WorkspaceStageInputSource<Raw = Uint8Array<ArrayBuffer>> =
+  | {
+      baseManifestRef: string;
+      currentManifestRef: string;
+      baseManifestRaw: Raw;
+      currentManifestRaw: Raw;
+    }
+  | {
+      publication: {
+        metadata: Raw;
+        publicationDigest: string;
+        currentManifestRef: string;
+        baseCommit: string;
+      };
+    };
+
+export type WorkspaceStageInput<Raw = Uint8Array<ArrayBuffer>> = WorkspaceStageInputSource<Raw> & {
+  inputPath: string;
+  stagingRoot: string;
+  stagedResultRef: string;
+};
+
 export type WorkspaceManifestComputationOperations = {
+  "workspace.manifest.tree-input": {
+    input: WorkspaceManifestValueInput;
+    output: null;
+  };
+  "workspace.manifest.nodes": {
+    input: WorkspaceManifestValueInput;
+    output: WorkspaceComputationHashResult<Array<[string, WorkspaceNode]>>;
+  };
   "workspace.manifest.capture": {
     input: WorkspaceManifestValueInput;
     output: WorkspaceComputationHashResult<WorkspaceManifestCapture>;
@@ -119,24 +164,16 @@ export type WorkspaceManifestComputationOperations = {
     input: { root: string; ref: string };
     output: StagedWorkerWorkspaceInventory;
   };
-  "workspace.manifest.entry": {
+  "workspace.manifest.entries": {
     input: {
       root: string;
-      object: { mode: string; objectId: string };
-      entry: WorkerWorkspaceManifestEntry;
+      entries: StagedWorkerWorkspaceReadEntry[];
     };
     output: Uint8Array;
   };
   "workspace.manifest.stage-input": {
-    input: {
-      stagingRoot: string;
-      stagedResultRef: string;
-      baseManifestRef: string;
-      currentManifestRef: string;
-      baseManifestRaw: Uint8Array<ArrayBuffer>;
-      currentManifestRaw: Uint8Array<ArrayBuffer>;
-    };
-    output: Uint8Array;
+    input: WorkspaceStageInput;
+    output: null;
   };
 };
 

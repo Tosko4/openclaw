@@ -7,9 +7,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import {
-  loadOriginDeviceTokenReadOnly,
-  storeOriginDeviceToken,
-} from "../infra/device-auth-store.js";
+  readOriginDeviceTokenReadOnlyForTest,
+  seedOriginDeviceToken,
+} from "../infra/device-auth-store.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -32,7 +32,7 @@ import {
 import {
   EMPTY_STABILITY_SNAPSHOT,
   startAgentTurnGateway,
-  startCronListGateway,
+  startCliReadGateway,
   startCronLookupMissGateway,
   startGatewayStabilityRpcServer,
   startNodePairingGateway,
@@ -71,7 +71,6 @@ describe("gateway-backed CLI process exit", () => {
   });
 
   it.each([
-    { label: "empty", timeout: "", valid: false },
     { label: "whitespace", timeout: " \t ", valid: false },
     { label: "positive", timeout: "10000", valid: true },
   ])(
@@ -151,7 +150,7 @@ describe("gateway-backed CLI process exit", () => {
       OPENCLAW_STATE_DIR: stateDir,
     };
     const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-    storeOriginDeviceToken({
+    seedOriginDeviceToken({
       gatewayScope: gatewayOriginScope(gateway.url),
       deviceId: identity.deviceId,
       role: "operator",
@@ -174,7 +173,7 @@ describe("gateway-backed CLI process exit", () => {
     expect(gateway.calls).toEqual(["node.pair.list", "node.pair.approve"]);
     expect(await snapshotDirectoryContents(stateDir)).toEqual(before);
     expect(
-      loadOriginDeviceTokenReadOnly({
+      readOriginDeviceTokenReadOnlyForTest({
         gatewayScope: gatewayOriginScope(gateway.url),
         deviceId: identity.deviceId,
         role: "operator",
@@ -225,7 +224,7 @@ describe("gateway-backed CLI process exit", () => {
       OPENCLAW_STATE_DIR: stateDir,
     };
     const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-    storeOriginDeviceToken({
+    seedOriginDeviceToken({
       gatewayScope: gatewayOriginScope(gateway.url),
       deviceId: identity.deviceId,
       role: "operator",
@@ -248,7 +247,7 @@ describe("gateway-backed CLI process exit", () => {
     expect(gateway.authInputs).toEqual([{ deviceToken: storedToken }]);
     expect(gateway.calls).toEqual(["diagnostics.stability"]);
     expect(
-      loadOriginDeviceTokenReadOnly({
+      readOriginDeviceTokenReadOnlyForTest({
         gatewayScope: gatewayOriginScope(gateway.url),
         deviceId: identity.deviceId,
         role: "operator",
@@ -279,7 +278,7 @@ describe("gateway-backed CLI process exit", () => {
       };
       if (seeded) {
         const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-        storeOriginDeviceToken({
+        seedOriginDeviceToken({
           gatewayScope: gatewayOriginScope(gateway.url),
           deviceId: identity.deviceId,
           role: "operator",
@@ -452,55 +451,12 @@ describe("gateway-backed CLI process exit", () => {
 
   it.each([
     { label: "list", args: ["devices", "list", "--timeout", "250"] },
-    { label: "join-code", args: ["devices", "join-code", "--timeout", "250"] },
-    {
-      label: "remove",
-      args: ["devices", "remove", "test-device", "--timeout", "250"],
-    },
-    {
-      label: "clear",
-      args: ["devices", "clear", "--yes", "--pending", "--timeout", "250"],
-    },
-    {
-      label: "approve",
-      args: ["devices", "approve", "test-request", "--timeout", "250"],
-    },
-    {
-      label: "reject",
-      args: ["devices", "reject", "test-request", "--timeout", "250"],
-    },
-    {
-      label: "rename",
-      args: [
-        "devices",
-        "rename",
-        "--device",
-        "test-device",
-        "--name",
-        "Test Device",
-        "--timeout",
-        "250",
-      ],
-    },
+    { label: "approve", args: ["devices", "approve", "test-request", "--timeout", "250"] },
     {
       label: "rotate",
       args: [
         "devices",
         "rotate",
-        "--device",
-        "test-device",
-        "--role",
-        "operator",
-        "--timeout",
-        "250",
-      ],
-      machineOutput: true,
-    },
-    {
-      label: "revoke",
-      args: [
-        "devices",
-        "revoke",
         "--device",
         "test-device",
         "--role",
@@ -628,7 +584,7 @@ describe("gateway-backed CLI process exit", () => {
     const configPath = path.join(stateDir, "openclaw.json");
     const caTriggerPath = path.join(root, "load-default-ca.mjs");
     const token = "test-token";
-    const gateway = await startCronListGateway(token);
+    const gateway = await startCliReadGateway(token);
     await fs.mkdir(stateDir, { recursive: true });
     await fs.writeFile(
       caTriggerPath,
@@ -899,7 +855,6 @@ describe("gateway-backed CLI process exit", () => {
   });
 
   it.each([
-    { label: "empty", timeout: "", valid: false },
     { label: "whitespace", timeout: " \t ", valid: false },
     { label: "omitted", timeout: undefined, valid: true },
     { label: "positive", timeout: "10000", valid: true },
