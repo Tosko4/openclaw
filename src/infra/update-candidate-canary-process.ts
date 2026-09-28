@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { redactSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
 import { signalProcessTree } from "../process/kill-tree.js";
+import { UPDATE_CANARY_PROGRESS_PREFIX } from "./update-candidate-canary-progress.js";
 
 export function launchCanary(params: {
   entry: string;
@@ -11,7 +12,8 @@ export function launchCanary(params: {
   stateDir: string;
   assertCurrent?: () => void;
   capture: (line: string) => void;
-  onSpawn: () => void;
+  onLine?: (line: string) => void;
+  onStdout?: (stdout: string) => void;
 }) {
   const { entry, args, env, capture } = params;
   params.assertCurrent?.();
@@ -22,12 +24,11 @@ export function launchCanary(params: {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
-  params.onSpawn();
   let stdout = "";
   let firstStderrLine: string | undefined;
   let cliReason: string | undefined;
   const captureStderr = (line: string) => {
-    if (!line.trim()) {
+    if (!line.trim() || line.startsWith(UPDATE_CANARY_PROGRESS_PREFIX)) {
       return;
     }
     const safe = redactSupportDiagnosticLine(line, { env, stateDir: params.stateDir });
@@ -44,6 +45,13 @@ export function launchCanary(params: {
     stream.setEncoding("utf8");
     let pending = "";
     let droppingLine = false;
+    const captureLine = (line: string) => {
+      if (stream === child.stderr) {
+        captureStderr(line);
+      }
+      capture(line);
+      params.onLine?.(line);
+    };
     stream.on("data", (chunk: string) => {
       let text = chunk;
       if (droppingLine) {
@@ -58,10 +66,7 @@ export function launchCanary(params: {
       const lines = pending.split(/\r?\n/u);
       pending = lines.pop() ?? "";
       for (const line of lines) {
-        if (stream === child.stderr) {
-          captureStderr(line);
-        }
-        capture(line);
+        captureLine(line);
       }
       if (pending.length > 64 * 1024) {
         // Discard an oversized unterminated line whole, never through a secret.
@@ -75,10 +80,7 @@ export function launchCanary(params: {
     });
     return () => {
       if (pending) {
-        if (stream === child.stderr) {
-          captureStderr(pending);
-        }
-        capture(pending);
+        captureLine(pending);
         pending = "";
       }
     };
@@ -87,18 +89,21 @@ export function launchCanary(params: {
     stdoutBytes += Buffer.byteLength(chunk);
     if (stdoutBytes <= 1024 * 1024) {
       stdout += chunk;
+      params.onStdout?.(stdout);
     } else {
       outputExceeded = true;
     }
   });
   let exited = false;
   let processExited = false;
-  let killed = false;
-  child.once("exit", (_code, signal) => {
-    processExited = true;
-    killed = Boolean(signal);
-  });
   const result = new Promise<number | null>((resolve) => {
+    child.once("exit", (code) => {
+      processExited = true;
+      // A failed leader cannot become a successful timeout while inherited pipes stay open.
+      if (code !== 0) {
+        resolve(code);
+      }
+    });
     child.once("error", (error) => {
       captureStderr(error.message);
       capture(error.message);
@@ -113,7 +118,7 @@ export function launchCanary(params: {
       resolve(code);
     });
   });
-  // An error can settle validation without proving that the child and its pipes closed.
+  // Failed processes can settle validation before their inherited pipes close.
   const closed = new Promise<void>((resolve) => {
     child.once("close", () => resolve());
   });
@@ -123,7 +128,6 @@ export function launchCanary(params: {
     closed,
     hasExited: () => exited,
     processExited: () => processExited,
-    wasKilled: () => killed,
     stdout: () => stdout,
     firstStderrLine: () => cliReason ?? firstStderrLine,
     outputExceeded: () => outputExceeded,

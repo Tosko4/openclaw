@@ -1,10 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { expect, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import * as serviceChildControl from "../process/supervisor/service-child-control-reader.js";
+import { workerBackgroundExecEntrypoints } from "../worker/worker-runtime-background-exec-entrypoints.test-support.js";
+import type { NodeWorkerLaunchClaim } from "./node-worker-launch-store.js";
 import * as workerLaunchTransport from "./node-worker-launch-transport.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -17,14 +19,17 @@ import {
   writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
 
-function writeSupervisorOwnerScript(root: string): string {
-  const supervisorUrl = pathToFileURL(path.resolve("src/node-host/node-worker-supervisor.ts")).href;
-  const scriptPath = path.join(root, "supervisor-owner.mts");
+const supervisorUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.supervisor);
+const turnsUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.turnStore);
+
+function writeSupervisorOwnerScript(root: string, waitForCompletedTurn: boolean): string {
+  const scriptPath = path.join(root, "supervisor-owner.mjs");
   fs.writeFileSync(
     scriptPath,
     `
       import fs from "node:fs";
-      import { createNodeWorkerSupervisor } from ${JSON.stringify(supervisorUrl)};
+      import { createNodeWorkerSupervisor } from ${JSON.stringify(supervisorUrl.href)};
+      import { NodeWorkerTurnStore } from ${JSON.stringify(turnsUrl.href)};
       const [bundleRoot, stateDir, inputPath] = process.argv.slice(2);
       const supervisor = createNodeWorkerSupervisor({
         bundleRoot,
@@ -36,7 +41,21 @@ function writeSupervisorOwnerScript(root: string): string {
       };
       process.once("SIGTERM", () => void shutdown());
       const input = JSON.parse(fs.readFileSync(inputPath, "utf8"));
+      const completed = Promise.withResolvers();
+      void completed.promise.catch(() => undefined);
+      if (${waitForCompletedTurn}) {
+        const finish = NodeWorkerTurnStore.prototype.finish;
+        NodeWorkerTurnStore.prototype.finish = function (params) {
+          const finishing = finish.call(this, params);
+          if (params.expected.launchId === input.launchId) {
+            NodeWorkerTurnStore.prototype.finish = finish;
+            void finishing.then(completed.resolve, completed.reject);
+          }
+          return finishing;
+        };
+      }
       const receipt = await supervisor.launch(input, ${JSON.stringify({ kind: "unix", socketPath: "/tmp/openclaw-worker/gateway.sock" })});
+      if (${waitForCompletedTurn}) await completed.promise;
       process.stdout.write(JSON.stringify(receipt) + "\\n");
       setInterval(() => {}, 1000);
     `,
@@ -44,20 +63,73 @@ function writeSupervisorOwnerScript(root: string): string {
   return scriptPath;
 }
 
+export function spawnPendingSupervisorOwner({
+  root,
+  env,
+  claim,
+}: {
+  root: string;
+  env: NodeJS.ProcessEnv;
+  claim: NodeWorkerLaunchClaim;
+}): ChildProcess {
+  const storeUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.launchStore);
+  const journalUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.journalWorker);
+  const identityUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.processIdentity);
+  const claimPath = path.join(root, "claim.json");
+  const scriptPath = path.join(root, "pending-owner.mjs");
+  fs.writeFileSync(claimPath, JSON.stringify(claim));
+  fs.writeFileSync(
+    scriptPath,
+    `
+        import fs from "node:fs";
+        import { NodeWorkerJournalWorker } from ${JSON.stringify(journalUrl.href)};
+        import { NodeWorkerLaunchStore } from ${JSON.stringify(storeUrl.href)};
+        import { NodeWorkerTurnStore } from ${JSON.stringify(turnsUrl.href)};
+        import { requireNodeWorkerProcessIdentity } from ${JSON.stringify(identityUrl.href)};
+        const [stateDir, claimPath] = process.argv.slice(2);
+        const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+        const journal = new NodeWorkerJournalWorker({ env });
+        const store = new NodeWorkerLaunchStore(journal);
+        const claim = JSON.parse(fs.readFileSync(claimPath, "utf8"));
+        const supervisor = requireNodeWorkerProcessIdentity(process.pid);
+        const result = (await store.claim(
+          claim,
+          supervisor,
+          2,
+        ));
+        const turn = (await new NodeWorkerTurnStore(journal).claim({
+          claim, ownerLaunchId: result.receipt.launchId, supervisor,
+        }));
+        process.stdout.write(JSON.stringify(turn.receipt) + "\\n");
+        setInterval(() => {}, 1000);
+      `,
+  );
+  return spawn(
+    process.execPath,
+    [
+      ...resolveRuntimeWorkerArgv(storeUrl).slice(0, -1),
+      scriptPath,
+      env.OPENCLAW_STATE_DIR!,
+      claimPath,
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+}
+
 export function spawnSupervisorOwner(params: {
   bundleRoot: string;
   env: NodeJS.ProcessEnv;
   input: ReturnType<typeof testWorkerLaunchInput>;
   root: string;
+  waitForCompletedTurn?: boolean;
 }): ChildProcess {
   const inputPath = path.join(params.root, `${params.input.launchId}.json`);
   fs.writeFileSync(inputPath, JSON.stringify(params.input));
   const child = spawn(
     process.execPath,
     [
-      "--import",
-      "tsx",
-      writeSupervisorOwnerScript(params.root),
+      ...resolveRuntimeWorkerArgv(supervisorUrl).slice(0, -1),
+      writeSupervisorOwnerScript(params.root, params.waitForCompletedTurn ?? false),
       params.bundleRoot,
       params.env.OPENCLAW_STATE_DIR!,
       inputPath,

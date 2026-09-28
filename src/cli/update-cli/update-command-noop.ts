@@ -1,6 +1,5 @@
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
-import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -10,20 +9,13 @@ import { maybeRepairLegacyConfigForUpdateChannel } from "./update-command-config
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import {
-  formatUpdateAncestryBlockMessage,
-  handoffUpdateFromGateway,
-} from "./update-command-handoff.js";
-import {
   captureOwnedManagedUpdateContext,
   revalidateUpdateDatabaseContext,
 } from "./update-command-managed-context.js";
 import { createPackageRuntimeRecovery } from "./update-command-node-runtime.js";
 import { preflightConfiguredNpmPluginTargets } from "./update-command-plugin-preflight.js";
 import { finishUpdate } from "./update-command-post-update.js";
-import {
-  collectServiceInspectionFailureFacts,
-  type RefuseUpdate,
-} from "./update-command-result.js";
+import type { RefuseUpdate } from "./update-command-result.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
   GatewayServiceUpdateOwnershipError,
@@ -32,8 +24,7 @@ import {
 } from "./update-command-service-plan.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
-  shouldBlockMutableUpdateFromGatewayServiceEnv,
-  UpdateCommandAbort,
+  mutableUpdateGatewayServiceBlock,
 } from "./update-command-service.js";
 
 export async function finishAlreadyCurrentUpdate(
@@ -54,7 +45,6 @@ export async function finishAlreadyCurrentUpdate(
     | "packageUpdateNodeRunner"
     | "ownedManagedUpdateEnv"
   > & {
-    packageInstallSpec: string | null;
     managedServiceRootRedirect: ManagedServiceRootRedirect | null;
     managedServiceRoot?: string;
     legacyConfigPlan?: LegacyConfigUpdatePlan;
@@ -80,9 +70,48 @@ export async function finishAlreadyCurrentUpdate(
       updateInstallKind: params.result.mode === "git" ? ("git" as const) : ("package" as const),
       jsonMode: Boolean(params.opts.json),
       timeoutMs: params.updateStepTimeoutMs,
+      expectedForeground: params.opts.run?.completionOwner === "gateway-restart" || undefined,
     };
     const admission = await inspectUpdateDatabaseContexts(inspection);
     const service = admission.service;
+    const context = admission.foreground ? admission.contexts[0]! : admission.contexts.at(-1)!;
+    const membership = await mutableUpdateGatewayServiceBlock({
+      preManagedServiceStop:
+        service ?? admission.services.get(params.managedServiceRoot ?? params.root),
+      root: params.root,
+      runId: params.opts.run?.runId,
+    });
+    if (membership) {
+      const deferredMaintenance =
+        "Core is already current; plugin, runtime, and service maintenance was deferred. " +
+        (params.requestedChannel && params.requestedChannel !== params.storedChannel
+          ? `Requested channel change to ${params.requestedChannel} was not applied; retry with --channel ${params.requestedChannel}. `
+          : "") +
+        membership.message;
+      result.steps.push({
+        name: "current-core-maintenance",
+        command: "openclaw update",
+        cwd: params.root,
+        durationMs: 0,
+        exitCode: 0,
+        advisory: { kind: "recoverable-maintenance", message: deferredMaintenance },
+      });
+      params.stop();
+      await finishUpdate({
+        ...params,
+        result,
+        coreAlreadyCurrent: true,
+        deferredMaintenance,
+        mutationStarted: false,
+        installKindChanged: false,
+        downgradeRisk: false,
+        preManagedServiceStop: service,
+        ownedManagedUpdateEnv: context.env,
+        configSnapshot: context.configSnapshot,
+        preUpdatePluginInstallRecords: {},
+      });
+      return;
+    }
     const canRefreshRuntime =
       params.shouldRestart &&
       service?.serviceUpdateVerdict?.kind === "owned" &&
@@ -93,7 +122,7 @@ export async function finishAlreadyCurrentUpdate(
       installedRoot: params.root,
       nodeRunner: params.packageUpdateNodeRunner,
       alreadyCurrent: true,
-      service: service ?? admission.services.get(params.root),
+      service: admission.foreground ? undefined : (service ?? admission.services.get(params.root)),
       sourceRoot: result.mode === "git" ? params.root : undefined,
       timeoutMs: params.updateStepTimeoutMs,
       runtimeRecovery:
@@ -112,7 +141,6 @@ export async function finishAlreadyCurrentUpdate(
       });
     }
     const packageUpdateNodeRunner = runtime.value.nodeRunner;
-    const context = admission.contexts.at(-1)!;
     const pluginWarnings = await preflightConfiguredNpmPluginTargets({
       config: context.configSnapshot.sourceConfig,
       env: context.env,
@@ -127,54 +155,28 @@ export async function finishAlreadyCurrentUpdate(
         defaultRuntime.log(warning.message);
       }
     }
-    await inspectUpdateDatabaseContexts({ ...inspection, expectedServices: admission.services });
+    await inspectUpdateDatabaseContexts({
+      ...inspection,
+      expectedServices: admission.services,
+      expectedForeground: admission.foreground,
+    });
     await Promise.all(admission.contexts.map(revalidateUpdateDatabaseContext));
-    let stopState;
-    try {
+    let stopState = admission.foreground
+      ? undefined
+      : admission.services.get(params.managedServiceRoot ?? params.root);
+    if (
+      process.platform === "linux" &&
+      stopState?.serviceUpdateVerdict?.kind === "owned" &&
+      !stopState.blockMessage
+    ) {
       stopState = await maybeStopManagedServiceBeforeMutableUpdate({
         ...inspection,
         root: params.managedServiceRoot ?? params.root,
         handoffRoot: params.managedServiceRoot ? params.root : undefined,
-        phase: "inspect",
-        expectedService: admission.services.get(params.managedServiceRoot ?? params.root),
+        phase: "refresh",
+        expectedService: stopState,
         updateRun: params.opts.run,
-        handoffFromGateway: (state) =>
-          handoffUpdateFromGateway({
-            state,
-            root: params.root,
-            mode: params.result.mode,
-            opts: params.opts,
-            tag:
-              params.channel === "extended-stable"
-                ? undefined
-                : params.packageInstallSpec &&
-                    !canResolveRegistryVersionForPackageTarget(params.packageInstallSpec)
-                  ? params.packageInstallSpec
-                  : (result.after.version ?? undefined),
-            timeoutMs: params.updateStepTimeoutMs,
-            nodeRunner: packageUpdateNodeRunner,
-            invocationCwd: params.invocationCwd,
-            stopProgress: params.stop,
-          }),
       });
-    } catch (error) {
-      if (error instanceof UpdateCommandAbort) {
-        return;
-      }
-      throw error;
-    }
-    if (
-      stopState.blockMessage ||
-      shouldBlockMutableUpdateFromGatewayServiceEnv({ preManagedServiceStop: stopState })
-    ) {
-      throw new UpdatePreMutationError(
-        "managed-service-preflight",
-        formatUpdateAncestryBlockMessage(
-          stopState.blockMessage ??
-            "Run openclaw update from a terminal outside the Gateway service before changing installed plugins.",
-        ),
-        { failureFacts: collectServiceInspectionFailureFacts(stopState.serviceUpdateVerdict) },
-      );
     }
     await assertOpenClawStateWriteAllowedAtPath({
       databasePath: resolveOpenClawStateSqlitePath(context.env),

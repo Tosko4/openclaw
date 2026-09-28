@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { OpenClawSchema } from "../config/zod-schema.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import { setupFailureAlertSuite } from "./service.failure-alert.test-helpers.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import { maybeEmitFailureRecovery, resolveFailureAlert } from "./service/failure-alerts.js";
-import { createCronServiceState } from "./service/state.js";
+import { createCronServiceState, type DeferredCronNotifications } from "./service/state.js";
 
 const { withFailureAlertCron } = setupFailureAlertSuite();
 
@@ -20,6 +21,7 @@ describe("automation recovery notification policy", () => {
     async (notifyOnRecovery) => {
       await withFailureAlertCron(
         {
+          scheduler: createTestGatewayScheduler(),
           failureAlert: { after: 1, cooldownMs: 3_600_000, notifyOnRecovery },
         },
         async ({ cron, addJob, runIsolatedAgentJob, sendCronFailureAlert }) => {
@@ -58,6 +60,7 @@ describe("automation recovery notification policy", () => {
       },
     });
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: "unused",
       cronEnabled: true,
       cronConfig: { failureAlert: { notifyOnRecovery: false } },
@@ -66,8 +69,8 @@ describe("automation recovery notification policy", () => {
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: async () => ({ status: "ok" }),
     });
-    const deferredNotifications: Array<() => void> = [];
-    maybeEmitFailureRecovery(state, {
+    const deferredNotifications: DeferredCronNotifications = [];
+    maybeEmitFailureRecovery({
       job,
       alertConfig: resolveFailureAlert(state, job),
       triggerOnly: true,

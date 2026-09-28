@@ -70,7 +70,10 @@ class ChatPositionRailDirective extends AsyncDirective {
   private resizeScrollTarget: { offset: number; atEnd: boolean } | undefined;
   private followingResize = false;
   private readonly stopScrollInput = {
-    handleEvent: (event: Event) => event.stopPropagation(),
+    handleEvent: (event: Event) => {
+      this.followActive = false;
+      event.stopPropagation();
+    },
     passive: true,
   };
 
@@ -224,13 +227,25 @@ class ChatPositionRailDirective extends AsyncDirective {
       this.disconnectVisibility();
       this.transcriptElement = root;
       this.stopTranscriptScroll = subscribeTranscriptScroll(root, (observation) => {
-        if (observation.type === "input") {
+        if (observation.type === "offset") {
+          // The reading position can cross a landmark without changing the
+          // rendered rows; follow it here instead of re-rendering the pane.
+          this.scheduleLayout();
+        } else if (observation.type === "input") {
           if (this.followingResize) {
             this.followActive = true;
             this.scheduleLayout();
           }
           this.followingResize = false;
           this.resizeScrollTarget = undefined;
+        } else if (
+          observation.type === "resize" &&
+          this.layoutVisible &&
+          this.scrollElement?.clientHeight
+        ) {
+          // Retain the committed viewport before another composer change can replace it.
+          this.syncReaderViewport();
+          this.scheduleLayout();
         }
       });
       // Publish the first visible pixel after an initially zero-area edge touch.
@@ -245,7 +260,8 @@ class ChatPositionRailDirective extends AsyncDirective {
               message.visible = entry.isIntersecting && entry.intersectionRatio > 0;
             }
           }
-          this.syncVisibleMarks();
+          // Publish current position, retained markers, and Tab entry in one layout commit.
+          this.scheduleLayout();
         },
         { root, threshold: [0, Number.EPSILON, 1] },
       );
@@ -321,7 +337,7 @@ class ChatPositionRailDirective extends AsyncDirective {
     }
   }
 
-  private syncVisibleMarks() {
+  private syncReaderViewport() {
     const root = this.transcriptElement;
     if (root) {
       const viewport = {
@@ -333,7 +349,7 @@ class ChatPositionRailDirective extends AsyncDirective {
         // Intersections can precede resize compensation. Preserve the reader's
         // rail offset while keeping any keyboard-focused marker in view.
         this.followingResize = true;
-        this.followActive =
+        this.followActive ||=
           this.markerElements.get(this.interaction.focusedId ?? "")?.matches(":focus-visible") ??
           false;
         if (this.followActive) {
@@ -368,11 +384,18 @@ class ChatPositionRailDirective extends AsyncDirective {
       }
       this.readerViewport = viewport;
     }
-    const visible = new Set(
-      Array.from(this.observedMessages.values())
-        .filter((message) => message.visible)
-        .map((message) => message.id),
-    );
+  }
+
+  private syncVisibleMarks() {
+    this.syncReaderViewport();
+    const visible = new Set<string>();
+    const visibleMessageIds = new Set<string>();
+    for (const message of this.observedMessages.values()) {
+      if (message.visible) {
+        visible.add(message.id);
+        visibleMessageIds.add(message.messageId);
+      }
+    }
     for (const id of this.visibleIds) {
       if (!visible.has(id)) {
         this.markerElements.get(id)?.removeAttribute("data-visible");
@@ -390,11 +413,6 @@ class ChatPositionRailDirective extends AsyncDirective {
       this.followActive = true;
       this.scheduleLayout();
     }
-    const visibleMessageIds = new Set(
-      Array.from(this.observedMessages.values())
-        .filter((message) => message.visible)
-        .map((message) => message.messageId),
-    );
     const visibleOrder = this.positionMessageIds.filter((id) => visibleMessageIds.has(id));
     // A continuation, folded tool row, or virtualized jump still belongs to a transcript position.
     const activeMessageId = this.session?.activeMessageId(
@@ -407,6 +425,7 @@ class ChatPositionRailDirective extends AsyncDirective {
       this.markerElements.get(this.activeId ?? "")?.setAttribute("aria-current", "false");
       this.activeId = activeId;
       this.markerElements.get(activeId ?? "")?.setAttribute("aria-current", "true");
+      this.syncTabStop();
       if (!this.followingResize) {
         this.followActive = true;
       }
@@ -443,7 +462,8 @@ class ChatPositionRailDirective extends AsyncDirective {
     this.syncVisibleMarks();
     this.syncTabStop();
     if (initialize || this.followActive) {
-      this.followActive = false;
+      // Navigation must reach the final viewport, even if its slot resized before this frame.
+      this.followActive = this.session?.layout.viewportResizePending ?? false;
       const focused = this.markerElements.get(this.interaction.focusedId ?? "");
       const current =
         (initialize || focused?.matches(":focus-visible")

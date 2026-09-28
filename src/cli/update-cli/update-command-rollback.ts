@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import {
   hashConfigRaw,
@@ -15,21 +16,22 @@ import {
   verifyGatewayServiceDefinitionBackup,
 } from "../../daemon/service-definition-backup.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
-import { replaceFileAtomic } from "../../infra/replace-file.js";
 import {
   readUpdateStateSchemaVersions,
   resolveUpdateStateContentVersion,
   updateStateSchemaVersionsMatch,
   type UpdateStateSchemaVersion,
 } from "../../infra/update-candidate-state.js";
+import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
@@ -37,7 +39,9 @@ import {
   readUpdateConfigSnapshot,
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
+import { restoreFailedUpdateDatabases } from "./update-command-database-backup.js";
 import { readPackageUpdateIdentity } from "./update-command-package.js";
+import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import type {
   UpdateServiceDefinitionRecovery,
   OriginalManagedServiceRuntime,
@@ -47,11 +51,10 @@ import {
   createWindowsTaskAutoStartGuard,
   revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service-maintenance.js";
-import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
+import { readGatewayServiceStateForUpdate } from "./update-command-service-plan.js";
 import { compensateOriginalManagedService } from "./update-command-service-recovery.js";
 import {
   maybeRestartService,
-  maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
   resolveUpdatedGatewayRestartPort,
   type PreManagedServiceStop,
@@ -62,6 +65,7 @@ export async function rollbackFailedUpdate(params: {
   result: UpdateRunResult;
   previousRoot: string;
   packageTransaction?: PackageUpdateTransaction;
+  databaseBackup?: UpdateDatabaseBackup;
   rollbackBlockedReason?: "state-migrated-no-rollback" | "rollback-state-unverified";
   schemaVersions?: UpdateStateSchemaVersion[];
   candidateSchemaVersions?: OpenClawSchemaVersions;
@@ -69,6 +73,7 @@ export async function rollbackFailedUpdate(params: {
   previousVerified?: boolean;
   originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   allowGatewayRestart?: boolean;
+  onGatewayStartAttempted?: () => void;
   configSnapshot: ConfigFileSnapshot;
   activationConfig?: UpdateConfigSnapshot;
   opts: UpdateCommandOptions;
@@ -95,6 +100,18 @@ export async function rollbackFailedUpdate(params: {
     executor?.assertCurrent();
   };
   const env = before?.serviceEnv ?? opts.run?.env ?? process.env;
+  const pendingRecovery = (result: UpdateRunResult, pendingRecoveryReason: string) => ({
+    result: {
+      ...result,
+      status: "error" as const,
+      recovery: {
+        serviceRestartSafe: false as const,
+        reason: "runtime-verification-failed" as const,
+      },
+    },
+    rolledBack: false,
+    pendingRecoveryReason,
+  });
   if (!opts.recovery) {
     try {
       assertCurrent();
@@ -110,30 +127,16 @@ export async function rollbackFailedUpdate(params: {
         assertCurrent();
       }
     } catch (error) {
-      return {
-        result: {
-          ...params.result,
-          status: "error",
-          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-        },
-        rolledBack: false,
-        pendingRecoveryReason: formatErrorMessage(error),
-      };
+      return pendingRecovery(params.result, formatErrorMessage(error));
     }
   }
   if (opts.recovery) {
     // Retained full-state recovery is inspection-only in this delivery. Never
     // downgrade its claim to package-only rollback or rewrite its journal.
-    return {
-      result: {
-        ...params.result,
-        status: "error",
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-      },
-      rolledBack: false,
-      pendingRecoveryReason:
-        "Full-state checkpoint recovery is deferred; the retained record and artifacts were left unchanged.",
-    };
+    return pendingRecovery(
+      params.result,
+      "Full-state checkpoint recovery is deferred; the retained record and artifacts were left unchanged.",
+    );
   }
   // A's original service is independent of B's package transaction. Keep the
   // existing admission and explicit recovery refusals above this selection.
@@ -200,6 +203,9 @@ export async function rollbackFailedUpdate(params: {
       const kind = entry.path === sharedPath ? "state" : "agent";
       const supported = params.previousSchemaVersions?.[kind];
       if (supported === undefined || version > supported) {
+        if (params.databaseBackup && run && packageTransaction) {
+          return false;
+        }
         throw new Error(
           `Automatic rollback refused: newly created ${kind} database ${entry.path} uses schema ${version}; retained previous package support is ${supported ?? "unknown"}. Keep the update installed.`,
         );
@@ -239,7 +245,7 @@ export async function rollbackFailedUpdate(params: {
         steps: [
           ...result.steps,
           {
-            name: "config rollback",
+            name: "config-rollback",
             command: "restore pre-update config",
             cwd: params.previousRoot,
             durationMs: 0,
@@ -298,7 +304,29 @@ export async function rollbackFailedUpdate(params: {
       return failed("rollback-state-unverified");
     }
     if (!(await stateUnchanged())) {
-      return failed("state-migrated-no-rollback");
+      // Compatible databases stay in place: update ledger writes alone must
+      // not force snapshot restoration or prevent package-only rollback.
+      if (!params.databaseBackup || !run || !packageTransaction) {
+        return failed("state-migrated-no-rollback");
+      }
+      let restored: boolean;
+      try {
+        restored = await restoreFailedUpdateDatabases({
+          backup: params.databaseBackup,
+          result,
+          runId: run.runId,
+          env,
+          assertCurrent,
+        });
+      } catch (cause) {
+        // A partial restore must not reopen the ledger through ordinary failure reporting.
+        throw new UpdateCommandPendingRecoveryFailure(result, formatErrorMessage(cause), {
+          cause,
+        });
+      }
+      if (!restored || !(await stateUnchanged())) {
+        return failed("state-migrated-no-rollback");
+      }
     }
     await packageTransaction?.assertRollbackSafe?.();
     assertCurrent();
@@ -480,8 +508,10 @@ export async function rollbackFailedUpdate(params: {
         }
       : stopped;
     failureReason = "service-revalidation-failed";
-    await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
-      stopped,
+    if (stopped.windowsTaskAutoStartRecovery) {
+      params.onGatewayStartAttempted?.();
+    }
+    await stopped.windowsTaskAutoStartRecovery?.restore(
       true,
       createWindowsTaskAutoStartGuard({
         root: serviceRoot,
@@ -494,13 +524,12 @@ export async function rollbackFailedUpdate(params: {
     // A failed candidate does not authorize its restart. The previous package's
     // pre-activation verification authorizes restarting this schema-neutral restoration.
     const nodeRunner = before?.serviceNodeRunner ?? params.nodeRunner;
-    const state = await readGatewayServiceState(resolveGatewayService(), {
-      env: recoveryEnv,
-      requireEffective: true,
-      requireLoadedCommand: true,
-      validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-      timeoutMs: params.timeoutMs,
-    });
+    const state = await readGatewayServiceStateForUpdate(
+      resolveGatewayService(),
+      recoveryEnv,
+      params.timeoutMs,
+      { managerUid: restoredService.serviceManagerUid, assertCurrent },
+    );
     let verdict = await revalidateManagedGatewayServiceAfterUpdate({
       state,
       root: serviceRoot,
@@ -534,6 +563,7 @@ export async function rollbackFailedUpdate(params: {
     let verificationFailure: string | undefined;
     let verifiedAtMs: number | undefined;
     const restartOutcome = await maybeRestartService({
+      onGatewayStartAttempted: params.onGatewayStartAttempted,
       shouldRestart: true,
       result,
       opts,
@@ -589,19 +619,19 @@ export async function rollbackFailedUpdate(params: {
       ...(verifiedAtMs === undefined ? {} : { verifiedAtMs }),
     };
   } catch (error) {
+    if (
+      error instanceof UpdateCommandPendingRecoveryFailure ||
+      hasCommandProcessCleanupError(error)
+    ) {
+      throw error;
+    }
     const detail = formatErrorMessage(error);
     try {
       assertCurrent();
     } catch (cause) {
       return {
-        result: {
-          ...result,
-          status: "error",
-          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-        },
-        rolledBack: false,
+        ...pendingRecovery(result, formatErrorMessage(cause)),
         stoppedForRollback,
-        pendingRecoveryReason: formatErrorMessage(cause),
       };
     }
     if (error instanceof NativePackageRollbackError) {

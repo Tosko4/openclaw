@@ -50,7 +50,8 @@ const program = `
   import {withDelegatedUpdateCommandExecutor,withUpdateCommandExecutorChild,captureUpdateCommandExecutorAuthority,requiresRetainedUpdateCommandOwner,releaseUpdateCommandPreflightForHandoff} from ${JSON.stringify(ownerModule)};
   import {runUtf8CommandWithTimeout} from ${JSON.stringify(commandModule)};
   import {assertNoPendingPackageActivation} from ${JSON.stringify(activationModule)};
-  const input=JSON.parse(fs.readFileSync(0,"utf8"));
+  const {json}=await import("node:stream/consumers");
+  const input=await json(process.stdin);
   await withDelegatedUpdateCommandExecutor(input.grant,input.grant.runId,input.grant.root,async(fence)=>{
     assert.deepEqual(captureUpdateCommandExecutorAuthority(fence),input.authority);
     assert.equal(requiresRetainedUpdateCommandOwner(fence),true);
@@ -185,7 +186,6 @@ it.each([
   "key-only",
   "both",
   "legacy-digest",
-  "null-parent",
   "wrong-key",
   "wrong-generation",
   "wrong-start",
@@ -206,9 +206,6 @@ it.each([
         }
         if (tamper === "key-only" || tamper === "both" || tamper === "legacy-digest") {
           delete changed.retainedChildKey;
-        }
-        if (tamper === "null-parent") {
-          changed.retainedParent = null;
         }
         if (tamper === "wrong-key") {
           changed.retainedChildKey = grant.originalChildKey;

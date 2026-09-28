@@ -111,6 +111,26 @@ async function retryThroughReload(page: Page, error: ReturnType<Page["locator"]>
 
 const focusedCases = [
   {
+    name: "browser",
+    label: "browser panel",
+    path: focusPath({
+      kind: "browser",
+      sessionKey,
+      tab: { target: "host", profile: "work", targetId: "existing" },
+    }),
+    chunk: /\/assets\/browser-document-[^/?]+\.js(?:\?.*)?$/u,
+    gateway: {
+      featureMethods: ["browser.request"],
+      operatorScopes: ["operator.read"],
+    },
+    ready: (page: Page) =>
+      page
+        .getByText(
+          "Browser control is unavailable for this connection. Reconnect with browser access.",
+        )
+        .waitFor(),
+  },
+  {
     name: "terminal",
     label: "terminal panel",
     path: focusPath({ kind: "terminal" }),
@@ -341,6 +361,7 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport },
         async ({ page }) => {
+          await page.clock.install();
           await page.addInitScript(() => {
             const observed = window as Window & { completedHeadFrames?: number };
             const originalFetch = window.fetch;
@@ -397,7 +418,7 @@ suite.define(() => {
             .toBe(true);
           // A generic automatic retry used to wake one second after this
           // first settled frame. Close must remain authoritative beyond it.
-          await page.waitForTimeout(1_500);
+          await page.clock.runFor(1_500);
           if (documentRequests > 1) {
             await reloaded;
           }
@@ -538,8 +559,14 @@ suite.define(() => {
             const frame = page.locator(".debug-overlay");
             await frame.waitFor();
             expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
-            const expanded = await frame.boundingBox();
+            let expanded = await frame.boundingBox();
             expect(expanded).not.toBeNull();
+            const handle = (await frame.locator("header").boundingBox())!;
+            await page.mouse.move(handle.x + 30, handle.y + 20);
+            await page.mouse.down();
+            await page.mouse.move(handle.x - 30, handle.y, { steps: 3 });
+            await page.mouse.up();
+            expanded = await frame.boundingBox();
             await composer.fill("Still editable during the outer load");
             await frame
               .getByRole("button", { name: "Minimize system busyness", exact: true })
@@ -547,6 +574,11 @@ suite.define(() => {
             await expect
               .poll(() => frame.getAttribute("class"))
               .toContain("debug-overlay--minimized");
+            await frame.evaluate(async (element) => {
+              await new Promise(requestAnimationFrame);
+              await new Promise(requestAnimationFrame);
+              await Promise.all(element.getAnimations().map((animation) => animation.finished));
+            });
             const minimized = await frame.boundingBox();
             expect(minimized).not.toBeNull();
             expect(minimized!.height).toBeLessThan(expanded!.height);

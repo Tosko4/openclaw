@@ -107,6 +107,10 @@ export class SidebarPeopleRuntime {
       }
       this.portal.schedulePointerExit();
     } else if (event.type === "focusin" && !this.portal.restoringFocus) {
+      // Pointer focus must not put a card over a navigation link before its click.
+      if (event.target instanceof HTMLAnchorElement && !event.target.matches(":focus-visible")) {
+        return;
+      }
       this.activate(row, 0);
       this.portal.focusInside = true;
       this.portal.clearClose();
@@ -265,6 +269,7 @@ export class SidebarPeopleRuntime {
             });
             this.close();
             runSessionNavigationIntent(this.host, {
+              agentId,
               face,
               sessionKey: row.key,
               commit: () => {

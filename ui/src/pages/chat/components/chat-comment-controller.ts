@@ -1,11 +1,8 @@
 import { nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import { focusWithoutTooltip } from "../../../components/tooltip.ts";
-import { t } from "../../../i18n/index.ts";
-import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatAttachment, ChatSelectionAnnotation } from "../../../lib/chat/chat-types.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
-import { showToast } from "../../../lib/toast.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
@@ -13,17 +10,14 @@ import { resolveChatCommentAnchor } from "./chat-comment-anchor.ts";
 import { createChatSelectionAttachment } from "./chat-selection-attachment.ts";
 import { showChatAnnotationEditor } from "./chat-selection-popup.ts";
 
-registerChatMessageMetadataEnglish();
-
 type CommentAttachment = ChatAttachment & { selectionAnnotation: ChatSelectionAnnotation };
 
-export function currentChatComments(props: ChatAttachmentControlsProps, sessionKey: string) {
-  return (props.getAttachments?.() ?? props.attachments ?? []).filter(
-    (item): item is CommentAttachment =>
-      Boolean(
-        item.selectionAnnotation &&
-        areUiSessionKeysEquivalent(item.selectionAnnotation.sessionKey, sessionKey),
-      ),
+export function currentChatComments(attachments: readonly ChatAttachment[], sessionKey: string) {
+  return attachments.filter((item): item is CommentAttachment =>
+    Boolean(
+      item.selectionAnnotation &&
+      areUiSessionKeysEquivalent(item.selectionAnnotation.sessionKey, sessionKey),
+    ),
   );
 }
 
@@ -75,7 +69,7 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
       !this.presented ||
       this.props.disabled ||
       (this.editingId &&
-        !currentChatComments(this.props, this.sessionKey).some(
+        !currentChatComments(this.currentAttachments(), this.sessionKey).some(
           (item) => item.id === this.editingId,
         ))
     ) {
@@ -109,13 +103,9 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
     );
   }
 
-  private changeAttachments(
-    current: ChatAttachment[],
-    next: ChatAttachment[],
-    retained: ChatAttachment[] = [],
-  ) {
+  private changeAttachments(current: ChatAttachment[], next: ChatAttachment[]) {
     this.props.onAttachmentsChange?.(next);
-    releaseDisplacedChatAttachmentPayloads(current, [next, retained]);
+    releaseDisplacedChatAttachmentPayloads(current, [next]);
     this.props.onRequestUpdate?.();
   }
 
@@ -149,7 +139,7 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
       this.clearComments();
       return;
     }
-    const attachment = currentChatComments(this.props, this.sessionKey).find(
+    const attachment = currentChatComments(this.currentAttachments(), this.sessionKey).find(
       (item) => item.id === event.detail?.id,
     );
     if (!attachment) {
@@ -181,84 +171,24 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
 
   private clearComments() {
     this.retireEditor();
-    const signal = this.props.readSignal;
-    const sessionKey = this.sessionKey;
-    const gatewayScope = this.props.gatewayScope;
-    const removed = currentChatComments(this.props, sessionKey);
+    const removed = currentChatComments(this.currentAttachments(), this.sessionKey);
     if (removed.length === 0) {
       return;
     }
     const ids = new Set(removed.map((item) => item.id));
     const current = this.currentAttachments();
-    const positions = current.flatMap((item, index) => (ids.has(item.id) ? [{ item, index }] : []));
     this.changeAttachments(
       current,
       current.filter((item) => !ids.has(item.id)),
-      removed,
     );
     this.focusComposer();
-
-    // The shared toast owns the bounded Undo lifetime, including replacement and teardown.
-    let settled = false;
-    const finalize = () => {
-      if (!settled) {
-        settled = true;
-        releaseDisplacedChatAttachmentPayloads(removed, [this.currentAttachments()]);
-      }
-    };
-    const presented = showToast({
-      message: t("chat.messages.annotationsRemoved"),
-      actionLabel: t("common.undo"),
-      onAction: () => {
-        if (settled) {
-          return;
-        }
-        if (
-          !this.canChange(signal) ||
-          this.sessionKey !== sessionKey ||
-          this.props.gatewayScope !== gatewayScope
-        ) {
-          finalize();
-          return;
-        }
-        settled = true;
-        const latest = this.currentAttachments();
-        const restored = [...latest];
-        for (const { item, index } of positions) {
-          if (!restored.some((attachment) => attachment.id === item.id)) {
-            restored.splice(Math.min(index, restored.length), 0, item);
-          }
-        }
-        this.changeAttachments(latest, restored);
-        this.focusFrame = requestAnimationFrame(() => {
-          this.focusFrame = undefined;
-          if (
-            this.canChange(signal) &&
-            this.sessionKey === sessionKey &&
-            this.props.gatewayScope === gatewayScope
-          ) {
-            focusWithoutTooltip(
-              this.root?.querySelector<HTMLElement>(".chat-selection-annotations__trigger"),
-            );
-          }
-        });
-      },
-      onDismiss: (reason) => {
-        if (reason !== "action") {
-          finalize();
-        }
-      },
-    });
-    if (!presented) {
-      finalize();
-    }
   }
 
   private deleteComment(id: string, preview: HTMLElement | null = null) {
     this.retireEditor();
     const signal = this.props.readSignal;
     const sessionKey = this.sessionKey;
-    const comments = currentChatComments(this.props, sessionKey);
+    const comments = currentChatComments(this.currentAttachments(), sessionKey);
     const index = comments.findIndex((item) => item.id === id);
     const next = comments[index + 1] ?? comments[index - 1];
     const current = this.currentAttachments();

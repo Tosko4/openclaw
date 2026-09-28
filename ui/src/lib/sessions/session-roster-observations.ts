@@ -4,22 +4,22 @@ import type {
   SessionConnectionOwner,
   SessionConnectionScope,
   SessionRowTarget,
+  SessionRowEventListener,
+  SessionRowListener,
 } from "./session-capability.ts";
+import {
+  createSessionEventDelivery,
+  type SessionEventDelivery,
+} from "./session-event-observation.ts";
 import {
   areUiSessionKeysEquivalent,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "./session-key.ts";
 import type { ObservedSessionList } from "./session-list-query.ts";
-import {
-  createSessionRowProvenance,
-  createSessionWriteObservation,
-} from "./session-row-provenance.ts";
-import { isOlderSessionSnapshot } from "./session-row-reconcile.ts";
-import {
-  createSessionRunTerminalReconciler,
-  type SessionRunTerminal,
-} from "./session-run-terminal.ts";
+import { createSessionRowProvenance } from "./session-row-provenance.ts";
+import { isOlderSessionSnapshot, type SessionChangedRowResult } from "./session-row-reconcile.ts";
+import { createSessionRunTerminalStaging } from "./session-run-terminal.ts";
 
 type ObservedSessionRow = {
   target: SessionRowTarget;
@@ -32,12 +32,14 @@ type RegisteredSessionRow = {
   snapshot: {
     row: GatewaySessionRow | null;
     visible: GatewaySessionRow | null;
+    hasObserved: boolean;
     sessionId: string | null;
     invalidatedRevision: number;
     retired: boolean;
   };
-  listener: (row: GatewaySessionRow | null) => void;
+  listener: SessionRowListener;
   onInvalidate?: (reason?: string) => void;
+  onEvent?: SessionRowEventListener;
   isValid: (sessionId: string) => boolean;
   decorate: (row: GatewaySessionRow) => GatewaySessionRow | null;
 };
@@ -46,9 +48,11 @@ type RowProjection = (entry: ObservedSessionRow) => {
   row: GatewaySessionRow | null;
   invalidateRevision?: number;
   observationRevision?: number;
+  eventResult?: SessionChangedRowResult;
 };
 
 type SessionRowAdmission = { row: GatewaySessionRow; revision: number };
+type RowEventDelivery = SessionEventDelivery<RegisteredSessionRow>;
 
 /** Metadata follows held rows; wire values stay in their existing roster owners. */
 export function createSessionRosterObservations(
@@ -75,10 +79,17 @@ export function createSessionRosterObservations(
     registrationIsAttached(entry) &&
     !entry.snapshot.retired &&
     (entry.snapshot.sessionId === null || entry.isValid(entry.snapshot.sessionId));
+  const captureEventDelivery = createSessionEventDelivery(
+    registeredRows,
+    host.connection,
+    registrationIsAttached,
+    registrationIsCurrent,
+    provenance.hasNewerFacts,
+  );
   const matchesTarget = (row: GatewaySessionRow, target: SessionRowTarget) => {
     const parsedAgent = parseAgentSessionKey(row.key)?.agentId;
     return (
-      identity(row, target.agentId) !== null &&
+      Boolean(row.sessionId?.trim()) &&
       areUiSessionKeysEquivalent(row.key, target.key) &&
       owner(row, target.agentId) === normalizeAgentId(target.agentId) &&
       (!parsedAgent ||
@@ -128,9 +139,16 @@ export function createSessionRosterObservations(
       ? { entry, previous, snapshot: { ...previous, row: null, visible: null, retired: true } }
       : undefined;
   };
-  const indexRows = (rows: readonly GatewaySessionRow[], agentId?: string | null) => {
+  const indexRows = (
+    rows: readonly GatewaySessionRow[],
+    agentId?: string | null,
+    sessionIds?: ReadonlySet<string | undefined>,
+  ) => {
     const indexed = new Map<string, GatewaySessionRow>();
     for (const row of rows) {
+      if (sessionIds && !sessionIds.has(row.sessionId)) {
+        continue;
+      }
       const key = identity(row, agentId);
       if (key) {
         indexed.set(key, row);
@@ -171,9 +189,9 @@ export function createSessionRosterObservations(
     });
     return projectSessionResultRows(result, sessions);
   };
-  const captureHeldRows = () => {
+  const captureHeldRows = (sessionIds?: ReadonlySet<string | undefined>) => {
     const state = host.readState();
-    const primaryRows = indexRows(state.result?.sessions ?? [], state.agentId);
+    const primaryRows = indexRows(state.result?.sessions ?? [], state.agentId, sessionIds);
     const epoch = host.connection.capture()?.epoch;
     const observedRows = new Map<string, GatewaySessionRow[]>();
     const append = (key: string, row: GatewaySessionRow) => {
@@ -189,6 +207,7 @@ export function createSessionRosterObservations(
         for (const [key, row] of indexRows(
           entry.snapshot.result?.sessions ?? [],
           entry.snapshot.agentId,
+          sessionIds,
         )) {
           append(key, row);
         }
@@ -196,15 +215,23 @@ export function createSessionRosterObservations(
     }
     for (const entry of registeredRows) {
       const row = registeredRow(entry);
-      const key = row && identity(row, entry.target.agentId);
+      const key =
+        row &&
+        (!sessionIds || sessionIds.has(row.sessionId)) &&
+        identity(row, entry.target.agentId);
       if (row && key) {
         append(key, row);
       }
     }
     return { state, primaryRows, observedRows };
   };
-  const prepareProjection = () => {
-    const { state, primaryRows, observedRows } = captureHeldRows();
+  const prepareProjection = (requestedRows?: readonly GatewaySessionRow[]) => {
+    // Identity includes the verbatim session ID; other IDs cannot donate facts.
+    // Event planning still captures every held identity once when no rows are supplied.
+    const sessionIds =
+      requestedRows &&
+      new Set(requestedRows.flatMap((row) => (row.sessionId?.trim() ? [row.sessionId] : [])));
+    const { state, primaryRows, observedRows } = captureHeldRows(sessionIds);
     const projectFields = (row: GatewaySessionRow, agentId?: string | null) => {
       const key = identity(row, agentId);
       if (!key) {
@@ -222,22 +249,17 @@ export function createSessionRosterObservations(
       for (const offered of observedRows.get(key) ?? []) {
         current = mergeRow(current, offered, agentId);
       }
-      return current;
+      // Field freshness cannot change the caller's tree key.
+      return current.key === row.key ? current : inheritRow({ ...current, key: row.key }, current);
     };
     return {
       projectFields,
       projectRows: (rows: readonly GatewaySessionRow[]): GatewaySessionRow[] =>
-        rows.map((row) => {
-          const projected = projectFields(row);
-          // Field freshness cannot change the caller's tree keys or membership.
-          return projected.key === row.key
-            ? projected
-            : inheritRow({ ...projected, key: row.key }, projected);
-        }),
+        rows.map((row) => projectFields(row)),
     };
   };
   const projectFields = (row: GatewaySessionRow, agentId?: string | null) =>
-    prepareProjection().projectFields(row, agentId);
+    prepareProjection([row]).projectFields(row, agentId);
   const heldRowsFor = (
     row: GatewaySessionRow,
     agentId?: string | null,
@@ -277,6 +299,7 @@ export function createSessionRosterObservations(
     projectRow?: RowProjection,
     admitRead = false,
     admittedRows: readonly SessionRowAdmission[] = [],
+    event?: RowEventDelivery,
   ): {
     changed: boolean;
     notify: (publishedRows?: readonly SessionRowAdmission[], reason?: string) => void;
@@ -301,8 +324,7 @@ export function createSessionRosterObservations(
         continue;
       }
       const previous = entry.snapshot;
-      const projected = project(entry);
-      const decorated = host.decorate(projected, entry);
+      const decorated = host.decorate(project(entry), entry);
       if (decorated !== entry.snapshot.result) {
         changes.push({ key, entry, previous, snapshot: { ...previous, result: decorated } });
       }
@@ -333,7 +355,9 @@ export function createSessionRosterObservations(
               )
             : acceptsRowIdentity(entry, projected.row)))
           ? projected.row
-          : null;
+          : admitRead && projected.row
+            ? held // Rejecting a stale read must not remove the current descriptor.
+            : null;
       const decorated = row ? entry.decorate(row) : null;
       const visible =
         row &&
@@ -346,22 +370,39 @@ export function createSessionRosterObservations(
         !previous.row || entry.onInvalidate
           ? Math.max(previous.invalidatedRevision, projected.invalidateRevision ?? 0)
           : previous.invalidatedRevision;
+      const hasObserved =
+        previous.hasObserved || row !== null || Boolean(projected.eventResult?.deletedKey);
+      let nextSnapshot = previous;
       if (
         row !== previous.row ||
         visible !== previous.visible ||
+        hasObserved !== previous.hasObserved ||
         invalidatedRevision !== previous.invalidatedRevision
       ) {
+        nextSnapshot = {
+          // Settled local row intents remain held, as they do in existing lists.
+          row: visible ?? row,
+          visible,
+          hasObserved,
+          invalidatedRevision,
+          sessionId: previous.sessionId ?? row?.sessionId ?? null,
+          retired: Boolean(projected.eventResult?.deletedKey),
+        };
         rowChanges.push({
           entry,
           previous,
-          snapshot: {
-            // Settled local row intents remain held, as they do in existing lists.
-            row: visible ?? row,
-            visible,
-            invalidatedRevision,
-            sessionId: previous.sessionId ?? row?.sessionId ?? null,
-            retired: false,
-          },
+          snapshot: nextSnapshot,
+        });
+      }
+      if (
+        entry.onEvent &&
+        projected.eventResult &&
+        (!projected.eventResult.admittedRow ||
+          acceptsRowIdentity(entry, projected.eventResult.admittedRow))
+      ) {
+        event?.results.set(entry, {
+          snapshot: nextSnapshot,
+          result: { ...projected.eventResult, row: visible ?? undefined },
         });
       }
     }
@@ -418,7 +459,12 @@ export function createSessionRosterObservations(
           (snapshot.retired || registrationIsCurrent(entry)) &&
           entry.snapshot === snapshot
         ) {
-          entry.listener(snapshot.visible);
+          // A captured recipient must finish this frame before replacing its binding.
+          if (snapshot.retired && entry.onEvent && event?.captures(entry)) {
+            entry.listener(snapshot.visible, { eventPending: true });
+          } else {
+            entry.listener(snapshot.visible);
+          }
           if (
             registrationIsCurrent(entry) &&
             entry.snapshot === snapshot &&
@@ -479,8 +525,8 @@ export function createSessionRosterObservations(
     registerRow(
       this: void,
       target: SessionRowTarget,
-      listener: (row: GatewaySessionRow | null) => void,
-      options: Pick<RegisteredSessionRow, "isValid" | "decorate" | "onInvalidate">,
+      listener: SessionRowListener,
+      options: Pick<RegisteredSessionRow, "isValid" | "decorate" | "onInvalidate" | "onEvent">,
     ) {
       const entry: RegisteredSessionRow = {
         target: Object.freeze({ ...target }),
@@ -490,6 +536,7 @@ export function createSessionRosterObservations(
         snapshot: {
           row: null,
           visible: null,
+          hasObserved: false,
           sessionId: null,
           invalidatedRevision: 0,
           retired: false,
@@ -498,6 +545,8 @@ export function createSessionRosterObservations(
       registeredRows.add(entry);
       return {
         current: () => (registeredRow(entry) ? entry.snapshot.visible : null),
+        sessionId: () => entry.snapshot.sessionId,
+        hasObserved: () => entry.snapshot.hasObserved,
         isCurrent: () => registrationIsCurrent(entry),
         readInvalidated: (revision: number) => revision <= entry.snapshot.invalidatedRevision,
         acceptsRead: (row: GatewaySessionRow, revision: number) => acceptsRow(entry, row, revision),
@@ -510,6 +559,7 @@ export function createSessionRosterObservations(
             ...entry.snapshot,
             row: null,
             visible: null,
+            hasObserved: true,
             invalidatedRevision: Math.max(entry.snapshot.invalidatedRevision, revision),
           };
           entry.snapshot = snapshot;
@@ -557,83 +607,49 @@ export function createSessionRosterObservations(
     projectFields,
     prepareProjection,
     projectRows: (rows: readonly GatewaySessionRow[]): GatewaySessionRow[] =>
-      rows.length === 0 ? [] : prepareProjection().projectRows(rows),
+      rows.length === 0 ? [] : prepareProjection(rows).projectRows(rows),
     stageObservedRows,
     stageManagedResults,
+    captureEventDelivery,
     rowRevision,
     hasLiveObservation: (row: GatewaySessionRow) =>
       host.connection.capture() !== null && provenance.hasObservation(row),
-    isCurrentRow: (
-      row: GatewaySessionRow,
-      revision = rowRevision(row),
-      agentId?: string | null,
-    ): boolean => !heldRowsFor(row, agentId).some((current) => rowRevision(current) > revision),
+    isCurrentRow: (row: GatewaySessionRow, revision?: number, agentId?: string | null): boolean => {
+      const held = heldRowsFor(row, agentId);
+      const readRevision = revision ?? rowRevision(row);
+      // Cold descriptors carry first-read fences before any live row can carry their receipts.
+      return (
+        !held.some((current) => rowRevision(current) > readRevision) &&
+        (revision === undefined ||
+          held.some(provenance.hasObservation) ||
+          ![...registeredRows].some(
+            (entry) =>
+              acceptsRowIdentity(entry, row) && !acceptsRow(entry, row, readRevision, true),
+          ))
+      );
+    },
     bindOwner: (result: SessionsListResult | null, agentId?: string | null) => {
       for (const row of result?.sessions ?? []) {
         provenance.bindOwner(row, agentId);
       }
     },
-    observeReadRow,
     observeReadRows,
     observeFields: provenance.observeFields,
+    fieldNames: provenance.fieldNames,
     fieldObservation: provenance.fieldObservation,
-    stageRunTerminal(
-      this: void,
-      terminal: SessionRunTerminal,
-      event: { scope: SessionConnectionScope | null; revision: number },
-    ) {
-      const { projectFields: project } = prepareProjection();
-      const reconcileRow = (agentId: string | null) =>
-        createSessionRunTerminalReconciler(terminal, {
-          agentId: (row) => owner(row, agentId),
-          project: (row) => project(row, agentId),
-          observe: (row, source, fields) => {
-            inheritRow(row, source);
-            // Terminal time is local; only Gateway rows supply the updatedAt clock.
-            observations.observeFields(
-              row,
-              fields,
-              createSessionWriteObservation(event.revision, null),
-              agentId,
-            );
-          },
-        });
-      const reconcile = (result: SessionsListResult | null, agentId: string | null) => {
-        if (!result) {
-          return result;
-        }
-        return projectSessionResultRows(result, result.sessions.map(reconcileRow(agentId)));
-      };
-      const state = host.readState();
-      const result = reconcile(state.result, state.agentId);
-      // Compute every owner against the unchanged held rows: consuming an overlap
-      // in one window must not make another reject the same completed run.
-      const staged = stageManagedResults(
-        event.scope,
-        (entry) => reconcile(entry.snapshot.result, entry.snapshot.agentId),
-        (entry) => {
-          const matches = terminal.sessionKeys.some((key) => {
-            const agentId = parseAgentSessionKey(key)?.agentId ?? terminal.agentId;
-            return Boolean(
-              agentId &&
-              areUiSessionKeysEquivalent(key, entry.target.key) &&
-              normalizeAgentId(agentId) === normalizeAgentId(entry.target.agentId),
-            );
-          });
-          return {
-            row: entry.row && matches ? reconcileRow(entry.target.agentId)(entry.row) : entry.row,
-            ...(!entry.row && matches ? { invalidateRevision: event.revision } : {}),
-          };
-        },
-      );
-      return { result, changed: result !== state.result || staged.changed, notify: staged.notify };
-    },
+    stageRunTerminal: createSessionRunTerminalStaging({
+      readState: host.readState,
+      prepareProjection,
+      provenance,
+      stage: stageManagedResults,
+    }),
     // Local copies keep source provenance; they are not new Gateway reads.
     copyRow: (row: GatewaySessionRow, patch: Partial<GatewaySessionRow>) =>
       inheritRow({ ...row, ...patch }, row),
     captureReconciliation(revision: number) {
       const scope = host.connection.capture();
       return {
+        scope,
         revision,
         observe: (row: GatewaySessionRow, agentId?: string | null) =>
           observeReadRow(row, revision, agentId),
@@ -677,7 +693,8 @@ export function createSessionRosterObservations(
           accepted = merge(accepted, [row], agentId, entry.target.agentId, incomingRows);
         }
       }
-      return accepted;
+      // Publish canonical row identities now, not on a later unrelated event.
+      return projectSessionResultRows(accepted, observations.projectRows(accepted?.sessions ?? []));
     },
     inherit(
       this: void,

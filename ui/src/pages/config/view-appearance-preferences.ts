@@ -1,4 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
+import {
+  BUILTIN_THEMES,
+  resolveThemeBranding,
+} from "../../../../packages/gateway-protocol/src/theme.ts";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import {
   normalizeCatalogOpenTarget,
@@ -298,6 +302,17 @@ export function renderChatPreferencesSection(
           ],
           onChange: (value) => props.setCatalogOpenTarget(normalizeCatalogOpenTarget(value)),
         })}
+        ${
+          props.setOpenLinksExternally
+            ? renderSettingsToggleRow({
+                title: t("configView.chatPrefs.openLinksExternally"),
+                description: html`${t("configView.chatPrefs.openLinksExternallyHint")}<br />
+                  ${t("configView.chatPrefs.openLinksExternallyStorage")}`,
+                checked: props.openLinksExternally === true,
+                onChange: props.setOpenLinksExternally,
+              })
+            : nothing
+        }
         ${renderSettingsMicrophoneField(props)} ${renderSettingsCameraField(props)}
         ${
           props.setComposerHoldToRecord
@@ -323,6 +338,18 @@ export function renderLobsterPetSection(props: ConfigProps) {
   }
   const lobsterPetVisits = props.lobsterPetVisits ?? UI_APPEARANCE_DEFAULTS.lobsterPetVisits;
   const lobsterPetSounds = props.lobsterPetSounds ?? UI_APPEARANCE_DEFAULTS.lobsterPetSounds;
+  const activeTheme =
+    BUILTIN_THEMES.find((theme) => theme.id === props.theme) ??
+    props.themeCatalog?.themes.find((theme) => theme.id === props.theme);
+  const themeHiddenDescription =
+    resolveThemeBranding(activeTheme).mascot === "none"
+      ? html`<br />${t("quickSettings.appearance.lobsterVisitsThemeHidden", {
+            theme:
+              activeTheme?.source === "builtin"
+                ? t(`configView.themes.${activeTheme.id}.label`)
+                : (activeTheme?.name ?? props.theme),
+          })}`
+      : nothing;
   const lobsterVisitsDefaultDescription = renderSettingsDefaultDescription(
     t("common.enabled"),
     lobsterPetVisits !== UI_APPEARANCE_DEFAULTS.lobsterPetVisits,
@@ -343,9 +370,11 @@ export function renderLobsterPetSection(props: ConfigProps) {
           title: t("quickSettings.appearance.lobsterVisits"),
           description: lobsterPetVisits
             ? html`${t("quickSettings.appearance.lobsterVisitsOn")}<br />
-                ${lobsterVisitsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`
+                ${lobsterVisitsDefaultDescription}
+                ${t("quickSettings.personal.browserOnly")}${themeHiddenDescription}`
             : html`${t("quickSettings.appearance.lobsterVisitsOff")}<br />
-                ${lobsterVisitsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
+                ${lobsterVisitsDefaultDescription}
+                ${t("quickSettings.personal.browserOnly")}${themeHiddenDescription}`,
           checked: lobsterPetVisits,
           onChange: (enabled) => props.setLobsterPetVisits?.(enabled),
         })}

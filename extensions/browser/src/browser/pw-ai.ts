@@ -17,7 +17,6 @@ import {
   markObservedDialogsHandledRemotelyForPage,
   refLocator,
   respondToObservedDialogOnPage,
-  retirePlaywrightBrowserConnection,
   retirePlaywrightBrowserConnectionExact,
 } from "./pw-session.js";
 import {
@@ -58,7 +57,6 @@ import {
   navigateViaPlaywright,
   pdfViaPlaywright,
   resizeViewportViaPlaywright,
-  snapshotAiViaPlaywright,
   snapshotAriaViaPlaywright,
   snapshotRoleViaPlaywright,
   storeSnapshotRefsViaPlaywright,
@@ -88,7 +86,6 @@ export const pwAi = {
   downloadCurrentDocumentViaPlaywright,
   closePageByTargetIdViaPlaywright,
   closePlaywrightBrowserConnection,
-  retirePlaywrightBrowserConnection,
   retirePlaywrightBrowserConnectionExact,
   createPageViaPlaywright,
   ensurePageState,
@@ -141,7 +138,6 @@ export const pwAi = {
   setLocaleViaPlaywright,
   setOfflineViaPlaywright,
   setTimezoneViaPlaywright,
-  snapshotAiViaPlaywright,
   snapshotAriaViaPlaywright,
   snapshotRoleViaPlaywright,
   storeSnapshotRefsViaPlaywright,

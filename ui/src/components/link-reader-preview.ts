@@ -8,11 +8,8 @@ import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { takeGraphemes } from "../lib/graphemes.ts";
-import {
-  linkReaderAuthorHref,
-  linkReaderResponseMatchesTarget,
-  type LinkReaderTarget,
-} from "./link-reader-target.ts";
+import { linkReaderAuthorHref, linkReaderResponseMatchesTarget } from "./link-reader-response.ts";
+import type { LinkReaderTarget } from "./link-reader-target.ts";
 export type LinkPreview = LinkReaderTarget & ControlUiLinkReaderPreview;
 
 function safePreviewImage(value: string | undefined): string | undefined {
@@ -22,21 +19,17 @@ function safePreviewImage(value: string | undefined): string | undefined {
   if (/^data:image\/(?:gif|jpeg|png|webp);base64,/u.test(value)) {
     return value;
   }
-  try {
-    const url = new URL(value);
-    const host = url.hostname.replace(/\.+$/u, "");
-    return url.protocol === "https:" &&
-      !url.username &&
-      !url.password &&
-      url.origin !== window.location.origin &&
-      host.includes(".") &&
-      !/(?:^|\.)(?:localhost|local|internal|localdomain)$/u.test(host) &&
-      !parseCanonicalIpAddress(host)
-      ? url.href
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const url = URL.parse(value);
+  const host = url?.hostname.replace(/\.+$/u, "") ?? "";
+  return url?.protocol === "https:" &&
+    !url.username &&
+    !url.password &&
+    url.origin !== window.location.origin &&
+    host.includes(".") &&
+    !/(?:^|\.)(?:localhost|local|internal|localdomain)$/u.test(host) &&
+    !parseCanonicalIpAddress(host)
+    ? url.href
+    : undefined;
 }
 
 export function parsePreviewResponse(
@@ -58,7 +51,7 @@ export function parsePreviewResponse(
   );
   const badge =
     badgeValue && typeof badgeValue.label === "string" && tone
-      ? { label: badgeValue.label, tone }
+      ? { label: badgeValue.label, tone, timestamp: readNonBlankString(badgeValue.timestamp) }
       : undefined;
   return {
     url: value.url,

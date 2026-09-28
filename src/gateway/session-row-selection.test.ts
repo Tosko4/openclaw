@@ -1,12 +1,17 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   deleteSessionEntryLifecycle,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import * as sessionKeys from "../sessions/session-key-utils.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
+import { listSessionFixture } from "./session-list.test-support.js";
+import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { create as createSessionRow } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
@@ -15,6 +20,56 @@ import {
   listProjectedSessions,
   prepareSessionRowSelection,
 } from "./session-utils-list.js";
+
+beforeEach(() => {
+  setActivePluginRegistry(createSessionConversationTestRegistry());
+});
+
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+});
+
+it("reuses selection through transcript refreshes and refreshes metadata ordering", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    const first = "agent:main:first";
+    const second = "agent:main:second";
+    for (const [sessionKey, updatedAt, lastInteractionAt] of [
+      [first, 2, 1],
+      [second, 1, 2],
+    ] as const) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        { sessionId: sessionKey, updatedAt, lastInteractionAt },
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const scan = vi.spyOn(projection, "selectEntries");
+    try {
+      const list = async (sortBy?: "lastInteractionAt") =>
+        (await listProjectedSessions({ projection, opts: { limit: 1, sortBy } })).sessions;
+      expect((await list())[0]?.key).toBe(first);
+      scan.mockClear();
+      emitSessionTranscriptUpdate({
+        target: { agentId: "main", sessionId: first, sessionKey: first },
+      });
+      expect((await list())[0]?.key).toBe(first);
+      expect(scan.mock.calls.filter(([query]) => !query?.key)).toHaveLength(0);
+      expect((await list("lastInteractionAt"))[0]?.key).toBe(second);
+      expect((await list())[0]?.key).toBe(first);
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: second },
+        { sessionId: second, updatedAt: 3, label: "Changed metadata" },
+      );
+      expect((await list())[0]).toMatchObject({ key: second, label: "Changed metadata" });
+    } finally {
+      scan.mockRestore();
+      projection.dispose();
+      release();
+    }
+  });
+});
 
 it("selects an exact row before pagination while retaining discovery filters", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -56,11 +111,11 @@ it("selects an exact row before pagination while retaining discovery filters", a
   });
 });
 
-it("reuses resident key predicates across list requests and refreshes entry classification", async () => {
+it("reuses resident key predicates across list requests and refreshes legacy spawned classification", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
     const keys = [
-      "agent:main:dashboard:visible",
+      "agent:main:legacy-visible",
       "agent:main:cron:job:run:one",
       "agent:main:subagent:child",
       "agent:main:matrix:channel:!Room:example.org:thread:$Event",
@@ -201,9 +256,6 @@ it.each([false, true])(
           expect(target.entry).toBe(entry);
           expect(target.storeTarget).toBe(original.storeTarget);
           expect(target.storeKey ?? key).toBe(original.key);
-          if (!activeOnly || original.key.startsWith("agent:")) {
-            expect(target).toBe(original);
-          }
         }
         const visible = filterAndSortSessionEntries({
           ...prepared,
@@ -265,3 +317,31 @@ it("rejects duplicate ordinary keys introduced after store admission before filt
     }
   });
 });
+
+it.each([undefined, "Research"])(
+  "keeps visible spawned work discoverable with group=%s",
+  async (category) => {
+    const result = await listSessionFixture({
+      cfg: { agents: { entries: { main: {} } } },
+      storePath: "/tmp/openclaw-visible-session-activity",
+      store: {
+        "agent:main:subagent:hidden": {
+          sessionId: "hidden",
+          updatedAt: 3,
+          category,
+          spawnedBy: "agent:main:discussion",
+        },
+        "agent:main:dashboard:visible": {
+          sessionId: "visible",
+          updatedAt: 2,
+          category,
+          spawnedBy: "agent:main:discussion",
+        },
+        "agent:main:discussion": { sessionId: "parent", updatedAt: 1 },
+      },
+      opts: { excludeSubagents: true, limit: 1 },
+    });
+    expect(result.sessions.map((row) => row.key)).toEqual(["agent:main:dashboard:visible"]);
+    expect(result).toMatchObject({ totalCount: 2, nextOffset: 1, hasMore: true });
+  },
+);

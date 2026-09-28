@@ -30,11 +30,10 @@ import type {
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
 } from "./update-command-migrated-types.js";
-import {
-  createUpdateCommandFinalizationFence,
-  UpdateCommandRecoveryPendingError,
-} from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import { createUpdateCommandFinalizationFence } from "./update-command-recovery.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
+import { releaseLegacySourceLock } from "./update-command-runtime.js";
 import {
   resolveUpdatedInstallCommandEnv,
   stripGatewayServiceMarkerEnv,
@@ -99,7 +98,7 @@ export async function inspectActivatedUpdateState(
     result.status = "error";
     result.reason = "rollback-state-unverified";
     result.steps.push({
-      name: "state schema verification",
+      name: "state-schema-verification",
       command: "openclaw update",
       cwd: result.root ?? root,
       durationMs: 0,
@@ -114,7 +113,12 @@ export async function inspectActivatedUpdateState(
 export async function continueMigratedUpdateInFreshProcess(
   params: FinishUpdateParams,
   bufferedSteps: UpdateRunStep[],
-): Promise<Omit<MigratedUpdateFinalizationResult, "terminalRunId">> {
+): Promise<
+  Pick<
+    MigratedUpdateFinalizationResult,
+    "result" | "exitCode" | "automaticTriage" | "candidateStartAttempted"
+  > & { databaseRollbackAvailable?: true }
+> {
   if (params.opts.recovery) {
     throw new UpdateCommandRecoveryPendingError("Full-state checkpoint recovery is deferred.");
   }
@@ -147,9 +151,11 @@ export async function continueMigratedUpdateInFreshProcess(
       TMP: scratchDir,
       TEMP: scratchDir,
     };
-    if (run.executorFence) {
+    if (run.executorFence || run.completionOwner) {
       assertCurrent();
-      const requiresRetainedOwner = requiresRetainedUpdateCommandOwner(run.executorFence);
+      const requiresRetainedOwner = run.executorFence
+        ? requiresRetainedUpdateCommandOwner(run.executorFence)
+        : false;
       // Compatibility only, never authority. An older installed worker ignores
       // new JSON fields, so refuse before exposing any continuation input.
       const check = await runUtf8CommandWithTimeout([...workerCommand, "--check"], {
@@ -177,11 +183,16 @@ export async function continueMigratedUpdateInFreshProcess(
         check.code !== 0 ||
         check.cleanup !== "normal" ||
         !isRecord(contract) ||
-        contract.executorDelegation !== "pid-start-v1" ||
+        (run.executorFence && contract.executorDelegation !== "pid-start-v1") ||
         (requiresRetainedOwner && contract.retainedOwnerBinding !== true)
       ) {
         throw new UpdateCommandRecoveryPendingError(
           "Update runtime does not support live executor delegation; recovery remains pending.",
+        );
+      }
+      if (run.completionOwner === "gateway-restart" && contract.gatewayRestartCompletion !== true) {
+        throw new UpdateCommandRecoveryPendingError(
+          "Candidate runtime cannot defer foreground update completion to Gateway restart; recovery remains pending.",
         );
       }
     }
@@ -196,7 +207,12 @@ export async function continueMigratedUpdateInFreshProcess(
         }),
       );
     }
-    const { packageTransaction: _transaction, preManagedServiceStop, ...serializable } = params;
+    const {
+      packageTransaction: _transaction,
+      databaseBackup: _databaseBackup,
+      preManagedServiceStop,
+      ...serializable
+    } = params;
     let stopState: MigratedUpdateFinalizationInput["params"]["preManagedServiceStop"];
     if (preManagedServiceStop) {
       const { windowsTaskAutoStartRecovery: _windows, ...serializableStop } = preManagedServiceStop;
@@ -216,7 +232,12 @@ export async function continueMigratedUpdateInFreshProcess(
     const handoff = createUpdateTimeoutHandoff(params.opts.timeout, params.updateStepTimeoutMs);
     assertCurrent();
     const resultPath = path.join(scratchDir, "result.json");
-    const { requesterAuthority, executorFence, ...runIdentity } = run;
+    const {
+      requesterAuthority,
+      executorFence,
+      sourceArtifactLock: _sourceArtifactLock,
+      ...runIdentity
+    } = run;
     const input: MigratedUpdateFinalizationInput = {
       ...handoff,
       params: {
@@ -256,12 +277,10 @@ export async function continueMigratedUpdateInFreshProcess(
         killGraceMs: 500,
         maxOutputBytes: 1024 * 1024,
       });
+    await releaseLegacySourceLock(root, run.sourceArtifactLock);
     const child = executorFence
       ? await withUpdateCommandExecutorChild(executorFence, root, runChild)
       : await runChild();
-    if (child.stdout) {
-      process.stdout.write(child.stdout);
-    }
     if (child.stderr) {
       process.stderr.write(child.stderr);
     }
@@ -273,11 +292,38 @@ export async function continueMigratedUpdateInFreshProcess(
       child.code !== 0 ||
       child.cleanup !== "normal" ||
       (executorFence && response.executorDelegation !== "pid-start-v1") ||
-      response.terminalRunId !== run.runId ||
+      (response.terminalRunId !== run.runId &&
+        !(
+          run.completionOwner === "gateway-restart" &&
+          run.gatewayRestartRequired === true &&
+          response.restartRunId === run.runId &&
+          response.result.status === "ok"
+        )) ||
       response.result.runId !== run.runId ||
       !Number.isInteger(response.exitCode)
     ) {
       throw new Error("Update finalization did not confirm the admitted run's terminal outcome.");
+    }
+    const restoreDatabases =
+      params.databaseBackup !== undefined &&
+      params.packageTransaction !== undefined &&
+      !windowsRecovery &&
+      response.result.status === "error" &&
+      response.candidateStartAttempted === false &&
+      !isUpdateGatewayReadinessPending(response.result);
+    if (restoreDatabases) {
+      // The waiting driver still owns the package transaction and stopped
+      // lifecycle. Its database restoration and rollback publish the final result.
+      return {
+        result: response.result,
+        exitCode: response.exitCode,
+        automaticTriage: response.automaticTriage,
+        candidateStartAttempted: false,
+        databaseRollbackAvailable: true,
+      };
+    }
+    if (child.stdout) {
+      process.stdout.write(child.stdout);
     }
     try {
       await windowsRecovery?.complete(
@@ -303,6 +349,7 @@ export async function continueMigratedUpdateInFreshProcess(
       result: response.result,
       exitCode: response.exitCode,
       automaticTriage: response.automaticTriage,
+      candidateStartAttempted: response.candidateStartAttempted,
     };
   } catch (error) {
     if (error instanceof UpdateCommandRecoveryPendingError) {
