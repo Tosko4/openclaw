@@ -1,12 +1,19 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createProcessTool } from "./bash-tools.process.js";
 
+const readSessionEntriesMock = vi.hoisted(() => vi.fn());
+vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntriesFromStoreInWorker: readSessionEntriesMock,
+}));
+beforeEach(() => {
+  readSessionEntriesMock.mockReset().mockRejectedValue(new Error("session worker unavailable"));
+});
 afterEach(resetProcessRegistryForTests);
 
 function nodeCommand(source: string): string {
@@ -90,4 +97,55 @@ test("does not advertise detached continuation when process is unavailable", asy
   });
   expect(result.details).toMatchObject({ status: "completed", aggregated: "FOREGROUND_COMPLETE" });
   expect(result.details).not.toHaveProperty("followUp");
+});
+
+test.each([
+  { label: "notifications disabled", notifyOnExit: false, allowBackground: true },
+  { label: "foreground only", notifyOnExit: true, allowBackground: false },
+])("runs dashboard exec without the unavailable session worker when $label", async (defaults) => {
+  const sessionKey = `agent:main:dashboard:worker-unavailable-${defaults.label}`;
+  const exec = createExecTool({
+    config: {},
+    host: "gateway",
+    security: "full",
+    ask: "off",
+    sessionKey,
+    scopeKey: sessionKey,
+    notifyOnExit: defaults.notifyOnExit,
+    allowBackground: defaults.allowBackground,
+  });
+  const started = await exec.execute("worker-unavailable", {
+    command: nodeCommand('process.stdout.write("EXEC_COMPLETED")'),
+    background: true,
+  });
+  const processTool = createProcessTool({ scopeKey: sessionKey });
+  await waitForExecScope(sessionKey);
+  const result =
+    started.details.status === "running"
+      ? await processTool.execute("worker-unavailable-poll", {
+          action: "poll",
+          sessionId: started.details.sessionId,
+        })
+      : started;
+  expect(result.details).toMatchObject({ status: "completed", aggregated: "EXEC_COMPLETED" });
+  expect(readSessionEntriesMock).not.toHaveBeenCalled();
+});
+
+test("consults the session worker when a dashboard exec can notify on completion", async () => {
+  const exec = createExecTool({
+    config: {},
+    host: "gateway",
+    security: "full",
+    ask: "off",
+    sessionKey: "agent:main:dashboard:notification-possible",
+    notifyOnExit: true,
+    allowBackground: true,
+  });
+  await expect(
+    exec.execute("notification-possible", {
+      command: nodeCommand('process.stdout.write("UNREACHED")'),
+      background: true,
+    }),
+  ).rejects.toThrow("session worker unavailable");
+  expect(readSessionEntriesMock).toHaveBeenCalledOnce();
 });

@@ -568,7 +568,8 @@ export function createExecTool(
           });
         }
 
-        const subagentSession = await resolveSubagentSession();
+        const subagentSession =
+          notifyOnExit && allowBackground ? await resolveSubagentSession() : false;
         assertSourceActive();
         run = await runExecProcess({
           command: params.command,
