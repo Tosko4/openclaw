@@ -11,9 +11,10 @@ import {
   withTempTelegramHeartbeatSandbox,
 } from "../infra/heartbeat-runner.test-utils.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
-import { getFinishedSession } from "./bash-process-registry.js";
+import { getFinishedSession, waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { createExecTool, createProcessTool } from "./bash-tools.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
+import { createProcessTool } from "./bash-tools.process.js";
 import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import { createSubagentRunRecord } from "./subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagents/registry/subagent-registry-memory.js";
@@ -38,6 +39,12 @@ afterEach(() => {
 
 it.skipIf(process.platform === "win32").each([
   { kind: "retired visible child", sessionKey: "agent:main:dashboard:child", child: true },
+  {
+    kind: "visible child borrowing parent tool policy",
+    sessionKey: "agent:main:dashboard:borrowed",
+    child: true,
+    borrowedPolicy: true,
+  },
   { kind: "ordinary dashboard", sessionKey: "agent:main:dashboard:ordinary", child: false },
   { kind: "main session", sessionKey: "agent:main:main", child: false },
   { kind: "hidden child", sessionKey: "agent:main:subagent:hidden", child: true },
@@ -49,7 +56,7 @@ it.skipIf(process.platform === "win32").each([
   },
 ])(
   "keeps a real failed background exec owned by its $kind",
-  async ({ sessionKey, child, navigation }) => {
+  async ({ sessionKey, child, navigation, borrowedPolicy }) => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg: OpenClawConfig = {
         agents: { defaults: { workspace: tmpDir, heartbeat: { every: "0m", target: "telegram" } } },
@@ -66,14 +73,16 @@ it.skipIf(process.platform === "win32").each([
           ...(navigation ? { spawnedBy: "agent:main:main" } : {}),
         });
       }
-      const releaseFile = path.join(tmpDir, "release-child");
       const scriptFile = path.join(tmpDir, "background-child.cjs");
+      const releaseFile = path.join(tmpDir, "release-child");
       await fs.writeFile(
         scriptFile,
         [
           'const fs = require("node:fs");',
           `const releaseFile = ${JSON.stringify(releaseFile)};`,
-          'setInterval(() => { if (fs.existsSync(releaseFile)) { process.stdout.write("synthetic failed build\\n"); process.exit(7); } }, 10);',
+          'const finish = () => { if (fs.existsSync(releaseFile)) { watcher.close(); process.stdout.write("synthetic failed build\\n"); process.exit(7); } };',
+          `const watcher = fs.watch(${JSON.stringify(tmpDir)}, finish);`,
+          "finish();",
         ].join("\n"),
       );
       const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -85,7 +94,8 @@ it.skipIf(process.platform === "win32").each([
         allowBackground: true,
         timeoutSec: 10,
         notifyOnExit: true,
-        sessionKey,
+        sessionKey: borrowedPolicy ? "agent:main:main" : sessionKey,
+        ...(borrowedPolicy ? { runSessionKey: sessionKey } : {}),
         scopeKey: sessionKey,
         messageProvider: "telegram",
         currentChannelId: "100123",
@@ -107,10 +117,9 @@ it.skipIf(process.platform === "win32").each([
         );
       }
       subagentRuns.delete(RUN_ID);
+      const processTool = createProcessTool({ scopeKey: sessionKey });
       await fs.writeFile(releaseFile, "go");
-      await expect
-        .poll(() => getFinishedSession(sessionId), { timeout: 5000, interval: 25 })
-        .toBeDefined();
+      await waitForExecScope(sessionKey);
       expect(getFinishedSession(sessionId)?.exitCode).toBe(7);
       expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);
 
@@ -131,7 +140,6 @@ it.skipIf(process.platform === "win32").each([
       expect(sendTelegram).toHaveBeenCalledTimes(child ? 0 : 1);
       expect(requestHeartbeatMock).toHaveBeenCalledTimes(child ? 0 : 1);
       if (child) {
-        const processTool = createProcessTool({ scopeKey: sessionKey });
         const result = await processTool.execute("poll-child", { action: "poll", sessionId });
         expect(result.details).toMatchObject({ status: "completed", exitCode: 7 });
         expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);

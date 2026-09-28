@@ -1,7 +1,24 @@
 #if os(macOS)
 import AppKit
+import Observation
 import SwiftUI
 import UniformTypeIdentifiers
+
+/// Window-local presentation commands shared with the app menu. Gateway/session
+/// operations remain on the chat view model owned by that same window.
+@MainActor
+@Observable
+public final class OpenClawChatWindowCommands {
+    public var isCommandPalettePresented = false
+    var composerFocusRequest = 0
+    var findRequest = 0
+
+    public init() {}
+}
+
+extension EnvironmentValues {
+    @Entry var openClawChatWindowCommands: OpenClawChatWindowCommands?
+}
 
 /// Native macOS chat window with a sessions sidebar and conversation toolbar.
 /// Draft controls belong to the composer; the compact menu-bar panel keeps
@@ -13,14 +30,24 @@ public struct OpenClawChatWindowShell: View {
     public nonisolated static let assistantToolActivityDefaultsKey = "openclaw.webchat.showAssistantToolActivity"
 
     @State private var viewModel: OpenClawChatViewModel
+    @State private var windowCommands: OpenClawChatWindowCommands
     @Environment(\.colorScheme) private var colorScheme
+    /// Keep absent keys available to the app's legacy trace-preference migration.
+    @AppStorage(OpenClawChatWindowShell.assistantReasoningDefaultsKey)
+    private var storedShowsReasoning: Bool?
+    @AppStorage(OpenClawChatWindowShell.assistantToolActivityDefaultsKey)
+    private var storedShowsToolActivity: Bool?
     @State private var sessionQuery = ""
+    @State private var sessionGroups: [OpenClawChatSessionGroup] = []
+    @State private var sessionPreviews = ChatSessionSidebarPreviews()
+    @State private var pendingPaletteAction: ChatCommandPaletteAction?
     @State private var isConfirmingClearHistory = false
     @State private var isPresentingSessions = false
     @State private var isRenamingSession = false
     @State private var isPresentingNewSessionOptions = false
     @State private var renameSessionTarget: OpenClawChatSessionTarget?
     @State private var renameText = ""
+    private let attentionRequests: [OpenClawChatAttentionRequest]
     private let userAccent: Color?
     private let displayOptions: OpenClawChatDisplayOptions
     private let emptyAssistantIntro: String?
@@ -33,7 +60,9 @@ public struct OpenClawChatWindowShell: View {
     /// `showsAssistantTrace` remains as a source-compatible convenience that sets both display options.
     public init(
         viewModel: OpenClawChatViewModel,
+        windowCommands: OpenClawChatWindowCommands? = nil,
         userAccent: Color? = nil,
+        attentionRequests: [OpenClawChatAttentionRequest] = [],
         displayOptions: OpenClawChatDisplayOptions? = nil,
         showsAssistantTrace: Bool = false,
         emptyAssistantIntro: String? = nil,
@@ -44,6 +73,8 @@ public struct OpenClawChatWindowShell: View {
         mediaPlaybackAllowed: @escaping @MainActor @Sendable () -> Bool = { true })
     {
         _viewModel = State(initialValue: viewModel)
+        _windowCommands = State(initialValue: windowCommands ?? OpenClawChatWindowCommands())
+        self.attentionRequests = attentionRequests
         self.userAccent = userAccent
         self.displayOptions = displayOptions ?? .assistantTrace(showsAssistantTrace)
         self.emptyAssistantIntro = emptyAssistantIntro
@@ -58,7 +89,10 @@ public struct OpenClawChatWindowShell: View {
         NavigationSplitView {
             ChatSessionSidebar(
                 viewModel: self.viewModel,
-                query: self.$sessionQuery)
+                query: self.$sessionQuery,
+                groups: self.$sessionGroups,
+                previews: self.sessionPreviews,
+                additionalAttentionRequests: self.attentionRequests)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 360)
         } detail: {
             OpenClawChatView(
@@ -80,12 +114,22 @@ public struct OpenClawChatWindowShell: View {
                 speech: self.speech,
                 mediaPlaybackAllowed: self.mediaPlaybackAllowed)
                 .environment(\.openClawChatDesktopLayout, true)
+                .environment(\.openClawChatWindowCommands, self.windowCommands)
                 .navigationTitle(self.activeSessionTitle)
                 .toolbar { self.detailToolbar }
                 .background(self.keyboardShortcutHandlers)
                 .background(OpenClawChatTheme.desktopCanvas(in: self.colorScheme))
         }
         .task { await self.viewModel.refreshAgents() }
+        .sheet(
+            isPresented: self.$windowCommands.isCommandPalettePresented,
+            onDismiss: {
+                let action = self.pendingPaletteAction
+                self.pendingPaletteAction = nil
+                self.performPaletteAction(action)
+            }, content: {
+                self.commandPalette
+            })
         .confirmationDialog(
             "Clear this thread's history?",
             isPresented: self.$isConfirmingClearHistory)
@@ -141,7 +185,7 @@ public struct OpenClawChatWindowShell: View {
                 Text("New Thread")
                     .font(OpenClawChatTypography.body)
             }
-            .keyboardShortcut("n", modifiers: [.command])
+            .keyboardShortcut("n", modifiers: [.command, .shift])
             .focusable(false)
 
             Button {
@@ -255,13 +299,7 @@ public struct OpenClawChatWindowShell: View {
         let activity = self.activeSessionEntry.flatMap {
             ChatSessionSidebarModel.activity(for: $0, now: date.timeIntervalSince1970 * 1000)
         }
-        if activity?.kind == .attention {
-            return (String(localized: "Needs you"), "exclamationmark.bubble", OpenClawChatTheme.warning)
-        }
-        if activity?.kind == .queued {
-            return (String(localized: "Queued"), "hourglass", .secondary)
-        }
-        if self.viewModel.hasBlockingRunActivity {
+        if self.viewModel.hasBlockingRunActivity, activity?.kind != .attention, activity?.kind != .queued {
             return (String(localized: "Working"), "circle.dotted", .secondary)
         }
         guard let activity else { return nil }
@@ -290,7 +328,7 @@ public struct OpenClawChatWindowShell: View {
             } label: {
                 chatWindowActionLabel("New Thread", systemImage: "square.and.pencil")
             }
-            .keyboardShortcut("n", modifiers: [.command])
+            .keyboardShortcut("n", modifiers: [.command, .shift])
 
             Button {
                 self.isPresentingNewSessionOptions = true
@@ -398,7 +436,7 @@ public struct OpenClawChatWindowShell: View {
             Divider()
 
             Button {
-                self.copyToPasteboard(self.viewModel.sessionKey)
+                ChatPasteboard.copy(self.viewModel.sessionKey)
             } label: {
                 chatWindowActionLabel("Copy Session Key", systemImage: "doc.on.doc")
             }
@@ -413,27 +451,21 @@ public struct OpenClawChatWindowShell: View {
 
             Toggle(isOn: Binding(
                 get: { self.displayOptions.contains(.reasoning) },
-                set: {
-                    UserDefaults.standard.set(
-                        $0,
-                        forKey: Self.assistantReasoningDefaultsKey)
-                })) {
-                    chatWindowActionLabel(
-                        "Show Reasoning",
-                        systemImage: "brain.head.profile")
-                }
+                set: { self.storedShowsReasoning = $0 }))
+            {
+                chatWindowActionLabel(
+                    "Show Reasoning",
+                    systemImage: "brain.head.profile")
+            }
 
             Toggle(isOn: Binding(
                 get: { self.displayOptions.contains(.toolActivity) },
-                set: {
-                    UserDefaults.standard.set(
-                        $0,
-                        forKey: Self.assistantToolActivityDefaultsKey)
-                })) {
-                    chatWindowActionLabel(
-                        "Show Tool Activity",
-                        systemImage: "hammer")
-                }
+                set: { self.storedShowsToolActivity = $0 }))
+            {
+                chatWindowActionLabel(
+                    "Show Tool Activity",
+                    systemImage: "hammer")
+            }
 
             Divider()
 
@@ -461,9 +493,49 @@ public struct OpenClawChatWindowShell: View {
         .help("Thread actions")
     }
 
-    private func copyToPasteboard(_ string: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(string, forType: .string)
+    private var commandPalette: some View {
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: self.viewModel.sessions,
+            currentSessionKey: self.viewModel.sessionKey,
+            mainSessionKey: self.viewModel.selectedAgentMainSessionKey,
+            activeAgentID: self.viewModel.selectedAgentID,
+            groups: self.sessionGroups,
+            query: "",
+            sessionRoutingContract: self.viewModel.agentCatalog?.sessionRoutingContract ??
+                self.viewModel.sessionRoutingContract)
+        let previewRequest = ChatSessionSidebarPreviews.Request(
+            viewModel: self.viewModel,
+            sessions: sections.flatMap(\.nodes).flatMap(\.previewSessions))
+        return ChatCommandPalette(
+            viewModel: self.viewModel,
+            sections: sections,
+            additionalAttentionRequests: self.attentionRequests,
+            preview: { session in
+                if self.viewModel.matchesCurrentSessionKey(
+                    incoming: session.key, agentId: session.agentId, current: self.viewModel.sessionKey),
+                    let current = ChatSessionSidebarModel.messagePreview(from: self.viewModel.messages)
+                { return current }
+                return self.sessionPreviews.text(for: session, in: previewRequest)
+            },
+            onAction: { self.pendingPaletteAction = $0 })
+    }
+
+    private func performPaletteAction(_ action: ChatCommandPaletteAction?) {
+        if action == .find {
+            self.windowCommands.findRequest += 1
+            return
+        }
+        self.windowCommands.composerFocusRequest += 1
+        switch action {
+        case .newThread:
+            Task { await self.viewModel.startNewSession() }
+        case .threads:
+            self.isPresentingSessions = true
+        case .export:
+            self.exportTranscript()
+        case .find, nil:
+            break
+        }
     }
 
     private func exportTranscript() {

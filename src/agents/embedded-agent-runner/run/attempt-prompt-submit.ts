@@ -1,7 +1,3 @@
-/**
- * Submits or skips the prompt after build/preflight and before stream execution.
- * It may assume prompt context is assembled and admission state is published.
- */
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "../../../llm/types.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
@@ -15,7 +11,6 @@ import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { ackPendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import { recordAggregateTruncation } from "../prompt-cache-observability.js";
-import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
 import {
   type getEmbeddedSessionPromptState,
@@ -40,9 +35,6 @@ import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-/**
- * Submits one prepared prompt while owning provider transforms and cleanup.
- */
 type PromptSubmissionSession = {
   messages: AgentMessage[];
   [agentSessionQueuePromptContext]: AgentSession[typeof agentSessionQueuePromptContext];
@@ -62,6 +54,7 @@ type PromptActiveSession = (
 type SteeringLease = {
   leaseId: string;
   runIds: readonly string[];
+  isCurrent: () => boolean;
 };
 
 type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
@@ -100,22 +93,35 @@ export async function submitEmbeddedAttemptPrompt(input: {
   transcriptPrompt: string;
 }): Promise<void> {
   const { activeSession, attempt } = input;
+  let pendingSteering = input.leasedSteering;
+  const assertSteeringCurrent = () => {
+    if (pendingSteering && !pendingSteering.isCurrent()) {
+      throw new Error(
+        "The queued child results lost authority before requester prompt submission.",
+      );
+    }
+  };
+  assertSteeringCurrent();
   const userTurnRecorder = attempt.userTurnTranscriptRecorder;
   const persistedUserIdempotencyKey =
     attempt.skipPreparedUserTurnMessage !== true && userTurnRecorder?.hasPersisted() === true
       ? (userTurnRecorder.getPersistedMessage?.() ?? userTurnRecorder.message)?.idempotencyKey
       : undefined;
-  const normalizedReplayMessages = normalizeAssistantReplayContent(activeSession.messages);
-  if (normalizedReplayMessages !== activeSession.messages) {
-    activeSession.agent.state.messages = normalizedReplayMessages;
-  }
 
   const installProviderPromptHistoryTransform = (): (() => void) => {
     const baseStreamFn = activeSession.agent.streamFn;
     const persistThenStream: StreamFn = async (model, context, options) => {
       await input.persistToolResultProjections();
+      // Runtime admission queues behind the user append; join it outside that write lane.
+      await userTurnRecorder?.waitForRuntimePersistence();
       options?.signal?.throwIfAborted();
-      return baseStreamFn(model, context, options);
+      assertSteeringCurrent();
+      const stream = await baseStreamFn(model, context, options);
+      // Pre-prompt compaction has not consumed the deferred answer.
+      if (captureCurrentPromptForModel) {
+        pendingSteering = undefined;
+      }
+      return stream;
     };
     const providerPromptStreamFn = wrapStreamFnWithMessageTransform(
       persistThenStream,
@@ -161,7 +167,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
   });
   updateActiveEmbeddedRunSnapshot(attempt.sessionId, {
     transcriptLeafId: input.transcriptLeafId,
-    messages: snapshotRecentMessages(normalizedReplayMessages),
+    messages: snapshotRecentMessages(activeSession.messages),
     inFlightPrompt: input.transcriptPrompt,
   });
 
@@ -219,7 +225,6 @@ export function resolvePromptSubmissionSkipReason(params: {
   prompt: string;
   messages: readonly unknown[];
   imageCount: number;
-  runtimeOnly?: boolean;
 }): PromptSubmissionSkipReason | null {
   if (params.prompt.trim().length > 0 || params.imageCount > 0) {
     return null;
@@ -269,7 +274,7 @@ export async function handleEmbeddedAttemptPromptError(input: {
   activeSession: AgentSession;
   attempt: PromptErrorAttempt;
   error: unknown;
-  handleMidTurnPrecheckRequest: (request: MidTurnPrecheckRequest) => void;
+  handleMidTurnPrecheckRequest: (request: MidTurnPrecheckRequest) => Promise<void>;
   markYieldAborted: () => void;
   releaseLeasedSteering: (error?: unknown) => void;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;

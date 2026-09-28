@@ -3,7 +3,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { ExecHost } from "../infra/exec-approvals.js";
 import {
   isDangerousHostEnvOverrideVarName,
@@ -16,7 +15,7 @@ import {
   installationTargetEnv,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "../infra/installation-target-context.js";
-import { OPENCLAW_CLI_ENV_VAR } from "../infra/openclaw-exec-env.js";
+import { OPENCLAW_CLI_ENV_VAR, SUBAGENT_EXEC_ENV_VAR } from "../infra/openclaw-exec-env.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
@@ -183,23 +182,34 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
   const notifySessionKey = normalizeOptionalString(
-    defaults?.notifySessionKey ?? defaults?.sessionKey,
+    defaults?.notifySessionKey ?? defaults?.runSessionKey ?? defaults?.sessionKey,
   );
   const notifyAgentSession = parseAgentSessionKey(notifySessionKey);
-  // Visible child ownership is persisted before dispatch, whereas registry
-  // registration can follow startup and retirement can precede process exit.
-  const subagentSession = isSubagentEnvelopeSession(notifySessionKey, {
-    entry:
-      notifySessionKey && defaults?.config && notifyAgentSession?.rest.startsWith("dashboard:")
-        ? loadSessionEntryReadOnly({
-            agentId: notifyAgentSession.agentId,
-            sessionKey: notifySessionKey,
-            storePath: resolveSessionStorePathCore(defaults.config.session?.store, {
-              agentId: notifyAgentSession.agentId,
-            }),
-          })
-        : undefined,
-  });
+  // Resolve before dispatch and retain the fact after the child registry retires.
+  // One tool instance belongs to one run; worker reads avoid blocking the Gateway.
+  let subagentSession: Promise<boolean> | undefined;
+  const resolveSubagentSession = () =>
+    (subagentSession ??= (async () => {
+      if (
+        !notifySessionKey ||
+        !defaults?.config ||
+        !notifyAgentSession?.rest.startsWith("dashboard:")
+      ) {
+        return isSubagentEnvelopeSession(notifySessionKey);
+      }
+      const { readSessionEntriesFromStoreInWorker } =
+        await import("../config/sessions/session-entry-read-runtime.js");
+      const read = await readSessionEntriesFromStoreInWorker({
+        agentId: notifyAgentSession.agentId,
+        sessionKeys: [notifySessionKey],
+        storePath: resolveSessionStorePathCore(defaults.config.session?.store, {
+          agentId: notifyAgentSession.agentId,
+        }),
+      });
+      return isSubagentEnvelopeSession(notifySessionKey, {
+        entry: read.entries.find(({ sessionKey }) => sessionKey === notifySessionKey)?.entry,
+      });
+    })());
   const notifyDeliveryContext = normalizeDeliveryContext({
     channel: defaults?.messageProvider,
     to: defaults?.currentChannelId,
@@ -210,7 +220,7 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
     notifyOnExit,
     notifyOnExitEmptySuccess,
     notifySessionKey,
-    subagentSession,
+    resolveSubagentSession,
     notifyDeliveryContext,
   };
 }
@@ -285,7 +295,7 @@ export function createExecRequestPreparation(params: {
       return execParams;
     }
     if (isResolveExecEnvPrepared(execParams)) {
-      return markResolveExecEnvPrepared(execParams);
+      return execParams;
     }
     const hookRunner = getGlobalHookRunner();
     if (
@@ -408,11 +418,11 @@ export function resolvePreparedExecEnvironment(params: {
   sandbox?: BashSandboxConfig;
   containerWorkdir?: string | null;
   channelContext?: PluginHookChannelContext;
+  subagentExecution?: boolean;
   defaultPathPrepend: string[];
   pluginEnv?: Record<string, string>;
   storeEnv?: Record<string, string>;
   storeSecretEnv?: Record<string, string>;
-  secretEgressEnv?: Record<string, string>;
   credentialScrubEnv?: Readonly<Record<string, string>>;
   localIdentityEnv?: Readonly<Record<string, string>>;
   managedLocalIdentity?: boolean;
@@ -423,9 +433,6 @@ export function resolvePreparedExecEnvironment(params: {
     throw new Error(LOCAL_INSTALLATION_TARGET_UNSUPPORTED);
   }
   const inheritedBaseEnv = coerceEnv(process.env);
-  if (params.secretEgressEnv) {
-    Object.assign(inheritedBaseEnv, params.secretEgressEnv);
-  }
   const channelContextEnv = buildChannelContextEnv(params.channelContext);
   const explicitEnv: Record<string, string> | undefined =
     params.execParams.env !== undefined ||
@@ -563,9 +570,6 @@ export function resolvePreparedExecEnvironment(params: {
       }
     }
   }
-  if (params.secretEgressEnv) {
-    Object.assign(env, params.secretEgressEnv);
-  }
   const preparedEnv = {
     ...params.localProcessEnv,
     ...params.credentialScrubEnv,
@@ -574,10 +578,17 @@ export function resolvePreparedExecEnvironment(params: {
   // Prepared values win locally; nodes sanitize their own base env and reject scrub override keys.
   Object.assign(env, preparedEnv);
 
+  const forwardedEnv = params.subagentExecution
+    ? { ...requestedEnv, [SUBAGENT_EXEC_ENV_VAR]: "1" }
+    : requestedEnv;
+  if (params.subagentExecution) {
+    env[SUBAGENT_EXEC_ENV_VAR] = "1";
+  }
+
   return {
     env,
     ...(params.host !== "node" && Object.keys(preparedEnv).length > 0
-      ? { requestedEnv: { ...requestedEnv, ...preparedEnv } }
-      : { requestedEnv }),
+      ? { requestedEnv: { ...forwardedEnv, ...preparedEnv } }
+      : { requestedEnv: forwardedEnv }),
   };
 }
