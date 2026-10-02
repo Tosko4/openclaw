@@ -262,7 +262,7 @@ async function runVitestSpecs(
   const withCacheSlot = createVitestCacheSlots();
   await runVitestPlans(specs, {
     concurrency,
-    isExclusive: automatic ? (spec) => isExclusiveCiTestConfig(spec.config) : undefined,
+    isExclusive: (spec) => isExclusiveCiTestConfig(spec.config),
     shouldStop: () => stopScheduling || Boolean(termination.signal),
     run: async (spec, index) => {
       let result: Awaited<ReturnType<typeof runLoggedVitestSpec>>;
@@ -393,25 +393,27 @@ export async function runTestProjects(
 
   const { parseCLI } = await import("vitest/node");
   let exactTargetRun = false;
+  const selectedTargets = changedTargetArgs ?? targetArgs;
   if (
-    targetArgs.length &&
+    selectedTargets.length &&
     !runSpecs.some((spec) => spec.watchMode) &&
     !hasNonRunVitestSubcommand(forwardedArgs)
   ) {
-    // Native parsing stays in the execution owner. Original filters distinguish
-    // explicit files from broad selections that also lower to literal include files.
+    // Changed selection already resolved its targets. Broad/config selections
+    // keep their existing policy even when lowered to literal include files.
     const execution = parseVitestExecutionArgs(["run", ...forwardedArgs], parseCLI);
+    const filters = changedTargetArgs ?? execution?.filter ?? [];
     if (
       execution &&
       !execution.options.watch &&
       execution.options.run !== false &&
-      execution.filter.length > 0 &&
-      execution.filter.every(
+      filters.length > 0 &&
+      filters.every(
         (file) => isTestFileTarget(file) && /[/\\]/u.test(file) && !/[*?[\]{}]|[@+!]\(/u.test(file),
       )
     ) {
       exactTargetRun = true;
-      if (!Object.hasOwn(execution.options, "passWithNoTests")) {
+      if (targetArgs.length && !Object.hasOwn(execution.options, "passWithNoTests")) {
         for (const spec of runSpecs) {
           const separator = spec.pnpmArgs.indexOf("--");
           spec.pnpmArgs.splice(
@@ -532,6 +534,10 @@ export async function runTestProjects(
       targetArgs.length === 0 &&
       changedTargetArgs === null &&
       !runSpecs.some((spec) => spec.watchMode);
+    const focusedCiShard =
+      !isFullSuiteRun &&
+      isCiLikeEnv(baseEnv) &&
+      Boolean(baseEnv.OPENCLAW_VITEST_SHARD_NAME?.trim());
     const isExplicitParallelMultiConfigRun =
       Boolean(baseEnv.OPENCLAW_TEST_PROJECTS_PARALLEL) &&
       runSpecs.length > 1 &&
@@ -560,6 +566,9 @@ export async function runTestProjects(
       : isParallelShardRun
         ? resolveParallelFullSuiteConcurrency(runSpecs.length, baseEnv)
         : 1;
+    if (focusedCiShard) {
+      console.error(`[test] inner parallelism ${concurrency}`);
+    }
     if (automatic) {
       console.error(
         `[test] running ${runSpecs.length} exact-target plans with parallelism ${concurrency} and joined exclusive barriers`,
@@ -595,9 +604,7 @@ export async function runTestProjects(
       termination,
       automatic,
       baseEnv.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE === "1",
-      !isFullSuiteRun &&
-        isCiLikeEnv(baseEnv) &&
-        Boolean(baseEnv.OPENCLAW_VITEST_SHARD_NAME?.trim()),
+      focusedCiShard,
     );
     if (concurrency === 1 && termination.signal) {
       return;

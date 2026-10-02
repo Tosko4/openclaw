@@ -161,6 +161,8 @@ type ChangedTestTargetOptions = {
   broad?: boolean;
   combineSiblingWithImportGraph?: boolean;
   boundedOwners?: boolean;
+  aggressive?: { maxDirectImporters: number; maxDirectoryTests: number };
+  onSelection?: (selection: { rule: string; input: string; targets: string[] }) => void;
   forceFullImportGraph?: boolean;
   resolveAliases?: boolean;
   runtimeOnly?: boolean;
@@ -181,6 +183,7 @@ type ImportGraphOptions = {
   resolveAliases?: boolean;
   runtimeOnly?: boolean;
   direct?: boolean;
+  maxDepth?: number;
 };
 type ImportGraphAlias = { pattern: string; targets: string[] };
 type VitestSpecShape = Pick<VitestRunSpec, "config" | "env"> & {
@@ -612,6 +615,7 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
   /^test\/helpers\//u,
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
+  ["src/plugins/runtime.retention.test-support.ts", ["src/plugins/runtime.retention.test.ts"]],
   [
     "src/agents/bash-tools.process-liveness-child.test-support.ts",
     ["src/agents/bash-tools.process.liveness.test.ts"],
@@ -851,7 +855,7 @@ const SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
-    "src/plugin-sdk/channel-reply-pipeline.ts",
+    "src/channels/message/reply-pipeline.ts",
     ["src/plugins/contracts/plugin-sdk-subpaths.test.ts", ...GROUP_VISIBLE_REPLY_TEST_TARGETS],
   ],
   ["src/plugin-sdk/reply-runtime.ts", ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"]],
@@ -1136,6 +1140,7 @@ function listUnitSrcFullSuiteTestTargets(cwd: string) {
 
 function listAgentsCoreFullSuiteTestTargets(cwd: string) {
   const isolatedTests = new Set([
+    ...cliProcessTestFiles,
     ...agentVitestProjectOwners.spawnProductionBoundary.include,
     ...agentVitestProjectOwners.coreIsolated.include,
   ]);
@@ -1500,6 +1505,29 @@ function resolveExplicitSourceTestTargets(
   ].toSorted((left, right) => left.localeCompare(right));
 }
 
+function listDirectoryTestTargets(directory: string, cwd: string): string[] {
+  if (isSharedVitestExcludedPath(directory) || isSharedVitestExcludedPath(`${directory}/`)) {
+    return [];
+  }
+  return fs.readdirSync(path.join(cwd, directory), { withFileTypes: true }).flatMap((entry) => {
+    const relative = path.posix.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      return listDirectoryTestTargets(relative, cwd);
+    }
+    return entry.isFile() && relative.endsWith(".test.ts") && !isSharedVitestExcludedPath(relative)
+      ? [relative]
+      : [];
+  });
+}
+
+function isOrdinaryAgentGlobTarget(relative: string): boolean {
+  return (
+    isPathAtOrUnder(relative, agentVitestProjectOwners.all.root) &&
+    isGlobTarget(relative) &&
+    !/\.(?:live|e2e)\.test\.ts$/u.test(relative)
+  );
+}
+
 function expandExplicitSourceTestTargets(targetArgs: string[], cwd: string, watchMode: boolean) {
   const sourceTargetCount = targetArgs.filter((targetArg) => {
     const relative = toRepoRelativeTarget(targetArg, cwd);
@@ -1512,18 +1540,42 @@ function expandExplicitSourceTestTargets(targetArgs: string[], cwd: string, watc
       // The full aggregate already includes the dedicated database-worker project.
       return [targetArg];
     }
-    const databaseWorkerTargets = databaseWorkerExtensionTestFiles.filter((file) =>
-      isGlobTarget(relative)
-        ? path.matchesGlob(file, relative)
-        : isExistingDirectoryTarget(targetArg, cwd) && isPathAtOrUnder(file, relative),
-    );
+    const glob = isGlobTarget(relative);
+    const directory = isExistingDirectoryTarget(targetArg, cwd);
+    if (
+      !watchMode &&
+      !glob &&
+      directory &&
+      (isPathAtOrUnder(relative, "packages") ||
+        isPathAtOrUnder(relative, agentVitestProjectOwners.all.root))
+    ) {
+      const targets = listDirectoryTestTargets(relative, cwd).toSorted((left, right) =>
+        left.localeCompare(right),
+      );
+      return targets.length > 0 ? targets : [targetArg];
+    }
+    if (!watchMode && isOrdinaryAgentGlobTarget(relative)) {
+      // Assign every leaf before choosing configs: agent shards exclude light,
+      // isolated, and database-worker tests owned by other projects.
+      const targets = expandVitestIncludePatterns([relative], cwd).filter(
+        (file) =>
+          file.endsWith(".test.ts") &&
+          !isSharedVitestExcludedPath(file) &&
+          isExistingFileTarget(file, cwd),
+      );
+      return targets.length > 0 ? targets : [targetArg];
+    }
+    // Target shape is invariant across the worker inventory; literal files need no expansion.
+    const databaseWorkerTargets =
+      glob || directory
+        ? databaseWorkerExtensionTestFiles.filter((file) =>
+            glob ? path.matchesGlob(file, relative) : isPathAtOrUnder(file, relative),
+          )
+        : [];
     if (databaseWorkerTargets.length > 0) {
       return [...databaseWorkerTargets, targetArg];
     }
-    if (
-      (isPathAtOrUnder(relative, "ui") || isPluginControlUiPath(relative)) &&
-      isGlobTarget(relative)
-    ) {
+    if ((isPathAtOrUnder(relative, "ui") || isPluginControlUiPath(relative)) && glob) {
       // Expand mixed browser globs before assigning files to their disjoint runners.
       const targets = listExplicitTestTargetFilesForCwd(cwd).filter(
         (file) => isTestFileTarget(file) && path.matchesGlob(file, relative),
@@ -1534,13 +1586,13 @@ function expandExplicitSourceTestTargets(targetArgs: string[], cwd: string, watc
     if (prefixTargets) {
       return prefixTargets;
     }
-    if (relative === "src/commands" && isExistingDirectoryTarget(targetArg, cwd)) {
+    if (relative === "src/commands" && directory) {
       return [COMMANDS_LIGHT_VITEST_CONFIG, COMMANDS_VITEST_CONFIG];
     }
     // Contract directory targets must fan out to the owning contract lanes; the
     // generic channels/plugins projects exclude contracts/**, so routing a
     // contracts directory there silently runs zero tests (passWithNoTests).
-    if (isExistingDirectoryTarget(targetArg, cwd)) {
+    if (directory) {
       if (isPathAtOrUnder(relative, "src/channels/plugins/contracts")) {
         return [
           CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG,
@@ -1749,6 +1801,7 @@ function resolveImportSpecifiers(
   extensions: readonly string[] = IMPORTABLE_FILE_EXTENSIONS,
   aliases: readonly ImportGraphAlias[] = [],
   aliasResolutions?: Map<string, string[]>,
+  runtimeOnly = false,
 ): string[] {
   if (!specifier.startsWith(".")) {
     if (aliasResolutions?.has(specifier)) {
@@ -1772,6 +1825,9 @@ function resolveImportSpecifiers(
           `./${target.replace("*", wildcard ?? "")}`,
           fileSet,
           extensions,
+          [],
+          undefined,
+          runtimeOnly,
         )) {
           resolved.add(file);
         }
@@ -1799,8 +1855,12 @@ function resolveImportSpecifiers(
     );
   }
 
-  const resolved = candidates.find((candidate) => fileSet.has(candidate));
-  return resolved ? [resolved] : [];
+  // A .js runtime sibling must not hide the TypeScript source selected by
+  // extension substitution. Combined graphs retain both kinds of consumers.
+  const resolved = [...new Set(candidates.filter((candidate) => fileSet.has(candidate)))];
+  return runtimeOnly || ![".js", ".jsx", ".mjs", ".cjs"].includes(ext)
+    ? resolved.slice(0, 1)
+    : resolved;
 }
 
 const cachedImportGraphs = new Map<string, { graph: ImportGraph; additionalPaths: string }>();
@@ -2041,22 +2101,22 @@ function readImportGraphEdges(
   const requests = files
     .map((file) => ({ file, parseImports: !cachedImportGraphEdges.has(cacheKey(file)) }))
     .filter(({ parseImports }) => parseImports || terms.length > 0);
-  return readTestSelectorSourceFacts(cwd, requests, terms, GIT_LS_FILES_MAX_BUFFER_BYTES).map(
-    ({ file, imports, typeOnlyImports, matches, references }) => {
-      const edges = cachedImportGraphEdges.get(cacheKey(file)) ?? {
-        file,
-        specifiers: imports,
-        typeOnlySpecifiers: new Set(typeOnlyImports),
-        imports: resolve(file, imports),
-        references: new Set<string>(),
-      };
-      for (const reference of references) {
-        edges.references.add(reference);
-      }
-      cachedImportGraphEdges.set(cacheKey(file), edges);
-      return { edges, matches };
-    },
-  );
+  return readTestSelectorSourceFacts(cwd, requests, terms, GIT_LS_FILES_MAX_BUFFER_BYTES, {
+    matchingOnly: terms.length > 0,
+  }).map(({ file, imports, typeOnlyImports, matches, references }) => {
+    const edges = cachedImportGraphEdges.get(cacheKey(file)) ?? {
+      file,
+      specifiers: imports,
+      typeOnlySpecifiers: new Set(typeOnlyImports),
+      imports: resolve(file, imports),
+      references: new Set<string>(),
+    };
+    for (const reference of references) {
+      edges.references.add(reference);
+    }
+    cachedImportGraphEdges.set(cacheKey(file), edges);
+    return { edges, matches };
+  });
 }
 
 function listImportGraphGrepMatches(
@@ -2092,24 +2152,30 @@ function listImportGraphGrepMatches(
     maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
     stdio: ["pipe", "pipe", "pipe"],
   };
-  const result = spawnSync(
-    "git",
-    ["grep", "-l", "-z", "--fixed-strings", "-f", "-", "--", ...grepPaths],
-    spawnOptions,
-  );
+  // Git's fixed-string prefilter rescans for each term. Large frontiers use the
+  // source reader's single-pass multi-term matcher over the same inventory.
+  const result =
+    missing.length <= 64
+      ? spawnSync(
+          "git",
+          ["grep", "-l", "-z", "--fixed-strings", "-f", "-", "--", ...grepPaths],
+          spawnOptions,
+        )
+      : undefined;
   for (const term of missing) {
     matches.set(term, []);
   }
-  if (result.status !== 1) {
+  if (result?.status !== 1) {
     const trackedFiles = new Set(listImportGraphFilesForCwd(cwd, { tooling }));
     // Source archives use the same filesystem inventory and native reader as the full graph.
     const candidates = (
-      result.status === 0
+      result?.status === 0
         ? result.stdout.split("\0").filter((file) => trackedFiles.has(file))
         : [...trackedFiles].filter((file) => !testFilesOnly || isTestFileTarget(file))
     ).toSorted((left, right) => left.localeCompare(right));
-    // Per-term membership preserves the helper first-success rule.
-    // Cached edges need only term facts; full-graph acquisition reuses their parsing.
+    // Per-term membership preserves the helper first-success rule. One native pass
+    // matches every candidate, parses only uncached matches, and leaves nonmatches
+    // uncached so later full-graph queries still read them.
     for (const { edges, matches: fileTerms } of readImportGraphEdges(
       cwd,
       candidates,
@@ -2163,6 +2229,8 @@ function findDirectImporters(
                 resolution.files,
                 extensions,
                 resolution.aliases,
+                undefined,
+                resolution.runtimeOnly,
               ).includes(importedFile),
           )
         : imports.has(importedFile);
@@ -2325,6 +2393,7 @@ function getImportGraph(
         extensions,
         aliases,
         aliasResolutions,
+        options.runtimeOnly,
       )) {
         const importers = reverseImports.get(imported) ?? [];
         importers.push(file);
@@ -2380,6 +2449,7 @@ export function hasImportGraphImpactOnTargets(
           extensions,
           aliases,
           aliasResolutions,
+          options.runtimeOnly,
         )) {
           if (changed.has(dependency)) {
             return true;
@@ -2399,13 +2469,16 @@ export function hasImportGraphImpactOnTargets(
 function walkAffectedTestsFromImportGraph(
   changedPaths: string[],
   { reverseImports, testFiles }: ImportGraph,
-  direct = false,
+  maxDepth = Infinity,
 ) {
-  const queue = [...changedPaths];
-  const seen = new Set(queue);
+  const queue = changedPaths.map((file) => ({ file, depth: 0 }));
+  const seen = new Set(changedPaths);
   const targets: string[] = [];
-  for (const current of queue) {
-    for (const importer of reverseImports.get(current) ?? []) {
+  for (const { file, depth } of queue) {
+    if (depth >= maxDepth) {
+      continue;
+    }
+    for (const importer of reverseImports.get(file) ?? []) {
       if (seen.has(importer)) {
         continue;
       }
@@ -2413,9 +2486,7 @@ function walkAffectedTestsFromImportGraph(
       if (testFiles.has(importer)) {
         targets.push(importer);
       }
-      if (!direct) {
-        queue.push(importer);
-      }
+      queue.push({ file: importer, depth: depth + 1 });
     }
   }
   return targets.toSorted((left, right) => left.localeCompare(right));
@@ -2445,6 +2516,7 @@ export function resolveAffectedTestsFromImportGraph(
     !options.resolveAliases &&
     !options.runtimeOnly &&
     options.forceFull !== true &&
+    options.maxDepth === undefined &&
     typeof changedPath === "string"
   ) {
     const targetedTargets = resolveAffectedTestsFromTargetedImportScan(changedPath, cwd, options);
@@ -2457,8 +2529,32 @@ export function resolveAffectedTestsFromImportGraph(
 
   return uniqueOrdered([
     ...changedTests,
-    ...walkAffectedTestsFromImportGraph(paths, getImportGraph(cwd, options, paths), options.direct),
+    ...walkAffectedTestsFromImportGraph(
+      paths,
+      getImportGraph(cwd, options, paths),
+      options.direct ? 1 : options.maxDepth,
+    ),
   ]).toSorted((left, right) => left.localeCompare(right));
+}
+
+/** Complete transitive consumers, including erased type imports unless runtimeOnly is requested. */
+export function resolveImportGraphDependents(
+  changedPaths: readonly string[],
+  cwd = process.cwd(),
+  options: ImportGraphOptions = {},
+) {
+  const roots = new Set(changedPaths);
+  const { reverseImports } = getImportGraph(cwd, options, [...roots]);
+  const seen = new Set(roots);
+  // Set iteration visits newly admitted consumers once, including across cycles.
+  for (const current of seen) {
+    for (const importer of reverseImports.get(current) ?? []) {
+      seen.add(importer);
+    }
+  }
+  return [...seen]
+    .filter((file) => !roots.has(file))
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 /** Changed resolved dependencies enter the same graph at their literal import consumers. */
@@ -2468,7 +2564,8 @@ export function resolveDependencyTestConsumers(
   {
     runtimeOnly = false,
     importerBindings,
-  }: Pick<ImportGraphOptions, "runtimeOnly"> & {
+    direct = false,
+  }: Pick<ImportGraphOptions, "runtimeOnly" | "direct"> & {
     importerBindings?: Array<{ root: string; dependencies: string[] }>;
   } = {},
 ) {
@@ -2536,7 +2633,7 @@ export function resolveDependencyTestConsumers(
     unresolved: [...unresolved.values()],
     tests: uniqueOrdered([
       ...sources.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
-      ...resolveAffectedTestsFromImportGraph(sources, cwd, options),
+      ...(direct ? [] : resolveAffectedTestsFromImportGraph(sources, cwd, options)),
     ]).toSorted((left, right) => left.localeCompare(right)),
   };
 }
@@ -2855,7 +2952,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [".github/workflows/update-migration.yml", [packageAcceptance, workflowGuards]],
   [
     ".github/actions/setup-node-env/action.yml",
-    ["setup-node-env-bun", packageAcceptance, workflowGuards],
+    ["setup-node-env-bun", "setup-node-env-semantic-memory", packageAcceptance, workflowGuards],
   ],
   [
     ".github/actions/setup-node-env/dependency-fingerprint.mjs",
@@ -3930,7 +4027,8 @@ function resolveToolingTestTargets(
   const semanticTargets = resolveSemanticToolingTargets(implementationPath).filter(boundedOwner);
   const facts = getChangedPathFacts(changedPath);
   const toolingTestSource =
-    changedPath.startsWith("test/scripts/") &&
+    (changedPath.startsWith("test/scripts/") ||
+      (!options.boundedOwners && /^test\/vitest\/vitest\.[^/]+-paths\.mjs$/u.test(changedPath))) &&
     TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => implementationPath.endsWith(ext));
   const hasToolingOwner =
     exactTargets.length > 0 ||
@@ -4024,7 +4122,7 @@ function shouldUseBroadChangedTargets(env = process.env) {
   return parsePermissiveBooleanToken(env[BROAD_CHANGED_ENV_KEY]) === true;
 }
 
-function isRoutableChangedTarget(changedPath: string) {
+export function isRoutableChangedTarget(changedPath: string) {
   if (GENERATED_CHANGED_TEST_TARGET_PATTERNS.some((pattern) => pattern.test(changedPath))) {
     return false;
   }
@@ -4156,12 +4254,29 @@ function isDeletedChangedTestTarget(changedPath: string, cwd: string) {
   return isTestFileTarget(changedPath) && !fs.existsSync(path.join(cwd, changedPath));
 }
 
-function resolveConventionalChangedOwnerTargets(changedPath: string, cwd: string) {
+function resolveConventionalChangedOwnerTargets(
+  changedPath: string,
+  cwd: string,
+  maxDirectoryTests?: number,
+) {
   if (!isRoutableChangedTarget(changedPath) || changedPath.endsWith(".live.test.ts")) {
     return [];
   }
   const stem = changedPath.replace(/\.[cm]?[jt]sx?$/u, "");
-  const siblings = listImportGraphFilesForCwd(cwd, { tooling: true }).filter(
+  const files = listImportGraphFilesForCwd(cwd, { tooling: true });
+  if (maxDirectoryTests !== undefined) {
+    const directory = path.posix.dirname(changedPath);
+    const adjacent = files.filter(
+      (file) =>
+        path.posix.dirname(file) === directory &&
+        isTestFileTarget(file) &&
+        !file.endsWith(".live.test.ts"),
+    );
+    return adjacent.length <= maxDirectoryTests
+      ? adjacent
+      : adjacent.filter((file) => file.startsWith(stem));
+  }
+  const siblings = files.filter(
     (file) =>
       file.startsWith(`${stem}.`) && isTestFileTarget(file) && !file.endsWith(".live.test.ts"),
   );
@@ -4240,19 +4355,32 @@ function resolveBoundedChangedTestTargetPlan(
       !RUNNABLE_VITEST_CONFIG_TARGETS.has(target) &&
       !isExistingDirectoryTarget(target, cwd) &&
       isLikelyFileTarget(target)
-        ? resolveConventionalChangedOwnerTargets(target, cwd)
+        ? resolveConventionalChangedOwnerTargets(target, cwd, options.aggressive?.maxDirectoryTests)
         : [target],
     );
     const pluginPackageOwner =
       getChangedPathFacts(changedPath).surface === "extension" &&
       path.posix.basename(changedPath) === "package.json"
-        ? resolveConventionalChangedOwnerTargets(changedPath, cwd)
+        ? resolveConventionalChangedOwnerTargets(
+            changedPath,
+            cwd,
+            options.aggressive?.maxDirectoryTests,
+          )
         : [];
     const explicitOwners = uniqueOrdered([...(mappedOwners ?? []), ...pluginPackageOwner]);
-    const owners =
-      explicitOwners.length > 0
+    const conventionalOwners = resolveConventionalChangedOwnerTargets(
+      changedPath,
+      cwd,
+      options.aggressive?.maxDirectoryTests,
+    );
+    const owners = options.aggressive
+      ? uniqueOrdered([
+          ...explicitOwners,
+          ...(isTestFileTarget(changedPath) ? [] : conventionalOwners),
+        ]).filter((owner) => !RUNNABLE_VITEST_CONFIG_TARGETS.has(owner))
+      : explicitOwners.length > 0
         ? explicitOwners
-        : resolveConventionalChangedOwnerTargets(changedPath, cwd);
+        : conventionalOwners;
     const hasExplicitScope = explicitOwners.some(
       (owner) => isGlobTarget(owner) || !isTestFileTarget(owner),
     );
@@ -4273,17 +4401,43 @@ function resolveBoundedChangedTestTargetPlan(
     if (!onlyTestPaths || testsHaveConsumers) {
       // Deleted and non-source inputs share one resolution universe for the whole plan.
       graph ??= getImportGraph(cwd, graphOptions, changedPaths);
-      directImporters = new Set(walkAffectedTestsFromImportGraph([changedPath], graph, true));
-      affectedTests = walkAffectedTestsFromImportGraph([changedPath], graph);
+      directImporters = new Set(walkAffectedTestsFromImportGraph([changedPath], graph, 1));
+      const directCount = new Set(graph.reverseImports.get(changedPath)).size;
+      const depth = options.aggressive
+        ? directCount < options.aggressive.maxDirectImporters
+          ? 2
+          : 1
+        : undefined;
+      affectedTests = walkAffectedTestsFromImportGraph([changedPath], graph, depth);
     }
     // Direct readers keep their coverage without broadening the owner's transitive area.
     const importers = affectedTests.filter(
       (file) =>
+        options.aggressive ||
         directImporters.has(file) ||
         (!broadInput && owners.length === 0 && areas.length === 0) ||
         areas.some((area) => isPathAtOrUnder(file, area)) ||
         owners.some((owner) => owner === file || path.matchesGlob(file, owner)),
     );
+    if (options.aggressive) {
+      options.onSelection?.({
+        rule: "explicit-owner",
+        input: changedPath,
+        targets: explicitOwners.filter((owner) => !RUNNABLE_VITEST_CONFIG_TARGETS.has(owner)),
+      });
+      options.onSelection?.({
+        rule: "conventional-owner",
+        input: changedPath,
+        targets: isTestFileTarget(changedPath) ? [] : conventionalOwners,
+      });
+    } else {
+      options.onSelection?.({
+        rule: explicitOwners.length > 0 ? "explicit-owner" : "conventional-owner",
+        input: changedPath,
+        targets: owners,
+      });
+    }
+    options.onSelection?.({ rule: "import-consumer", input: changedPath, targets: importers });
     ownerTargets.push(...owners);
     if (!isTestFileTarget(changedPath)) {
       ownerAreas.push(...areas);
@@ -4291,6 +4445,30 @@ function resolveBoundedChangedTestTargetPlan(
     targets.push(...owners, ...importers);
     if (CHANNEL_PLUGIN_SHAPE_PARITY_WIRING_PATHS.has(changedPath)) {
       targets.push(CHANNEL_PLUGIN_SHAPE_PARITY_TEST_TARGET);
+    }
+  }
+  if (options.aggressive) {
+    const manifests = uniqueOrdered(
+      changedPaths
+        .filter((file) => !isTestFileTarget(file))
+        .flatMap((file) => {
+          const root = /^(?:packages|extensions)\/[^/]+\//u.exec(file)?.[0];
+          return root ? [`${root}package.json`] : file === "package.json" ? [file] : [];
+        }),
+    );
+    for (const manifest of manifests) {
+      const name = readImportGraphManifest(cwd, manifest).name;
+      if (typeof name !== "string") {
+        continue;
+      }
+      const consumers = resolveDependencyTestConsumers([{ root: ".", dependencies: [name] }], cwd, {
+        runtimeOnly: true,
+        // Resolved aliases share the module graph's hub cutoff. Traversing again
+        // from package readers would bypass it for mixed import styles.
+        direct: true,
+      }).tests;
+      targets.push(...consumers);
+      options.onSelection?.({ rule: "package-consumer", input: manifest, targets: consumers });
     }
   }
   return {
@@ -4470,7 +4648,7 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
   if (isPathAtOrUnder(relative, "ui") || isPluginControlUiPath(relative)) {
     return "ui";
   }
-  if (relative.startsWith("src/tui/tui-pty-") || tuiPtyTestFiles.includes(relative)) {
+  if (tuiPtyTestFiles.includes(relative)) {
     return "tuiPty";
   }
   if (relative.endsWith(".e2e.test.ts")) {
@@ -4835,6 +5013,17 @@ export function buildVitestRunPlans(
     ...activeTargetArgs,
   ]).flatMap((targetArg) => {
     const relative = toRepoRelativeTarget(targetArg, cwd);
+    if (
+      !watchMode &&
+      (isOrdinaryAgentGlobTarget(relative) ||
+        (!isGlobTarget(relative) &&
+          isExistingDirectoryTarget(targetArg, cwd) &&
+          (isPathAtOrUnder(relative, "packages") ||
+            isPathAtOrUnder(relative, agentVitestProjectOwners.all.root))))
+    ) {
+      // Expanded selections already contribute their existing leaves through activeTargetArgs.
+      return [];
+    }
     return isTestFileTarget(relative) ||
       isGlobTarget(relative) ||
       isExistingDirectoryTarget(targetArg, cwd)
@@ -4943,11 +5132,12 @@ export function buildVitestRunPlans(
       groupedTargets.set("toolingDocker", current);
     }
   }
+  const activeIncludePatterns = activeTargetArgs.map((target) =>
+    toScopedIncludePattern(target, cwd),
+  );
   const impliedToolingIsolatedTargets = !watchMode
     ? toolingIsolatedTestFiles.filter((file) =>
-        classifiedTargets.some(({ targetArg }) =>
-          includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
-        ),
+        activeIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
       )
     : [];
   if (impliedToolingIsolatedTargets.length > 0) {
@@ -4960,10 +5150,9 @@ export function buildVitestRunPlans(
     groupedTargets.set("toolingIsolated", current);
   }
   const uiTargets = groupedTargets.get("ui") ?? [];
+  const uiIncludePatterns = uiTargets.map((target) => toScopedIncludePattern(target, cwd));
   const impliedUiTimingTargets = uiTimingTestFiles.filter((file) =>
-    uiTargets.some((targetArg) =>
-      includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
-    ),
+    uiIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
   );
   if (impliedUiTimingTargets.length > 0) {
     groupedTargets.set("uiTiming", [
@@ -4990,9 +5179,7 @@ export function buildVitestRunPlans(
     }
   }
   const impliedUiIsolatedTargets = uiIsolatedTestFiles.filter((file) =>
-    uiTargets.some((targetArg) =>
-      includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
-    ),
+    uiIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
   );
   if (impliedUiIsolatedTargets.length > 0) {
     const current = groupedTargets.get("uiIsolated") ?? [];
@@ -5006,9 +5193,7 @@ export function buildVitestRunPlans(
   // Source-child ownership can cross shared suites (for example state tests).
   // Match every active target so broad selections cannot silently omit excluded children.
   const impliedCliProcessTargets = cliProcessTestFiles.filter((file) =>
-    activeTargetArgs.some((targetArg) =>
-      includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
-    ),
+    activeIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
   );
   if (impliedCliProcessTargets.length > 0) {
     const current = groupedTargets.get("cliProcess") ?? [];

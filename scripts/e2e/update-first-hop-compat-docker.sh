@@ -8,7 +8,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 if [ "${OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP:-0}" != "1" ]; then
   echo "blocked destructive package self-update; set OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 to run" >&2
@@ -21,7 +20,9 @@ IMAGE_NAME="$(
     OPENCLAW_UPDATE_FIRST_HOP_E2E_IMAGE
 )"
 SKIP_BUILD="${OPENCLAW_UPDATE_FIRST_HOP_E2E_SKIP_BUILD:-0}"
-DOCKER_RUN_TIMEOUT="${OPENCLAW_UPDATE_FIRST_HOP_DOCKER_RUN_TIMEOUT:-1200s}"
+# Run 36506342273 (hosted 4-vCPU): 1558s before the final candidate hop
+# + projected 560s hop + ~5s assertions ~= 2125s; x ~1.5 => 3200s per source.
+DOCKER_RUN_TIMEOUT="${OPENCLAW_UPDATE_FIRST_HOP_DOCKER_RUN_TIMEOUT:-3200s}"
 # Space- or comma-separated recorded release versions; empty runs every recorded source.
 SOURCE_VERSION_FILTER="${OPENCLAW_UPDATE_FIRST_HOP_SOURCE_VERSIONS:-}"
 ARTIFACT_DIR="${OPENCLAW_UPDATE_FIRST_HOP_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/update-first-hop-compat${SOURCE_VERSION_FILTER:+-${SOURCE_VERSION_FILTER//[ ,]/-}}}"
@@ -103,11 +104,9 @@ for version in "${SOURCE_VERSIONS[@]}"; do
     cp "$ARTIFACT_DIR/second-hop-fixture.json" "$lane_artifact_dir/second-hop-fixture.json"
     npm pack "openclaw@$version" --ignore-scripts --json --min-release-age=0 \
       --pack-destination "$FIXTURE_ROOT/source" >"$lane_artifact_dir/source-pack.json"
-    source_package="$FIXTURE_ROOT/source/$(node -e '
-      const result = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
-      if (!Array.isArray(result) || result.length !== 1 || !result[0]?.filename) process.exit(1);
-      process.stdout.write(result[0].filename);
-    ' "$lane_artifact_dir/source-pack.json")"
+    source_package="$FIXTURE_ROOT/source/$(
+      node "$FIXTURE_HELPER" pack-filename "$lane_artifact_dir/source-pack.json"
+    )"
   fi
   chmod a+rwx "$lane_artifact_dir"
   node "$FIXTURE_HELPER" source "$FIXTURE_ROOT/packages/original/package" \

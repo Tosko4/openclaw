@@ -33,12 +33,13 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
     signal: null,
     killed: false,
     termination: "exit",
+    cleanup: "normal",
   }),
 }));
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
   readPackageVersion: vi.fn(async () => "2026.9.4"),
-  resolveNodeRunner: vi.fn(() => "/usr/bin/node"),
+  resolveNodeRunner: vi.fn(() => process.execPath),
 }));
 vi.mock("./update-command-resume.js", () => ({
   convergePostCoreUpdatePlugins: mocks.convergeCandidate,

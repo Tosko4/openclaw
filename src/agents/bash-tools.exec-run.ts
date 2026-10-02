@@ -29,6 +29,7 @@ import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
+import { EXEC_MANUAL_COLLECTION_FOLLOW_UP } from "./bash-tools.exec-output.js";
 import {
   assertSupportedExecParams,
   createExecRequestPreparation,
@@ -109,7 +110,7 @@ export function createExecTool(
     10,
     120_000,
   );
-  const allowBackground =
+  const backgroundAvailable =
     defaults?.processToolAvailabilityRef?.value ?? defaults?.allowBackground ?? true;
   const defaultTimeoutSec = resolveExecDefaultTimeoutSec(defaults?.timeoutSec);
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
@@ -146,7 +147,7 @@ export function createExecTool(
   } = resolveExecNotificationDefaults(defaults);
   const backgroundFollowUp = notifyOnExit
     ? BACKGROUND_EXEC_FOLLOW_UP
-    : `${BACKGROUND_EXEC_FOLLOW_UP} Automatic completion wake is disabled (tools.exec.notifyOnExit=false). If the task needs this result, use poll with a timeout to collect it before ending the turn, unless another continuation is already arranged.`;
+    : `${BACKGROUND_EXEC_FOLLOW_UP} ${EXEC_MANUAL_COLLECTION_FOLLOW_UP}`;
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
@@ -211,6 +212,9 @@ export function createExecTool(
         return reviewCommand(transcript ? { ...input, transcript } : input);
       };
       let params = requestPreparation.normalizeParams(args);
+      // A required command remains an owned tool call until its terminal result is collected.
+      // Explicit detached services retain their existing independent process lifetime.
+      const allowBackground = backgroundAvailable && params.required !== true;
       const resolveExecEnvPrepared = requestPreparation.isResolveExecEnvPrepared(
         args as ExecToolArgs,
       );
@@ -228,7 +232,7 @@ export function createExecTool(
       let gatewayApproval: GatewayApprovalResult | undefined;
       let approvalReview: ExecToolApprovalReview | undefined;
       const foregroundFallbackWarning =
-        !allowBackground && (params.background === true || typeof params.yieldMs === "number")
+        !backgroundAvailable && (params.background === true || typeof params.yieldMs === "number")
           ? "Warning: continuation options are unavailable; running synchronously."
           : undefined;
       const yieldWindow = allowBackground

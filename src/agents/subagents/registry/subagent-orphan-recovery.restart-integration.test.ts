@@ -1,6 +1,7 @@
+import { existsSync } from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Restart-path proof against the real registry sweeper and SQLite session store.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { makeRestartRecoveryRun as makeRunRecord, useSubagentRestartRecoveryFixture } from "./subagent-restart-recovery.test-support.js";
@@ -27,6 +28,7 @@ import {
   registerAgentRunContext,
 } from "../../../infra/agent-run-registry.js";
 import { acquireGatewayLock } from "../../../infra/gateway-lock.js";
+import type { SubsystemLogger } from "../../../logging/subsystem.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -35,6 +37,12 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
+import { getOpenIncognitoAgentDatabase } from "../../../state/openclaw-agent-db-lifecycle.js";
+import {
+  resolveIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../../../state/openclaw-agent-db.paths.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
 import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
@@ -42,7 +50,8 @@ import { prepareInternalSessionEffectsSession } from "../../internal-session-eff
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
+import { recoverInterruptedSubagentRow } from "./subagent-registry-restart-recovery.js";
 import {
   readSubagentSessionStore,
   removeSubagentSessionEntry,
@@ -59,13 +68,105 @@ import {
   resetSubagentRegistryForTests,
   testing,
 } from "./subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 vi.mock("../../../gateway/session-utils.fs.js", () => ({
   readSessionMessagesAsync: vi.fn(async () => []),
 }));
 
+const registryLog = vi.hoisted<{ info?: SubsystemLogger["info"] }>(() => ({}));
+vi.mock("../../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "agents/subagent-registry"
+        ? {
+            ...logger,
+            info: (message: string, meta?: Record<string, unknown>) => {
+              logger.info(message, meta);
+              registryLog.info?.(message, meta);
+            },
+          }
+        : logger;
+    },
+  };
+});
+
 const TWO_HOURS_MS = 2 * 60 * 60 * 1_000;
+
+it.each(["durable", "incognito"] as const)(
+  "classifies missing %s storage for recovery without creating its database",
+  async (storage) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const databasePath = (
+        storage === "incognito"
+          ? resolveIncognitoOpenClawAgentSqlitePath
+          : resolveOpenClawAgentSqlitePath
+      )({ agentId: "main", env: state.env });
+      const childSessionKey = `agent:main:subagent:${storage === "incognito" ? "incognito-" : ""}missing-store`;
+      const entry = makeRunRecord({
+        runId: "missing-store-run",
+        childSessionKey,
+        execution: { status: "interrupted", startedAt: Date.now() - 1_000 },
+      });
+      const recover = (candidate: SubagentRunRecord) =>
+        recoverInterruptedSubagentRow({
+          entry: candidate,
+          runId: candidate.runId,
+          gatewayRuntime: undefined,
+          isCurrent: () => true,
+          warn: vi.fn(),
+        });
+      expect(existsSync(databasePath)).toBe(false);
+      expect(getOpenIncognitoAgentDatabase("main", databasePath)).toBeUndefined();
+      const running = { ...entry, execution: { ...entry.execution, status: "running" as const } };
+      expect(await recover(running)).toEqual({ status: "ignored" });
+      const result = await recover(entry);
+      expect(result).toMatchObject({ status: "terminal", suppressSessionEffects: true });
+      if (result.status !== "terminal") {
+        throw new Error("Expected missing child storage to permit terminal settlement");
+      }
+      expect(await result.recoveryCurrent?.prepare()).toBe(true);
+      expect(result.recoveryCurrent?.isHostCurrent()).toBe(true);
+      expect(
+        await recover({
+          ...running,
+          execution: {
+            ...running.execution,
+            restartRecovery: {
+              phase: "accepted",
+              sessionId: "lost-session",
+              sessionMarker: "lost-session:1",
+              idempotencyKey: "lost-recovery",
+            },
+          },
+        }),
+      ).toMatchObject({ status: "terminal", suppressSessionEffects: true });
+      expect(existsSync(databasePath)).toBe(false);
+      expect(getOpenIncognitoAgentDatabase("main", databasePath)).toBeUndefined();
+
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: childSessionKey },
+        {
+          sessionId: "successor-session",
+          lifecycleRevision: "successor-lifecycle",
+          updatedAt: Date.now(),
+        },
+      );
+      expect(result.recoveryCurrent?.isHostCurrent()).toBe(false);
+      expect(await result.recoveryCurrent?.prepare()).toBe(false);
+      expect(await result.sessionEffects?.isCurrent()).toBe(false);
+      const missingRow = await recover({ ...entry, childSessionKey: `${childSessionKey}-other` });
+      expect(missingRow.status).toBe("terminal");
+      if (missingRow.status === "terminal") {
+        expect(missingRow.suppressSessionEffects).not.toBe(true);
+      }
+    });
+  },
+);
 
 describe("subagent orphan recovery — faithful restart path", () => {
   const fixture = useSubagentRestartRecoveryFixture();
@@ -95,11 +196,10 @@ describe("subagent orphan recovery — faithful restart path", () => {
           updatedAt: startedAt,
         },
       );
-      addSubagentRunForTests(entry);
+      await addSubagentRunForTests(entry);
     }
-    persistSubagentRunsToDiskOrThrow(subagentRuns);
     await fixture.settle();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     rotateAgentEventLifecycleGeneration();
     const lock = await acquireGatewayLock({
       allowInTests: true,
@@ -113,8 +213,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
     try {
       await lock.run(async () => {
         await runStartupSessionMigration({ cfg: { agents: { entries: { main: {} } } }, log });
-        initSubagentRegistry();
-        activateGatewayRuntime();
+        await initSubagentRegistry();
+        await activateGatewayRuntime();
         await testing.sweepOnceForTests();
         await fixture.settle();
         for (const entry of records) {
@@ -189,6 +289,18 @@ describe("subagent orphan recovery — faithful restart path", () => {
         waitRequests.push(params.runId);
         return (params.runId === runId ? await oldWait.promise : { status: "pending" }) as T;
       };
+      const interruptedPersisted = createDeferred();
+      const terminalPersisted = createDeferred();
+      const stopObservingPublication = subscribeSubagentRunChanges("persistence", () => {
+        const executionStatus = loadSubagentRegistryFromSqlite().get(runId)?.execution.status;
+        if (executionStatus === "interrupted") {
+          interruptedPersisted.resolve();
+        }
+        if (executionStatus === "terminal") {
+          terminalPersisted.resolve();
+        }
+      });
+      onTestFinished(stopObservingPublication);
       try {
         await runWithGatewayIndependentRootWorkAdmission(async () => {
           await registerSubagentRun({
@@ -223,6 +335,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
             });
             await vi.dynamicImportSettled();
             if (restartsBeforeWait) {
+              await interruptedPersisted.promise;
               expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.status).toBe(
                 "interrupted",
               );
@@ -237,9 +350,21 @@ describe("subagent orphan recovery — faithful restart path", () => {
             rotateAgentEventLifecycleGeneration();
           }
           if (source === "retired wait retry") {
+            const retryScheduled = createDeferred();
+            registryLog.info = (message, meta) => {
+              if (
+                message ===
+                  "subagent wait timed out; deferring terminal state until session reconciliation" &&
+                meta?.runId === runId &&
+                meta.childSessionKey === childSessionKey
+              ) {
+                retryScheduled.resolve();
+              }
+            };
             vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
             oldWait.reject(new Error("gateway request timeout"));
-            await vi.advanceTimersByTimeAsync(0);
+            // Advancing fake time does not join the session-store worker reads.
+            await retryScheduled.promise;
             expect(vi.getTimerCount()).toBeGreaterThan(0);
             rotateAgentEventLifecycleGeneration();
             await vi.advanceTimersByTimeAsync(1_000);
@@ -258,6 +383,10 @@ describe("subagent orphan recovery — faithful restart path", () => {
           }
           await vi.dynamicImportSettled();
         }, "test:admitted-agent");
+        // The wait can still be reconciling worker reads after its spawning admission returns.
+        if (expected === "terminal") {
+          await terminalPersisted.promise;
+        }
         await fixture.settle();
 
         const persisted = loadSubagentRegistryFromSqlite().get(runId);
@@ -277,11 +406,11 @@ describe("subagent orphan recovery — faithful restart path", () => {
         // The retired task registry reported every unended run as running; sessions keep the interruption.
         expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe(expected);
 
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         resetGatewayWorkAdmission();
         rotateAgentEventLifecycleGeneration();
-        initSubagentRegistry();
-        activateGatewayRuntime();
+        await initSubagentRegistry();
+        await activateGatewayRuntime();
         await testing.sweepOnceForTests();
         expect(dispatchAgent).not.toHaveBeenCalled();
         expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
@@ -290,12 +419,14 @@ describe("subagent orphan recovery — faithful restart path", () => {
         });
       } finally {
         if (source === "retired wait retry") {
+          delete registryLog.info;
           vi.useRealTimers();
         }
         oldWait.resolve(waitResult);
         try {
           await fixture.settle();
         } finally {
+          stopObservingPublication();
           if (getActiveGatewayRootWorkCount() === 0) {
             gatewayRuntime.waitForAgent = originalWait;
             resetGatewayWorkAdmission();
@@ -319,7 +450,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
         abortedLastRun: true,
       });
       const entry = makeRunRecord({ runId, childSessionKey });
-      addSubagentRunForTests(entry);
+      await addSubagentRunForTests(entry);
       const entered = createDeferred();
       const release = createDeferred();
       const acquire = vi.spyOn(
@@ -352,9 +483,11 @@ describe("subagent orphan recovery — faithful restart path", () => {
         }
         release.resolve();
         await pending;
-        expect(entry.execution.endedAt).toBeUndefined();
-        expect(entry.execution.outcome).toBeUndefined();
-        expect(entry.terminalOwner).toBeUndefined();
+        const current = subagentRuns.get(runId);
+        expect(current).toBeDefined();
+        expect(current?.execution.endedAt).toBeUndefined();
+        expect(current?.execution.outcome).toBeUndefined();
+        expect(current?.terminalOwner).toBeUndefined();
         expect(dispatchAgent).not.toHaveBeenCalled();
       } finally {
         release.resolve();
@@ -418,17 +551,16 @@ describe("subagent orphan recovery — faithful restart path", () => {
         },
         completion: { required: true, resultText: null, capturedAt: now },
       });
-      addSubagentRunForTests(entry);
+      await addSubagentRunForTests(entry);
       if (owner === "original" || owner === "unclassified") {
-        persistSubagentRunsToDiskOrThrow(subagentRuns, [runId]);
         expect(
           loadSubagentRegistryFromSqlite().get(runId)?.execution.interruptionReason,
         ).toBeUndefined();
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         await cleanupSessionStateForTest({ stateDir: fixture.stateDir });
         rotateAgentEventLifecycleGeneration();
-        initSubagentRegistry();
-        activateGatewayRuntime();
+        await initSubagentRegistry();
+        await activateGatewayRuntime();
       }
       const announce = vi.mocked(runSubagentAnnounceFlow);
       const cleanupBrowser = vi.mocked(cleanupBrowserSessionsForLifecycleEnd);
@@ -504,7 +636,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
       createdAt: now - 3 * TWO_HOURS_MS,
       startedAt: now - 3 * TWO_HOURS_MS,
     });
-    addSubagentRunForTests(record);
+    await addSubagentRunForTests(record);
 
     await testing.sweepOnceForTests();
 
@@ -553,7 +685,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
         startedAt: now - runAgeMs,
         runTimeoutSeconds: 0,
       });
-      addSubagentRunForTests(record);
+      await addSubagentRunForTests(record);
 
       await testing.sweepOnceForTests();
 
@@ -597,9 +729,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
         runId: nextRunId,
         source: retired,
         storePath,
-        requireSource: true,
       });
-      addSubagentRunForTests(
+      await addSubagentRunForTests(
         makeRunRecord({
           runId,
           childSessionKey,
@@ -607,7 +738,6 @@ describe("subagent orphan recovery — faithful restart path", () => {
           execution: { status: "running", startedAt: Date.now(), transcriptTarget: retired },
         }),
       );
-      persistSubagentRunsToDiskOrThrow(subagentRuns, [runId]);
       await fixture.settle();
       const parent = tryBeginGatewayRootWorkAdmission("test:replacement");
       if (!parent) {
@@ -632,7 +762,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
             markGatewayRestartDraining();
           }
           expect(
-            replaceSubagentRunAfterSteerCore({
+            await replaceSubagentRunAfterSteerCore({
               previousRunId: runId,
               nextRunId,
               transcriptTarget: successor,
@@ -647,9 +777,9 @@ describe("subagent orphan recovery — faithful restart path", () => {
         released.resolve();
         try {
           await blocker;
+          await fixture.settle();
           // Settle the original untracked deletion too when the ownership assertion fails.
           await vi.waitFor(() => expect(loadExactSessionEntry(retired)).toBeUndefined());
-          await fixture.settle();
         } finally {
           if (getActiveGatewayRootWorkCount() === 0) {
             resetGatewayWorkAdmission();
@@ -699,14 +829,13 @@ describe("subagent orphan recovery — faithful restart path", () => {
         },
       },
     });
-    addSubagentRunForTests(record);
-    persistSubagentRunsToDiskOrThrow(subagentRuns, [runId]);
+    await addSubagentRunForTests(record);
 
     await fixture.settle();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     rotateAgentEventLifecycleGeneration();
-    initSubagentRegistry();
-    activateGatewayRuntime();
+    await initSubagentRegistry();
+    await activateGatewayRuntime();
     await Promise.resolve();
     await testing.sweepOnceForTests();
 
@@ -733,10 +862,10 @@ describe("subagent orphan recovery — faithful restart path", () => {
     });
     expect(persisted?.execution.restartRecovery).toBeUndefined();
 
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     rotateAgentEventLifecycleGeneration();
-    initSubagentRegistry();
-    activateGatewayRuntime();
+    await initSubagentRegistry();
+    await activateGatewayRuntime();
     await Promise.resolve();
     await testing.sweepOnceForTests();
 
@@ -773,8 +902,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
       startedAt: now - 55_000,
       sessionStartedAt: now - 60_000,
     });
-    addSubagentRunForTests(staleRecord);
-    addSubagentRunForTests(freshRecord);
+    await addSubagentRunForTests(staleRecord);
+    await addSubagentRunForTests(freshRecord);
 
     await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,

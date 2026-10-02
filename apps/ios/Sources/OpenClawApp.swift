@@ -88,8 +88,8 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     private var backgroundWakeAttempt: BackgroundWakeRefreshAttempt?
     private var pendingAPNsDeviceToken: Data?
     private var pendingExecApprovalPrompts: [ApprovalNotificationPrompt] = []
-    private var pendingExecApprovalRequestedPushes: [ExecApprovalNotificationPrompt] = []
-    private var pendingExecApprovalResolvedPushes: [ExecApprovalNotificationPrompt] = []
+    private var pendingExecApprovalRequestedPushes: [ApprovalNotificationPrompt] = []
+    private var pendingExecApprovalResolvedPushes: [ApprovalNotificationPrompt] = []
     private var pendingOpenURLs: [URL] = []
 
     weak var appModel: NodeAppModel? {
@@ -124,7 +124,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                 self.pendingExecApprovalResolvedPushes.removeAll()
                 Task { @MainActor in
                     for push in pending {
-                        _ = await model.handleExecApprovalResolvedRemotePush(push)
+                        await model.handleExecApprovalResolvedRemotePush(push)
                     }
                 }
             }
@@ -237,12 +237,11 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         Task { @MainActor in
             if let push = ApprovalNotificationBridge.parseResolvedPush(userInfo: userInfo) {
                 if let appModel = self.resolvedAppModel() {
-                    let handled = await appModel.handleExecApprovalResolvedRemotePush(push)
-                    completionHandler(handled ? .newData : .noData)
+                    await appModel.handleExecApprovalResolvedRemotePush(push)
                 } else {
                     self.pendingExecApprovalResolvedPushes.append(push)
-                    completionHandler(.newData)
                 }
+                completionHandler(.newData)
                 return
             }
             guard let appModel = self.resolvedAppModel() else {
@@ -417,8 +416,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     {
         let userInfo = notification.request.content.userInfo
         if Self.isWatchPromptNotification(userInfo)
-            || ExecApprovalNotificationBridge.shouldPresentNotification(userInfo: userInfo)
-            || PluginApprovalNotificationBridge.shouldPresentNotification(userInfo: userInfo)
+            || ApprovalNotificationBridge.parseRequestedPush(userInfo: userInfo) != nil
         {
             completionHandler([.banner, .list, .sound])
             return
@@ -627,12 +625,7 @@ enum WatchPromptNotificationBridge {
         notificationCenter: NotificationCentering) async -> Bool
     {
         guard NotificationServingPreference.isEnabled() else { return false }
-        switch await notificationCenter.authorizationStatus() {
-        case .authorized, .provisional, .ephemeral:
-            return true
-        case .denied, .notDetermined:
-            return false
-        }
+        return await notificationCenter.authorizationStatus().allowsNotifications
     }
 
     private static func upsertNotificationCategory(

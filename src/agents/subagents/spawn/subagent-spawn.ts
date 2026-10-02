@@ -15,7 +15,11 @@ import {
   summarizeSpawnError,
   type SpawnBackendAdapter,
 } from "../../spawn-pipeline.js";
-import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
+  withGatewayToolOperatorContinuation,
+} from "../../tools/gateway-caller-context.js";
 import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
 import { activateSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
@@ -64,7 +68,6 @@ export async function spawnSubagentDirect(
   const label = params.label?.trim() || "";
   const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
-  const requesterSessionKey = ctx.agentSessionKey;
   const gatewayCaller = getGatewayToolCallerIdentity();
   const gatewayScope = getPluginRuntimeGatewayRequestScope();
   const gatewayContextResolver =
@@ -72,7 +75,8 @@ export async function spawnSubagentDirect(
     gatewayScope?.resolveGatewayContext ??
     gatewayScope?.context?.resolveGatewayContext;
   const operatorAuthority =
-    gatewayCaller?.operatorAuthority ?? gatewayScope?.client?.internal?.operatorRunAuthority;
+    resolveGatewayToolOperatorSelection().operatorAuthority ??
+    gatewayScope?.client?.internal?.operatorRunAuthority;
   const requestResolution = await resolveSubagentSpawnRequest(params, ctx);
   if (!requestResolution.ok) {
     return requestResolution.result;
@@ -168,6 +172,7 @@ export async function spawnSubagentDirect(
     const initialSession = await createInitialSubagentSession({
       assertActive,
       cfg,
+      requesterAgentId,
       targetAgentId,
       childSessionKey,
       label: label || undefined,
@@ -178,6 +183,7 @@ export async function spawnSubagentDirect(
       spawnedWorkspaceDir,
       spawnedCwd,
       sessionPermissionPolicy: ctx.sessionPermissionPolicy,
+      worktree: params.worktree ? params : undefined,
       admissionPatch: admission.childSessionPatch,
       inheritedToolAllowlist: ctx.inheritedToolAllowlist,
       inheritedToolDenylist: ctx.inheritedToolDenylist,
@@ -286,7 +292,7 @@ export async function spawnSubagentDirect(
       soleCollectorChild: soleImplicitMember,
       spawnMode,
       task,
-      requesterSessionKey,
+      requesterSessionKey: ctx.agentSessionKey,
       requesterOrigin: childSessionOrigin,
       childSessionKey,
       label: label || undefined,
@@ -339,7 +345,7 @@ export async function spawnSubagentDirect(
         message: envelope.message,
         spawnedByKey: requesterInternalKey,
         toolSpawnMetadata,
-        spawnedWorkspaceDir,
+        spawnedWorkspaceDir: params.worktree ? undefined : spawnedWorkspaceDir,
         childSessionKey,
         childSessionOrigin,
         childIdem,
@@ -406,6 +412,14 @@ export async function spawnSubagentDirect(
         ),
         childLaunch.authorization,
         gatewayContextResolver,
+        childEntry?.sessionId && childEntry.lifecycleRevision
+          ? {
+              sessionKey: childSessionKey,
+              sessionId: childEntry.sessionId,
+              lifecycleRevision: childEntry.lifecycleRevision,
+              runId: childIdem,
+            }
+          : undefined,
       );
       acceptedChildRunId = readGatewayRunId(launch.response) ?? childIdem;
       cleanupOwner?.bindAcceptedRun(acceptedChildRunId);
@@ -558,6 +572,7 @@ export async function spawnSubagentDirect(
           requesterTurnRunId: ctx.requesterTurnRunId,
           childSessionKey,
           controllerSessionKey: ownership.controllerSessionKey,
+          sessionEntry: childEntry,
           requesterSessionKey: ownership.completionRequesterSessionKey,
           requesterOrigin,
           progressOrigin,
@@ -625,29 +640,31 @@ export async function spawnSubagentDirect(
       const canLaunch = pipelineResult.registrationScope?.canLaunch() !== false;
       if (swarmReservation?.isCurrent() !== false) {
         // The scheduler also settles registrations that have lost launch authority.
-        activateSwarmRun({
-          groupId: swarmSchedulerGroupKey,
-          runId: childRunId,
-          lifecycleOwner: gatewayContextResolver
-            ? getCanonicalGatewayContextResolver(gatewayContextResolver)
-            : undefined,
-          ...createCollectorLaunchCallbacks({
-            childRunId,
-            childSessionKey,
-            requesterSessionKey: requesterInternalKey,
-            gatewayContextResolver,
-            operatorAuthority,
-            releaseOperatorAuthority,
-            cleanupOwner,
-            registrationScope: pipelineResult.registrationScope,
-            preparation: pipelineResult.state.contextEnginePreparation,
-            provisionalSessionIdentity,
-            launchChildRun,
-            recordParticipant: recordRequesterParticipation,
-            emitSpawnLifecycleHooks,
-            cleanupFailedSpawn,
+        withGatewayToolOperatorContinuation(operatorAuthority, () =>
+          activateSwarmRun({
+            groupId: swarmSchedulerGroupKey,
+            runId: childRunId,
+            lifecycleOwner: gatewayContextResolver
+              ? getCanonicalGatewayContextResolver(gatewayContextResolver)
+              : undefined,
+            ...createCollectorLaunchCallbacks({
+              childRunId,
+              childSessionKey,
+              requesterSessionKey: requesterInternalKey,
+              gatewayContextResolver,
+              operatorAuthority,
+              releaseOperatorAuthority,
+              cleanupOwner,
+              registrationScope: pipelineResult.registrationScope,
+              preparation: pipelineResult.state.contextEnginePreparation,
+              provisionalSessionIdentity,
+              launchChildRun,
+              recordParticipant: recordRequesterParticipation,
+              emitSpawnLifecycleHooks,
+              cleanupFailedSpawn,
+            }),
           }),
-        });
+        );
         releaseOperatorAuthority = undefined;
       } else {
         if (canRetireReservation?.() !== false) {
