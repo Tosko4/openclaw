@@ -225,7 +225,11 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
       return isSubagentEnvelopeSession(notifySessionKey, {
         entry: read.entries.find(({ sessionKey }) => sessionKey === notifySessionKey)?.entry,
       });
-    })());
+    })().catch(() => {
+      // Identity enrichment must not prevent exec; retry the worker on the next call.
+      subagentSession = undefined;
+      return isSubagentEnvelopeSession(notifySessionKey);
+    }));
   const notifyDeliveryContext = normalizeDeliveryContext({
     channel: defaults?.messageProvider,
     to: defaults?.currentChannelId,
