@@ -168,7 +168,6 @@ describe.skipIf(process.platform === "win32")(
           const client = shared.client();
           expect(client.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
           const nativeRequests = vi.spyOn(client, "request");
-          const capture = vi.spyOn(settledContext, "captureCodexSettledTurnFinalizationContext");
           closeHost();
           vi.useFakeTimers({ toFake: ["Date"] });
           vi.setSystemTime(Date.now() + 1_000);
@@ -186,16 +185,9 @@ describe.skipIf(process.platform === "win32")(
           fixture.setMessageDelivery(final);
           params.runId = "run-native-message";
           params.prompt = "Send the inventory summary.";
-          // Core owns the delivery-aware capture decision: a confirmed final receipt
-          // declines it, progress leaves delivery missing and requests it.
-          const onSettledTurn = vi.fn<NonNullable<typeof params.onSettledTurn>>(
-            async (attempt, captureContext) => {
-              if (!final) {
-                attempt.settledTurnFinalizationContext = await captureContext();
-              }
-            },
-          );
-          params.onSettledTurn = onSettledTurn;
+          // Capture eligibility belongs to core's settled-turn finalization suite;
+          // this case covers native delivery and history continuity only.
+          params.onSettledTurn = undefined;
           closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
           const result = await runCodexAppServerAttempt(params, runOptions);
           expect(result.terminal).toEqual({ kind: "ok" });
@@ -216,19 +208,9 @@ describe.skipIf(process.platform === "win32")(
           expect(result.messagingToolSentTargets).toEqual([
             expect.objectContaining({ sourceReplyFinal: final }),
           ]);
-          expect(onSettledTurn).toHaveBeenCalledOnce();
           expect(nativeRequests.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(
             final,
           );
-          if (final) {
-            expect(result.settledTurnFinalizationContext).toEqual({ source: "unavailable" });
-            expect(capture).not.toHaveBeenCalled();
-          } else {
-            expect(result.settledTurnFinalizationContext).toBeInstanceOf(
-              settledContext.CodexSettledTurnContext,
-            );
-            expect(capture).toHaveBeenCalledOnce();
-          }
           const binding = await readCodexAppServerBinding(params.sessionFile);
           expect(binding?.threadId).toBe(originalBinding.threadId);
           expect(Date.parse(binding?.historyCoveredThrough ?? "")).toBeGreaterThan(
