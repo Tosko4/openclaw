@@ -1,4 +1,5 @@
-// Xai plugin module implements x search behavior.
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   jsonResult,
   normalizeToIsoDate,
@@ -46,18 +47,7 @@ type XSearchCacheEntry = {
   value: Record<string, unknown>;
 };
 
-function getSharedXSearchCache(): Map<string, XSearchCacheEntry> {
-  const root = globalThis as Record<PropertyKey, unknown>;
-  const existing = root[X_SEARCH_CACHE_KEY];
-  if (existing instanceof Map) {
-    return existing as Map<string, XSearchCacheEntry>;
-  }
-  const next = new Map<string, XSearchCacheEntry>();
-  root[X_SEARCH_CACHE_KEY] = next;
-  return next;
-}
-
-const X_SEARCH_CACHE = getSharedXSearchCache();
+const X_SEARCH_CACHE = resolveGlobalMap<string, XSearchCacheEntry>(X_SEARCH_CACHE_KEY);
 
 function normalizeOptionalIsoDate(value: string | undefined, label: string): string | undefined {
   if (!value) {
@@ -98,6 +88,7 @@ function validateXSearchHandleFilters(params: {
 }
 
 function buildXSearchCacheKey(params: {
+  apiKey: string;
   query: string;
   model: string;
   endpoint: string;
@@ -107,6 +98,7 @@ function buildXSearchCacheKey(params: {
 }) {
   return JSON.stringify([
     "x_search",
+    sha256Hex(params.apiKey),
     params.model,
     params.endpoint,
     params.query,
@@ -169,25 +161,18 @@ export function createXSearchTool(options?: {
       enableImageUnderstanding: args.enable_image_understanding === true,
       enableVideoUnderstanding: args.enable_video_understanding === true,
     };
-    const xSearchConfigRecord = xSearchConfig;
-    const model = resolveXaiXSearchModel(xSearchConfigRecord);
-    const endpoint = resolveXaiXSearchEndpoint(xSearchConfigRecord);
-    const inlineCitations = resolveXaiXSearchInlineCitations(xSearchConfigRecord);
-    const maxTurns = resolveXaiXSearchMaxTurns(xSearchConfigRecord);
+    const model = resolveXaiXSearchModel(xSearchConfig);
+    const endpoint = resolveXaiXSearchEndpoint(xSearchConfig);
+    const inlineCitations = resolveXaiXSearchInlineCitations(xSearchConfig);
+    const maxTurns = resolveXaiXSearchMaxTurns(xSearchConfig);
     const cacheKey = buildXSearchCacheKey({
+      apiKey,
       query,
       model,
       endpoint,
       inlineCitations,
       maxTurns,
-      options: {
-        allowedXHandles,
-        excludedXHandles,
-        fromDate,
-        toDate,
-        enableImageUnderstanding: xSearchOptions.enableImageUnderstanding,
-        enableVideoUnderstanding: xSearchOptions.enableVideoUnderstanding,
-      },
+      options: xSearchOptions,
     });
     const cacheTtlMs = resolveCacheTtlMs(xSearchConfig?.cacheTtlMinutes, 15);
     const cached = readCache(X_SEARCH_CACHE, cacheKey, cacheTtlMs);
@@ -211,10 +196,7 @@ export function createXSearchTool(options?: {
       query,
       model,
       tookMs: Date.now() - startedAt,
-      content: result.content,
-      citations: result.citations,
-      inlineCitations: result.inlineCitations,
-      truncated: result.truncated,
+      ...result,
       options: xSearchOptions,
     });
     writeCache(X_SEARCH_CACHE, cacheKey, payload, cacheTtlMs);
